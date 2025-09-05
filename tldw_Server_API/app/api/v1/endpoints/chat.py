@@ -84,7 +84,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
-    API_KEYS,
+    get_api_keys,
     ChatCompletionRequest,
     DEFAULT_LLM_PROVIDER,
 )
@@ -562,7 +562,9 @@ async def create_chat_completion(
 
     try:
         target_api_provider = provider # Already determined
-        provider_api_key = API_KEYS.get(target_api_provider) # API_KEYS should be up-to-date
+        # Get API keys dynamically to support runtime changes (e.g., in tests)
+        api_keys = get_api_keys()
+        provider_api_key = api_keys.get(target_api_provider)
 
         # Simplified list, actual check might be in Chat_Functions or per-provider
         # FIXME - This should be a more dynamic check based on the provider's requirements.
@@ -581,7 +583,12 @@ async def create_chat_completion(
             current_loop
         )
         if character_card_for_context:
-            logger.debug(f"Loaded character: {character_card_for_context.get('name')} with system_prompt: {character_card_for_context.get('system_prompt', 'None')[:50]}...")
+            system_prompt_preview = character_card_for_context.get('system_prompt')
+            if system_prompt_preview:
+                system_prompt_preview = system_prompt_preview[:50] + "..." if len(system_prompt_preview) > 50 else system_prompt_preview
+            else:
+                system_prompt_preview = "None"
+            logger.debug(f"Loaded character: {character_card_for_context.get('name')} with system_prompt: {system_prompt_preview}")
         
         # Track character access
         if character_card_for_context:
@@ -644,7 +651,11 @@ async def create_chat_completion(
                 if msg_parts:
                     hist_entry = {"role": role, "content": msg_parts}
                     if role == "assistant" and character_card_for_context and character_card_for_context.get('name'):
-                        hist_entry["name"] = character_card_for_context.get('name')
+                        # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
+                        name = character_card_for_context.get('name', '')
+                        name = name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
+                        if name:  # Only add if name is not empty after sanitization
+                            hist_entry["name"] = name
                     historical_openai_messages.append(hist_entry)
             logger.info(f"Loaded {len(historical_openai_messages)} historical messages for conv_id '{final_conversation_id}'.")
 
@@ -662,7 +673,11 @@ async def create_chat_completion(
 
             msg_for_llm = msg_dict.copy()
             if msg_model.role == "assistant" and character_card_for_context and character_card_for_context.get('name'):
-                msg_for_llm["name"] = character_card_for_context.get('name')
+                # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
+                name = character_card_for_context.get('name', '')
+                name = name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
+                if name:  # Only add if name is not empty after sanitization
+                    msg_for_llm["name"] = name
             current_turn_messages_for_llm.append(msg_for_llm)
 
         # --- Prompt Templating ---
@@ -685,15 +700,20 @@ async def create_chat_completion(
             # If template produces empty string and we have a character with system prompt, use that instead
             if not final_system_message and character_card_for_context and character_card_for_context.get('system_prompt'):
                 final_system_message = character_card_for_context.get('system_prompt')
-                logger.debug(f"Template produced empty, using character system prompt: {final_system_message[:50]}...")
+                # Use repr() to safely log system prompts that might contain curly braces
+                system_prompt_preview = final_system_message[:50] if final_system_message else ""
+                logger.debug(f"Template produced empty, using character system prompt: {repr(system_prompt_preview)}...")
         elif sys_msg_from_req:
             final_system_message = sys_msg_from_req
         elif character_card_for_context and character_card_for_context.get('system_prompt'):
             # Use character's system prompt if no template and no system message in request
             final_system_message = character_card_for_context.get('system_prompt')
-            logger.debug(f"Using character system prompt: {final_system_message[:50]}...")
+            # Use repr() to safely log system prompts that might contain curly braces
+            system_prompt_preview = final_system_message[:50] if final_system_message else ""
+            logger.debug(f"Using character system prompt: {repr(system_prompt_preview)}...")
         
-        logger.debug(f"Final system message: {final_system_message}")
+        # Use repr() to safely log system message that might contain curly braces
+        logger.debug(f"Final system message: {repr(final_system_message)}")
 
         templated_llm_payload: List[Dict[str, Any]] = []
         # FIXME
@@ -838,7 +858,9 @@ async def create_chat_completion(
             async def save_callback(full_reply: str):
                 """Callback to save the assistant's reply after streaming completes."""
                 if full_reply and final_conversation_id:
+                    # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
                     asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
+                    asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
                     logger.info(f"Saving assistant reply (len {len(full_reply)}) for conv_id {final_conversation_id}")
                     # Use transaction for atomic save
                     await _save_message_turn_to_db(
@@ -925,7 +947,11 @@ async def create_chat_completion(
             
             content_to_save: Optional[str] = None
             if isinstance(llm_response, dict): # OpenAI-like
-                content_to_save = llm_response.get("choices", [{}])[0].get("message", {}).get("content")
+                choices = llm_response.get("choices")
+                if choices and isinstance(choices, list) and len(choices) > 0:
+                    content_to_save = choices[0].get("message", {}).get("content")
+                else:
+                    logger.warning("LLM response does not contain valid choices array")
                 
                 # Track token usage if available
                 usage = llm_response.get("usage")
@@ -940,9 +966,14 @@ async def create_chat_completion(
                     )
             elif isinstance(llm_response, str):
                 content_to_save = llm_response
+            elif llm_response is None:
+                logger.error("LLM response is None - this indicates a serious issue with the LLM call")
+                raise ChatAPIError(provider=provider, message="LLM call returned None response", status_code=500)
 
             if content_to_save:
+                # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
                 asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
+                asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
                 await _save_message_turn_to_db(chat_db, final_conversation_id, {"role": "assistant", "name": asst_name, "content": content_to_save}, use_transaction=True)
 
             # Use CPU-bound handler for large JSON encoding
@@ -1057,7 +1088,16 @@ async def create_chat_completion(
                             ChatConfigurationError: 503, ChatProviderError: getattr(e_chat, 'status_code', 502),
                             ChatAPIError: getattr(e_chat, 'status_code', 500) }
         err_status = status_code_map.get(type(e_chat), 500)
-        logger.error(f"Chat Library Error: {type(e_chat).__name__} - '{e_chat.message}' (Provider: {e_chat.provider}, UpstreamStatus: {getattr(e_chat, 'status_code', 'N/A')})", exc_info=True)
+        # Don't use f-string when logging errors that might contain JSON with curly braces
+        # Use lazy formatting to avoid issues with curly braces in error messages
+        logger.error(
+            "Chat Library Error: {} - {} (Provider: {}, UpstreamStatus: {})", 
+            type(e_chat).__name__, 
+            repr(e_chat.message), 
+            e_chat.provider, 
+            getattr(e_chat, 'status_code', 'N/A'),
+            exc_info=True
+        )
         # Standardize error messages - never expose internal details for 5xx errors
         if err_status < 500:
             # Client errors can have more detail
@@ -1087,13 +1127,19 @@ async def create_chat_completion(
         raise HTTPException(status_code=err_status, detail=client_detail)
 
     except Exception as e_final:
+        # Log the full traceback for debugging
+        import traceback
+        logger.error(f"Unexpected error in chat completion: {type(e_final).__name__}: {str(e_final)}")
+        logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        
         # Create a structured error for unexpected exceptions
         unexpected_error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
-            message=f"Unexpected error in chat completion endpoint",
+            message=f"Unexpected error in chat completion endpoint: {str(e_final)}",
             details={
                 "error_type": type(e_final).__name__,
-                "request_id": request_id,
+                "error_str": str(e_final),
+                "request_id": request_id if 'request_id' in locals() else None,
                 "conversation_id": final_conversation_id if 'final_conversation_id' in locals() else None
             },
             cause=e_final,
@@ -1104,7 +1150,7 @@ async def create_chat_completion(
         # Send alert for critical errors
         if hasattr(e_final, '__module__') and 'sqlite' not in e_final.__module__:
             # Don't alert for database errors, they're handled separately
-            logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id}")
+            logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id if 'request_id' in locals() else 'Not set'}")
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
