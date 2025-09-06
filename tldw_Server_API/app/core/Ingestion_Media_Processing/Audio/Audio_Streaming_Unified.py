@@ -582,11 +582,11 @@ async def handle_unified_websocket(
     if not config:
         config = UnifiedStreamingConfig()
     
-    transcriber = UnifiedStreamingTranscriber(config)
+    transcriber = None  # Initialize transcriber after config is set
     
     try:
         # Wait for configuration message if not provided
-        if config.model is None:
+        if config.model is None or config.model == 'parakeet':
             config_message = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
             config_data = json.loads(config_message)
             
@@ -604,6 +604,11 @@ async def handle_unified_websocket(
                     config.beam_size = config_data.get("beam_size", 5)
                     config.vad_filter = config_data.get("vad_filter", False)
                     config.task = config_data.get("task", "transcribe")
+                
+                # Create transcriber with updated config (moved here to use updated config)
+                if transcriber is None:
+                    logger.info(f"Creating UnifiedStreamingTranscriber with updated config for model: {config.model}")
+                    transcriber = UnifiedStreamingTranscriber(config)
                 
                 # Send acknowledgment
                 status_msg = {
@@ -624,6 +629,16 @@ async def handle_unified_websocket(
                 await websocket.send_json(status_msg)
         
         # Initialize transcriber
+        if transcriber is None:
+            error_msg = f"No transcriber created for model: {config.model}"
+            logger.error(error_msg)
+            await websocket.send_json({
+                "type": "error",
+                "message": error_msg,
+                "model": config.model
+            })
+            return
+        
         try:
             logger.info(f"Initializing transcriber for model: {config.model}")
             logger.info(f"Configuration details: whisper_model_size={getattr(config, 'whisper_model_size', 'N/A')}, "
@@ -724,7 +739,8 @@ async def handle_unified_websocket(
             pass
     finally:
         # Clean up
-        transcriber.cleanup()
+        if transcriber:
+            transcriber.cleanup()
 
 
 # Export main components
