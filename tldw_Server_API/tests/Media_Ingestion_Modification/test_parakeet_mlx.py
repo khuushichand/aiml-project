@@ -430,7 +430,7 @@ class TestParakeetMLXPerformance:
         # Verify results
         for result in results:
             assert result['processing_time'] > 0
-            print(f"Duration: {result['duration']}s, "
+            print(f"Duration: {result['duration']:.2f}s, "
                   f"Processing: {result['processing_time']:.3f}s, "
                   f"RTF: {result['real_time_factor']:.1f}x")
     

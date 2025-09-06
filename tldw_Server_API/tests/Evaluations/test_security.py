@@ -358,7 +358,7 @@ class TestConnectionPoolThreadSafety:
                     # Expected - pool is exhausted
                     elapsed = time.time() - start
                     # Should timeout quickly (within 2 seconds)
-                    assert elapsed <= 2.0, f"Timeout took too long: {elapsed}s"
+                    assert elapsed <= 2.0, f"Timeout took too long: {elapsed:.2f}s"
                 
             finally:
                 # Properly exit all context managers
