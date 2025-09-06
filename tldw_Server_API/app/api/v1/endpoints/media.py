@@ -45,9 +45,8 @@ from fastapi import (
     UploadFile
 )
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, Field
 import redis
-from pydantic.v1 import Field
 # API Rate Limiter/Caching via Redis
 # Use centralized rate limiter that respects TEST_MODE
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
@@ -821,8 +820,8 @@ async def delete_version(
     response_model=Dict[str, Any], # Update if you create a specific Pydantic model
 )
 async def rollback_version(
+    media_id: int,
     request_body: VersionRollbackRequest, # Renamed for clarity
-    media_id: int = Path(..., description="The ID of the media item"),
     # --- Use the new DB dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
@@ -1388,7 +1387,7 @@ class TempDirManager:
         self._created = False
 
     def __enter__(self):
-        self.temp_dir_path = Path(tempfile.mkdtemp(prefix=self.prefix))
+        self.temp_dir_path = FilePath(tempfile.mkdtemp(prefix=self.prefix))
         self._created = True
         logging.info(f"Created temporary directory: {self.temp_dir_path}")
         return self.temp_dir_path
@@ -1477,7 +1476,7 @@ async def _save_uploaded_files(
                 continue # Skip to the next file in the loop
 
             # --- Extension Validation ---
-            file_extension = Path(original_filename).suffix.lower()
+            file_extension = FilePath(original_filename).suffix.lower()
             
             # Block dangerous/executable file types for security
             BLOCKED_EXTENSIONS = {
@@ -1510,7 +1509,7 @@ async def _save_uploaded_files(
                 continue # Skip to the next file
 
             # --- Sanitize and Create Unique Filename ---
-            original_stem = Path(original_filename).stem
+            original_stem = FilePath(original_filename).stem
             secure_base = sanitize_filename(original_stem) # Sanitize the base name
 
             # Construct filename and ensure uniqueness within the temp dir for this batch
@@ -1939,7 +1938,7 @@ async def _process_batch_media(
             if isinstance(extracted_keywords, list):
                  combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and k.strip())
             final_keywords_list = sorted(list(combined_keywords))
-            title_for_db = metadata_for_db.get('title', form_data.title or (Path(str(original_input_ref)).stem if original_input_ref else 'Untitled')) # Use original_input_ref here
+            title_for_db = metadata_for_db.get('title', form_data.title or (FilePath(str(original_input_ref)).stem if original_input_ref else 'Untitled')) # Use original_input_ref here
             author_for_db = metadata_for_db.get('author', form_data.author)
 
             if content_for_db:
@@ -2133,7 +2132,7 @@ async def _process_document_like_item(
                  raise IOError(f"Download failed or did not return a valid path for {processing_source}")
 
         else: # It's an uploaded file path string
-            path_obj = Path(processing_source)
+            path_obj = FilePath(processing_source)
             if not path_obj.is_file(): # More specific check
                  raise FileNotFoundError(f"Uploaded file path not found or is not a file: {processing_source}")
             processing_filepath = path_obj
@@ -2280,7 +2279,7 @@ async def _process_document_like_item(
 
         model_used = metadata_for_db.get('parser_used', 'Imported') # Check metadata first
         if not model_used and media_type == 'pdf': model_used = final_result.get('analysis_details', {}).get('parser', 'Imported')
-        title_for_db = metadata_for_db.get('title', form_data.title or (Path(item_input_ref).stem if item_input_ref else 'Untitled'))
+        title_for_db = metadata_for_db.get('title', form_data.title or (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
         author_for_db = metadata_for_db.get('author', form_data.author or 'Unknown')
 
 
@@ -3236,7 +3235,7 @@ async def process_audios_endpoint(
 
     # ── 1) temp dir + uploads ────────────────────────────────────────────────
     with TempDirManager(cleanup=True, prefix="process_audio_") as temp_dir:
-        temp_dir_path = Path(temp_dir)
+        temp_dir_path = FilePath(temp_dir)
         ALLOWED_AUDIO_EXTENSIONS = ['.mp3', '.aac', '.flac', '.wav', '.ogg', '.m4a'] # Define allowed extensions
         saved_files, file_errors_raw = await _save_uploaded_files(
             files or [],
@@ -3733,7 +3732,7 @@ async def process_ebooks_endpoint(
     # Use httpx.AsyncClient for concurrent downloads
     async with httpx.AsyncClient() as client:
         with temp_dir_manager as tmp_dir_path:
-            temp_dir = Path(tmp_dir_path)
+            temp_dir = FilePath(tmp_dir_path)
             logger.info(f"Using temporary directory: {temp_dir}")
 
             # --- Handle Uploads ---
@@ -3760,7 +3759,7 @@ async def process_ebooks_endpoint(
 
                 for info in saved_files:
                     original_ref = info["original_filename"]
-                    local_path = Path(info["path"])
+                    local_path = FilePath(info["path"])
                     local_paths_to_process.append((original_ref, local_path))
                     source_map[original_ref] = str(local_path)
                     logger.debug(f"Prepared uploaded file for processing: {original_ref} -> {local_path}")
@@ -4129,7 +4128,7 @@ async def process_documents_endpoint(
     loop = asyncio.get_running_loop()
     # Use TempDirManager for reliable cleanup
     with TempDirManager(cleanup=(not form_data.keep_original_file), prefix="process_doc_") as temp_dir_path:
-        temp_dir = Path(temp_dir_path)
+        temp_dir = FilePath(temp_dir_path)
         logger.info(f"Using temporary directory: {temp_dir}")
 
         local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
@@ -4160,7 +4159,7 @@ async def process_documents_endpoint(
 
             for info in saved_files:
                 original_ref = info["original_filename"]
-                local_path = Path(info["path"])
+                local_path = FilePath(info["path"])
                 local_paths_to_process.append((original_ref, local_path))
                 source_map[original_ref] = local_path
                 logger.debug(f"Prepared uploaded file for processing: {original_ref} -> {local_path}")
@@ -4639,7 +4638,7 @@ async def process_pdfs_endpoint(
         if files:
             saved_files, upload_errors = await _save_uploaded_files(
                 files,
-                temp_dir=Path(temp_dir),  # Need Path object
+                temp_dir=FilePath(temp_dir),  # Need FilePath object
                 validator=file_validator_instance,
                 allowed_extensions=ALLOWED_PDF_EXTENSIONS
             )
@@ -4658,7 +4657,7 @@ async def process_pdfs_endpoint(
             # Now read bytes for successfully saved files
             for info in saved_files:
                 original_ref = info["original_filename"]
-                local_path = Path(info["path"])
+                local_path = FilePath(info["path"])
                 try:
                     file_bytes = local_path.read_bytes()
                     pdf_inputs_to_process.append((original_ref, file_bytes))
@@ -4688,7 +4687,7 @@ async def process_pdfs_endpoint(
                              res.raise_for_status()
                              content_type = res.headers.get('content-type', '').lower()
                              # Basic check for PDF content type or .pdf extension in final URL
-                             final_url_path = Path(str(res.url)).name # Get filename from final redirected URL
+                             final_url_path = FilePath(str(res.url)).name # Get filename from final redirected URL
                              if 'application/pdf' in content_type or final_url_path.endswith('.pdf'):
                                  file_bytes = res.content
                                  pdf_inputs_to_process.append((url, file_bytes)) # Use original URL as ref
@@ -5002,7 +5001,7 @@ async def ingest_mediawiki_dump_endpoint(
 
     # Using the existing TempDirManager
     with TempDirManager(prefix="mediawiki_ingest_") as temp_dir:
-        temp_file_path = Path(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
+        temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
                 content = await dump_file.read()  # Read file content
@@ -5055,7 +5054,7 @@ async def process_mediawiki_dump_ephemeral_endpoint(
         raise HTTPException(status_code=400, detail="Dump file has no filename.")
 
     with TempDirManager(prefix="mediawiki_process_") as temp_dir:
-        temp_file_path = Path(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
+        temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
                 content = await dump_file.read()
@@ -5587,7 +5586,7 @@ async def _download_url_async(
                         match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
                         disp_filename = match.group(1) if match else None
                         if disp_filename:
-                            actual_suffix = Path(disp_filename).suffix.lower()
+                            actual_suffix = FilePath(disp_filename).suffix.lower()
 
                 if not actual_suffix or actual_suffix not in allowed_extensions:
                     raise ValueError(
