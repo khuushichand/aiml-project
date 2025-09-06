@@ -9,7 +9,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
@@ -20,7 +20,7 @@ from starlette.staticfiles import StaticFiles
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 #
 # Audio Endpoint (includes WebSocket streaming transcription)
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
 #
 # Chat Endpoint
 from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
@@ -578,8 +578,11 @@ app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
 # Router for media endpoints/media file handling
 app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
 
-# Router for /audio/ endpoints (includes WebSocket streaming at /audio/stream/transcribe)
+# Router for /audio/ endpoints
 app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+
+# WebSocket router for audio streaming (separate to avoid authentication conflicts)
+app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
 
 # Router for chat endpoints/chat temp-file handling
 app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])

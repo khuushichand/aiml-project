@@ -241,44 +241,46 @@ class VibeVoiceAdapter(TTSAdapter):
             # Load the model components
             logger.info(f"{self.provider_name}: Loading VibeVoice components...")
             
-            # Import VibeVoice (hypothetical library)
+            # Import VibeVoice
             try:
-                # This would be the actual VibeVoice library import
-                # For now, we'll use placeholder imports
-                from transformers import AutoModel, AutoTokenizer
+                from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+                from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
                 
-                # Load processor/tokenizer
-                self.processor = AutoTokenizer.from_pretrained(
-                    self.model_path,
-                    cache_dir=self.cache_dir,
-                    local_files_only=self.model_dir.exists()
-                )
+                # Load processor
+                logger.info(f"Loading VibeVoice processor from {self.model_path}")
+                self.processor = VibeVoiceProcessor.from_pretrained(self.model_path)
+                
+                # Determine dtype and attention implementation
+                if self.device == "cuda":
+                    load_dtype = torch.bfloat16 if self.use_fp16 else torch.float32
+                    attn_impl = "flash_attention_2"
+                else:
+                    load_dtype = torch.float32
+                    attn_impl = "sdpa"
                 
                 # Load main model
-                self.model = AutoModel.from_pretrained(
+                logger.info(f"Loading VibeVoice model with dtype={load_dtype}, device={self.device}")
+                self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
                     self.model_path,
-                    torch_dtype=torch.float16 if self.use_fp16 else torch.float32,
-                    device_map=self.device,
-                    cache_dir=self.cache_dir,
-                    local_files_only=self.model_dir.exists()
+                    torch_dtype=load_dtype,
+                    device_map=self.device if self.device != "cpu" else None,
+                    attn_implementation=attn_impl
                 )
                 
-                # Model is ready for use
+                # Set model to eval and configure inference
+                self.model.eval()
+                self.model.set_ddpm_inference_steps(num_steps=10)
                 
             except ImportError as e:
                 error_msg = (
                     f"{self.provider_name}: Required libraries not installed. "
                     f"To use VibeVoice, follow these steps:\n"
-                    f"1. Clone the VibeVoice repository:\n"
-                    f"   git clone https://github.com/microsoft/VibeVoice.git\n"
-                    f"   cd VibeVoice/\n"
-                    f"2. Install VibeVoice (recommended in Docker):\n"
-                    f"   sudo docker run --privileged --gpus all --rm -it nvcr.io/nvidia/pytorch:24.07-py3\n"
-                    f"   pip install -e .\n"
-                    f"3. Or install locally:\n"
-                    f"   pip install transformers torch torchaudio accelerate\n"
-                    f"   pip install -e /path/to/VibeVoice\n"
-                    f"4. The {self.variant} model will auto-download on first use from:\n"
+                    f"1. Ensure VibeVoice is installed:\n"
+                    f"   cd libs/VibeVoice && pip install -e .\n"
+                    f"2. Or clone and install:\n"
+                    f"   git clone https://github.com/great-wind/MicroSoft_VibeVoice.git libs/VibeVoice\n"
+                    f"   cd libs/VibeVoice && pip install -e .\n"
+                    f"3. The {self.variant} model will auto-download on first use from:\n"
                     f"   {self.model_path}"
                 )
                 logger.error(f"{self.provider_name}: Required libraries not installed: {e}")
@@ -552,53 +554,70 @@ class VibeVoiceAdapter(TTSAdapter):
             # Prepare input with speaker settings
             input_data = self._prepare_vibevoice_input(request, voice, speaker_id)
             
-            # Process text with context
-            if self.enable_context:
-                context = request.extra_params.get("context", "")
-                inputs = self.processor(
-                    text=input_data["text"],
-                    context=context[:self.context_window],
-                    return_tensors="pt"
-                ).to(self.device)
-            else:
-                inputs = self.processor(
-                    text=input_data["text"],
-                    return_tensors="pt"
-                ).to(self.device)
+            # Prepare input data for generation
+            # VibeVoice uses voice samples directly, not embeddings
             
-            # Add speaker ID to inputs
-            inputs["speaker_id"] = torch.tensor([speaker_id], dtype=torch.long).to(self.device)
-            
-            # Add voice reference if provided
+            # Prepare voice samples list
+            voice_samples = []
             if voice_reference_path:
-                # Load reference audio for speaker embedding
-                import librosa
-                ref_audio, _ = librosa.load(voice_reference_path, sr=self.sample_rate)
-                # Extract speaker embedding (placeholder - would use actual model)
-                speaker_embedding = torch.tensor(ref_audio[:256]).unsqueeze(0).to(self.device)
-                inputs["speaker_embedding"] = speaker_embedding
-                logger.info(f"Using voice reference for VibeVoice: {voice_reference_path}")
+                voice_samples = [voice_reference_path]
+            elif voice in self.custom_voices:
+                voice_samples = [self.custom_voices[voice]]
+            else:
+                # Use default voice from Voices folder if available
+                if self.voices_dir.exists():
+                    default_voices = list(self.voices_dir.glob("*.wav"))
+                    if default_voices:
+                        voice_samples = [str(default_voices[0])]
             
-            # Generate with streaming
+            # Prepare inputs for the model
+            inputs = self.processor(
+                text=[input_data["text"]],  # Wrap in list for batch
+                voice_samples=[voice_samples] if voice_samples else None,
+                padding=True,
+                return_tensors="pt",
+                return_attention_mask=True
+            )
+            
+            # Move tensors to device
+            for k, v in inputs.items():
+                if torch.is_tensor(v):
+                    inputs[k] = v.to(self.device)
+            
+            # Generate with VibeVoice model
             with torch.no_grad():
-                # Placeholder for actual generation
-                # In production, this would use the VibeVoice model's streaming generation
-                audio_length = len(request.text) * 200  # Rough estimate
-                audio_array = np.random.randn(audio_length).astype(np.float32) * 0.1
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=None,
+                    cfg_scale=request.extra_params.get("cfg_scale", 1.3),
+                    tokenizer=self.processor.tokenizer,
+                    generation_config={'do_sample': False},
+                    verbose=False
+                )
                 
-                # Simulate streaming chunks
-                chunk_size = int(self.sample_rate * 0.25)  # 0.25 second chunks
-                for i in range(0, len(audio_array), chunk_size):
-                    chunk = audio_array[i:i + chunk_size]
+                # Get the generated audio
+                if outputs.speech_outputs and outputs.speech_outputs[0] is not None:
+                    audio_array = outputs.speech_outputs[0].cpu().numpy()
                     
-                    if len(chunk) > 0:
-                        # Normalize to int16
-                        normalized_chunk = normalizer.normalize(chunk, target_dtype=np.int16)
+                    # Stream the audio in chunks
+                    chunk_size = int(self.sample_rate * 0.25)  # 0.25 second chunks
+                    for i in range(0, len(audio_array), chunk_size):
+                        chunk = audio_array[i:i + chunk_size]
                         
-                        # Encode to target format
-                        encoded_bytes = writer.write_chunk(normalized_chunk)
-                        if encoded_bytes:
-                            yield encoded_bytes
+                        if len(chunk) > 0:
+                            # Normalize to int16
+                            normalized_chunk = normalizer.normalize(chunk, target_dtype=np.int16)
+                            
+                            # Encode to target format
+                            encoded_bytes = writer.write_chunk(normalized_chunk)
+                            if encoded_bytes:
+                                yield encoded_bytes
+                else:
+                    logger.error("No audio output generated from VibeVoice")
+                    raise TTSGenerationError(
+                        "Failed to generate audio",
+                        provider=self.provider_name
+                    )
             
             # Finalize stream
             final_bytes = writer.write_chunk(finalize=True)
