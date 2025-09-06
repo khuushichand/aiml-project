@@ -189,15 +189,18 @@ async def process_documents(
                 # (Optionally) Store in DB
                 if store_in_db:
                     # Use your own DB logic
-                    db_id = add_media_with_keywords(
+                    # Fix the function call to match the actual signature
+                    db_id, _, _ = add_media_with_keywords(
                         url=url,
                         title=custom_title or os.path.basename(local_path),
                         media_type="document",
                         content=text_content,
-                        summary=summary_text,
                         keywords=custom_keywords,
                         prompt=custom_prompt_input,
-                        system_prompt=system_prompt_input,
+                        analysis_content=summary_text,  # Store summary as analysis
+                        transcription_model="document-import",
+                        author=None,
+                        ingestion_date=None,
                         overwrite=overwrite_existing
                     )
                     item_result["db_id"] = db_id
@@ -236,15 +239,18 @@ async def process_documents(
                 item_result["summary"] = summary_text
 
                 if store_in_db:
-                    db_id = add_media_with_keywords(
+                    # Fix the function call to match the actual signature
+                    db_id, _, _ = add_media_with_keywords(
                         url=file_path,
                         title=custom_title or os.path.basename(file_path),
                         media_type="document",
                         content=text_content,
-                        summary=summary_text,
                         keywords=custom_keywords,
                         prompt=custom_prompt_input,
-                        system_prompt=system_prompt_input,
+                        analysis_content=summary_text,  # Store summary as analysis
+                        transcription_model="document-import",
+                        author=None,
+                        ingestion_date=None,
                         overwrite=overwrite_existing
                     )
                     item_result["db_id"] = db_id

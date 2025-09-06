@@ -427,17 +427,19 @@ class WebScrapingService:
                 summary = article.get("summary", "No summary available")
                 
                 # Add to database
-                media_id = add_media_with_keywords(
+                # Note: add_media_with_keywords expects specific parameters
+                media_id, _, _ = add_media_with_keywords(
                     url=article.get("url", ""),
-                    info_dict=info_dict,
-                    segments=segments,
-                    summary=summary,
-                    keywords=keywords.split(",") if keywords else [],
-                    custom_prompt_input=None,
-                    whisper_model="web-scraping-import",
+                    title=article.get("title", "Untitled"),
                     media_type="web_document",
-                    overwrite=False,
-                    user_id=user_id
+                    content=content_with_metadata,  # The full content
+                    keywords=keywords.split(",") if keywords else [],
+                    prompt=None,  # Optional prompt parameter
+                    analysis_content=article.get("summary", None),  # Store summary as analysis
+                    transcription_model="web-scraping-import",
+                    author=article.get("author", None),
+                    ingestion_date=None,  # Will use current time
+                    overwrite=False
                 )
                 
                 media_ids.append(media_id)

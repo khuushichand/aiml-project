@@ -194,15 +194,21 @@ async def process_web_scraping_task(
                     # "Segments" is how your DB manager expects text. We'll store one big chunk:
                     segments = [{"Text": article.get("content", "")}]
 
-                    media_id = add_media_with_keywords(
+                    # Combine content and metadata
+                    content_text = article.get("content", "")
+                    
+                    # Fix the function call to match the actual signature
+                    media_id, _, _ = add_media_with_keywords(
                         url=article.get("url", ""),
-                        info_dict=info_dict,
-                        segments=segments,
-                        summary=summary,
-                        keywords=keywords.split(",") if keywords else [],
-                        custom_prompt_input=(system_prompt or "") + "\n\n" + (custom_prompt or ""),
-                        whisper_model="web-scraping-import",
+                        title=article.get("title", "Untitled"),
                         media_type="web_document",
+                        content=content_text,
+                        keywords=keywords.split(",") if keywords else [],
+                        prompt=(system_prompt or "") + "\n\n" + (custom_prompt or "") if (system_prompt or custom_prompt) else None,
+                        analysis_content=article.get("summary", None),
+                        transcription_model="web-scraping-import",
+                        author=article.get("author", None),
+                        ingestion_date=None,
                         overwrite=False
                     )
                     media_ids.append(media_id)
