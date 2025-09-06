@@ -5474,7 +5474,7 @@ async def process_web_scraping_endpoint(
             summarize_checkbox=payload.summarize_checkbox,
             custom_prompt=payload.custom_prompt,
             api_name=payload.api_name,
-            # api_key removed - retrieved from server config
+            api_key=None,  # API key retrieved from server config
             keywords=payload.keywords or "",
             custom_titles=payload.custom_titles,
             system_prompt=payload.system_prompt,
@@ -5484,7 +5484,12 @@ async def process_web_scraping_endpoint(
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
+        import traceback
+        error_detail = f"Web scraping failed: {str(e)}"
+        logger.error(f"Web scraping endpoint error: {error_detail}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Request details - scrape_method: {payload.scrape_method}, url_input: {payload.url_input[:100] if payload.url_input else 'None'}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 #
 # End of Web Scraping Ingestion

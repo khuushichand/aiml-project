@@ -96,9 +96,12 @@ async def process_web_scraping_task(
         return result
         
     except Exception as e:
-        # Log error but try fallback
+        # Log error with full details
         import logging
-        logging.warning(f"Enhanced scraping service failed, using legacy: {e}")
+        import traceback
+        logging.error(f"Enhanced scraping service failed: {str(e)}")
+        logging.error(f"Full traceback: {traceback.format_exc()}")
+        logging.warning(f"Falling back to legacy implementation")
         
         # Fallback to legacy implementation
         try:
