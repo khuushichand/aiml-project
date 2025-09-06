@@ -146,9 +146,45 @@ class ChunkingOptions(BaseModel):
                 raise ValueError(f"Invalid regex pattern provided for custom_chapter_pattern: {v}. Error: {e}")
         return v
 
+class TranscriptionModel(str, Enum):
+    """Available transcription models and backends"""
+    # Whisper Models (faster-whisper)
+    WHISPER_TINY = "whisper-tiny"
+    WHISPER_TINY_EN = "whisper-tiny.en"
+    WHISPER_BASE = "whisper-base"
+    WHISPER_BASE_EN = "whisper-base.en"
+    WHISPER_SMALL = "whisper-small"
+    WHISPER_SMALL_EN = "whisper-small.en"
+    WHISPER_MEDIUM = "whisper-medium"
+    WHISPER_MEDIUM_EN = "whisper-medium.en"
+    WHISPER_LARGE_V1 = "whisper-large-v1"
+    WHISPER_LARGE_V2 = "whisper-large-v2"
+    WHISPER_LARGE_V3 = "whisper-large-v3"
+    WHISPER_LARGE_V3_TURBO = "whisper-large-v3-turbo"
+    
+    # Distil-Whisper Models (faster, optimized)
+    DISTIL_WHISPER_LARGE_V2 = "distil-whisper-large-v2"
+    DISTIL_WHISPER_LARGE_V3 = "distil-whisper-large-v3"
+    DISTIL_WHISPER_MEDIUM_EN = "distil-whisper-medium.en"
+    DISTIL_WHISPER_SMALL_EN = "distil-whisper-small.en"
+    
+    # Specific HuggingFace models
+    DEEPDML_FASTER_DISTIL_LARGE_V3 = "deepdml/faster-distil-whisper-large-v3.5"
+    DEEPDML_FASTER_LARGE_V3_TURBO = "deepdml/faster-whisper-large-v3-turbo-ct2"
+    
+    # Nemo Models
+    NEMO_CANARY_1B = "nemo-canary-1b"
+    NEMO_PARAKEET_TDT_1B = "nemo-parakeet-tdt-1.1b"
+    
+    # Parakeet with backends
+    PARAKEET_STANDARD = "parakeet-standard"
+    PARAKEET_CUDA = "parakeet-cuda"
+    PARAKEET_MLX = "parakeet-mlx"
+    PARAKEET_ONNX = "parakeet-onnx"
+
 class AudioVideoOptions(BaseModel):
     """Pydantic model for Audio/Video specific options"""
-    transcription_model: str = Field("deepdml/faster-distil-whisper-large-v3.5", description="Model ID for audio/video transcription (e.g., from Hugging Face)")
+    transcription_model: str = Field("deepdml/faster-distil-whisper-large-v3.5", description="Model ID for audio/video transcription")
     transcription_language: str = Field("en", description="Language for audio/video transcription (ISO 639-1 code)")
     diarize: bool = Field(False, description="Enable speaker diarization (audio/video)")
     timestamp_option: bool = Field(True, description="Include timestamps in the transcription (audio/video)")
@@ -187,10 +223,14 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     # -----------------------------------------------
 
     # --- Integration Options ---
-    api_name: Optional[str] = Field(None, description="Optional API name for integration (e.g., OpenAI)")
-    api_key: Optional[str] = Field(None, description="Optional API key for integration") # Consider secure handling/storage
+    # SECURITY: Never accept API keys from client - lookup from server config instead
+    api_provider: Optional[str] = Field(None, description="LLM provider name (e.g., openai, anthropic, local-llm)")
+    model_name: Optional[str] = Field(None, description="Model name for the selected provider")
     use_cookies: bool = Field(False, description="Whether to attach cookies to URL download requests")
     cookies: Optional[str] = Field(None, description="Cookie string if `use_cookies` is set to True")
+    
+    # Legacy field for backward compatibility - will be removed
+    api_name: Optional[str] = Field(None, description="DEPRECATED - use api_provider instead")
 
     # --- Embedding Options ---
     generate_embeddings: bool = Field(False, description="Generate embeddings after media processing")
@@ -209,6 +249,19 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
         if not self.keywords_str:
             return []
         return [k.strip() for k in self.keywords_str.split(",") if k.strip()]
+    
+    def model_post_init(self, __context):
+        """Handle legacy api_name field by splitting into provider/model."""
+        if self.api_name and '/' in self.api_name:
+            # If api_name contains '/', treat it as 'provider/model' format
+            provider, model = self.api_name.split('/', 1)
+            if not self.api_provider:
+                self.api_provider = provider
+            if not self.model_name:
+                self.model_name = model
+        elif self.api_name and not self.api_provider:
+            # If only api_name is set without '/', use it as provider
+            self.api_provider = self.api_name
 
     # Use alias for 'keywords' field to accept 'keywords' in the form data
     # but internally work with 'keywords_str' before parsing.

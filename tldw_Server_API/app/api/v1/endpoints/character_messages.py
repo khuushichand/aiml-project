@@ -249,8 +249,14 @@ async def send_message(
         """, (chat_id,))
         conn.commit()
         
-        # Retrieve created message
-        created_msg = retrieve_message_details(db, created_id)
+        # Get character details for placeholders
+        character_id = conversation.get('character_id')
+        character = db.get_character_card_by_id(character_id) if character_id else None
+        character_name = character.get('name', 'Assistant') if character else 'Assistant'
+        user_name = conversation.get('user_name', 'User')
+        
+        # Retrieve created message with placeholder parameters
+        created_msg = retrieve_message_details(db, created_id, character_name, user_name)
         
         logger.info(f"Created message {created_id} in chat {chat_id} by user {current_user.id}")
         
@@ -417,8 +423,15 @@ async def edit_message(
         """, (message['conversation_id'],))
         conn.commit()
         
-        # Retrieve updated message
-        updated_msg = retrieve_message_details(db, message_id)
+        # Get character details for placeholders
+        conversation = db.get_conversation_by_id(message['conversation_id'])
+        character_id = conversation.get('character_id') if conversation else None
+        character = db.get_character_card_by_id(character_id) if character_id else None
+        character_name = character.get('name', 'Assistant') if character else 'Assistant'
+        user_name = conversation.get('user_name', 'User') if conversation else 'User'
+        
+        # Retrieve updated message with placeholder parameters
+        updated_msg = retrieve_message_details(db, message_id, character_name, user_name)
         
         logger.info(f"Updated message {message_id} by user {current_user.id}")
         

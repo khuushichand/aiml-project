@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import uuid
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path as FilePath
 from typing import Any, Dict, List, Optional, Tuple, Callable, Literal, Union, Set
 #
 # 3rd-party imports
@@ -38,6 +38,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Path,
     Query,
     Request,
     status,
@@ -116,7 +117,8 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessAudiosForm,
     SearchRequest,
     ProcessedMediaWikiPage,
-    media_wiki_global_config
+    media_wiki_global_config,
+    TranscriptionModel
 )
 from tldw_Server_API.app.core.config import settings, config
 from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
@@ -277,7 +279,7 @@ def get_add_media_form(
     keep_original_file: bool = Form(False, description="Retain original uploaded files"),
     perform_analysis: bool = Form(True, description="Perform analysis (default=True)"),
     api_name: Optional[str] = Form(None, description="Optional API name"),
-    api_key: Optional[str] = Form(None, description="Optional API key"), # Consider secure handling
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
     cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
     transcription_model: str = Form("deepdml/faster-distil-whisper-large-v3.5", description="Transcription model"),
@@ -311,6 +313,13 @@ def get_add_media_form(
     Dependency function to parse form data for the /add endpoint
     and validate it against the AddMediaForm model.
     """
+    # Validate transcription_model against TranscriptionModel enum
+    if transcription_model:
+        valid_models = [model.value for model in TranscriptionModel]
+        if transcription_model not in valid_models:
+            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
+            transcription_model = "whisper-large-v3"  # Default to a reliable model
+    
     try:
         # Create the Pydantic model instance using the parsed form data.
         # Pass the received Form(...) parameters to the model constructor
@@ -328,7 +337,7 @@ def get_add_media_form(
             start_time=start_time,
             end_time=end_time,
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             use_cookies=use_cookies,
             cookies=cookies,
             transcription_model=transcription_model,
@@ -386,7 +395,7 @@ def get_add_media_form(
     # response_model=MediaDetailResponse # Define a Pydantic model for this response if desired
 )
 async def get_media_item(
-    media_id: int,
+    media_id: int = Path(..., description="The ID of the media item"),
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
@@ -618,7 +627,7 @@ async def create_version(
     response_model=List[Dict[str, Any]], # Update if you create a specific Pydantic model
 )
 async def list_versions(
-    media_id: int,
+    media_id: int = Path(..., description="The ID of the media item"),
     include_content: bool = Query(False, description="Include full content in response"),
     limit: int = Query(10, ge=1, le=100, description="Results per page"),
     page: int = Query(1, ge=1, description="Page number"), # Use page instead of offset
@@ -689,8 +698,8 @@ async def list_versions(
     response_model=Dict[str, Any], # Update if you create a specific Pydantic model
 )
 async def get_version(
-    media_id: int,
-    version_number: int,
+    media_id: int = Path(..., description="The ID of the media item"),
+    version_number: int = Path(..., description="The version number"),
     include_content: bool = Query(True, description="Include full content in response"),
     # --- Use the new DB dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user)
@@ -739,8 +748,8 @@ async def get_version(
     status_code=status.HTTP_204_NO_CONTENT, # Keep 204 on success
 )
 async def delete_version(
-    media_id: int,
-    version_number: int,
+    media_id: int = Path(..., description="The ID of the media item"),
+    version_number: int = Path(..., description="The version number"),
     # --- Use the new DB dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
@@ -812,8 +821,8 @@ async def delete_version(
     response_model=Dict[str, Any], # Update if you create a specific Pydantic model
 )
 async def rollback_version(
-    media_id: int,
     request_body: VersionRollbackRequest, # Renamed for clarity
+    media_id: int = Path(..., description="The ID of the media item"),
     # --- Use the new DB dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
@@ -883,8 +892,8 @@ async def rollback_version(
     response_model=Dict[str, Any], # Update if specific model created
 )
 async def update_media_item(
-    media_id: int,
     payload: MediaUpdateRequest,
+    media_id: int = Path(..., description="The ID of the media item"),
     # --- Use the new DB dependency ---
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
@@ -1148,6 +1157,72 @@ async def list_all_media(
     except Exception as e:
         logger.error(f"Unexpected error in list_all_media endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected internal server error occurred.")
+
+
+@router.get(
+    "/transcription-models",
+    status_code=status.HTTP_200_OK,
+    summary="Get Available Transcription Models",
+    tags=["Media Processing"],
+    response_model=Dict[str, List[Dict[str, str]]]
+)
+async def get_transcription_models():
+    """
+    Get all available transcription models grouped by category.
+    Returns models suitable for populating dropdown menus.
+    """
+    models_by_category = {
+        "Whisper Models": [
+            {"value": "whisper-tiny", "label": "Whisper Tiny (39M)", "description": "Fastest, least accurate"},
+            {"value": "whisper-tiny.en", "label": "Whisper Tiny English (39M)", "description": "English only, faster"},
+            {"value": "whisper-base", "label": "Whisper Base (74M)", "description": "Fast, good accuracy"},
+            {"value": "whisper-base.en", "label": "Whisper Base English (74M)", "description": "English only, better"},
+            {"value": "whisper-small", "label": "Whisper Small (244M)", "description": "Balanced speed/accuracy"},
+            {"value": "whisper-small.en", "label": "Whisper Small English (244M)", "description": "English only, recommended"},
+            {"value": "whisper-medium", "label": "Whisper Medium (769M)", "description": "Good accuracy, slower"},
+            {"value": "whisper-medium.en", "label": "Whisper Medium English (769M)", "description": "English only, high quality"},
+            {"value": "whisper-large-v1", "label": "Whisper Large v1 (1550M)", "description": "Original large model"},
+            {"value": "whisper-large-v2", "label": "Whisper Large v2 (1550M)", "description": "Improved large model"},
+            {"value": "whisper-large-v3", "label": "Whisper Large v3 (1550M)", "description": "Latest, most accurate"},
+            {"value": "whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo", "description": "Faster large model"}
+        ],
+        "Distil-Whisper Models": [
+            {"value": "distil-whisper-small.en", "label": "Distil-Whisper Small English", "description": "6x faster, similar accuracy"},
+            {"value": "distil-whisper-medium.en", "label": "Distil-Whisper Medium English", "description": "6x faster, good quality"},
+            {"value": "distil-whisper-large-v2", "label": "Distil-Whisper Large v2", "description": "5.8x faster"},
+            {"value": "distil-whisper-large-v3", "label": "Distil-Whisper Large v3", "description": "Latest distilled model"}
+        ],
+        "Optimized Models": [
+            {"value": "whisper-tiny-ct2", "label": "Whisper Tiny CT2", "description": "CTranslate2 optimized"},
+            {"value": "whisper-base-ct2", "label": "Whisper Base CT2", "description": "CTranslate2 optimized"},
+            {"value": "whisper-small-ct2", "label": "Whisper Small CT2", "description": "CTranslate2 optimized"},
+            {"value": "whisper-medium-ct2", "label": "Whisper Medium CT2", "description": "CTranslate2 optimized"},
+            {"value": "whisper-large-v2-ct2", "label": "Whisper Large v2 CT2", "description": "CTranslate2 optimized"},
+            {"value": "whisper-large-v3-ct2", "label": "Whisper Large v3 CT2", "description": "CTranslate2 optimized"}
+        ],
+        "Nemo Models": [
+            {"value": "nemo-canary", "label": "Nemo Canary", "description": "NVIDIA's multilingual model"},
+            {"value": "nemo-parakeet-0.11b", "label": "Nemo Parakeet 0.11B", "description": "Lightweight model"},
+            {"value": "nemo-parakeet-1.1b", "label": "Nemo Parakeet 1.1B", "description": "Standard model"},
+            {"value": "nemo-parakeet-tdt-1.1b", "label": "Nemo Parakeet TDT 1.1B", "description": "Timestamped model"}
+        ],
+        "Parakeet Backends": [
+            {"value": "parakeet-standard", "label": "Parakeet Standard", "description": "Default CPU backend"},
+            {"value": "parakeet-cuda", "label": "Parakeet CUDA", "description": "GPU acceleration (NVIDIA)"},
+            {"value": "parakeet-mlx", "label": "Parakeet MLX", "description": "Apple Silicon acceleration"},
+            {"value": "parakeet-onnx", "label": "Parakeet ONNX", "description": "Cross-platform optimization"}
+        ]
+    }
+    
+    # Also return a flat list of all values for validation
+    all_models = []
+    for category_models in models_by_category.values():
+        all_models.extend([model["value"] for model in category_models])
+    
+    return {
+        "categories": models_by_category,
+        "all_models": all_models
+    }
 
 
 # FIXME - Add an 'advanced search' option for searching by date range, media type, etc. - update DB schema to add new fields
@@ -1573,6 +1648,7 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
 
 def _prepare_common_options(form_data: AddMediaForm, chunk_options: Optional[Dict]) -> Dict[str, Any]:
     """Prepares the dictionary of common processing options."""
+    # SECURITY: Never pass API keys from client - they will be retrieved from server config
     return {
         "keywords": form_data.keywords, # Use the parsed list from the model
         "custom_prompt": form_data.custom_prompt,
@@ -1580,8 +1656,10 @@ def _prepare_common_options(form_data: AddMediaForm, chunk_options: Optional[Dic
         "overwrite_existing": form_data.overwrite_existing,
         "perform_analysis": form_data.perform_analysis,
         "chunk_options": chunk_options, # Pass the prepared dict
-        "api_name": form_data.api_name,
-        "api_key": form_data.api_key,
+        "api_name": form_data.api_name,  # For backward compatibility
+        "api_provider": form_data.api_provider,  # New field for provider name
+        "model_name": form_data.model_name,  # New field for model name
+        # api_key removed - will be retrieved from server config in processing functions
         "store_in_db": True, # Assume we always want to store for this endpoint
         "summarize_recursively": form_data.summarize_recursively,
         "author": form_data.author # Pass common author
@@ -1715,7 +1793,7 @@ async def _process_batch_media(
                  "chunk_language": chunk_options.get('language') if chunk_options else None,
                  "summarize_recursively": form_data.summarize_recursively,
                  "api_name": form_data.api_name if form_data.perform_analysis else None,
-                 "api_key": form_data.api_key,
+                 # api_key removed - retrieved from server config
                  "use_cookies": form_data.use_cookies, "cookies": form_data.cookies,
                  "timestamp_option": form_data.timestamp_option,
                  "perform_confabulation_check": form_data.perform_confabulation_check_of_analysis,
@@ -1741,7 +1819,7 @@ async def _process_batch_media(
                  "diarize": form_data.diarize, "vad_use": form_data.vad_use, "timestamp_option": form_data.timestamp_option,
                  "perform_analysis": form_data.perform_analysis,
                  "api_name": form_data.api_name if form_data.perform_analysis else None,
-                 "api_key": form_data.api_key,
+                 # api_key removed - retrieved from server config
                  "custom_prompt_input": form_data.custom_prompt, "system_prompt_input": form_data.system_prompt,
                  "summarize_recursively": form_data.summarize_recursively,
                  "use_cookies": form_data.use_cookies, "cookies": form_data.cookies,
@@ -2087,7 +2165,7 @@ async def _process_document_like_item(
             "perform_analysis": form_data.perform_analysis,
             # --- FIX: Pass these arguments ---
             "api_name": form_data.api_name,
-            "api_key": form_data.api_key,
+            # api_key removed - retrieved from server config
             "custom_prompt": form_data.custom_prompt,
             "system_prompt": form_data.system_prompt,
             # ----------------------------------
@@ -2600,7 +2678,7 @@ def get_process_videos_form(
     start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
     end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
     api_name: Optional[str] = Form(None, description="Optional API name"),
-    api_key: Optional[str] = Form(None, description="Optional API key"), # Consider secure handling via settings
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
     cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
     transcription_model: str = Form("deepdml/faster-whisper-large-v3-turbo-ct2", description="Transcription model"),
@@ -2628,6 +2706,13 @@ def get_process_videos_form(
     Dependency function to parse form data and validate it
     against the ProcessVideosForm model.
     """
+    # Validate transcription_model against TranscriptionModel enum
+    if transcription_model:
+        valid_models = [model.value for model in TranscriptionModel]
+        if transcription_model not in valid_models:
+            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
+            transcription_model = "whisper-large-v3"  # Default to a reliable model
+    
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessVideosForm(
@@ -2644,7 +2729,7 @@ def get_process_videos_form(
             start_time=start_time,
             end_time=end_time,
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             use_cookies=use_cookies,
             cookies=cookies,
             transcription_model=transcription_model,
@@ -2816,7 +2901,7 @@ async def process_videos_endpoint(
             "chunk_language": form_data.chunk_language,
             "summarize_recursively": form_data.summarize_recursively,
             "api_name": form_data.api_name if form_data.perform_analysis else None,
-            "api_key": form_data.api_key,
+            # api_key removed - retrieved from server config
             "use_cookies": form_data.use_cookies,
             "cookies": form_data.cookies,
             "timestamp_option": form_data.timestamp_option,
@@ -2998,7 +3083,7 @@ def get_process_audios_form(
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used in this endpoint, but needed for model)"),
     perform_analysis: bool = Form(True, description="Perform analysis"),
     api_name: Optional[str] = Form(None, description="Optional API name"),
-    api_key: Optional[str] = Form(None, description="Optional API key"),
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
     cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
     transcription_model: str = Form("deepdml/faster-distil-whisper-large-v3.5", description="Transcription model"),
@@ -3030,6 +3115,13 @@ def get_process_audios_form(
     Dependency function to parse form data and validate it
     against the ProcessAudiosForm model.
     """
+    # Validate transcription_model against TranscriptionModel enum
+    if transcription_model:
+        valid_models = [model.value for model in TranscriptionModel]
+        if transcription_model not in valid_models:
+            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
+            transcription_model = "whisper-large-v3"  # Default to a reliable model
+    
     try:
         # Map form fields to ProcessAudiosForm fields
         form_instance = ProcessAudiosForm(
@@ -3043,7 +3135,7 @@ def get_process_audios_form(
             keep_original_file=False,
             perform_analysis=perform_analysis,
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             use_cookies=use_cookies,
             cookies=cookies,
             transcription_model=transcription_model,
@@ -3220,7 +3312,7 @@ async def process_audios_endpoint(
             "timestamp_option": form_data.timestamp_option,
             "perform_analysis": form_data.perform_analysis,
             "api_name": form_data.api_name if form_data.perform_analysis else None,
-            "api_key": form_data.api_key,
+            # api_key removed - retrieved from server config
             "custom_prompt_input": form_data.custom_prompt,
             "system_prompt_input": form_data.system_prompt,
             "summarize_recursively": form_data.summarize_recursively,
@@ -3410,7 +3502,7 @@ def _process_single_ebook(
     perform_analysis: bool,
     summarize_recursively: bool,
     api_name: Optional[str],
-    api_key: Optional[str],
+    # api_key removed - SECURITY: Never accept API keys from client
     custom_prompt: Optional[str],
     system_prompt: Optional[str],
     extraction_method: str, # Pass selected method
@@ -3432,7 +3524,7 @@ def _process_single_ebook(
             chunk_options=chunk_options,
             perform_analysis=perform_analysis,
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             custom_prompt=custom_prompt,
             system_prompt=system_prompt,
             summarize_recursively=summarize_recursively,
@@ -3469,7 +3561,7 @@ def get_process_ebooks_form(
     overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used, for model validation)"),
     perform_analysis: bool = Form(True, description="Perform analysis (summarization)"),
     api_name: Optional[str] = Form(None, description="Optional API name for analysis"),
-    api_key: Optional[str] = Form(None, description="Optional API key for analysis"),
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests (Not implemented for ebooks)"),
     cookies: Optional[str] = Form(None, description="Cookie string (Not implemented for ebooks)"),
     summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
@@ -3518,7 +3610,7 @@ def get_process_ebooks_form(
             "overwrite_existing": overwrite_existing, # Keep for model validation if needed
             "perform_analysis": perform_analysis,
             "api_name": api_name,
-            "api_key": api_key,
+            # api_key removed - retrieved from server config
             "use_cookies": use_cookies, # Keep for model validation if needed
             "cookies": cookies, # Keep for model validation if needed
             "summarize_recursively": summarize_recursively,
@@ -3615,7 +3707,7 @@ async def process_ebooks_endpoint(
     logger.info("Request received for /process-ebooks (no persistence).")
     # Log form data safely (exclude sensitive fields)
     # Use .model_dump() for Pydantic v2
-    logger.debug(f"Form data received: {form_data.model_dump(exclude={'api_key'})}")
+    logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
 
     if form_data.urls and form_data.urls == ['']:
         logger.info("Received urls=[''], treating as no URLs provided for ebook processing.")
@@ -3762,7 +3854,7 @@ async def process_ebooks_endpoint(
                     perform_analysis=form_data.perform_analysis,
                     summarize_recursively=form_data.summarize_recursively,
                     api_name=form_data.api_name,
-                    api_key=form_data.api_key,
+                    # api_key removed - retrieved from server config
                     custom_prompt=form_data.custom_prompt,
                     system_prompt=form_data.system_prompt,
                     # --- Pass the extraction method ---
@@ -3891,7 +3983,7 @@ def get_process_documents_form(
     overwrite_existing: bool = Form(False), # Keep for model validation
     perform_analysis: bool = Form(True),
     api_name: Optional[str] = Form(None),
-    api_key: Optional[str] = Form(None),
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False),
     cookies: Optional[str] = Form(None),
     summarize_recursively: bool = Form(False),
@@ -3935,7 +4027,7 @@ def get_process_documents_form(
             "overwrite_existing": overwrite_existing,
             "perform_analysis": perform_analysis,
             "api_name": api_name,
-            "api_key": api_key,
+            # api_key removed - retrieved from server config
             "use_cookies": use_cookies,
             "cookies": cookies,
             "summarize_recursively": summarize_recursively,
@@ -4016,7 +4108,7 @@ async def process_documents_endpoint(
     Supports `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml`. Requires `pandoc` for `.rtf`.
     """
     logger.info("Request received for /process-documents (no persistence).")
-    logger.debug(f"Form data received: {form_data.model_dump(exclude={'api_key'})}") # Use model_dump for Pydantic v2+
+    logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
 
     # Define allowed extensions for this endpoint
     # Make sure these match what convert_document_to_text supports
@@ -4174,7 +4266,7 @@ async def process_documents_endpoint(
                 perform_analysis=form_data.perform_analysis,
                 summarize_recursively=form_data.summarize_recursively,
                 api_name=form_data.api_name,
-                api_key=form_data.api_key,
+                # api_key removed - retrieved from server config
                 custom_prompt=form_data.custom_prompt,
                 system_prompt=form_data.system_prompt,
                 title_override=form_data.title,
@@ -4304,7 +4396,7 @@ def get_process_pdfs_form(
     keep_original_file: bool = Form(False, description="Retain original files (fixed in model)"), # Fixed by ProcessPDFsForm
     perform_analysis: bool = Form(True, description="Perform analysis"),
     api_name: Optional[str] = Form(None, description="Optional API name"), # Keep this
-    api_key: Optional[str] = Form(None, description="Optional API key"),    # Keep this
+    # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
     cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
     summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
@@ -4338,6 +4430,14 @@ def get_process_pdfs_form(
     Dependency function to parse form data and validate it
     against the ProcessPDFsForm model.
     """
+    # Validate transcription_model against TranscriptionModel enum
+    # (even though PDFs don't use transcription, it's part of the base form)
+    if transcription_model:
+        valid_models = [model.value for model in TranscriptionModel]
+        if transcription_model not in valid_models:
+            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
+            transcription_model = "whisper-large-v3"  # Default to a reliable model
+    
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessPDFsForm(
@@ -4353,7 +4453,7 @@ def get_process_pdfs_form(
             keep_original_file=keep_original_file, # Use arg
             perform_analysis=perform_analysis,
             api_name=api_name,   # Pass received arg
-            api_key=api_key,     # Pass received arg
+            # api_key removed - retrieved from server config
             use_cookies=use_cookies,
             cookies=cookies,
             summarize_recursively=summarize_recursively,
@@ -4422,7 +4522,7 @@ async def _single_pdf_worker(
             "custom_prompt": form.custom_prompt,
             "system_prompt": form.system_prompt,
             "api_name": form.api_name if form.perform_analysis else None,
-            "api_key": form.api_key,
+            # api_key removed - retrieved from server config
             "perform_analysis": form.perform_analysis,
             "keywords": form.keywords,
             "perform_chunking": form.perform_chunking and form.perform_analysis,
@@ -4645,7 +4745,7 @@ async def process_pdfs_endpoint(
             status_code = status.HTTP_207_MULTI_STATUS if batch_result["errors_count"] > 0 else status.HTTP_400_BAD_REQUEST
             return JSONResponse(status_code=status_code, content=batch_result)
 
-        logger.debug(f"ENDPOINT: #1 Passing to task -> api_name='{form_data.api_name}', api_key='{form_data.api_key}'")
+        logger.debug(f"ENDPOINT: #1 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
         # --- Call process_pdf_task for each input ---
         tasks = []
         for original_ref, file_bytes in pdf_inputs_to_process:
@@ -4656,7 +4756,7 @@ async def process_pdfs_endpoint(
                  'overlap': form_data.chunk_overlap
              }
              logger.debug(
-                 f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_key='{form_data.api_key}'")
+                 f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
              # Create the async task
              task = asyncio.create_task(
                  process_pdf_task(
@@ -4674,7 +4774,7 @@ async def process_pdfs_endpoint(
                      chunk_overlap=chunk_opts_for_task['overlap'],
                      perform_analysis=form_data.perform_analysis,
                      api_name=form_data.api_name,
-                     api_key=form_data.api_key,
+                     # api_key removed - retrieved from server config
                      custom_prompt=form_data.custom_prompt,
                      system_prompt=form_data.system_prompt,
                      summarize_recursively=form_data.summarize_recursively,
@@ -4773,7 +4873,7 @@ class XMLIngestRequest(BaseModel):
     custom_prompt: Optional[str] = None
     auto_summarize: bool = False
     api_name: Optional[str] = None
-    api_key: Optional[str] = None
+    # api_key removed - SECURITY: Never accept API keys from client
     mode: str = "persist"  # or "ephemeral"
 
 # @router.post("/process-xml")
@@ -4800,7 +4900,7 @@ class XMLIngestRequest(BaseModel):
 #             custom_prompt=payload.custom_prompt,
 #             auto_summarize=payload.auto_summarize,
 #             api_name=payload.api_name,
-#             api_key=payload.api_key
+#             # api_key removed - retrieved from server config
 #         )
 #
 #         # 2) ephemeral vs. persist
@@ -5092,7 +5192,7 @@ async def ingest_web_content(
             input_data=content,
             custom_prompt_arg=request.custom_prompt or "Summarize this article.",
             api_name=request.api_name,
-            api_key=request.api_key,
+            # api_key removed - retrieved from server config
             temp=0.7,
             system_message=request.system_prompt or "Act as a professional summarizer."
         )
@@ -5344,7 +5444,7 @@ class WebScrapingRequest(BaseModel):
     summarize_checkbox: bool = False
     custom_prompt: Optional[str] = None
     api_name: Optional[str] = None
-    api_key: Optional[str] = None
+    # api_key removed - SECURITY: Never accept API keys from client
     keywords: Optional[str] = "default,no_keyword_set"
     custom_titles: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -5375,7 +5475,7 @@ async def process_web_scraping_endpoint(
             summarize_checkbox=payload.summarize_checkbox,
             custom_prompt=payload.custom_prompt,
             api_name=payload.api_name,
-            api_key=payload.api_key,
+            # api_key removed - retrieved from server config
             keywords=payload.keywords or "",
             custom_titles=payload.custom_titles,
             system_prompt=payload.system_prompt,

@@ -226,7 +226,7 @@ def process_audio_files(
     timestamp_option: bool = True, # Keep timestamps by default
     perform_analysis: bool = True, # Summarize by default if API provided
     api_name: Optional[str] = None, # LLM API for summarization
-    api_key: Optional[str] = None,
+    # api_key removed - retrieved from server config
     custom_prompt_input: Optional[str] = None,
     system_prompt_input: Optional[str] = None,
     summarize_recursively: bool = False,
@@ -283,7 +283,7 @@ def process_audio_files(
                           transcribed/chunked text. Defaults to True. Requires `api_name`.
         api_name: Name of the LLM API to use for analysis (e.g., 'openai', 'anthropic').
                   Required if `perform_analysis` is True. Defaults to None.
-        api_key: API key for the specified LLM API. Defaults to None.
+        # api_key parameter removed - API keys are retrieved from server config
         custom_prompt_input: Custom user prompt for the analysis task. Defaults to None.
         system_prompt_input: System prompt/message for the analysis task. Defaults to None.
         summarize_recursively: If True, use a recursive summarization strategy for long texts.
@@ -571,7 +571,7 @@ def process_audio_files(
                             api_name=api_name,
                             input_data=text_to_process_for_analysis,
                             custom_prompt_arg=custom_prompt_input,
-                            api_key=api_key,
+                            api_key=None,  # Pass None - will be retrieved from server config
                             recursive_summarization=summarize_recursively,
                             chunked_summarization=(generated_chunks is not None and len(
                                 generated_chunks) > 1 and not summarize_recursively),
@@ -867,7 +867,7 @@ def process_podcast(
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None, # Added system prompt
     api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
+    # api_key removed - retrieved from server config
     summarize_recursively: bool = False, # Added recursive flag
     # Chunking options
     perform_chunking: bool = True, # Added perform flag
@@ -909,7 +909,7 @@ def process_podcast(
         custom_prompt: Custom user prompt for LLM analysis. Defaults to None.
         system_prompt: System prompt for LLM analysis. Defaults to None.
         api_name: Name of LLM API for analysis (e.g., 'openai'). Defaults to None (no analysis).
-        api_key: API key for the LLM. Defaults to None.
+        # api_key parameter removed - API keys are retrieved from server config
         summarize_recursively: Use recursive summarization. Defaults to False.
         perform_chunking: Whether to chunk the transcript. Defaults to True.
         chunk_method: Chunking method. Defaults to None (library default).
@@ -1049,7 +1049,7 @@ def process_podcast(
             timestamp_option=keep_timestamps,
             perform_analysis=(api_name is not None and api_name.lower() != 'none'),
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             custom_prompt_input=custom_prompt,
             system_prompt_input=system_prompt,
             summarize_recursively=summarize_recursively,

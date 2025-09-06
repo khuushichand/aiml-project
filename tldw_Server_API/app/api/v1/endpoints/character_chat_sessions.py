@@ -413,7 +413,7 @@ async def update_chat_session(
                summary="Delete chat session", tags=["Chat Sessions"])
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
-    expected_version: int = Query(..., description="Expected version for optimistic locking"),
+    expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -446,8 +446,8 @@ async def delete_chat_session(
                 detail="You don't have access to this chat session"
             )
         
-        # Check version
-        if conversation.get('version', 1) != expected_version:
+        # Check version if provided
+        if expected_version is not None and conversation.get('version', 1) != expected_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"

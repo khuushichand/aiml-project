@@ -67,8 +67,9 @@ class CharacterResponse(CharacterBase):
 
 
 class CharacterImportResponse(BaseModel):
-    message: str
-    character: Optional[CharacterResponse] = None
+    id: int = Field(..., description="ID of the imported character")
+    name: str = Field(..., description="Name of the imported character")
+    message: str = Field(..., description="Import status message")
 
 
 class DeletionResponse(BaseModel):

@@ -470,7 +470,7 @@ def process_videos(
     chunk_language: Optional[str],
     summarize_recursively: bool,
     api_name: Optional[str],
-    api_key: Optional[str],
+    # api_key removed - retrieved from server config
     use_cookies: bool,
     cookies: Optional[str],
     timestamp_option: bool,
@@ -505,7 +505,7 @@ def process_videos(
     :param chunk_language: The language for chunking logic.
     :param summarize_recursively: If True, do multi-pass summarization of chunk summaries.
     :param api_name: The LLM API name (e.g., "openai").
-    :param api_key: The user’s (or system) API key for the LLM.
+    # api_key parameter removed - API keys are retrieved from server config
     :param use_cookies: If True, use cookies for authenticated video downloads.
     :param cookies: The user-supplied cookies in JSON or Netscape format.
     :param timestamp_option: If True, keep timestamps in final transcript.
@@ -592,7 +592,7 @@ def process_videos(
                 chunk_language=chunk_language,
                 summarize_recursively=summarize_recursively,
                 api_name=api_name,
-                api_key=api_key,
+                # api_key removed - retrieved from server config
                 use_cookies=use_cookies,
                 cookies=cookies,
                 timestamp_option=timestamp_option,
@@ -685,7 +685,7 @@ def process_videos(
                 single_summary = f"Video Input: {url}\nTranscription:\n{transcript}\n\nSummary:\n{individual_summary}\n\n"
 
                 # Run g_eval on this single pair
-                pair_result = run_geval(single_transcript_dict, single_summary, api_key, api_name)
+                pair_result = run_geval(single_transcript_dict, single_summary, None, api_name)  # Pass None for api_key
                 confab_results.append(f"URL: {url} - {pair_result}")
             else:
                 logging.warning(f"Could not find matching summary for URL: {url}")
@@ -727,7 +727,7 @@ def process_single_video(
     chunk_language: Optional[str],
     summarize_recursively: bool,
     api_name: Optional[str],
-    api_key: Optional[str],
+    # api_key removed - retrieved from server config
     use_cookies: bool,
     cookies: Optional[str],
     timestamp_option: bool,
@@ -912,7 +912,7 @@ def process_single_video(
                          logging.warning(warn_msg)
                          processing_result["warnings"].append(warn_msg)
                          # Fallback: Summarize original text if chunking fails/is empty
-                         analysis_text = analyze(api_name, text_to_analyze, custom_prompt, api_key, system_message=system_prompt)
+                         analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
 
                     else:
                          logger.info(f"Chunking successful, created {len(chunked_texts_list)} chunks.")
@@ -922,7 +922,7 @@ def process_single_video(
                              chunk_text = chunk_block.get("text")
                              if chunk_text:
                                  try:
-                                     csum = analyze(api_name, chunk_text, custom_prompt, api_key, system_message=system_prompt)
+                                     csum = analyze(api_name, chunk_text, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
                                      if csum:
                                          chunk_summaries.append(csum)
                                          # Optionally store chunk summary in chunk metadata if needed later
@@ -940,7 +940,7 @@ def process_single_video(
                                  logger.info("Performing recursive summarization on chunk summaries.")
                                  combined_chunk_summaries = "\n\n---\n\n".join(chunk_summaries) # Use separator
                                  try:
-                                     analysis_text = analyze(api_name, combined_chunk_summaries, custom_prompt or "Summarize the key points from the preceding text sections.", api_key, system_message=system_prompt)
+                                     analysis_text = analyze(api_name, combined_chunk_summaries, custom_prompt or "Summarize the key points from the preceding text sections.", None, system_message=system_prompt)  # Pass None for api_key
                                  except Exception as rec_summ_err:
                                      warn_msg = f"Recursive summarization failed: {rec_summ_err}"
                                      logging.warning(warn_msg)
@@ -959,7 +959,7 @@ def process_single_video(
                     processing_result["warnings"].append(warn_msg)
                     # Fallback: Summarize original text if chunking fails
                     try:
-                        analysis_text = analyze(api_name, text_to_analyze, custom_prompt, api_key, system_message=system_prompt)
+                        analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
                     except Exception as summ_err:
                          warn_msg = f"Summarization failed after chunking error: {summ_err}"
                          logging.error(warn_msg, exc_info=True)
@@ -968,7 +968,7 @@ def process_single_video(
             else: # No chunking requested
                  logger.info(f"Performing single-pass analysis for {local_file_path_for_transcription}")
                  try:
-                     analysis_text = analyze(api_name, text_to_analyze, custom_prompt, api_key, system_message=system_prompt)
+                     analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
                  except Exception as summ_err:
                      warn_msg = f"Summarization failed: {summ_err}"
                      logging.error(warn_msg, exc_info=True)

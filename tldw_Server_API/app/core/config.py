@@ -9,6 +9,7 @@ import os
 import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
 
 
 #
@@ -500,6 +501,14 @@ def load_comprehensive_config():
     # .parent.parent.parent -> .../tldw_Server_API (This is the project root)
     project_root = current_file_path.parent.parent.parent
 
+    # Load .env file if it exists (API keys should be here)
+    env_path = project_root / 'Config_Files' / '.env'
+    if env_path.exists():
+        logger.info(f"Loading environment variables from: {str(env_path)}")
+        load_dotenv(dotenv_path=str(env_path), override=False)
+    else:
+        logger.info(f"No .env file found at {str(env_path)}, will use config.txt and system environment variables")
+
     config_path_obj = project_root / 'Config_Files' / 'config.txt'
 
     logger.info(f"Attempting to load comprehensive config from: {str(config_path_obj)}")
@@ -582,49 +591,48 @@ def load_and_log_configs():
         if config_parser_object is None:
             logger.error("Comprehensive config object is None, cannot proceed")  # Changed to logger
             return None
-        # API Keys
-        anthropic_api_key = config_parser_object.get('API', 'anthropic_api_key', fallback=None)
+        # API Keys - Check environment variables first, then config file
+        anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') or config_parser_object.get('API', 'anthropic_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded Anthropic API Key: {anthropic_api_key[:5]}...{anthropic_api_key[-5:] if anthropic_api_key else None}")
 
-        cohere_api_key = config_parser_object.get('API', 'cohere_api_key', fallback=None)
+        cohere_api_key = os.getenv('COHERE_API_KEY') or config_parser_object.get('API', 'cohere_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded Cohere API Key: {cohere_api_key[:5]}...{cohere_api_key[-5:] if cohere_api_key else None}")
 
-        groq_api_key = config_parser_object.get('API', 'groq_api_key', fallback=None)
+        groq_api_key = os.getenv('GROQ_API_KEY') or config_parser_object.get('API', 'groq_api_key', fallback=None)
         # logging.debug(f"Loaded Groq API Key: {groq_api_key[:5]}...{groq_api_key[-5:] if groq_api_key else None}")
 
-        openai_api_key = config_parser_object.get('API', 'openai_api_key', fallback=None)
+        openai_api_key = os.getenv('OPENAI_API_KEY') or config_parser_object.get('API', 'openai_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded OpenAI API Key: {openai_api_key[:5]}...{openai_api_key[-5:] if openai_api_key else None}")
 
-        huggingface_api_key = config_parser_object.get('API', 'huggingface_api_key', fallback=None)
+        huggingface_api_key = os.getenv('HUGGINGFACE_API_KEY') or config_parser_object.get('API', 'huggingface_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded HuggingFace API Key: {huggingface_api_key[:5]}...{huggingface_api_key[-5:] if huggingface_api_key else None}")
 
-        openrouter_api_key = config_parser_object.get('API', 'openrouter_api_key', fallback=None)
+        openrouter_api_key = os.getenv('OPENROUTER_API_KEY') or config_parser_object.get('API', 'openrouter_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded OpenRouter API Key: {openrouter_api_key[:5]}...{openrouter_api_key[-5:] if openrouter_api_key else None}")
 
-        deepseek_api_key = config_parser_object.get('API', 'deepseek_api_key', fallback=None)
+        deepseek_api_key = os.getenv('DEEPSEEK_API_KEY') or config_parser_object.get('API', 'deepseek_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded DeepSeek API Key: {deepseek_api_key[:5]}...{deepseek_api_key[-5:] if deepseek_api_key else None}")
 
-        mistral_api_key = config_parser_object.get('API', 'mistral_api_key', fallback=None)
+        mistral_api_key = os.getenv('MISTRAL_API_KEY') or config_parser_object.get('API', 'mistral_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded Mistral API Key: {mistral_api_key[:5]}...{mistral_api_key[-5:] if mistral_api_key else None}")
 
-        google_api_key = config_parser_object.get('API', 'google_api_key', fallback=None)
+        google_api_key = os.getenv('GOOGLE_API_KEY') or config_parser_object.get('API', 'google_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded Google API Key: {google_api_key[:5]}...{google_api_key[-5:] if google_api_key else None}")
 
-        elevenlabs_api_key = config_parser_object.get('API', 'elevenlabs_api_key', fallback=None)
+        elevenlabs_api_key = os.getenv('ELEVENLABS_API_KEY') or config_parser_object.get('API', 'elevenlabs_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded elevenlabs API Key: {elevenlabs_api_key[:5]}...{elevenlabs_api_key[-5:] if elevenlabs_api_key else None}")
 
         # LLM API Settings - streaming / temperature / top_p / min_p
         # Anthropic
-        anthropic_api_key = config_parser_object.get('API', 'anthropic_api_key', fallback=None)
         anthropic_model = config_parser_object.get('API', 'anthropic_model', fallback='claude-3-5-sonnet-20240620')
         anthropic_streaming = config_parser_object.get('API', 'anthropic_streaming', fallback='False')
         anthropic_temperature = config_parser_object.get('API', 'anthropic_temperature', fallback='0.7')
