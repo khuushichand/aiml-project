@@ -15,7 +15,8 @@ from pypandoc import convert_file
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 async def process_documents(
@@ -188,22 +189,28 @@ async def process_documents(
 
                 # (Optionally) Store in DB
                 if store_in_db:
-                    # Use your own DB logic
-                    # Fix the function call to match the actual signature
-                    db_id, _, _ = add_media_with_keywords(
-                        url=url,
-                        title=custom_title or os.path.basename(local_path),
-                        media_type="document",
-                        content=text_content,
-                        keywords=custom_keywords,
-                        prompt=custom_prompt_input,
-                        analysis_content=summary_text,  # Store summary as analysis
-                        transcription_model="document-import",
-                        author=None,
-                        ingestion_date=None,
-                        overwrite=overwrite_existing
-                    )
-                    item_result["db_id"] = db_id
+                    # Get database instance
+                    effective_user_id = 1  # Default for document processing
+                    db_path = get_user_media_db_path(effective_user_id)
+                    db = MediaDatabase(db_path=db_path, client_id="document_processing_service")
+                    try:
+                        # Fix the function call to match the actual signature
+                        db_id, _, _ = db.add_media_with_keywords(
+                            url=url,
+                            title=custom_title or os.path.basename(local_path),
+                            media_type="document",
+                            content=text_content,
+                            keywords=custom_keywords,
+                            prompt=custom_prompt_input,
+                            analysis_content=summary_text,  # Store summary as analysis
+                            transcription_model="document-import",
+                            author=None,
+                            ingestion_date=None,
+                            overwrite=overwrite_existing
+                        )
+                        item_result["db_id"] = db_id
+                    finally:
+                        db.close_connection()
 
                 processed_count += 1
                 item_result["success"] = True
@@ -239,21 +246,28 @@ async def process_documents(
                 item_result["summary"] = summary_text
 
                 if store_in_db:
-                    # Fix the function call to match the actual signature
-                    db_id, _, _ = add_media_with_keywords(
-                        url=file_path,
-                        title=custom_title or os.path.basename(file_path),
-                        media_type="document",
-                        content=text_content,
-                        keywords=custom_keywords,
-                        prompt=custom_prompt_input,
-                        analysis_content=summary_text,  # Store summary as analysis
-                        transcription_model="document-import",
-                        author=None,
-                        ingestion_date=None,
-                        overwrite=overwrite_existing
-                    )
-                    item_result["db_id"] = db_id
+                    # Get database instance
+                    effective_user_id = 1  # Default for document processing
+                    db_path = get_user_media_db_path(effective_user_id)
+                    db = MediaDatabase(db_path=db_path, client_id="document_processing_service")
+                    try:
+                        # Fix the function call to match the actual signature
+                        db_id, _, _ = db.add_media_with_keywords(
+                            url=file_path,
+                            title=custom_title or os.path.basename(file_path),
+                            media_type="document",
+                            content=text_content,
+                            keywords=custom_keywords,
+                            prompt=custom_prompt_input,
+                            analysis_content=summary_text,  # Store summary as analysis
+                            transcription_model="document-import",
+                            author=None,
+                            ingestion_date=None,
+                            overwrite=overwrite_existing
+                        )
+                        item_result["db_id"] = db_id
+                    finally:
+                        db.close_connection()
 
                 processed_count += 1
                 item_result["success"] = True

@@ -13,6 +13,8 @@ from fastapi import HTTPException
 # Local Imports
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 # Import the enhanced service
 from tldw_Server_API.app.services.enhanced_web_scraping_service import (
     get_web_scraping_service, shutdown_web_scraping_service
@@ -175,43 +177,51 @@ async def process_web_scraping_task(
                     "results": result_list
                 }
             else:
-                # Import here to avoid circular imports
-                from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+                # Get the database path and create instance
+                # Default to user_id 1 if not provided (single-user mode)
+                effective_user_id = 1  # Default for legacy fallback
+                db_path = get_user_media_db_path(effective_user_id)
+                db = MediaDatabase(db_path=db_path, client_id="webscraping_legacy_service")
                 
-                # Persist each article in the DB. For example:
+                # Persist each article in the DB
                 media_ids = []
-                for article in result_list:
-                    # Construct info_dict
-                    info_dict = {
-                        "title": article.get("title", "Untitled"),
-                        "author": "Unknown",
-                        "source": article.get("url", ""),
-                        "scrape_method": scrape_method
-                    }
-                    # We'll treat article['content'] as the main text
-                    # If there's a summary, store it in summary field
-                    summary = article.get("summary", "No summary available")
-                    # "Segments" is how your DB manager expects text. We'll store one big chunk:
-                    segments = [{"Text": article.get("content", "")}]
+                try:
+                    for article in result_list:
+                        # Construct info_dict
+                        info_dict = {
+                            "title": article.get("title", "Untitled"),
+                            "author": "Unknown",
+                            "source": article.get("url", ""),
+                            "scrape_method": scrape_method
+                        }
+                        # We'll treat article['content'] as the main text
+                        # If there's a summary, store it in summary field
+                        summary = article.get("summary", "No summary available")
+                        # "Segments" is how your DB manager expects text. We'll store one big chunk:
+                        segments = [{"Text": article.get("content", "")}]
 
-                    # Combine content and metadata
-                    content_text = article.get("content", "")
-                    
-                    # Fix the function call to match the actual signature
-                    media_id, _, _ = add_media_with_keywords(
-                        url=article.get("url", ""),
-                        title=article.get("title", "Untitled"),
-                        media_type="web_document",
-                        content=content_text,
-                        keywords=keywords.split(",") if keywords else [],
-                        prompt=(system_prompt or "") + "\n\n" + (custom_prompt or "") if (system_prompt or custom_prompt) else None,
-                        analysis_content=article.get("summary", None),
-                        transcription_model="web-scraping-import",
-                        author=article.get("author", None),
-                        ingestion_date=None,
-                        overwrite=False
-                    )
-                    media_ids.append(media_id)
+                        # Combine content and metadata
+                        content_text = article.get("content", "")
+                        
+                        # Fix the function call to match the actual signature
+                        media_id, media_uuid, message = db.add_media_with_keywords(
+                            url=article.get("url", ""),
+                            title=article.get("title", "Untitled"),
+                            media_type="web_document",
+                            content=content_text,
+                            keywords=keywords.split(",") if keywords else [],
+                            prompt=(system_prompt or "") + "\n\n" + (custom_prompt or "") if (system_prompt or custom_prompt) else None,
+                            analysis_content=article.get("summary", None),
+                            transcription_model="web-scraping-import",
+                            author=article.get("author", None),
+                            ingestion_date=None,
+                            overwrite=False
+                        )
+                        if media_id:
+                            media_ids.append(media_id)
+                finally:
+                    # Close database connection
+                    db.close_connection()
 
                 return {
                     "status": "persist-ok",
