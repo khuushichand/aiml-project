@@ -5,13 +5,13 @@
 import os
 from typing import Optional, Dict, Any, Literal, Union, List
 
-import toml
 from dotenv import load_dotenv
 #
 # 3rd-party imports
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 #
 # Local Imports
+from tldw_Server_API.app.core.config import load_comprehensive_config
 #
 #######################################################################################################################
 #
@@ -25,20 +25,34 @@ model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
 load_dotenv()
-try:
-    _config = toml.load("config.toml")
-except FileNotFoundError:
-    _config = {}
+
+# Use load_and_log_configs which returns a proper dict
+from tldw_Server_API.app.core.config import load_and_log_configs
+_config = load_and_log_configs() or {}
 
 def _get_setting(env_var, section, key, default=""):
     env_value = os.getenv(env_var)
     if env_value is not None:
         return env_value
+    
+    # Check for API key in the config dict
+    if section == "api_keys":
+        # Look for provider-specific API config like 'openai_api'
+        provider_api_key = f"{key}_api"
+        if provider_api_key in _config:
+            api_config = _config[provider_api_key]
+            if isinstance(api_config, dict):
+                api_key = api_config.get("api_key")
+                if api_key:
+                    return api_key
+    
+    # Fallback to checking section directly
     config_section = _config.get(section)
     if config_section:
-        config_value = config_section.get(key)
+        config_value = config_section.get(key) if isinstance(config_section, dict) else None
         if config_value is not None:
             return config_value
+    
     return default
 ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
     "anthropic",
@@ -61,14 +75,53 @@ ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
     "custom-openai-api-2"
 ]
 
-API_KEYS = {
-    name: _get_setting(
-        f"{name.upper().replace('.', '_')}_API_KEY",
-        "api_keys",
-        name
-    )
-    for name in ALL_SUPPORTED_PROVIDER_NAMES_LIST # Use the list here
-}
+def get_api_keys() -> Dict[str, Optional[str]]:
+    """
+    Get API keys dynamically to support runtime changes.
+    This function reloads config and environment variables each time it's called,
+    ensuring that test environment changes are properly reflected.
+    """
+    # Reload config to get latest values
+    current_config = load_and_log_configs() or {}
+    
+    def _get_dynamic_setting(env_var, section, key, default=""):
+        # First check environment variable
+        env_value = os.getenv(env_var)
+        if env_value is not None:
+            return env_value
+        
+        # Check for API key in the config dict
+        if section == "api_keys":
+            # Look for provider-specific API config like 'openai_api'
+            provider_api_key = f"{key}_api"
+            if provider_api_key in current_config:
+                api_config = current_config[provider_api_key]
+                if isinstance(api_config, dict):
+                    api_key = api_config.get("api_key")
+                    if api_key:
+                        return api_key
+        
+        # Fallback to checking section directly
+        config_section = current_config.get(section)
+        if config_section:
+            config_value = config_section.get(key) if isinstance(config_section, dict) else None
+            if config_value is not None:
+                return config_value
+        
+        return default
+    
+    return {
+        name: _get_dynamic_setting(
+            f"{name.upper().replace('.', '_')}_API_KEY",
+            "api_keys",
+            name
+        )
+        for name in ALL_SUPPORTED_PROVIDER_NAMES_LIST
+    }
+
+# Keep API_KEYS for backward compatibility but make it compute on first access
+# This will be deprecated in favor of get_api_keys()
+API_KEYS = get_api_keys()
 
 # For type hinting - define explicitly
 SUPPORTED_API_ENDPOINTS = Literal[
@@ -221,7 +274,7 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: Optional[Dict[str, float]] = Field(None, description="Logit bias parameter (provider support varies).")
     logprobs: Optional[bool] = Field(False, description="Whether to return log probabilities (provider support varies).")
     top_logprobs: Optional[int] = Field(None, ge=0, le=20, description="Number of top log probabilities to return (provider support varies). `logprobs` must be true.")
-    max_tokens: Optional[int] = Field(None, description="Maximum number of tokens to generate (provider support varies).")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum number of tokens to generate (provider support varies).")
     n: Optional[int] = Field(1, ge=1, le=128, description="Number of completions to generate (provider support varies).")
     presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0, description="Presence penalty parameter (provider support varies).")
     response_format: Optional[ResponseFormat] = Field(None, description="Response format specification (e.g., JSON mode, provider support varies).")

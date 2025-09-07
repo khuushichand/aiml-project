@@ -270,8 +270,9 @@ class ContentDeduplicator:
 class ScrapingJobQueue:
     """Priority job queue for scraping tasks"""
     
-    def __init__(self, max_concurrent: int = 5):
+    def __init__(self, max_concurrent: int = 5, parent_scraper=None):
         self.max_concurrent = max_concurrent
+        self.parent_scraper = parent_scraper  # Store reference to parent scraper
         self._queues: Dict[JobPriority, asyncio.Queue] = {
             priority: asyncio.Queue() for priority in JobPriority
         }
@@ -397,10 +398,19 @@ class ScrapingJobQueue:
     
     async def _execute_job(self, job: ScrapingJob) -> Dict[str, Any]:
         """Execute a scraping job"""
-        # This will be implemented with actual scraping logic
-        # For now, return mock result
-        await asyncio.sleep(random.uniform(1, 3))
-        return {"content": f"Scraped content for {job.url}", "title": "Test Article"}
+        # Get the scraper instance from parent
+        if self.parent_scraper:
+            # Use the parent scraper's actual scraping method
+            return await self.parent_scraper.scrape_article(
+                job.url, 
+                job.method,
+                custom_cookies=job.metadata.get('custom_cookies')
+            )
+        else:
+            # Fallback to importing the standalone scraping function
+            logger.warning(f"No parent scraper available for job {job.job_id}, using fallback scraping")
+            from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
+            return await scrape_article(job.url, custom_cookies=job.metadata.get('custom_cookies'))
     
     def get_status(self) -> Dict[str, Any]:
         """Get queue status"""
@@ -430,7 +440,8 @@ class EnhancedWebScraper:
         self.cookie_manager = CookieManager()
         self.deduplicator = ContentDeduplicator()
         self.job_queue = ScrapingJobQueue(
-            max_concurrent=self.config.get('max_concurrent', 5)
+            max_concurrent=self.config.get('max_concurrent', 5),
+            parent_scraper=self  # Pass self reference to job queue
         )
         
         # Playwright browser
@@ -444,12 +455,24 @@ class EnhancedWebScraper:
         """Start the scraper"""
         await self.job_queue.start()
         
-        # Initialize Playwright
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
-        )
+        try:
+            # Initialize Playwright
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox']
+            )
+            logger.info("Playwright browser initialized successfully")
+        except ImportError:
+            logger.warning("Playwright not installed. Run: pip install playwright && playwright install chromium")
+            logger.warning("Web scraping will proceed without JavaScript rendering support")
+            self._playwright = None
+            self._browser = None
+        except Exception as e:
+            logger.error(f"Failed to initialize Playwright browser: {e}")
+            logger.warning("Web scraping will proceed without JavaScript rendering support")
+            self._playwright = None
+            self._browser = None
         
         logger.info("Enhanced web scraper started")
     

@@ -1468,6 +1468,326 @@ def format_time(total_seconds: float) -> str:
     seconds = int(total_seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+def parse_transcription_model(model_name: str) -> tuple:
+    """
+    Parse model name to extract provider, model, and variant.
+    
+    Examples:
+    - "parakeet-mlx" -> ("parakeet", "parakeet", "mlx")
+    - "parakeet-onnx" -> ("parakeet", "parakeet", "onnx")
+    - "parakeet-cuda" -> ("parakeet", "parakeet", "cuda")
+    - "parakeet-standard" -> ("parakeet", "parakeet", "standard")
+    - "nemo-canary-1b" -> ("canary", "canary", "standard")
+    - "nemo-parakeet-tdt-1.1b" -> ("parakeet", "parakeet", "standard")
+    - "whisper-large-v3" -> ("whisper", "large-v3", None)
+    - "distil-whisper-large-v3" -> ("whisper", "distil-whisper-large-v3", None)
+    
+    Returns:
+        Tuple of (provider, model, variant)
+    """
+    model_lower = model_name.lower()
+    
+    # Check for Parakeet models with variants
+    if "parakeet" in model_lower:
+        if model_lower.endswith("-mlx"):
+            return ("parakeet", "parakeet", "mlx")
+        elif model_lower.endswith("-onnx"):
+            return ("parakeet", "parakeet", "onnx")
+        elif model_lower.endswith("-cuda"):
+            return ("parakeet", "parakeet", "cuda")
+        elif model_lower.endswith("-standard") or "nemo-parakeet" in model_lower:
+            return ("parakeet", "parakeet", "standard")
+        else:
+            # Default to standard if no variant specified
+            return ("parakeet", "parakeet", "standard")
+    
+    # Check for Canary models
+    elif "canary" in model_lower:
+        return ("canary", "canary", "standard")
+    
+    # Check for Qwen2Audio models
+    elif "qwen2audio" in model_lower or "qwen2-audio" in model_lower:
+        return ("qwen2audio", model_name, None)
+    
+    # Default to whisper for all other models
+    else:
+        # This includes whisper-*, distil-whisper-*, deepdml/*, etc.
+        return ("whisper", model_name, None)
+
+def create_segments_from_text(text: str, audio_duration: float = None, segmentation: str = "sentence") -> list:
+    """
+    Convert plain text to whisper-compatible segment format with sentence or word-level segmentation.
+    
+    Args:
+        text: The transcribed text
+        audio_duration: Optional duration of the audio in seconds
+        segmentation: Segmentation level - "sentence" (default), "word", or "full"
+        
+    Returns:
+        List of segment dictionaries compatible with whisper format
+    """
+    import re
+    
+    if not text:
+        return []
+    
+    text = text.strip()
+    segments = []
+    
+    if segmentation == "sentence":
+        # Split by sentence-ending punctuation, keeping the punctuation
+        # This regex splits on .!? followed by space or end of string, keeping the delimiter
+        sentence_pattern = r'(?<=[.!?])\s+|(?<=[.!?])$'
+        sentences = re.split(sentence_pattern, text)
+        # Remove empty strings
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            sentences = [text]  # Fallback if no sentence boundaries found
+        
+        # Estimate time distribution across sentences
+        if audio_duration:
+            # Calculate time per character for even distribution
+            total_chars = sum(len(s) for s in sentences)
+            if total_chars > 0:
+                time_per_char = audio_duration / total_chars
+            else:
+                time_per_char = 0
+            
+            current_time = 0.0
+            for sentence in sentences:
+                sentence_duration = len(sentence) * time_per_char
+                end_time = current_time + sentence_duration
+                
+                segments.append({
+                    "start_seconds": current_time,
+                    "end_seconds": end_time,
+                    "text": sentence,
+                    "Text": sentence,  # Some code expects "Text" key
+                    "start": format_time(current_time),
+                    "end": format_time(end_time),
+                    "Time_Start": current_time,
+                    "Time_End": end_time
+                })
+                
+                current_time = end_time
+        else:
+            # No duration info, just create segments without timing
+            for i, sentence in enumerate(sentences):
+                segments.append({
+                    "start_seconds": 0.0,
+                    "end_seconds": 0.0,
+                    "text": sentence,
+                    "Text": sentence,
+                    "start": "00:00:00",
+                    "end": "00:00:00",
+                    "Time_Start": 0.0,
+                    "Time_End": 0.0
+                })
+    
+    elif segmentation == "word":
+        # Split by whitespace to get words
+        words = text.split()
+        
+        if audio_duration and words:
+            # Distribute time evenly across words
+            time_per_word = audio_duration / len(words)
+            
+            for i, word in enumerate(words):
+                start_time = i * time_per_word
+                end_time = (i + 1) * time_per_word
+                
+                segments.append({
+                    "start_seconds": start_time,
+                    "end_seconds": end_time,
+                    "text": word,
+                    "Text": word,
+                    "start": format_time(start_time),
+                    "end": format_time(end_time),
+                    "Time_Start": start_time,
+                    "Time_End": end_time
+                })
+        else:
+            # No duration info
+            for word in words:
+                segments.append({
+                    "start_seconds": 0.0,
+                    "end_seconds": 0.0,
+                    "text": word,
+                    "Text": word,
+                    "start": "00:00:00",
+                    "end": "00:00:00",
+                    "Time_Start": 0.0,
+                    "Time_End": 0.0
+                })
+    
+    else:  # "full" or any other value
+        # Single segment with full text
+        segments = [{
+            "start_seconds": 0.0,
+            "end_seconds": audio_duration if audio_duration else 0.0,
+            "text": text,
+            "Text": text,
+            "start": "00:00:00",
+            "end": format_time(audio_duration) if audio_duration else "00:00:00",
+            "Time_Start": 0.0,
+            "Time_End": audio_duration if audio_duration else 0.0
+        }]
+    
+    return segments
+
+def speech_to_text_parakeet(
+    audio_file_path: str,
+    variant: str = "standard",
+    selected_source_lang: str = 'en',
+    vad_filter: bool = False
+) -> list:
+    """
+    Transcribe audio using Parakeet with specified variant.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        variant: Parakeet variant ('standard', 'onnx', 'mlx', 'cuda')
+        selected_source_lang: Language code (not used by Parakeet currently)
+        vad_filter: VAD filter flag (not used by Parakeet currently)
+        
+    Returns:
+        List of segments in whisper-compatible format
+    """
+    try:
+        logging.info(f"Transcribing with Parakeet variant: {variant}")
+        
+        # Get audio duration for segment creation
+        try:
+            import librosa
+            audio_duration = librosa.get_duration(path=audio_file_path)
+        except:
+            audio_duration = None
+            logging.warning("Could not determine audio duration")
+        
+        # Route to appropriate Parakeet implementation
+        if variant == "mlx":
+            # Use MLX implementation (macOS only)
+            try:
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
+                    transcribe_with_parakeet_mlx, check_mlx_available
+                )
+                
+                if not check_mlx_available():
+                    logging.warning("MLX not available on this platform, falling back to standard Parakeet")
+                    variant = "standard"
+                else:
+                    # MLX implementation expects file path directly
+                    text = transcribe_with_parakeet_mlx(audio_file_path)
+                    # Default to sentence-level segmentation
+                    return create_segments_from_text(text, audio_duration, segmentation="sentence")
+                    
+            except ImportError as e:
+                logging.warning(f"Could not import Parakeet MLX: {e}. Falling back to standard.")
+                variant = "standard"
+        
+        # For other variants or fallback, use Nemo implementation
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+            transcribe_with_parakeet
+        )
+        
+        # Load audio data for Nemo implementation
+        import numpy as np
+        import librosa
+        audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
+        
+        # Transcribe with Parakeet
+        text = transcribe_with_parakeet(audio_data, sample_rate, variant)
+        
+        # Convert to segment format with sentence-level segmentation
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+        
+    except Exception as e:
+        logging.error(f"Parakeet transcription failed: {e}")
+        raise RuntimeError(f"Parakeet transcription error: {str(e)}") from e
+
+def speech_to_text_canary(
+    audio_file_path: str,
+    selected_source_lang: str = 'en',
+    vad_filter: bool = False
+) -> list:
+    """
+    Transcribe audio using Canary model.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        selected_source_lang: Language code
+        vad_filter: VAD filter flag (not used by Canary currently)
+        
+    Returns:
+        List of segments in whisper-compatible format
+    """
+    try:
+        logging.info("Transcribing with Canary model")
+        
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+            transcribe_with_canary
+        )
+        
+        # Load audio data
+        import numpy as np
+        import librosa
+        audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
+        
+        # Get audio duration
+        audio_duration = librosa.get_duration(y=audio_data, sr=sample_rate)
+        
+        # Transcribe with Canary
+        text = transcribe_with_canary(audio_data, sample_rate, selected_source_lang)
+        
+        # Convert to segment format with sentence-level segmentation
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+        
+    except Exception as e:
+        logging.error(f"Canary transcription failed: {e}")
+        raise RuntimeError(f"Canary transcription error: {str(e)}") from e
+
+def speech_to_text_qwen2audio(
+    audio_file_path: str,
+    selected_source_lang: str = 'en',
+    vad_filter: bool = False
+) -> list:
+    """
+    Transcribe audio using Qwen2Audio model.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        selected_source_lang: Language code (not used by Qwen2Audio currently)
+        vad_filter: VAD filter flag (not used by Qwen2Audio currently)
+        
+    Returns:
+        List of segments in whisper-compatible format
+    """
+    try:
+        logging.info("Transcribing with Qwen2Audio model")
+        
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen2Audio import (
+            transcribe_with_qwen2audio
+        )
+        
+        # Load audio data
+        import numpy as np
+        import librosa
+        audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
+        
+        # Get audio duration
+        audio_duration = librosa.get_duration(y=audio_data, sr=sample_rate)
+        
+        # Transcribe with Qwen2Audio
+        text = transcribe_with_qwen2audio(audio_data, sample_rate)
+        
+        # Convert to segment format with sentence-level segmentation
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+        
+    except Exception as e:
+        logging.error(f"Qwen2Audio transcription failed: {e}")
+        raise RuntimeError(f"Qwen2Audio transcription error: {str(e)}") from e
+
 def speech_to_text(
     audio_file_path: str,
     whisper_model: str = 'distil-large-v3',
@@ -1516,6 +1836,58 @@ def speech_to_text(
     if not audio_file_path:
         log_counter("speech_to_text_error", labels={"error": "No audio file provided"})
         raise ValueError("speech-to-text: No audio file provided")
+    
+    # Parse the model name to determine the provider
+    provider, model, variant = parse_transcription_model(whisper_model)
+    
+    # Route to the appropriate transcription provider
+    if provider == "parakeet":
+        logging.info(f"Routing to Parakeet transcription with variant: {variant}")
+        try:
+            return speech_to_text_parakeet(
+                audio_file_path=audio_file_path,
+                variant=variant,
+                selected_source_lang=selected_source_lang,
+                vad_filter=vad_filter
+            )
+        except Exception as e:
+            logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
+            # Fall back to whisper
+            provider = "whisper"
+            model = "distil-whisper-large-v3"  # Default fallback model
+    
+    elif provider == "canary":
+        logging.info("Routing to Canary transcription")
+        try:
+            return speech_to_text_canary(
+                audio_file_path=audio_file_path,
+                selected_source_lang=selected_source_lang,
+                vad_filter=vad_filter
+            )
+        except Exception as e:
+            logging.error(f"Canary transcription failed, falling back to whisper: {e}")
+            # Fall back to whisper
+            provider = "whisper"
+            model = "distil-whisper-large-v3"
+    
+    elif provider == "qwen2audio":
+        logging.info("Routing to Qwen2Audio transcription")
+        try:
+            return speech_to_text_qwen2audio(
+                audio_file_path=audio_file_path,
+                selected_source_lang=selected_source_lang,
+                vad_filter=vad_filter
+            )
+        except Exception as e:
+            logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
+            # Fall back to whisper
+            provider = "whisper"
+            model = "distil-whisper-large-v3"
+    
+    # If we get here, use the original whisper implementation
+    # Update whisper_model to use the parsed model name (in case we fell back)
+    if provider == "whisper":
+        whisper_model = model
 
     # Convert the string to a Path object and ensure it's resolved (absolute path)
     file_path = Path(audio_file_path).resolve()
@@ -1652,6 +2024,75 @@ def _find_ffmpeg() -> str:
     raise FileNotFoundError("ffmpeg executable not found in Bin directory, FFMPEG_PATH, or system PATH.")
 
 # os.system(r'.\Bin\ffmpeg.exe -ss 00:00:00 -i "{video_file_path}" -ar 16000 -ac 1 -c:a pcm_s16le "{out_path}"')
+
+def validate_audio_file(file_path: str) -> tuple:
+    """
+    Validate audio file using ffprobe.
+    
+    Args:
+        file_path: Path to the audio file to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Check file exists and has minimum size
+        path = Path(file_path)
+        if not path.exists():
+            return False, "File does not exist"
+        
+        file_size = path.stat().st_size
+        if file_size < 1024:  # Less than 1KB
+            return False, f"File too small ({file_size} bytes), likely corrupted"
+        
+        # Find ffprobe command
+        ffmpeg_cmd = _find_ffmpeg()
+        # Try to get ffprobe by replacing ffmpeg with ffprobe
+        if 'ffmpeg' in ffmpeg_cmd:
+            ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe')
+        else:
+            # Fallback to just 'ffprobe' if pattern doesn't match
+            ffprobe_cmd = 'ffprobe'
+        
+        # Use ffprobe to check for audio streams
+        result = subprocess.run(
+            [ffprobe_cmd, "-v", "error", "-select_streams", "a:0", 
+             "-show_entries", "stream=codec_name,channels,sample_rate", 
+             "-of", "json", str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=10  # 10 second timeout
+        )
+        
+        if result.returncode != 0:
+            return False, f"FFprobe failed: {result.stderr[:200] if result.stderr else 'Unknown error'}"
+        
+        # Parse JSON output
+        try:
+            import json
+            probe_data = json.loads(result.stdout)
+            if not probe_data.get('streams'):
+                return False, "No audio streams detected in file"
+            
+            # Check first audio stream
+            stream = probe_data['streams'][0]
+            if stream.get('channels', 0) == 0:
+                return False, "Audio stream has 0 channels"
+                
+        except (json.JSONDecodeError, KeyError) as e:
+            # If we can't parse the output, try simpler check
+            if not result.stdout.strip():
+                return False, "No audio stream detected"
+        
+        return True, ""
+        
+    except subprocess.TimeoutExpired:
+        return False, "File validation timed out (possible corrupt file)"
+    except Exception as e:
+        logging.warning(f"Audio validation error: {e}")
+        # Don't fail completely if validation has issues, let FFmpeg try
+        return True, f"Validation warning: {str(e)}"
+
 #DEBUG
 #@profile
 @timeit
@@ -1725,11 +2166,61 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
         raise RuntimeError(error_msg) from e
 
 
+    # Validate the audio file first
+    is_valid, validation_msg = validate_audio_file(str(input_path))
+    if not is_valid:
+        logging.warning(f"Audio file validation warning for '{input_path.name}': {validation_msg}")
+        # For critical validation failures, we should fail early
+        if "0 channels" in validation_msg or "No audio stream" in validation_msg or "too small" in validation_msg:
+            logging.error(f"Critical audio file issue detected, cannot proceed with conversion: {validation_msg}")
+            
+            # Special handling for potential format mismatch (e.g., m4a file with .mp3 extension)
+            if str(input_path).lower().endswith('.mp3') and "0 channels" in validation_msg:
+                logging.info("Possible format mismatch detected. Checking if file is actually a different format...")
+                
+                # Try to detect actual format using ffprobe
+                try:
+                    ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe') if 'ffmpeg' in ffmpeg_cmd else 'ffprobe'
+                    probe_result = subprocess.run(
+                        [ffprobe_cmd, "-v", "error", "-show_entries", "format=format_name", 
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(input_path)],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    
+                    if probe_result.returncode == 0 and probe_result.stdout.strip():
+                        detected_format = probe_result.stdout.strip()
+                        logging.info(f"Detected actual format: {detected_format}")
+                        
+                        # If it's actually m4a/mp4 audio, we can try to process it
+                        if 'mp4' in detected_format or 'm4a' in detected_format or 'mov' in detected_format:
+                            logging.info("File appears to be MP4/M4A format despite .mp3 extension. Will attempt conversion with format override.")
+                            # Don't raise error, let FFmpeg try with proper format detection
+                        else:
+                            raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                    else:
+                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                        
+                except subprocess.TimeoutExpired:
+                    logging.error("Format detection timed out")
+                    raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                except Exception as e:
+                    logging.error(f"Error during format detection: {e}")
+                    raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+            else:
+                raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+        # For other issues, continue anyway as FFmpeg might still handle it
+    
     logging.info(f"Starting conversion to WAV: '{input_path.name}' -> '{out_path.name}'")
 
+    # Enhanced command with better detection parameters
+    # Don't force format based on extension - let FFmpeg auto-detect
     command = [
         ffmpeg_cmd,
-        "-i", str(input_path),
+        "-analyzeduration", "10M",    # Increase analysis duration for better format detection
+        "-probesize", "50M",          # Increase probe size for difficult files
+        "-i", str(input_path),        # Input file - FFmpeg will auto-detect format
         "-ss", str(offset),           # Use offset if needed (e.g., "00:00:10" or 10)
         "-ar", "16000",               # Audio sample rate (good for Whisper)
         "-ac", "1",                   # Mono audio channel (good for Whisper)
@@ -1739,7 +2230,7 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
     ]
 
     try:
-        # Execute ffmpeg command
+        # Execute ffmpeg command with enhanced parameters
         result = subprocess.run(
             command,
             stdin=subprocess.DEVNULL, # Prevent ffmpeg from waiting for stdin
@@ -1750,12 +2241,49 @@ def convert_to_wav(video_file_path: str, offset: int = 0, overwrite: bool = Fals
 
         # Check result
         if result.returncode != 0:
-            error_details = result.stderr or result.stdout or "No output captured"
-            # Clean up potentially corrupted output file
-            if out_path.exists():
-                try: out_path.unlink()
-                except OSError: pass
-            raise ConversionError(f"FFmpeg conversion failed (code {result.returncode}) for '{input_path.name}'. Error: {error_details.strip()}")
+            # Log initial failure
+            logging.warning(f"Initial conversion failed for '{input_path.name}', trying with more aggressive parameters")
+            
+            # Try with more lenient settings as fallback
+            fallback_command = [
+                ffmpeg_cmd,
+                "-analyzeduration", "100M",   # Much higher analysis duration
+                "-probesize", "100M",         # Much higher probe size
+                "-err_detect", "ignore_err",  # Ignore errors and continue
+                "-i", str(input_path),        # Let FFmpeg auto-detect format
+                "-ss", str(offset),
+                "-ar", "16000",
+                "-ac", "1",
+                "-c:a", "pcm_s16le",
+                "-y",
+                str(out_path)
+            ]
+            
+            # Don't force format - let FFmpeg figure it out
+            # The file extension might be wrong (e.g., m4a file with .mp3 extension)
+            
+            fallback_result = subprocess.run(
+                fallback_command,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if fallback_result.returncode == 0:
+                logging.info(f"Fallback conversion succeeded for '{input_path.name}'")
+                result = fallback_result
+                # Log any warnings from the fallback attempt
+                if fallback_result.stderr:
+                    logging.debug(f"Fallback conversion warnings: {fallback_result.stderr[:500]}")
+            else:
+                # Both attempts failed, use original error for reporting
+                error_details = result.stderr or result.stdout or "No output captured"
+                # Clean up potentially corrupted output file
+                if out_path.exists():
+                    try: out_path.unlink()
+                    except OSError: pass
+                raise ConversionError(f"FFmpeg conversion failed (code {result.returncode}) for '{input_path.name}'. Error: {error_details.strip()}")
         else:
             logging.info(f"Conversion to WAV completed successfully: {out_path}")
             if result.stderr: # Log warnings even on success

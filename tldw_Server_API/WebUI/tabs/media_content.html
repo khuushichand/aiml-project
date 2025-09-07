@@ -293,10 +293,7 @@
                                     <option value="">Loading models...</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="addMedia_api_key">API Key (optional, if not in config):</label>
-                                <input type="password" id="addMedia_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                             <div class="form-group">
                                 <label for="addMedia_cookies">Cookies (string, if use_cookies):</label>
                                 <input type="text" id="addMedia_cookies" name="cookies">
@@ -306,7 +303,42 @@
                             <h3>Specific Media Settings</h3>
                              <div class="form-group">
                                 <label for="addMedia_transcription_model">Transcription Model (Audio/Video):</label>
-                                <input type="text" id="addMedia_transcription_model" name="transcription_model" value="deepdml/faster-distil-whisper-large-v3.5">
+                                <select id="addMedia_transcription_model" name="transcription_model" class="form-control">
+                                    <optgroup label="Whisper Models">
+                                        <option value="whisper-tiny">Whisper Tiny (39M)</option>
+                                        <option value="whisper-tiny.en">Whisper Tiny English (39M)</option>
+                                        <option value="whisper-base">Whisper Base (74M)</option>
+                                        <option value="whisper-base.en">Whisper Base English (74M)</option>
+                                        <option value="whisper-small">Whisper Small (244M)</option>
+                                        <option value="whisper-small.en">Whisper Small English (244M)</option>
+                                        <option value="whisper-medium">Whisper Medium (769M)</option>
+                                        <option value="whisper-medium.en">Whisper Medium English (769M)</option>
+                                        <option value="whisper-large-v1">Whisper Large v1 (1550M)</option>
+                                        <option value="whisper-large-v2">Whisper Large v2 (1550M)</option>
+                                        <option value="whisper-large-v3">Whisper Large v3 (1550M)</option>
+                                        <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo (809M)</option>
+                                    </optgroup>
+                                    <optgroup label="Distil-Whisper Models (Faster)">
+                                        <option value="distil-whisper-large-v2">Distil-Whisper Large v2</option>
+                                        <option value="distil-whisper-large-v3">Distil-Whisper Large v3</option>
+                                        <option value="distil-whisper-medium.en">Distil-Whisper Medium English</option>
+                                        <option value="distil-whisper-small.en">Distil-Whisper Small English</option>
+                                    </optgroup>
+                                    <optgroup label="Optimized Models">
+                                        <option value="deepdml/faster-distil-whisper-large-v3.5" selected>Faster Distil-Whisper Large v3.5 (Recommended)</option>
+                                        <option value="deepdml/faster-whisper-large-v3-turbo-ct2">Faster Whisper Large v3 Turbo CT2</option>
+                                    </optgroup>
+                                    <optgroup label="Nemo Models">
+                                        <option value="nemo-canary-1b">Nemo Canary 1B (Multilingual)</option>
+                                        <option value="nemo-parakeet-tdt-1.1b">Nemo Parakeet TDT 1.1B</option>
+                                    </optgroup>
+                                    <optgroup label="Parakeet Backends">
+                                        <option value="parakeet-standard">Parakeet Standard</option>
+                                        <option value="parakeet-cuda">Parakeet CUDA (GPU)</option>
+                                        <option value="parakeet-mlx">Parakeet MLX (Apple Silicon)</option>
+                                        <option value="parakeet-onnx">Parakeet ONNX (Cross-platform)</option>
+                                    </optgroup>
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="addMedia_transcription_language">Transcription Language (Audio/Video):</label>
@@ -446,10 +478,7 @@
                                     <option value="">Loading models...</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="processVideos_api_key">API Key (optional, if not in config):</label>
-                                <input type="password" id="processVideos_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                             <div class="form-group">
                                 <label for="processVideos_cookies">Cookies (string, if use_cookies):</label>
                                 <input type="text" id="processVideos_cookies" name="cookies">
@@ -459,7 +488,42 @@
                             <h3>Video Specific Settings</h3>
                              <div class="form-group">
                                 <label for="processVideos_transcription_model">Transcription Model:</label>
-                                <input type="text" id="processVideos_transcription_model" name="transcription_model" value="deepdml/faster-whisper-large-v3-turbo-ct2">
+                                <select id="processVideos_transcription_model" name="transcription_model" class="form-control">
+                                    <optgroup label="Whisper Models">
+                                        <option value="whisper-tiny">Whisper Tiny (39M)</option>
+                                        <option value="whisper-tiny.en">Whisper Tiny English (39M)</option>
+                                        <option value="whisper-base">Whisper Base (74M)</option>
+                                        <option value="whisper-base.en">Whisper Base English (74M)</option>
+                                        <option value="whisper-small">Whisper Small (244M)</option>
+                                        <option value="whisper-small.en">Whisper Small English (244M)</option>
+                                        <option value="whisper-medium">Whisper Medium (769M)</option>
+                                        <option value="whisper-medium.en">Whisper Medium English (769M)</option>
+                                        <option value="whisper-large-v1">Whisper Large v1 (1550M)</option>
+                                        <option value="whisper-large-v2">Whisper Large v2 (1550M)</option>
+                                        <option value="whisper-large-v3">Whisper Large v3 (1550M)</option>
+                                        <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo (809M)</option>
+                                    </optgroup>
+                                    <optgroup label="Distil-Whisper Models (Faster)">
+                                        <option value="distil-whisper-large-v2">Distil-Whisper Large v2</option>
+                                        <option value="distil-whisper-large-v3">Distil-Whisper Large v3</option>
+                                        <option value="distil-whisper-medium.en">Distil-Whisper Medium English</option>
+                                        <option value="distil-whisper-small.en">Distil-Whisper Small English</option>
+                                    </optgroup>
+                                    <optgroup label="Optimized Models">
+                                        <option value="deepdml/faster-distil-whisper-large-v3.5">Faster Distil-Whisper Large v3.5</option>
+                                        <option value="deepdml/faster-whisper-large-v3-turbo-ct2" selected>Faster Whisper Large v3 Turbo CT2 (Recommended)</option>
+                                    </optgroup>
+                                    <optgroup label="Nemo Models">
+                                        <option value="nemo-canary-1b">Nemo Canary 1B (Multilingual)</option>
+                                        <option value="nemo-parakeet-tdt-1.1b">Nemo Parakeet TDT 1.1B</option>
+                                    </optgroup>
+                                    <optgroup label="Parakeet Backends">
+                                        <option value="parakeet-standard">Parakeet Standard</option>
+                                        <option value="parakeet-cuda">Parakeet CUDA (GPU)</option>
+                                        <option value="parakeet-mlx">Parakeet MLX (Apple Silicon)</option>
+                                        <option value="parakeet-onnx">Parakeet ONNX (Cross-platform)</option>
+                                    </optgroup>
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="processVideos_transcription_language">Transcription Language:</label>
@@ -575,10 +639,7 @@
                                     <option value="">Loading models...</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="processAudios_api_key">API Key (optional, if not in config):</label>
-                                <input type="password" id="processAudios_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                             <div class="form-group">
                                 <label for="processAudios_cookies">Cookies (string, if use_cookies):</label>
                                 <input type="text" id="processAudios_cookies" name="cookies">
@@ -588,7 +649,42 @@
                             <h3>Audio Specific Settings</h3>
                              <div class="form-group">
                                 <label for="processAudios_transcription_model">Transcription Model:</label>
-                                <input type="text" id="processAudios_transcription_model" name="transcription_model" value="deepdml/faster-distil-whisper-large-v3.5">
+                                <select id="processAudios_transcription_model" name="transcription_model" class="form-control">
+                                    <optgroup label="Whisper Models">
+                                        <option value="whisper-tiny">Whisper Tiny (39M)</option>
+                                        <option value="whisper-tiny.en">Whisper Tiny English (39M)</option>
+                                        <option value="whisper-base">Whisper Base (74M)</option>
+                                        <option value="whisper-base.en">Whisper Base English (74M)</option>
+                                        <option value="whisper-small">Whisper Small (244M)</option>
+                                        <option value="whisper-small.en">Whisper Small English (244M)</option>
+                                        <option value="whisper-medium">Whisper Medium (769M)</option>
+                                        <option value="whisper-medium.en">Whisper Medium English (769M)</option>
+                                        <option value="whisper-large-v1">Whisper Large v1 (1550M)</option>
+                                        <option value="whisper-large-v2">Whisper Large v2 (1550M)</option>
+                                        <option value="whisper-large-v3">Whisper Large v3 (1550M)</option>
+                                        <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo (809M)</option>
+                                    </optgroup>
+                                    <optgroup label="Distil-Whisper Models (Faster)">
+                                        <option value="distil-whisper-large-v2">Distil-Whisper Large v2</option>
+                                        <option value="distil-whisper-large-v3">Distil-Whisper Large v3</option>
+                                        <option value="distil-whisper-medium.en">Distil-Whisper Medium English</option>
+                                        <option value="distil-whisper-small.en">Distil-Whisper Small English</option>
+                                    </optgroup>
+                                    <optgroup label="Optimized Models">
+                                        <option value="deepdml/faster-distil-whisper-large-v3.5" selected>Faster Distil-Whisper Large v3.5 (Recommended)</option>
+                                        <option value="deepdml/faster-whisper-large-v3-turbo-ct2">Faster Whisper Large v3 Turbo CT2</option>
+                                    </optgroup>
+                                    <optgroup label="Nemo Models">
+                                        <option value="nemo-canary-1b">Nemo Canary 1B (Multilingual)</option>
+                                        <option value="nemo-parakeet-tdt-1.1b">Nemo Parakeet TDT 1.1B</option>
+                                    </optgroup>
+                                    <optgroup label="Parakeet Backends">
+                                        <option value="parakeet-standard">Parakeet Standard</option>
+                                        <option value="parakeet-cuda">Parakeet CUDA (GPU)</option>
+                                        <option value="parakeet-mlx">Parakeet MLX (Apple Silicon)</option>
+                                        <option value="parakeet-onnx">Parakeet ONNX (Cross-platform)</option>
+                                    </optgroup>
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="processAudios_transcription_language">Transcription Language:</label>
@@ -720,10 +816,7 @@
                                     <option value="">Loading models...</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="processEbooks_api_key">API Key (optional, if not in config):</label>
-                                <input type="password" id="processEbooks_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                         </div>
                     </div>
                     <button class="api-button" onclick="makeRequest('processEbooks', 'POST', '/api/v1/media/process-ebooks', 'form')">Send Request</button>
@@ -811,10 +904,7 @@
                                     <option value="">Loading models...</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="processDocuments_api_key">API Key (optional, if not in config):</label>
-                                <input type="password" id="processDocuments_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                         </div>
                     </div>
                     <button class="api-button" onclick="makeRequest('processDocuments', 'POST', '/api/v1/media/process-documents', 'form')">Send Request</button>
@@ -910,10 +1000,7 @@
                                 <label for="processPdfs_api_name">API Name:</label>
                                 <input type="text" id="processPdfs_api_name" name="api_name">
                             </div>
-                            <div class="form-group">
-                                <label for="processPdfs_api_key">API Key:</label>
-                                <input type="password" id="processPdfs_api_key" name="api_key">
-                            </div>
+                            <!-- api_key input removed - SECURITY: API keys are retrieved from server config -->
                         </div>
                     </div>
                     <button class="api-button" onclick="makeRequest('processPdfs', 'POST', '/api/v1/media/process-pdfs', 'form')">Send Request</button>
@@ -953,10 +1040,7 @@
                         <label for="ingestMediaWikiDump_api_name_vector_db">API Name (Vector DB Embedding):</label>
                         <input type="text" id="ingestMediaWikiDump_api_name_vector_db" name="api_name_vector_db">
                     </div>
-                    <div class="form-group">
-                        <label for="ingestMediaWikiDump_api_key_vector_db">API Key (Vector DB Embedding):</label>
-                        <input type="password" id="ingestMediaWikiDump_api_key_vector_db" name="api_key_vector_db">
-                    </div>
+                    <!-- api_key_vector_db input removed - SECURITY: API keys are retrieved from server config -->
                     <button class="api-button" onclick="makeRequest('ingestMediaWikiDump', 'POST', '/api/v1/media/mediawiki/ingest-dump', 'form', {}, 'stream')">Send Request</button>
                     <h3>cURL Command:</h3>
                     <pre id="ingestMediaWikiDump_curl">---</pre>
@@ -989,7 +1073,7 @@
                     </div>
                     <!-- api_name_vector_db and api_key_vector_db are ignored if store_to_vector_db is False, but form dep expects them -->
                     <input type="hidden" id="processMediaWikiDump_api_name_vector_db" name="api_name_vector_db" value="">
-                    <input type="hidden" id="processMediaWikiDump_api_key_vector_db" name="api_key_vector_db" value="">
+                    <!-- api_key_vector_db input removed - SECURITY: API keys are retrieved from server config -->
 
                     <button class="api-button" onclick="makeRequest('processMediaWikiDump', 'POST', '/api/v1/media/mediawiki/process-dump', 'form', {}, 'stream')">Send Request</button>
                     <h3>cURL Command:</h3>
@@ -1017,7 +1101,6 @@
     "custom_prompt": "Summarize this briefly.",
     "system_prompt": "You are a concise summarizer.",
     "api_name": null,
-    "api_key": null,
     "perform_translation": false,
     "translation_language": "en",
     "perform_chunking": true,
@@ -1058,7 +1141,6 @@
     "summarize_checkbox": true,
     "custom_prompt": "Please summarize with bullet points only.",
     "api_name": null,
-    "api_key": null,
     "keywords": "web, scraping, example",
     "custom_titles": "Article 1 Title\\nArticle 2 Title",
     "system_prompt": "You are a bulleted-notes specialist...",

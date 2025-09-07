@@ -22,7 +22,8 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
 # Import existing components
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     is_content_page, ContentMetadataHandler
 )
@@ -39,9 +40,19 @@ class WebScrapingService:
     async def initialize(self):
         """Initialize the scraping service"""
         if not self._initialized:
-            self.scraper = await create_enhanced_scraper()
-            self._initialized = True
-            logger.info("Web scraping service initialized")
+            try:
+                self.scraper = await create_enhanced_scraper()
+                self._initialized = True
+                logger.info("Web scraping service initialized with Playwright")
+            except ImportError as e:
+                logger.warning(f"Playwright not available: {e}. Service will use basic scraping only.")
+                self.scraper = None  # Will use fallback methods
+                self._initialized = True
+            except Exception as e:
+                logger.error(f"Failed to initialize enhanced scraper: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
     
     async def shutdown(self):
         """Shutdown the scraping service"""
@@ -156,6 +167,15 @@ class WebScrapingService:
         urls = [url.strip() for url in url_input.split('\n') if url.strip()]
         titles = custom_titles.split('\n') if custom_titles else []
         
+        # Check if scraper is available
+        if self.scraper is None:
+            logger.warning("Enhanced scraper not available, falling back to basic scraping")
+            # Return empty results or raise to trigger fallback
+            raise RuntimeError("Enhanced scraper not initialized - Playwright may not be available")
+        
+        logger.info(f"Starting to scrape {len(urls)} URLs with enhanced scraper")
+        logger.debug(f"URLs to scrape: {urls}")
+        
         # Scrape with enhanced scraper
         results = await self.scraper.scrape_multiple(
             urls,
@@ -169,6 +189,12 @@ class WebScrapingService:
             temperature=temperature,
             custom_cookies=custom_cookies
         )
+        
+        logger.info(f"Scraping completed, got {len(results)} results")
+        for i, result in enumerate(results):
+            logger.debug(f"Result {i}: extraction_successful={result.get('extraction_successful')}, "
+                        f"has_content={bool(result.get('content'))}, "
+                        f"error={result.get('error')}")
         
         # Apply custom titles if provided
         for i, result in enumerate(results):
@@ -190,6 +216,11 @@ class WebScrapingService:
         temperature: float, priority: JobPriority
     ) -> Dict[str, Any]:
         """Scrape from sitemap with filtering"""
+        # Check if scraper is available
+        if self.scraper is None:
+            logger.warning("Enhanced scraper not available for sitemap scraping")
+            raise RuntimeError("Enhanced scraper not initialized - Playwright may not be available")
+        
         # Scrape sitemap with content page filter
         results = await self.scraper.scrape_sitemap(
             sitemap_url,
@@ -358,57 +389,79 @@ class WebScrapingService:
         media_ids = []
         errors = []
         
-        for article in result.get("articles", []):
-            if not article.get("extraction_successful"):
-                errors.append(f"Failed to extract: {article.get('url')}")
-                continue
-            
-            try:
-                # Prepare data for database
-                info_dict = {
-                    "title": article.get("title", "Untitled"),
-                    "author": article.get("author", "Unknown"),
-                    "source": article.get("url", ""),
-                    "scrape_method": result.get("method", "Unknown"),
-                    "extraction_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
+        logger.info(f"Storing {len(result.get('articles', []))} articles to database")
+        
+        # Get the database path and create instance
+        # Default to user_id 1 if not provided (single-user mode)
+        effective_user_id = user_id if user_id is not None else 1
+        db_path = get_user_media_db_path(effective_user_id)
+        db = MediaDatabase(db_path=db_path, client_id=f"webscraping_service_{effective_user_id}")
+        
+        try:
+            for article in result.get("articles", []):
+                logger.debug(f"Processing article: url={article.get('url')}, "
+                            f"extraction_successful={article.get('extraction_successful')}")
+                if not article.get("extraction_successful"):
+                    error_msg = f"Failed to extract: {article.get('url', 'Unknown URL')}"
+                    logger.warning(error_msg)
+                    errors.append(error_msg)
+                    continue
                 
-                # Format content with metadata
-                content_with_metadata = ContentMetadataHandler.format_content_with_metadata(
-                    url=article.get("url", ""),
-                    content=article.get("content", ""),
-                    pipeline=article.get("method", "enhanced"),
-                    additional_metadata={
-                        "date": article.get("date", ""),
-                        "author": article.get("author", "Unknown")
+                try:
+                    # Prepare data for database
+                    info_dict = {
+                        "title": article.get("title", "Untitled"),
+                        "author": article.get("author", "Unknown"),
+                        "source": article.get("url", ""),
+                        "scrape_method": result.get("method", "Unknown"),
+                        "extraction_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
-                )
-                
-                # Prepare segments
-                segments = [{"Text": content_with_metadata}]
-                
-                # Use summary if available
-                summary = article.get("summary", "No summary available")
-                
-                # Add to database
-                media_id = add_media_with_keywords(
-                    url=article.get("url", ""),
-                    info_dict=info_dict,
-                    segments=segments,
-                    summary=summary,
-                    keywords=keywords.split(",") if keywords else [],
-                    custom_prompt_input=None,
-                    whisper_model="web-scraping-import",
-                    media_type="web_document",
-                    overwrite=False,
-                    user_id=user_id
-                )
-                
-                media_ids.append(media_id)
-                
-            except Exception as e:
-                logger.error(f"Failed to store article: {e}")
-                errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
+                    
+                    # Format content with metadata
+                    content_with_metadata = ContentMetadataHandler.format_content_with_metadata(
+                        url=article.get("url", ""),
+                        content=article.get("content", ""),
+                        pipeline=article.get("method", "enhanced"),
+                        additional_metadata={
+                            "date": article.get("date", ""),
+                            "author": article.get("author", "Unknown")
+                        }
+                    )
+                    
+                    # Prepare segments
+                    segments = [{"Text": content_with_metadata}]
+                    
+                    # Use summary if available
+                    summary = article.get("summary", "No summary available")
+                    
+                    # Add to database using the instance method
+                    media_id, media_uuid, message = db.add_media_with_keywords(
+                        url=article.get("url", ""),
+                        title=article.get("title", "Untitled"),
+                        media_type="web_document",
+                        content=content_with_metadata,  # The full content
+                        keywords=keywords.split(",") if keywords else [],
+                        prompt=None,  # Optional prompt parameter
+                        analysis_content=article.get("summary", None),  # Store summary as analysis
+                        transcription_model="web-scraping-import",
+                        author=article.get("author", None),
+                        ingestion_date=None,  # Will use current time
+                        overwrite=False
+                    )
+                    
+                    if media_id:
+                        media_ids.append(media_id)
+                        logger.info(f"Stored article with media_id: {media_id}, uuid: {media_uuid}")
+                    else:
+                        logger.warning(f"Failed to get media_id for article: {article.get('url')}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to store article: {e}")
+                    errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
+        
+        finally:
+            # Close database connection
+            db.close_connection()
         
         return {
             "status": "persist-ok",

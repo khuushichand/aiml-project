@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Union, Any, Dict, Optional
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Body
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from pydantic import ValidationInfo
@@ -72,43 +72,67 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
 
 # --- API Endpoints ---
 
-@router.post("/import", response_model=CharacterImportResponse, summary="Import character card file",
-             tags=["Characters"], status_code=status.HTTP_201_CREATED)
-async def import_character_from_file_endpoint(
+@router.post("/import", response_model=CharacterImportResponse, 
+             summary="Import character card", tags=["Characters"], 
+             status_code=status.HTTP_201_CREATED)
+async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user)
 ):
+    """
+    Import a character card from a file.
+    
+    Supports:
+    - Image files (PNG, WEBP) with embedded character data
+    - JSON files (including Character Card V3 format)
+    - Markdown files
+    - Plain text files with JSON content
+    
+    For JSON data, you can upload a .json file or a text file containing JSON.
+    """
     try:
         file_content_bytes = await character_file.read()
         if not file_content_bytes:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
-
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is empty"
+            )
+        
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_import")
         rate_limiter.check_import_size(len(file_content_bytes))
         
         # Check character count limit
-        existing_chars = db.list_character_cards(limit=10000)  # Get count
+        existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
-
-        logger.info(f"API: Attempting to import character from file: {character_file.filename}")
-
-        # import_and_save_character_from_file now raises ConflictError if name exists
-        # and InputError/CharactersRAGDBError for other issues.
+        
+        logger.info(f"API: Importing character from file: {character_file.filename}")
+        
+        # import_and_save_character_from_file handles all file types including JSON
         char_id = import_and_save_character_from_file(db, file_content_bytes)
+        
+        if not char_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to import character"
+            )
+        
+        # Retrieve the imported character
+        imported_char = db.get_character_card_by_id(char_id)
+        if not imported_char:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Character imported but could not be retrieved"
+            )
 
-        # If no exception, char_id should be valid
-        imported_char_db = db.get_character_card_by_id(char_id)  # type: ignore
-        if not imported_char_db:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="Character imported but could not be retrieved.")
-
-        response_char_model = _convert_db_char_to_response_model(imported_char_db)
+        logger.info(f"Character '{imported_char.get('name', 'Unknown')}' imported successfully (ID: {char_id})")
+        
         return CharacterImportResponse(
-            message=f"Character '{response_char_model.name}' processed successfully (ID: {char_id}).",
-            character=response_char_model
+            id=char_id,
+            name=imported_char.get('name', 'Unknown'),
+            message=f"Character '{imported_char.get('name', 'Unknown')}' imported successfully"
         )
     except ConflictError as e:  # Character with same name already exists
         # The library function might return the ID of the existing char if we want that behavior.
@@ -147,6 +171,7 @@ async def import_character_from_file_endpoint(
                             detail="An unexpected error occurred during file import.")
     finally:
         await character_file.close()
+
 
 
 @router.get("/", response_model=List[CharacterResponse], summary="List characters", tags=["Characters"])
@@ -225,6 +250,73 @@ async def create_new_character_endpoint(
     except Exception as e:
         logger.error(f"Unexpected error creating character: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+
+
+@router.get("/filter", response_model=List[CharacterResponse], 
+            summary="Filter characters by tags", tags=["Characters"])
+async def filter_characters_by_tags(
+    tags: List[str] = Query([], description="List of tags to filter by"),
+    match_all: bool = Query(False, description="Require all tags (AND) vs any tag (OR)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    """
+    Filter characters by tags.
+    
+    Args:
+        tags: List of tags to filter by
+        match_all: If True, require all tags; if False, match any tag
+        limit: Maximum results
+        offset: Pagination offset
+        db: Database instance
+        
+    Returns:
+        List of characters matching the tag criteria
+    """
+    try:
+        # If no tags specified, return all characters
+        if not tags:
+            results = db.list_character_cards(limit=limit, offset=offset)
+            return [_convert_db_character_to_response(char) for char in results]
+        
+        # Get all characters (we'll filter in memory for now)
+        all_characters = db.list_character_cards(limit=1000, offset=0)
+        
+        filtered = []
+        for char in all_characters:
+            char_tags = char.get('tags', [])
+            if isinstance(char_tags, str):
+                import json
+                try:
+                    char_tags = json.loads(char_tags)
+                except:
+                    char_tags = []
+            
+            if not char_tags:
+                continue
+                
+            # Check tag matching
+            if match_all:
+                # All specified tags must be present
+                if all(tag in char_tags for tag in tags):
+                    filtered.append(char)
+            else:
+                # Any specified tag must be present
+                if any(tag in char_tags for tag in tags):
+                    filtered.append(char)
+        
+        # Apply pagination
+        paginated = filtered[offset:offset+limit]
+        
+        return [_convert_db_char_to_response_model(char) for char in paginated]
+        
+    except Exception as e:
+        logger.error(f"Error filtering characters by tags: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while filtering characters"
+        )
 
 
 @router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["Characters"])
@@ -1153,6 +1245,118 @@ async def bulk_entry_operations(
     except Exception as e:
         logger.error(f"Unexpected error performing bulk operation: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+
+
+# ========================================================================
+# Additional Endpoints: Tag Filtering and Export
+# ========================================================================
+
+
+@router.get("/{character_id}/export", response_model=Dict[str, Any],
+            summary="Export character in various formats", tags=["Characters"])
+async def export_character(
+    character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),
+    format: str = Query("v3", description="Export format (v3, v2, json)"),
+    include_world_books: bool = Query(False, description="Include associated world books"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    """
+    Export a character in various formats.
+    
+    Args:
+        character_id: ID of character to export
+        format: Export format (v3 for Character Card V3, v2 for V2, json for raw)
+        include_world_books: Whether to include world book data
+        db: Database instance
+        
+    Returns:
+        Character data in requested format
+        
+    Raises:
+        HTTPException: 404 if character not found
+    """
+    try:
+        # Get character
+        character = get_character_details(db, character_id)
+        if not character:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found"
+            )
+        
+        # Build export data based on format
+        if format == "v3":
+            # Character Card V3 format
+            export_data = {
+                "spec": "chara_card_v3",
+                "spec_version": "3.0",
+                "data": {
+                    "name": character.get('name'),
+                    "description": character.get('description'),
+                    "personality": character.get('personality'),
+                    "scenario": character.get('scenario'),
+                    "first_mes": character.get('first_message'),
+                    "mes_example": character.get('message_example'),
+                    "creator_notes": character.get('creator_notes'),
+                    "system_prompt": character.get('system_prompt'),
+                    "post_history_instructions": character.get('post_history_instructions'),
+                    "alternate_greetings": character.get('alternate_greetings', []),
+                    "tags": character.get('tags', []),
+                    "creator": character.get('creator'),
+                    "character_version": character.get('character_version', "1.0"),
+                    "extensions": character.get('extensions', {})
+                }
+            }
+        elif format == "v2":
+            # Character Card V2 format
+            export_data = {
+                "name": character.get('name'),
+                "description": character.get('description'),
+                "personality": character.get('personality'),
+                "scenario": character.get('scenario'),
+                "first_mes": character.get('first_message'),
+                "mes_example": character.get('message_example'),
+                "metadata": {
+                    "version": 2,
+                    "created": character.get('created_at'),
+                    "modified": character.get('last_modified'),
+                    "id": character_id
+                }
+            }
+        else:
+            # Raw JSON format
+            export_data = character
+        
+        # Add world books if requested
+        if include_world_books:
+            world_books = db.get_character_world_books(character_id)
+            if world_books:
+                export_data["world_books"] = []
+                for wb in world_books:
+                    wb_data = db.get_world_book(wb['world_book_id'])
+                    if wb_data:
+                        entries = db.get_world_book_entries(wb['world_book_id'])
+                        wb_data['entries'] = entries or []
+                        export_data["world_books"].append(wb_data)
+        
+        # Add character image if present
+        if character.get('image'):
+            import base64
+            export_data["character_image"] = base64.b64encode(character['image']).decode('utf-8')
+        
+        logger.info(f"Exported character {character_id} in format {format}")
+        
+        return export_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while exporting character"
+        )
+
 
 #
 # End of characters.py

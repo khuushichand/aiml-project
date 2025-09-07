@@ -13,7 +13,7 @@ import numpy as np
 import soundfile as sf
 #
 # Third-party libraries
-from fastapi import APIRouter, Depends, HTTPException, Request, Header, File, Form, UploadFile, WebSocket, WebSocketDisconnect, Path
+from fastapi import APIRouter, Depends, HTTPException, Request, Header, File, Form, UploadFile, WebSocket, WebSocketDisconnect, Path, Query
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status # For status codes
 from slowapi import Limiter
@@ -30,11 +30,15 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.Auth.auth_utils import (
     extract_bearer_token,
-    validate_api_token,
-    get_expected_api_token,
-    is_authentication_required
+    validate_api_token
 )
 # from your_project.services.tts_service import TTSService, get_tts_service
+
+# For WebSocket streaming transcription
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+    handle_unified_websocket,
+    UnifiedStreamingConfig
+)
 
 # For logging (if you use the same logger as in your PDF endpoint)
 import logging # or from your_project.utils import logger
@@ -620,11 +624,17 @@ async def reset_tts_metrics(
         )
 
 ######################################################################################################################
-# WebSocket Streaming Transcription Endpoints
+# WebSocket Router Creation
 ######################################################################################################################
 
-@router.websocket("/stream/transcribe")
-async def websocket_transcribe(websocket: WebSocket):
+# Create a separate router for WebSocket endpoints to avoid authentication conflicts
+ws_router = APIRouter()
+
+@ws_router.websocket("/stream/transcribe")
+async def websocket_transcribe(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None)  # Get token from query parameter
+):
     """
     WebSocket endpoint for real-time audio transcription.
     
@@ -642,26 +652,106 @@ async def websocket_transcribe(websocket: WebSocket):
     6. Server sends final transcript:
        {"type": "full_transcript", "text": "..."}
     """
+    # Accept the WebSocket connection first
     await websocket.accept()
     
+    # Authentication check
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    settings = get_settings()
+    expected_key = settings.SINGLE_USER_API_KEY
+    
+    authenticated = False
+    
+    # Check if token was provided in query parameter
+    if token and token == expected_key:
+        logger.info("WebSocket authenticated via query parameter")
+        authenticated = True
+    elif not token:
+        # No token in query, wait for authentication message
+        try:
+            first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            auth_data = json.loads(first_message)
+            
+            if auth_data.get("type") != "auth":
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
+                })
+                await websocket.close()
+                return
+            
+            provided_token = auth_data.get("token")
+            
+            if provided_token != expected_key:
+                logger.warning(f"WebSocket connection with invalid token")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid authentication token"
+                })
+                await websocket.close()
+                return
+            
+            # Authentication successful
+            authenticated = True
+            logger.info("WebSocket authenticated via auth message")
+            await websocket.send_json({"type": "status", "message": "Authenticated"})
+            
+        except asyncio.TimeoutError:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Authentication timeout. Send auth message within 5 seconds."
+            })
+            await websocket.close()
+            return
+        except json.JSONDecodeError:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Invalid JSON in authentication message"
+            })
+            await websocket.close()
+            return
+        except Exception as e:
+            logger.error(f"Authentication error: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Authentication failed: {str(e)}"
+            })
+            await websocket.close()
+            return
+    else:
+        # Token was provided but invalid
+        logger.warning(f"WebSocket connection with invalid query token")
+        await websocket.send_json({
+            "type": "error",
+            "message": "Invalid authentication token"
+        })
+        await websocket.close()
+        return
+    
+    # If not authenticated by this point, reject (this shouldn't happen but safety check)
+    if not authenticated:
+        await websocket.send_json({
+            "type": "error",
+            "message": "Authentication required"
+        })
+        await websocket.close()
+        return
+    
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
-            handle_websocket_transcription,
-            StreamingConfig
-        )
-        
-        # Default configuration
-        config = StreamingConfig(
-            model_variant='mlx',  # Default to MLX variant
+        # Default configuration - will be updated by client config message
+        config = UnifiedStreamingConfig(
+            model='parakeet',  # Default model
+            model_variant='standard',  # Default variant
             sample_rate=16000,
             chunk_duration=2.0,
             overlap_duration=0.5,
             enable_partial=True,
-            partial_interval=0.5
+            partial_interval=0.5,
+            language='en'  # Default language for Canary
         )
         
-        # Handle the WebSocket connection
-        await handle_websocket_transcription(websocket, config)
+        # Handle the WebSocket connection with unified handler
+        await handle_unified_websocket(websocket, config)
         
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")

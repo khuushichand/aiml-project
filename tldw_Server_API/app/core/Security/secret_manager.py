@@ -15,6 +15,8 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from dotenv import load_dotenv
 from loguru import logger
 
 # Import existing config system
@@ -87,6 +89,10 @@ class SecretManager:
             validate_on_startup: Whether to validate all secrets on startup
         """
         self._secrets_cache: Dict[str, SecretValue] = {}
+        
+        # Load .env file if it exists
+        self._load_env_file()
+        
         self._config = load_comprehensive_config()
         
         # Define standard secret configurations
@@ -94,6 +100,24 @@ class SecretManager:
         
         if validate_on_startup:
             self._validate_required_secrets()
+    
+    def _load_env_file(self):
+        """Load .env file from Config_Files directory if it exists."""
+        # Note: .env loading is now handled by config.py's load_comprehensive_config()
+        # This method is kept for backward compatibility but doesn't duplicate loading
+        try:
+            current_file_path = Path(__file__).resolve()
+            project_root = current_file_path.parent.parent.parent.parent  # Up to tldw_Server_API
+            env_path = project_root / 'Config_Files' / '.env'
+            
+            if env_path.exists():
+                # Don't load again if already loaded by config.py
+                # Just log that we found it
+                logger.debug(f"SecretManager: .env file found at {env_path} (already loaded by config.py)")
+            else:
+                logger.debug(f"SecretManager: No .env file found at {env_path}")
+        except Exception as e:
+            logger.warning(f"SecretManager: Error checking .env file: {e}")
     
     def _get_config_value(self, section: str, key: str, fallback: Optional[str] = None) -> Optional[str]:
         """Get value from existing tldw config system."""
@@ -505,7 +529,21 @@ secret_manager = SecretManager(validate_on_startup=False)
 
 # Convenience functions for common operations
 def get_api_key(provider: str) -> Optional[str]:
-    """Get API key for a specific provider."""
+    """Get API key for a specific provider.
+    
+    Priority order:
+    1. Environment variable (e.g., OPENAI_API_KEY)
+    2. Secret manager cache
+    3. Config file
+    """
+    # First check environment variable
+    env_key = f"{provider.upper()}_API_KEY"
+    api_key = os.getenv(env_key)
+    
+    if api_key and api_key not in ['<' + provider + '_api_key>', '', 'your-api-key-here', 'None']:
+        return api_key
+    
+    # Fall back to secret manager
     return secret_manager.get_secret(f"{provider}_api_key")
 
 

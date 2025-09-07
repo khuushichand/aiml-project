@@ -5,16 +5,67 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/audio/speech - Text to Speech</span>
         </h2>
-        <p>Generate audio from text input (OpenAI-compatible API).</p>
+        <p>Generate audio from text using various TTS providers including commercial APIs and local models.</p>
         
+        <!-- Provider Status Indicators -->
+        <div class="provider-status-bar" id="tts-provider-status">
+            <h4>Provider Status</h4>
+            <div class="provider-indicators">
+                <span class="provider-status" data-provider="openai">
+                    <span class="status-dot"></span> OpenAI
+                </span>
+                <span class="provider-status" data-provider="elevenlabs">
+                    <span class="status-dot"></span> ElevenLabs
+                </span>
+                <span class="provider-status" data-provider="higgs">
+                    <span class="status-dot"></span> Higgs
+                </span>
+                <span class="provider-status" data-provider="vibevoice">
+                    <span class="status-dot"></span> VibeVoice
+                </span>
+                <span class="provider-status" data-provider="chatterbox">
+                    <span class="status-dot"></span> Chatterbox
+                </span>
+                <span class="provider-status" data-provider="kokoro">
+                    <span class="status-dot"></span> Kokoro
+                </span>
+            </div>
+            <button class="btn-small" onclick="checkTTSProviderStatus()">
+                <i class="icon-refresh"></i> Refresh Status
+            </button>
+        </div>
+        
+        <!-- Input Text -->
         <div class="form-group">
             <label for="audioTTS_input">Input Text <span class="required">*</span>:</label>
             <textarea id="audioTTS_input" rows="5" placeholder="Enter text to convert to speech...">Hello! This is a test of the text-to-speech system. It can convert any text into natural-sounding speech.</textarea>
+            <div class="text-counter">
+                <span id="audioTTS_charCount">0</span> characters
+            </div>
         </div>
         
+        <!-- Main Configuration -->
         <div class="columns">
             <div class="column">
+                <!-- Provider Selection -->
                 <div class="form-group">
+                    <label for="audioTTS_provider">Provider:</label>
+                    <select id="audioTTS_provider" onchange="updateTTSProviderOptions()">
+                        <optgroup label="Commercial APIs">
+                            <option value="openai">OpenAI</option>
+                            <option value="elevenlabs">ElevenLabs</option>
+                        </optgroup>
+                        <optgroup label="Local Models">
+                            <option value="higgs">Higgs Audio (3B, 50+ languages)</option>
+                            <option value="vibevoice">VibeVoice (90min, multi-speaker)</option>
+                            <option value="chatterbox">Chatterbox (emotion control)</option>
+                            <option value="kokoro">Kokoro (lightweight)</option>
+                        </optgroup>
+                    </select>
+                </div>
+                
+                <!-- Model Selection (dynamic based on provider) -->
+                <div class="form-group" id="audioTTS_model_group">
                     <label for="audioTTS_model">Model:</label>
                     <select id="audioTTS_model">
                         <option value="tts-1">tts-1 (Standard)</option>
@@ -22,6 +73,7 @@
                     </select>
                 </div>
                 
+                <!-- Voice Selection (dynamic based on provider) -->
                 <div class="form-group">
                     <label for="audioTTS_voice">Voice:</label>
                     <select id="audioTTS_voice">
@@ -36,6 +88,7 @@
             </div>
             
             <div class="column">
+                <!-- Audio Format -->
                 <div class="form-group">
                     <label for="audioTTS_response_format">Response Format:</label>
                     <select id="audioTTS_response_format">
@@ -48,34 +101,704 @@
                     </select>
                 </div>
                 
+                <!-- Speed Control -->
                 <div class="form-group">
                     <label for="audioTTS_speed">Speed:</label>
-                    <input type="number" id="audioTTS_speed" value="1.0" min="0.25" max="4.0" step="0.1">
+                    <input type="range" id="audioTTS_speed" value="1.0" min="0.25" max="4.0" step="0.1">
+                    <span id="audioTTS_speed_value">1.0x</span>
+                </div>
+                
+                <!-- Pitch Control (for supported providers) -->
+                <div class="form-group" id="audioTTS_pitch_group" style="display: none;">
+                    <label for="audioTTS_pitch">Pitch:</label>
+                    <input type="range" id="audioTTS_pitch" value="1.0" min="0.5" max="2.0" step="0.1">
+                    <span id="audioTTS_pitch_value">1.0</span>
                 </div>
             </div>
         </div>
         
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="audioTTS_stream">
-                Stream Audio Response
-            </label>
+        <!-- Voice Cloning Section -->
+        <div class="voice-cloning-section" id="voiceCloning" style="display: none;">
+            <h3>Voice Cloning</h3>
+            <div class="info-box">
+                <i class="icon-info"></i>
+                <span>Upload a reference audio file to clone the voice. Supported by: Higgs, VibeVoice, Chatterbox</span>
+            </div>
+            
+            <div class="form-group">
+                <label for="audioTTS_voiceReference">Voice Reference Audio:</label>
+                <div class="file-upload-area" id="voiceUploadArea">
+                    <input type="file" id="audioTTS_voiceReference" accept="audio/*" style="display: none;">
+                    <div class="upload-content">
+                        <i class="icon-upload"></i>
+                        <p>Click to upload or drag & drop</p>
+                        <p class="file-info">WAV, MP3, FLAC (3-30 seconds)</p>
+                    </div>
+                </div>
+                <div id="voiceRefInfo" style="display: none;">
+                    <audio id="voiceRefPlayer" controls style="width: 100%;"></audio>
+                    <button class="btn-small" onclick="clearVoiceReference()">Clear</button>
+                    <div class="voice-analysis" id="voiceAnalysis"></div>
+                </div>
+            </div>
         </div>
         
-        <button class="api-button" onclick="makeRequest('audioTTS', 'POST', '/api/v1/audio/speech', 'json')">
-            Generate Speech
-        </button>
+        <!-- Advanced Options (provider-specific) -->
+        <details class="advanced-options">
+            <summary>Advanced Options</summary>
+            
+            <!-- Higgs-specific options -->
+            <div class="provider-options" id="higgs_options" style="display: none;">
+                <h4>Higgs Audio Options</h4>
+                <div class="form-group">
+                    <label for="higgs_language">Language:</label>
+                    <select id="higgs_language">
+                        <option value="auto">Auto-detect</option>
+                        <option value="en">English</option>
+                        <option value="zh">Chinese</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <!-- Add more languages -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="higgs_multi_speaker">
+                        Enable Multi-speaker Mode
+                    </label>
+                </div>
+            </div>
+            
+            <!-- VibeVoice-specific options -->
+            <div class="provider-options" id="vibevoice_options" style="display: none;">
+                <h4>VibeVoice Options</h4>
+                <div class="form-group">
+                    <label for="vibevoice_speakers">Number of Speakers:</label>
+                    <input type="number" id="vibevoice_speakers" value="1" min="1" max="4">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="vibevoice_music" checked>
+                        Enable Background Music
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="vibevoice_cfg">CFG Scale:</label>
+                    <input type="number" id="vibevoice_cfg" value="1.3" min="0.5" max="3.0" step="0.1">
+                </div>
+            </div>
+            
+            <!-- Chatterbox-specific options -->
+            <div class="provider-options" id="chatterbox_options" style="display: none;">
+                <h4>Chatterbox Options</h4>
+                <div class="form-group">
+                    <label for="chatterbox_emotion">Emotion:</label>
+                    <select id="chatterbox_emotion">
+                        <option value="neutral">Neutral</option>
+                        <option value="happy">Happy</option>
+                        <option value="sad">Sad</option>
+                        <option value="angry">Angry</option>
+                        <option value="excited">Excited</option>
+                        <option value="calm">Calm</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="chatterbox_intensity">Emotion Intensity:</label>
+                    <input type="range" id="chatterbox_intensity" value="1.0" min="0.5" max="2.0" step="0.1">
+                    <span id="chatterbox_intensity_value">1.0</span>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="chatterbox_watermark">
+                        Add Perth Watermark
+                    </label>
+                </div>
+            </div>
+            
+            <!-- ElevenLabs-specific options -->
+            <div class="provider-options" id="elevenlabs_options" style="display: none;">
+                <h4>ElevenLabs Options</h4>
+                <div class="form-group">
+                    <label for="elevenlabs_stability">Stability:</label>
+                    <input type="range" id="elevenlabs_stability" value="0.5" min="0" max="1" step="0.1">
+                    <span id="elevenlabs_stability_value">0.5</span>
+                </div>
+                <div class="form-group">
+                    <label for="elevenlabs_similarity">Similarity Boost:</label>
+                    <input type="range" id="elevenlabs_similarity" value="0.75" min="0" max="1" step="0.1">
+                    <span id="elevenlabs_similarity_value">0.75</span>
+                </div>
+            </div>
+        </details>
         
-        <h3>cURL Command:</h3>
-        <pre id="audioTTS_curl">---</pre>
+        <!-- Generation Options -->
+        <div class="generation-options">
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="audioTTS_stream">
+                    Stream Audio Response
+                </label>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="audioTTS_cache">
+                    Use Cached Audio (if available)
+                </label>
+            </div>
+        </div>
         
-        <h3>Response:</h3>
-        <pre id="audioTTS_response">---</pre>
+        <!-- Action Buttons -->
+        <div class="button-group">
+            <button class="api-button primary" onclick="generateTTS()">
+                <i class="icon-play"></i> Generate Speech
+            </button>
+            <button class="api-button secondary" onclick="stopTTS()" id="stopButton" style="display: none;">
+                <i class="icon-stop"></i> Stop
+            </button>
+            <button class="api-button secondary" onclick="downloadAudio()" id="downloadButton" style="display: none;">
+                <i class="icon-download"></i> Download
+            </button>
+        </div>
         
-        <div class="form-group mt-3">
-            <h3>Audio Player</h3>
+        <!-- Progress Bar -->
+        <div class="progress-bar" id="ttsProgress" style="display: none;">
+            <div class="progress-fill" id="ttsProgressFill"></div>
+            <span class="progress-text" id="ttsProgressText">Generating...</span>
+        </div>
+        
+        <!-- Audio Player with Waveform -->
+        <div class="audio-player-section mt-3">
+            <h3>Generated Audio</h3>
+            <div class="waveform-container" id="waveformContainer" style="display: none;">
+                <canvas id="waveformCanvas" width="800" height="100"></canvas>
+            </div>
             <audio id="audioTTS_player" controls style="width: 100%; display: none;"></audio>
+            <div class="audio-info" id="audioInfo" style="display: none;">
+                <span>Duration: <span id="audioDuration">--:--</span></span>
+                <span>Size: <span id="audioSize">-- KB</span></span>
+                <span>Format: <span id="audioFormat">--</span></span>
+            </div>
             <p id="audioTTS_status" class="text-muted">Generate speech to play audio...</p>
         </div>
+        
+        <!-- Generation History -->
+        <details class="generation-history mt-3">
+            <summary>Generation History</summary>
+            <div id="ttsHistory" class="history-list">
+                <p class="text-muted">No generations yet...</p>
+            </div>
+        </details>
+        
+        <!-- Technical Details -->
+        <details class="technical-details mt-3">
+            <summary>Technical Details</summary>
+            <h4>cURL Command:</h4>
+            <pre id="audioTTS_curl">---</pre>
+            
+            <h4>API Response:</h4>
+            <pre id="audioTTS_response">---</pre>
+            
+            <h4>Performance Metrics:</h4>
+            <div id="performanceMetrics">
+                <p>Generation Time: <span id="genTime">--</span></p>
+                <p>Model Load Time: <span id="modelLoadTime">--</span></p>
+                <p>RTF (Real-Time Factor): <span id="rtfValue">--</span></p>
+            </div>
+        </details>
     </div>
 </div>
+
+<!-- Streaming Transcription Tab -->
+<div id="tabAudioStreaming" class="tab-content">
+    <div class="endpoint-section" id="audioStreaming">
+        <h2>
+            <span class="endpoint-method websocket">WS</span>
+            <span class="endpoint-path">/api/v1/audio/stream/transcribe - Real-time Streaming Transcription</span>
+        </h2>
+        <p>Stream audio from your microphone for real-time transcription using Nemo STT models.</p>
+        
+        <!-- Connection Status -->
+        <div class="status-bar" id="streamingStatus">
+            <div class="status-indicator disconnected" id="streamingStatusIndicator"></div>
+            <span id="streamingStatusText">Disconnected</span>
+        </div>
+        
+        <!-- Configuration Section -->
+        <div class="config-section">
+            <h3>Configuration</h3>
+            
+            <!-- API Key Section -->
+            <div class="form-group">
+                <label for="streamingApiKey">API Key:</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="password" id="streamingApiKey" placeholder="Enter your API key" style="flex: 1;">
+                    <button class="api-button secondary" onclick="saveStreamingApiKey()">Save</button>
+                    <button class="api-button" onclick="toggleApiKeyVisibility()">Show/Hide</button>
+                </div>
+                <small style="color: var(--color-text-muted);">API key is required for authentication. It will be saved in your browser's local storage.</small>
+            </div>
+            
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="streamingModel">Model:</label>
+                        <select id="streamingModel" onchange="updateModelOptions()">
+                            <option value="parakeet">Parakeet (Fast)</option>
+                            <option value="canary">Canary (Multilingual)</option>
+                            <option value="whisper">Whisper (Accurate)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group" id="variantGroup">
+                        <label for="streamingVariant">Variant:</label>
+                        <select id="streamingVariant">
+                            <option value="standard">Standard</option>
+                            <option value="onnx">ONNX (CPU Optimized)</option>
+                            <option value="mlx">MLX (Apple Silicon)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group" id="whisperModelGroup" style="display: none;">
+                        <label for="whisperModelSize">Whisper Model:</label>
+                        <select id="whisperModelSize">
+                            <option value="tiny">Tiny (39M, fastest)</option>
+                            <option value="base">Base (74M)</option>
+                            <option value="small">Small (244M)</option>
+                            <option value="medium">Medium (769M)</option>
+                            <option value="large-v3">Large v3 (1550M)</option>
+                            <option value="distil-large-v3" selected>Distil-Large v3 (756M, best)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group" id="whisperTaskGroup" style="display: none;">
+                        <label for="whisperTask">Task:</label>
+                        <select id="whisperTask">
+                            <option value="transcribe">Transcribe</option>
+                            <option value="translate">Translate to English</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group" id="languageGroup" style="display: none;">
+                        <label for="streamingLanguage">Language:</label>
+                        <select id="streamingLanguage">
+                            <option value="">Auto-detect</option>
+                            <option value="en">English</option>
+                            <option value="es">Spanish</option>
+                            <option value="de">German</option>
+                            <option value="fr">French</option>
+                            <option value="zh">Chinese</option>
+                            <option value="ja">Japanese</option>
+                            <option value="ko">Korean</option>
+                            <option value="ru">Russian</option>
+                            <option value="ar">Arabic</option>
+                            <option value="hi">Hindi</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="column">
+                    <div class="form-group">
+                        <label for="streamingSampleRate">Sample Rate:</label>
+                        <select id="streamingSampleRate">
+                            <option value="16000" selected>16000 Hz</option>
+                            <option value="8000">8000 Hz</option>
+                            <option value="44100">44100 Hz</option>
+                            <option value="48000">48000 Hz</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="streamingChunkDuration">Chunk Duration (seconds):</label>
+                        <input type="number" id="streamingChunkDuration" value="2.0" min="0.5" max="5.0" step="0.5">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="streamingEnablePartial" checked>
+                            Enable Partial Results
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Control Buttons -->
+        <div class="button-group">
+            <button id="connectStreamingBtn" class="api-button" onclick="toggleStreamingConnection()">
+                Connect to Server
+            </button>
+            <button id="startStreamingBtn" class="api-button secondary" onclick="startStreamingRecording()" disabled>
+                Start Recording
+            </button>
+            <button id="stopStreamingBtn" class="api-button danger" onclick="stopStreamingRecording()" disabled>
+                Stop Recording
+            </button>
+            <button class="api-button" onclick="clearStreamingTranscript()">
+                Clear Transcript
+            </button>
+        </div>
+        
+        <!-- Audio Visualizer -->
+        <div class="visualizer-section">
+            <h3>Audio Input</h3>
+            <canvas id="streamingVisualizer" width="800" height="100"></canvas>
+            <div class="audio-stats">
+                <span>Volume: <span id="streamingVolume">0</span>%</span>
+                <span>Duration: <span id="streamingDuration">0:00</span></span>
+                <span>Chunks Sent: <span id="streamingChunks">0</span></span>
+                <span>Responses: <span id="streamingResponses">0</span></span>
+            </div>
+        </div>
+        
+        <!-- Transcript Display -->
+        <div class="transcript-section">
+            <h3>Transcript</h3>
+            <div id="streamingTranscript" class="transcript-box">
+                <div class="transcript-placeholder">Connect and start recording to see transcript...</div>
+            </div>
+            
+            <!-- Partial Result Display -->
+            <div id="streamingPartial" class="partial-box" style="display: none;">
+                <span class="partial-indicator">Partial:</span>
+                <span id="streamingPartialText"></span>
+            </div>
+        </div>
+        
+        <!-- Debug Information -->
+        <details class="debug-section">
+            <summary>Debug Information</summary>
+            <div class="debug-content">
+                <h4>WebSocket Messages</h4>
+                <pre id="streamingDebug">No messages yet...</pre>
+                
+                <h4>Connection Details</h4>
+                <pre id="streamingConnectionInfo">Not connected</pre>
+            </div>
+        </details>
+    </div>
+</div>
+
+<style>
+/* TTS-specific styles */
+.provider-status-bar {
+    background: var(--color-surface-alt);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    margin-bottom: 1.5rem;
+}
+
+.provider-indicators {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 0.5rem 0;
+}
+
+.provider-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: gray;
+}
+
+.status-dot.available { background: #4CAF50; }
+.status-dot.unavailable { background: #f44336; }
+.status-dot.loading { background: #FFC107; }
+
+.text-counter {
+    text-align: right;
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+}
+
+.voice-cloning-section {
+    background: var(--color-surface-alt);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    margin: 1rem 0;
+}
+
+.file-upload-area {
+    border: 2px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.file-upload-area:hover {
+    border-color: var(--color-primary);
+    background: var(--color-surface-alt);
+}
+
+.file-upload-area.dragover {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+}
+
+.upload-content i {
+    font-size: 2rem;
+    color: var(--color-text-muted);
+}
+
+.voice-analysis {
+    margin-top: 1rem;
+    padding: 0.5rem;
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+}
+
+.advanced-options, .generation-history, .technical-details {
+    background: var(--color-surface-alt);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+}
+
+.provider-options {
+    padding: 1rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    margin-top: 1rem;
+}
+
+.progress-bar {
+    height: 30px;
+    background: var(--color-surface-alt);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    position: relative;
+    margin: 1rem 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), var(--color-primary-dark));
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--color-text);
+    font-weight: 600;
+}
+
+.waveform-container {
+    background: var(--color-surface);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    margin: 1rem 0;
+}
+
+.audio-info {
+    display: flex;
+    gap: 2rem;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+}
+
+.history-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.history-item {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+    cursor: pointer;
+}
+
+.history-item:hover {
+    background: var(--color-surface);
+}
+
+.button-group {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+}
+
+.api-button.primary {
+    background: var(--color-primary);
+    color: white;
+}
+
+.api-button.secondary {
+    background: var(--color-surface-alt);
+}
+
+input[type="range"] {
+    width: 150px;
+}
+
+#performanceMetrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+/* Streaming-specific styles */
+.status-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background: var(--color-surface-alt);
+    border-radius: var(--radius-md);
+    margin-bottom: 20px;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 10px;
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.connected {
+    background-color: #4CAF50;
+}
+
+.status-indicator.connecting {
+    background-color: #FFC107;
+}
+
+.status-indicator.disconnected {
+    background-color: #f44336;
+    animation: none;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.visualizer-section {
+    margin: 20px 0;
+    padding: 15px;
+    background: var(--color-surface-alt);
+    border-radius: var(--radius-md);
+}
+
+#streamingVisualizer {
+    width: 100%;
+    height: 100px;
+    background: #000;
+    border-radius: var(--radius-sm);
+}
+
+.audio-stats {
+    display: flex;
+    gap: 20px;
+    margin-top: 10px;
+    font-size: 0.9em;
+    color: var(--color-text-muted);
+}
+
+.transcript-section {
+    margin: 20px 0;
+}
+
+.transcript-box {
+    min-height: 200px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 15px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.transcript-placeholder {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+.transcript-entry {
+    margin: 5px 0;
+    padding: 5px;
+    border-left: 3px solid transparent;
+}
+
+.transcript-entry.partial {
+    color: #666;
+    font-style: italic;
+    border-left-color: #FFC107;
+}
+
+.transcript-entry.final {
+    color: var(--color-text);
+    border-left-color: #4CAF50;
+}
+
+.transcript-entry.error {
+    color: #f44336;
+    border-left-color: #f44336;
+}
+
+.transcript-entry.status {
+    color: #2196F3;
+    border-left-color: #2196F3;
+}
+
+.partial-box {
+    margin-top: 10px;
+    padding: 10px;
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    border-radius: var(--radius-sm);
+    color: #856404;
+}
+
+.partial-indicator {
+    font-weight: bold;
+    margin-right: 10px;
+}
+
+.debug-section {
+    margin-top: 20px;
+    padding: 10px;
+    background: var(--color-surface-alt);
+    border-radius: var(--radius-md);
+}
+
+.debug-content {
+    margin-top: 10px;
+}
+
+.debug-content pre {
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--color-surface);
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85em;
+}
+
+.endpoint-method.websocket {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+</style>

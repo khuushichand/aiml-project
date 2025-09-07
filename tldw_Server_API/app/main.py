@@ -9,7 +9,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
@@ -20,13 +20,17 @@ from starlette.staticfiles import StaticFiles
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 #
 # Audio Endpoint (includes WebSocket streaming transcription)
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
 #
 # Chat Endpoint
 from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
 #
 # Character Endpoint
 from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
+# Character Chat Sessions Endpoint
+from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+# Character Messages Endpoint
+from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 #
 # Metrics Endpoint
 from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -264,14 +268,14 @@ async def lifespan(app: FastAPI):
     # Initialize TTS Service
     logger.info("App Startup: Initializing TTS service...")
     try:
-        from tldw_Server_API.app.core.TTS.tts_generation import get_tts_service
+        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
         from tldw_Server_API.app.core.config import load_comprehensive_config
         
         # Load TTS configuration
         tts_config = load_comprehensive_config()
         
         # Initialize the TTS service with configuration
-        tts_service = await get_tts_service(app_config=tts_config)
+        tts_service = await get_tts_service_v2(config=tts_config)
         logger.info("App Startup: TTS service initialized successfully")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize TTS service: {e}")
@@ -291,14 +295,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
         # Continue startup even if template initialization fails
     
-    # Initialize Unified Audit Service
-    try:
-        from tldw_Server_API.app.core.Audit.unified_audit_service import get_unified_audit_service
-        
-        audit_service = await get_unified_audit_service()
-        logger.info("App Startup: Unified audit service initialized")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize audit service: {e}")
+    # Note: Audit service now uses dependency injection
+    # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
+    logger.info("App Startup: Audit service available via dependency injection")
     
     # Display authentication mode and API key for single-user mode
     try:
@@ -330,13 +329,9 @@ async def lifespan(app: FastAPI):
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
     
-    # Shutdown unified audit service
-    try:
-        from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
-        await shutdown_audit_service()
-        logger.info("App Shutdown: Audit service shutdown complete")
-    except Exception as e:
-        logger.error(f"App Shutdown: Error shutting down audit service: {e}")
+    # Note: Audit service cleanup handled via dependency injection
+    # No global shutdown needed
+    logger.info("App Shutdown: Audit services cleanup handled by dependency injection")
     
     # Close auth database pool
     try:
@@ -574,15 +569,24 @@ app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
 # Router for media endpoints/media file handling
 app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
 
-# Router for /audio/ endpoints (includes WebSocket streaming at /audio/stream/transcribe)
+# Router for /audio/ endpoints
 app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+
+# WebSocket router for audio streaming (separate to avoid authentication conflicts)
+app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
 
 # Router for chat endpoints/chat temp-file handling
 app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])
 
 
-# Router for chat endpoints/chat temp-file handling
+# Router for character endpoints
 app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character, persona"])
+
+# Router for character chat sessions
+app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character chat sessions"])
+
+# Router for character messages (Note: uses multiple prefixes for different endpoints)
+app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character messages"])
 
 
 # Router for metrics endpoints

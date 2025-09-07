@@ -226,7 +226,7 @@ def process_audio_files(
     timestamp_option: bool = True, # Keep timestamps by default
     perform_analysis: bool = True, # Summarize by default if API provided
     api_name: Optional[str] = None, # LLM API for summarization
-    api_key: Optional[str] = None,
+    # api_key removed - retrieved from server config
     custom_prompt_input: Optional[str] = None,
     system_prompt_input: Optional[str] = None,
     summarize_recursively: bool = False,
@@ -283,7 +283,7 @@ def process_audio_files(
                           transcribed/chunked text. Defaults to True. Requires `api_name`.
         api_name: Name of the LLM API to use for analysis (e.g., 'openai', 'anthropic').
                   Required if `perform_analysis` is True. Defaults to None.
-        api_key: API key for the specified LLM API. Defaults to None.
+        # api_key parameter removed - API keys are retrieved from server config
         custom_prompt_input: Custom user prompt for the analysis task. Defaults to None.
         system_prompt_input: System prompt/message for the analysis task. Defaults to None.
         summarize_recursively: If True, use a recursive summarization strategy for long texts.
@@ -401,21 +401,43 @@ def process_audio_files(
                 if is_url:
                     update_progress(f"Downloading audio from URL: {input_item}")
                     try:
-                        # Download to the processing temp dir
-                        downloaded_path = download_audio_file(
-                            url=input_item,
-                            target_temp_dir=str(processing_temp_dir_path),
-                            use_cookies=use_cookies,
-                            cookies=cookies
-                        )
-                        # Move or copy to our managed temp dir if different
-                        target_path = processing_temp_dir_path / Path(downloaded_path).name
-                        if Path(downloaded_path).parent != processing_temp_dir_path:
-                            Path(downloaded_path).rename(target_path)
-                            current_audio_path = str(target_path)
-                            # Clean up original download dir if empty? Maybe too complex.
+                        # Check if this is a YouTube URL that needs yt-dlp
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(input_item)
+                        is_youtube = 'youtube.com' in parsed_url.netloc or 'youtu.be' in parsed_url.netloc
+                        
+                        if is_youtube:
+                            # Use yt-dlp for YouTube URLs
+                            update_progress(f"Detected YouTube URL, using yt-dlp for extraction...")
+                            downloaded_path, download_message = download_youtube_audio(input_item)
+                            if not downloaded_path:
+                                raise RuntimeError(f"YouTube download failed: {download_message}")
+                            
+                            # Move the downloaded file to our temp directory
+                            source_path = Path(downloaded_path)
+                            target_path = processing_temp_dir_path / source_path.name
+                            if source_path.parent != processing_temp_dir_path:
+                                import shutil
+                                shutil.move(str(source_path), str(target_path))
+                                current_audio_path = str(target_path)
+                            else:
+                                current_audio_path = downloaded_path
                         else:
-                            current_audio_path = downloaded_path
+                            # Use regular download for direct audio file URLs
+                            downloaded_path = download_audio_file(
+                                url=input_item,
+                                target_temp_dir=str(processing_temp_dir_path),
+                                use_cookies=use_cookies,
+                                cookies=cookies
+                            )
+                            # Move or copy to our managed temp dir if different
+                            target_path = processing_temp_dir_path / Path(downloaded_path).name
+                            if Path(downloaded_path).parent != processing_temp_dir_path:
+                                Path(downloaded_path).rename(target_path)
+                                current_audio_path = str(target_path)
+                                # Clean up original download dir if empty? Maybe too complex.
+                            else:
+                                current_audio_path = downloaded_path
 
                         item_result["processing_source"] = current_audio_path
                         item_temp_files.append(current_audio_path) # Mark for potential cleanup
@@ -571,7 +593,7 @@ def process_audio_files(
                             api_name=api_name,
                             input_data=text_to_process_for_analysis,
                             custom_prompt_arg=custom_prompt_input,
-                            api_key=api_key,
+                            api_key=None,  # Pass None - will be retrieved from server config
                             recursive_summarization=summarize_recursively,
                             chunked_summarization=(generated_chunks is not None and len(
                                 generated_chunks) > 1 and not summarize_recursively),
@@ -792,7 +814,20 @@ def download_youtube_audio(url: str) -> tuple[Optional[str], str]:
     """
     try:
         # Determine ffmpeg path based on the operating system.
-        ffmpeg_path = './Bin/ffmpeg.exe' if os.name == 'nt' else 'ffmpeg'
+        if os.name == 'nt':
+            ffmpeg_path = './Bin/ffmpeg.exe'
+        else:
+            # Try to find ffmpeg in the system PATH
+            import shutil
+            ffmpeg_path = shutil.which('ffmpeg')
+            if not ffmpeg_path:
+                # Common macOS Homebrew locations
+                for path in ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']:
+                    if os.path.exists(path):
+                        ffmpeg_path = path
+                        break
+            if not ffmpeg_path:
+                ffmpeg_path = 'ffmpeg'  # Fallback to PATH
 
         # Create a temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -801,37 +836,28 @@ def download_youtube_audio(url: str) -> tuple[Optional[str], str]:
                 info_dict = ydl.extract_info(url, download=False)
                 sanitized_title = sanitize_filename(info_dict['title'])
 
-            # Setup the temporary filenames
-            temp_video_path = Path(temp_dir) / f"{sanitized_title}_temp.mp4"
+            # Setup the temporary filename (yt-dlp will create .mp3 directly with postprocessor)
             temp_audio_path = Path(temp_dir) / f"{sanitized_title}.mp3"
 
-            # Initialize yt-dlp with options for downloading
+            # Initialize yt-dlp with options for downloading and extracting audio
             ydl_opts = {
-                'format': 'bestaudio[ext=m4a]/best[height<=480]',  # Prefer best audio, or video up to 480p
+                'format': 'bestaudio/best',  # Prefer best audio quality
                 'ffmpeg_location': ffmpeg_path,
-                'outtmpl': str(temp_video_path),
+                'outtmpl': str(Path(temp_dir) / f"{sanitized_title}.%(ext)s"),
                 'noplaylist': True,
-                'quiet': True
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'postprocessor_args': [
+                    '-ar', '44100',  # Set sample rate to 44.1kHz
+                ]
             }
 
-            # Execute yt-dlp to download the video/audio
+            # Execute yt-dlp to download and convert to audio
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-
-            # Check if the file exists
-            if not temp_video_path.exists():
-                raise FileNotFoundError(f"Expected file was not found: {temp_video_path}")
-
-            # Use ffmpeg to extract audio
-            ffmpeg_command = [
-                ffmpeg_path,
-                '-i', str(temp_video_path),
-                '-vn',  # No video
-                '-acodec', 'libmp3lame',
-                '-b:a', '192k',
-                str(temp_audio_path)
-            ]
-            subprocess.run(ffmpeg_command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             # Check if the audio file was created
             if not temp_audio_path.exists():
@@ -867,7 +893,7 @@ def process_podcast(
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None, # Added system prompt
     api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
+    # api_key removed - retrieved from server config
     summarize_recursively: bool = False, # Added recursive flag
     # Chunking options
     perform_chunking: bool = True, # Added perform flag
@@ -909,7 +935,7 @@ def process_podcast(
         custom_prompt: Custom user prompt for LLM analysis. Defaults to None.
         system_prompt: System prompt for LLM analysis. Defaults to None.
         api_name: Name of LLM API for analysis (e.g., 'openai'). Defaults to None (no analysis).
-        api_key: API key for the LLM. Defaults to None.
+        # api_key parameter removed - API keys are retrieved from server config
         summarize_recursively: Use recursive summarization. Defaults to False.
         perform_chunking: Whether to chunk the transcript. Defaults to True.
         chunk_method: Chunking method. Defaults to None (library default).
@@ -1049,7 +1075,7 @@ def process_podcast(
             timestamp_option=keep_timestamps,
             perform_analysis=(api_name is not None and api_name.lower() != 'none'),
             api_name=api_name,
-            api_key=api_key,
+            # api_key removed - retrieved from server config
             custom_prompt_input=custom_prompt,
             system_prompt_input=system_prompt,
             summarize_recursively=summarize_recursively,

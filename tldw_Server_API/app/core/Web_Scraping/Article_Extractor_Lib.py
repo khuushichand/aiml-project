@@ -89,10 +89,10 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
         # load retry count from config
         scrape_retry_count = loaded_config['web_scraper'].get('web_scraper_retry_count', 3)
-        retries = scrape_retry_count
+        retries = int(scrape_retry_count) if isinstance(scrape_retry_count, str) else scrape_retry_count
         # Load retry timeout value from config
         web_scraper_retry_timeout = loaded_config['web_scraper'].get('web_scraper_retry_timeout', 60)
-        timeout_ms = web_scraper_retry_timeout
+        timeout_ms = int(web_scraper_retry_timeout) if isinstance(web_scraper_retry_timeout, str) else web_scraper_retry_timeout
 
         # Whether stealth mode is enabled
         stealth_enabled = loaded_config['web_scraper'].get('web_scraper_stealth_playwright', False)
@@ -117,8 +117,12 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
                     # Check if stealth mode is enabled in the config
                     if stealth_enabled:
-                        from playwright_stealth import stealth_async
-                        await stealth_async(page)
+                        try:
+                            from playwright_stealth import stealth_async
+                            await stealth_async(page)
+                        except ImportError:
+                            # Fallback if stealth_async is not available
+                            logging.debug("playwright_stealth not properly installed, skipping stealth mode")
 
                     # Navigate to the URL
                     await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)

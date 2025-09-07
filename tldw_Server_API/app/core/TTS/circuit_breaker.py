@@ -456,12 +456,24 @@ class CircuitBreakerManager:
         self._breakers: Dict[str, CircuitBreaker] = {}
         self._lock = asyncio.Lock()
         
+        # Extract circuit breaker config safely
+        if hasattr(self.config, 'has_section') and self.config.has_section('TTS-Settings'):
+            # It's a ConfigParser object, extract TTS settings
+            try:
+                circuit_config = dict(self.config.items('TTS-Settings'))
+            except Exception:
+                circuit_config = {}
+        elif isinstance(self.config, dict):
+            circuit_config = self.config
+        else:
+            circuit_config = {}
+        
         # Default configuration
         self.default_config = {
-            "failure_threshold": self.config.get("circuit_failure_threshold", 5),
-            "recovery_timeout": self.config.get("circuit_recovery_timeout", 60.0),
-            "half_open_max_calls": self.config.get("circuit_half_open_calls", 3),
-            "success_threshold": self.config.get("circuit_success_threshold", 2)
+            "failure_threshold": circuit_config.get("circuit_failure_threshold", 5),
+            "recovery_timeout": float(circuit_config.get("circuit_recovery_timeout", 60.0)),
+            "half_open_max_calls": int(circuit_config.get("circuit_half_open_calls", 3)),
+            "success_threshold": int(circuit_config.get("circuit_success_threshold", 2))
         }
     
     async def get_breaker(self, provider_name: str) -> CircuitBreaker:
@@ -477,7 +489,30 @@ class CircuitBreakerManager:
         async with self._lock:
             if provider_name not in self._breakers:
                 # Get provider-specific config or use defaults
-                provider_config = self.config.get(f"{provider_name}_circuit", {})
+                provider_config = {}
+                
+                # Handle ConfigParser objects
+                if hasattr(self.config, 'has_option'):
+                    # Try to get provider-specific circuit config from ConfigParser
+                    circuit_key = f"{provider_name}_circuit"
+                    if self.config.has_section('TTS-Settings'):
+                        # Check for provider-specific settings
+                        for key, value in dict(self.config.items('TTS-Settings')).items():
+                            if key.startswith(f"{provider_name}_circuit_"):
+                                param_name = key.replace(f"{provider_name}_circuit_", "")
+                                try:
+                                    # Convert to appropriate type
+                                    if param_name in ["failure_threshold", "half_open_max_calls", "success_threshold"]:
+                                        provider_config[param_name] = int(value)
+                                    elif param_name == "recovery_timeout":
+                                        provider_config[param_name] = float(value)
+                                    else:
+                                        provider_config[param_name] = value
+                                except ValueError:
+                                    pass
+                elif isinstance(self.config, dict):
+                    provider_config = self.config.get(f"{provider_name}_circuit", {})
+                
                 config = {**self.default_config, **provider_config}
                 
                 self._breakers[provider_name] = CircuitBreaker(

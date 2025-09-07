@@ -96,12 +96,20 @@ class TTSRequest:
     emotion: Optional[str] = None
     emotion_intensity: float = 1.0
     style: Optional[str] = None
-    seed: Optional[int] = None
     voice_reference: Optional[bytes] = None  # For voice cloning
     ssml: bool = False
     stream: bool = True
     # Multi-speaker dialogue support
     speakers: Optional[Dict[str, str]] = None  # Speaker ID to voice mapping
+    
+    # Advanced generation parameters (especially for VibeVoice)
+    seed: Optional[int] = None  # For reproducible generation
+    cfg_scale: Optional[float] = None  # 1.0-2.0, controls generation guidance
+    diffusion_steps: Optional[int] = None  # 5-100, quality vs speed
+    temperature: Optional[float] = None  # 0.1-2.0, sampling randomness
+    top_p: Optional[float] = None  # 0.1-1.0, nucleus sampling
+    attention_type: Optional[str] = None  # auto, sdpa, flash_attention_2, eager
+    
     # Additional provider-specific parameters
     extra_params: Dict[str, Any] = field(default_factory=dict)
 

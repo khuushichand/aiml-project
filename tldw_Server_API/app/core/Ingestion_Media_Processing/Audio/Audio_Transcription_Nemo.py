@@ -25,6 +25,10 @@ from typing import Optional, Union, Tuple, Dict, Any, Callable
 import numpy as np
 import torch
 
+# Apply NumPy 2.0 compatibility patches before importing Nemo
+from .numpy_compat import ensure_numpy_compatibility
+ensure_numpy_compatibility()
+
 # Import local config
 from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
 
@@ -327,6 +331,11 @@ def transcribe_with_canary(
         
         if transcriptions and len(transcriptions) > 0:
             result = transcriptions[0]
+            # Handle Hypothesis objects from Nemo
+            if hasattr(result, 'text'):
+                result = result.text
+            elif not isinstance(result, str):
+                result = str(result)
         else:
             result = "[No transcription produced]"
         
@@ -415,6 +424,11 @@ def transcribe_with_parakeet(
         
         if transcriptions and len(transcriptions) > 0:
             result = transcriptions[0]
+            # Handle Hypothesis objects from Nemo
+            if hasattr(result, 'text'):
+                result = result.text
+            elif not isinstance(result, str):
+                result = str(result)
         else:
             result = "[No transcription produced]"
         

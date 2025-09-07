@@ -451,6 +451,17 @@
             </div>
         </div>
 
+        <div id="chatbooks-subtabs" class="sub-tab-row" role="navigation" aria-label="Chatbooks sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabChatbooksExport" data-load-group="chatbooks" role="tab">
+                    Export/Import
+                </button>
+                <button class="sub-tab-button" data-content-id="tabChatbooksJobs" data-load-group="chatbooks" role="tab">
+                    Jobs
+                </button>
+            </div>
+        </div>
+
         <div id="rag-subtabs" class="sub-tab-row" role="navigation" aria-label="RAG sub-navigation">
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabRAGSearch" data-load-group="rag" role="tab">
@@ -536,6 +547,9 @@
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabAudioTTS" data-load-group="audio" role="tab">
                     Text to Speech
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAudioStreaming" data-load-group="audio" role="tab">
+                    Streaming Transcription
                 </button>
             </div>
         </div>
@@ -755,6 +769,10 @@
     <script src="js/api-client.js"></script>
     <script src="js/endpoint-helper.js"></script>
     <script src="js/chat-ui.js"></script>
+    <script src="js/streaming-transcription.js"></script> <!-- WebSocket streaming transcription -->
+    <script src="js/tts.js"></script> <!-- TTS functionality -->
+    <script src="js/tts-loader.js"></script> <!-- TTS content loader -->
+    <script src="js/tab-functions.js"></script> <!-- Load tab functions before main.js -->
     <script src="js/main.js"></script>
 
     <!-- Legacy compatibility functions -->
@@ -816,6 +834,46 @@
                 Loading.show(responseArea.parentElement, 'Sending request...');
                 responseArea.textContent = '';
 
+                // Replace path parameters like {media_id} with actual values from form inputs
+                const pathParamRegex = /\{([^}]+)\}/g;
+                let processedPath = path;
+                let pathParams = [];
+                let match;
+                
+                while ((match = pathParamRegex.exec(path)) !== null) {
+                    pathParams.push(match[1]);
+                }
+                
+                pathParams.forEach(param => {
+                    const inputEl = document.getElementById(`${endpointId}_${param}`);
+                    if (inputEl) {
+                        // Get the value, handling empty inputs
+                        let value = inputEl.value;
+                        
+                        if (!value || value.trim() === '') {
+                            // Show error for required path parameters
+                            Toast.error(`${param} is required but is empty`);
+                            throw new Error(`Missing required path parameter: ${param}`);
+                        }
+                        
+                        // Convert to appropriate type based on input type
+                        if (inputEl.type === 'number') {
+                            // Parse as integer for numeric inputs
+                            const numValue = parseInt(value, 10);
+                            if (isNaN(numValue)) {
+                                Toast.error(`${param} must be a valid number`);
+                                throw new Error(`Invalid number for parameter: ${param}`);
+                            }
+                            value = numValue;
+                        }
+                        processedPath = processedPath.replace(`{${param}}`, value);
+                    } else {
+                        // Input element not found - this is a configuration error
+                        Toast.error(`Input field not found for required parameter: ${param}`);
+                        throw new Error(`Input field not found for required parameter: ${param}`);
+                    }
+                });
+                
                 // Build the request based on bodyType
                 let body = null;
                 let query = {};
@@ -846,10 +904,13 @@
                         const inputs = formGroup.querySelectorAll('input[type="text"], input[type="number"], input[type="checkbox"], select');
                         inputs.forEach(input => {
                             const paramName = input.id.replace(endpointId + '_', '');
-                            if (input.type === 'checkbox') {
-                                if (input.checked) query[paramName] = true;
-                            } else if (input.value) {
-                                query[paramName] = input.value;
+                            // Skip path parameters - they're already in the URL
+                            if (!pathParams.includes(paramName)) {
+                                if (input.type === 'checkbox') {
+                                    if (input.checked) query[paramName] = true;
+                                } else if (input.value) {
+                                    query[paramName] = input.value;
+                                }
                             }
                         });
                     }
@@ -862,7 +923,15 @@
                         const inputs = formGroup.querySelectorAll('input, textarea, select');
                         inputs.forEach(input => {
                             const key = input.name || input.id.replace(endpointId + '_', '');
-                            if (input.type === 'file' && input.files.length > 0) {
+                            
+                            // Special handling for api_name field - split into api_provider and model_name
+                            if (key === 'api_name' && input.value && input.value.includes(':')) {
+                                const [provider, ...modelParts] = input.value.split(':');
+                                body.append('api_provider', provider);
+                                body.append('model_name', modelParts.join(':'));
+                                // Also keep api_name for backward compatibility
+                                body.append('api_name', input.value);
+                            } else if (input.type === 'file' && input.files.length > 0) {
                                 Array.from(input.files).forEach(file => body.append(key, file));
                             } else if (input.type === 'checkbox') {
                                 body.append(key, input.checked);
@@ -874,13 +943,13 @@
                 }
 
                 // Generate and display cURL command
-                const curlCommand = apiClient.generateCurl(method, path, { body, query });
+                const curlCommand = apiClient.generateCurl(method, processedPath, { body, query });
                 if (curlEl) {
                     curlEl.textContent = curlCommand;
                 }
 
                 // Make the request
-                const response = await apiClient.makeRequest(method, path, { body, query });
+                const response = await apiClient.makeRequest(method, processedPath, { body, query });
 
                 // Display response
                 if (typeof response === 'object') {
