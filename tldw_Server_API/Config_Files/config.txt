@@ -77,10 +77,26 @@ video_summarize_prompt = "Above is the transcript of a video. Please read throug
 
 
 [Database]
+# Database backend type: 'sqlite' or 'postgresql' (PostgreSQL support pending integration)
 type = sqlite
 sqlite_path = Databases/server_media_summary.db
 backup_path = ./tldw_DB_Backups/
 #Path to the backup location for the database. If the path does not exist, the backup will not be created.
+
+# PostgreSQL Configuration (Not yet integrated - backend files exist but not connected)
+# Uncomment and configure if you want to use PostgreSQL instead of SQLite
+# WARNING: PostgreSQL support is NOT functional yet - integration pending
+# type = postgresql
+# pg_host = localhost
+# pg_port = 5432
+# pg_database = tldw_server
+# pg_user = tldw_user
+# pg_password = your_secure_password
+# pg_sslmode = prefer
+# pg_pool_size = 20
+# pg_max_overflow = 40
+
+# Elasticsearch Configuration (Alternative search backend)
 elasticsearch_host = localhost
 elasticsearch_port = 9200
 # Additionally you can use elasticsearch as the database type, just replace `sqlite` with `elasticsearch` for `type` and provide the `elasticsearch_host` and `elasticsearch_port` of your configured ES instance.
