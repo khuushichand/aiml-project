@@ -272,13 +272,15 @@ async def send_message(
         )
 
 
-@router.get("/chats/{chat_id}/messages", response_model=MessageListResponse,
+@router.get("/chats/{chat_id}/messages", 
             summary="Get messages in a chat", tags=["Messages"])
 async def get_chat_messages(
     chat_id: str = Path(..., description="Chat session ID"),
     limit: int = Query(50, ge=1, le=200, description="Number of messages to return"),
     offset: int = Query(0, ge=0, description="Number of messages to skip"),
     include_deleted: bool = Query(False, description="Include deleted messages"),
+    include_character_context: bool = Query(False, description="Include character context for chat completions"),
+    format_for_completions: bool = Query(False, description="Format messages for use with chat/completions endpoint"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -290,11 +292,13 @@ async def get_chat_messages(
         limit: Maximum number of messages to return
         offset: Number of messages to skip
         include_deleted: Whether to include soft-deleted messages
+        include_character_context: Include character personality as system message
+        format_for_completions: Return in format ready for /api/v1/chat/completions
         db: Database instance
         current_user: Authenticated user
         
     Returns:
-        List of messages with pagination info
+        List of messages with pagination info, or formatted for completions if requested
         
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized
@@ -316,6 +320,69 @@ async def get_chat_messages(
         # Apply offset
         paginated = messages[offset:offset+limit]
         
+        # If character context or completions format requested
+        if include_character_context or format_for_completions:
+            # Get character info
+            character_id = conversation.get('character_id')
+            character = db.get_character_card_by_id(character_id) if character_id else None
+            
+            if format_for_completions:
+                # Return format ready for chat completions endpoint
+                formatted_messages = []
+                
+                # Add system prompt if character exists
+                if character and include_character_context:
+                    system_prompt_parts = [
+                        f"You are {character.get('name', 'Assistant')}.",
+                        character.get('description', ''),
+                        character.get('personality', ''),
+                        character.get('scenario', ''),
+                        character.get('system_prompt', '')
+                    ]
+                    system_prompt = '\n'.join(part for part in system_prompt_parts if part)
+                    formatted_messages.append({
+                        "role": "system",
+                        "content": system_prompt.strip()
+                    })
+                
+                # Add conversation messages
+                for msg in paginated:
+                    formatted_messages.append({
+                        "role": msg.get('sender', 'user'),
+                        "content": msg.get('content', '')
+                    })
+                
+                return {
+                    "character_name": character.get('name') if character else None,
+                    "character_id": character_id,
+                    "chat_id": chat_id,
+                    "messages": formatted_messages,
+                    "total": len(messages),
+                    "usage_instructions": "Use these messages with POST /api/v1/chat/completions"
+                }
+            
+            # Otherwise return standard format with character info
+            response = MessageListResponse(
+                messages=[_convert_db_message_to_response(msg) for msg in paginated],
+                total=len(messages),
+                limit=limit,
+                offset=offset
+            )
+            
+            # Add character context as additional field
+            if character:
+                response_dict = response.model_dump()
+                response_dict['character_context'] = {
+                    "name": character.get('name'),
+                    "description": character.get('description'),
+                    "personality": character.get('personality'),
+                    "system_prompt": character.get('system_prompt')
+                }
+                return response_dict
+            
+            return response
+        
+        # Standard response
         return MessageListResponse(
             messages=[_convert_db_message_to_response(msg) for msg in paginated],
             total=len(messages),

@@ -12,6 +12,16 @@ const TTS = {
     history: [],
     customVoices: {},
     
+    // Get API token from api-client or localStorage
+    getApiToken() {
+        // First try to get from api-client if available
+        if (window.apiClient && window.apiClient.token) {
+            return window.apiClient.token;
+        }
+        // Fallback to localStorage
+        return localStorage.getItem('apiToken') || '';
+    },
+    
     // Provider configurations
     providers: {
         vibevoice: {
@@ -80,21 +90,21 @@ const TTS = {
         const intensitySlider = document.getElementById('chatterbox-intensity');
         if (intensitySlider) {
             intensitySlider.addEventListener('input', (e) => {
-                document.getElementById('chatterbox-intensity-value`).textContent = `${e.target.value}%`;
+                document.getElementById('chatterbox-intensity-value').textContent = `${e.target.value}%`;
             });
         }
         
         const stabilitySlider = document.getElementById('elevenlabs-stability');
         if (stabilitySlider) {
             stabilitySlider.addEventListener('input', (e) => {
-                document.getElementById('elevenlabs-stability-value`).textContent = `${e.target.value}%`;
+                document.getElementById('elevenlabs-stability-value').textContent = `${e.target.value}%`;
             });
         }
         
         const claritySlider = document.getElementById('elevenlabs-clarity');
         if (claritySlider) {
             claritySlider.addEventListener('input', (e) => {
-                document.getElementById('elevenlabs-clarity-value`).textContent = `${e.target.value}%`;
+                document.getElementById('elevenlabs-clarity-value').textContent = `${e.target.value}%`;
             });
         }
     },
@@ -130,7 +140,17 @@ const TTS = {
     // Check provider status
     async checkProviderStatus() {
         try {
-            const response = await fetch('/api/v1/audio/health');
+            const apiToken = this.getApiToken();
+            const headers = {};
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
+            const response = await fetch('/api/v1/audio/health', {
+                headers: headers
+            });
             const data = await response.json();
             
             if (data.status === 'healthy' && data.providers) {
@@ -217,12 +237,19 @@ const TTS = {
             const request = this.buildRequest();
             
             // Make API call
+            const apiToken = this.getApiToken();
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
             const response = await fetch('/api/v1/audio/speech', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${API_KEY}` // If needed
-                },
+                headers: headers,
                 body: JSON.stringify(request),
                 signal: this.abortController.signal
             });
@@ -279,8 +306,29 @@ const TTS = {
         switch (this.currentProvider) {
             case 'vibevoice':
                 const customVoice = document.getElementById('vibevoice-custom-voice').value;
-                request.model = `vibevoice:${document.getElementById('vibevoice-model').value}`;
+                request.model = document.getElementById('vibevoice-model').value;
                 request.voice = customVoice || document.getElementById('vibevoice-voice').value;
+                request.provider = 'vibevoice';
+                
+                // Add advanced generation parameters
+                request.cfg_scale = parseFloat(document.getElementById('vibevoice-cfg').value);
+                request.diffusion_steps = parseInt(document.getElementById('vibevoice-steps').value);
+                request.temperature = parseFloat(document.getElementById('vibevoice-temperature').value);
+                request.top_p = parseFloat(document.getElementById('vibevoice-topp').value);
+                request.attention_type = document.getElementById('vibevoice-attention').value;
+                
+                // Add seed if provided
+                const seed = document.getElementById('vibevoice-seed').value;
+                if (seed) {
+                    request.seed = parseInt(seed);
+                }
+                
+                // Add features
+                request.extra_params = {
+                    background_music: document.getElementById('vibevoice-music').checked,
+                    enable_singing: document.getElementById('vibevoice-singing').checked,
+                    speaker_count: parseInt(document.getElementById('vibevoice-speakers').value)
+                };
                 break;
                 
             case 'kokoro':
@@ -450,11 +498,17 @@ const TTS = {
         formData.append('file', fileInput.files[0]);
         
         try {
+            const apiToken = this.getApiToken();
+            const headers = {};
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
             const response = await fetch('/api/v1/audio/voices/upload', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${API_KEY}` // If needed
-                },
+                headers: headers,
                 body: formData
             });
             
@@ -489,10 +543,16 @@ const TTS = {
     // Refresh voice list
     async refreshVoiceList() {
         try {
+            const apiToken = this.getApiToken();
+            const headers = {};
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
             const response = await fetch('/api/v1/audio/voices', {
-                headers: {
-                    'Authorization': `Bearer ${API_KEY}` // If needed
-                }
+                headers: headers
             });
             
             if (!response.ok) {
@@ -552,12 +612,19 @@ const TTS = {
     // Preview voice
     async previewVoice(voiceId) {
         try {
+            const apiToken = this.getApiToken();
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
             const response = await fetch(`/api/v1/audio/voices/${voiceId}/preview`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${API_KEY}` // If needed
-                },
+                headers: headers,
                 body: JSON.stringify({
                     text: 'This is a preview of your custom voice.'
                 })
@@ -584,11 +651,17 @@ const TTS = {
         if (!confirm('Are you sure you want to delete this voice?')) return;
         
         try {
+            const apiToken = this.getApiToken();
+            const headers = {};
+            
+            // Add authorization header if token exists
+            if (apiToken) {
+                headers['Authorization'] = `Bearer ${apiToken}`;
+            }
+            
             const response = await fetch(`/api/v1/audio/voices/${voiceId}`, {
                 method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${API_KEY}` // If needed
-                }
+                headers: headers
             });
             
             if (!response.ok) {
@@ -711,7 +784,11 @@ const TTS = {
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => TTS.init());
+    document.addEventListener('DOMContentLoaded', () => {
+        // Wait a bit for apiClient to be ready if it exists
+        setTimeout(() => TTS.init(), 100);
+    });
 } else {
-    TTS.init();
+    // Wait a bit for apiClient to be ready if it exists
+    setTimeout(() => TTS.init(), 100);
 }

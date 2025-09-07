@@ -295,14 +295,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
         # Continue startup even if template initialization fails
     
-    # Initialize Unified Audit Service
-    try:
-        from tldw_Server_API.app.core.Audit.unified_audit_service import get_unified_audit_service
-        
-        audit_service = await get_unified_audit_service()
-        logger.info("App Startup: Unified audit service initialized")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize audit service: {e}")
+    # Note: Audit service now uses dependency injection
+    # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
+    logger.info("App Startup: Audit service available via dependency injection")
     
     # Display authentication mode and API key for single-user mode
     try:
@@ -334,13 +329,9 @@ async def lifespan(app: FastAPI):
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
     
-    # Shutdown unified audit service
-    try:
-        from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
-        await shutdown_audit_service()
-        logger.info("App Shutdown: Audit service shutdown complete")
-    except Exception as e:
-        logger.error(f"App Shutdown: Error shutting down audit service: {e}")
+    # Note: Audit service cleanup handled via dependency injection
+    # No global shutdown needed
+    logger.info("App Shutdown: Audit services cleanup handled by dependency injection")
     
     # Close auth database pool
     try:

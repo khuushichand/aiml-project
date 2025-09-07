@@ -4,6 +4,250 @@
  */
 
 // ============================================================================
+// Audio Tab Functions (TTS and STT)
+// ============================================================================
+
+function updateTTSProviderOptions() {
+    const provider = document.getElementById('audioTTS_provider').value;
+    const modelSelect = document.getElementById('audioTTS_model');
+    const voiceSelect = document.getElementById('audioTTS_voice');
+    
+    // Clear existing options
+    modelSelect.innerHTML = '';
+    voiceSelect.innerHTML = '';
+    
+    // Define provider-specific options
+    const providerConfigs = {
+        openai: {
+            models: [
+                { value: 'tts-1', text: 'tts-1 (Standard)' },
+                { value: 'tts-1-hd', text: 'tts-1-hd (High Definition)' }
+            ],
+            voices: [
+                { value: 'alloy', text: 'Alloy' },
+                { value: 'echo', text: 'Echo' },
+                { value: 'fable', text: 'Fable' },
+                { value: 'onyx', text: 'Onyx' },
+                { value: 'nova', text: 'Nova' },
+                { value: 'shimmer', text: 'Shimmer' }
+            ]
+        },
+        elevenlabs: {
+            models: [
+                { value: 'eleven_monolingual_v1', text: 'Eleven Monolingual v1' },
+                { value: 'eleven_multilingual_v2', text: 'Eleven Multilingual v2' },
+                { value: 'eleven_turbo_v2', text: 'Eleven Turbo v2' }
+            ],
+            voices: [
+                { value: 'rachel', text: 'Rachel' },
+                { value: 'clyde', text: 'Clyde' },
+                { value: 'domi', text: 'Domi' },
+                { value: 'dave', text: 'Dave' },
+                { value: 'fin', text: 'Fin' },
+                { value: 'bella', text: 'Bella' },
+                { value: 'antoni', text: 'Antoni' },
+                { value: 'thomas', text: 'Thomas' },
+                { value: 'charlie', text: 'Charlie' },
+                { value: 'emily', text: 'Emily' },
+                { value: 'elli', text: 'Elli' },
+                { value: 'callum', text: 'Callum' },
+                { value: 'patrick', text: 'Patrick' },
+                { value: 'harry', text: 'Harry' },
+                { value: 'liam', text: 'Liam' },
+                { value: 'dorothy', text: 'Dorothy' },
+                { value: 'josh', text: 'Josh' },
+                { value: 'arnold', text: 'Arnold' },
+                { value: 'charlotte', text: 'Charlotte' },
+                { value: 'matilda', text: 'Matilda' },
+                { value: 'matthew', text: 'Matthew' },
+                { value: 'james', text: 'James' },
+                { value: 'joseph', text: 'Joseph' },
+                { value: 'jeremy', text: 'Jeremy' },
+                { value: 'michael', text: 'Michael' },
+                { value: 'ethan', text: 'Ethan' },
+                { value: 'gigi', text: 'Gigi' },
+                { value: 'freya', text: 'Freya' },
+                { value: 'grace', text: 'Grace' },
+                { value: 'daniel', text: 'Daniel' },
+                { value: 'serena', text: 'Serena' },
+                { value: 'adam', text: 'Adam' },
+                { value: 'nicole', text: 'Nicole' },
+                { value: 'jessie', text: 'Jessie' },
+                { value: 'ryan', text: 'Ryan' },
+                { value: 'sam', text: 'Sam' },
+                { value: 'glinda', text: 'Glinda' },
+                { value: 'giovanni', text: 'Giovanni' },
+                { value: 'mimi', text: 'Mimi' }
+            ]
+        },
+        higgs: {
+            models: [
+                { value: 'higgs-3b', text: 'Higgs 3B Model' }
+            ],
+            voices: [
+                { value: 'default', text: 'Default Voice' },
+                { value: 'male_1', text: 'Male Voice 1' },
+                { value: 'male_2', text: 'Male Voice 2' },
+                { value: 'female_1', text: 'Female Voice 1' },
+                { value: 'female_2', text: 'Female Voice 2' }
+            ]
+        },
+        vibevoice: {
+            models: [
+                { value: '1.5B', text: 'VibeVoice 1.5B (90 min generation)' },
+                { value: '7B', text: 'VibeVoice 7B (45 min generation)' }
+            ],
+            voices: [
+                { value: 'speaker_1', text: 'Speaker 1' },
+                { value: 'speaker_2', text: 'Speaker 2' },
+                { value: 'speaker_3', text: 'Speaker 3' },
+                { value: 'speaker_4', text: 'Speaker 4' }
+            ]
+        },
+        chatterbox: {
+            models: [
+                { value: 'chatterbox-v1', text: 'Chatterbox v1' }
+            ],
+            voices: [
+                { value: 'neutral', text: 'Neutral' },
+                { value: 'happy', text: 'Happy' },
+                { value: 'sad', text: 'Sad' },
+                { value: 'angry', text: 'Angry' },
+                { value: 'excited', text: 'Excited' },
+                { value: 'calm', text: 'Calm' }
+            ]
+        },
+        kokoro: {
+            models: [
+                { value: 'kokoro-v1', text: 'Kokoro v1' }
+            ],
+            voices: [
+                { value: 'default', text: 'Default Voice' },
+                { value: 'warm', text: 'Warm' },
+                { value: 'professional', text: 'Professional' },
+                { value: 'friendly', text: 'Friendly' }
+            ]
+        }
+    };
+    
+    // Get the configuration for the selected provider
+    const config = providerConfigs[provider] || providerConfigs.openai;
+    
+    // Populate model dropdown
+    config.models.forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.value;
+        option.textContent = model.text;
+        modelSelect.appendChild(option);
+    });
+    
+    // Populate voice dropdown
+    config.voices.forEach(voice => {
+        const option = document.createElement('option');
+        option.value = voice.value;
+        option.textContent = voice.text;
+        voiceSelect.appendChild(option);
+    });
+    
+    // Show/hide provider-specific options
+    const allProviderOptions = document.querySelectorAll('.provider-options');
+    allProviderOptions.forEach(el => el.style.display = 'none');
+    
+    const providerOptionsEl = document.getElementById(`${provider}_options`);
+    if (providerOptionsEl) {
+        providerOptionsEl.style.display = 'block';
+    }
+    
+    // Show/hide voice cloning section based on provider support
+    const voiceCloningSection = document.getElementById('voiceCloning');
+    if (voiceCloningSection) {
+        const supportsCloningProviders = ['higgs', 'vibevoice', 'chatterbox'];
+        voiceCloningSection.style.display = supportsCloningProviders.includes(provider) ? 'block' : 'none';
+    }
+    
+    // Show/hide pitch control based on provider support
+    const pitchGroup = document.getElementById('audioTTS_pitch_group');
+    if (pitchGroup) {
+        const supportsPitchProviders = ['elevenlabs', 'vibevoice', 'chatterbox'];
+        pitchGroup.style.display = supportsPitchProviders.includes(provider) ? 'block' : 'none';
+    }
+}
+
+function checkTTSProviderStatus() {
+    // This function would check the status of TTS providers
+    // For now, just update the UI to show checking
+    const statusIndicators = document.querySelectorAll('.provider-status .status-dot');
+    statusIndicators.forEach(dot => {
+        dot.classList.add('loading');
+    });
+    
+    // Simulate checking (in real implementation, this would call the API)
+    setTimeout(() => {
+        statusIndicators.forEach(dot => {
+            dot.classList.remove('loading');
+            // Randomly set as available or unavailable for demo
+            if (Math.random() > 0.3) {
+                dot.classList.add('available');
+            } else {
+                dot.classList.add('unavailable');
+            }
+        });
+    }, 1000);
+}
+
+function clearVoiceReference() {
+    const voiceRefInfo = document.getElementById('voiceRefInfo');
+    const voiceRefInput = document.getElementById('audioTTS_voiceReference');
+    const voiceRefPlayer = document.getElementById('voiceRefPlayer');
+    
+    if (voiceRefInfo) voiceRefInfo.style.display = 'none';
+    if (voiceRefInput) voiceRefInput.value = '';
+    if (voiceRefPlayer) voiceRefPlayer.src = '';
+}
+
+// Streaming STT Functions
+function updateModelOptions() {
+    const model = document.getElementById('streamingModel').value;
+    const variantGroup = document.getElementById('variantGroup');
+    const languageGroup = document.getElementById('languageGroup');
+    const whisperModelGroup = document.getElementById('whisperModelGroup');
+    const whisperTaskGroup = document.getElementById('whisperTaskGroup');
+    
+    if (model === 'parakeet') {
+        variantGroup.style.display = 'block';
+        languageGroup.style.display = 'none';
+        whisperModelGroup.style.display = 'none';
+        whisperTaskGroup.style.display = 'none';
+    } else if (model === 'canary') {
+        variantGroup.style.display = 'none';
+        languageGroup.style.display = 'block';
+        whisperModelGroup.style.display = 'none';
+        whisperTaskGroup.style.display = 'none';
+    } else if (model === 'whisper') {
+        variantGroup.style.display = 'none';
+        languageGroup.style.display = 'block';
+        whisperModelGroup.style.display = 'block';
+        whisperTaskGroup.style.display = 'block';
+    }
+}
+
+// Initialize TTS options when tab is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if we're on the audio tab
+    setTimeout(() => {
+        const ttsProvider = document.getElementById('audioTTS_provider');
+        if (ttsProvider) {
+            updateTTSProviderOptions();
+        }
+        
+        const sttModel = document.getElementById('streamingModel');
+        if (sttModel) {
+            updateModelOptions();
+        }
+    }, 500);
+});
+
+// ============================================================================
 // Chat Tab Functions
 // ============================================================================
 

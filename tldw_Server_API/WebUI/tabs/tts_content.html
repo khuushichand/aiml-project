@@ -99,14 +99,12 @@
                                 </select>
                             </div>
                             <div class="setting-group">
-                                <label>Voice</label>
+                                <label>Voice/Speaker</label>
                                 <select id="vibevoice-voice" class="form-control">
-                                    <option value="aurora">Aurora - Warm & Versatile</option>
-                                    <option value="phoenix">Phoenix - Dynamic Male</option>
-                                    <option value="sage">Sage - Thoughtful Neutral</option>
-                                    <option value="nova">Nova - Bright Female</option>
-                                    <option value="atlas">Atlas - Deep Male</option>
-                                    <option value="echo">Echo - Adaptive</option>
+                                    <option value="speaker_1">Speaker 1</option>
+                                    <option value="speaker_2">Speaker 2</option>
+                                    <option value="speaker_3">Speaker 3</option>
+                                    <option value="speaker_4">Speaker 4</option>
                                 </select>
                             </div>
                             <div class="setting-group">
@@ -136,6 +134,60 @@
                                     </label>
                                 </div>
                             </div>
+                            <div class="setting-group">
+                                <label>CFG Scale <span class="param-value" id="vibevoice-cfg-value">1.3</span></label>
+                                <input type="range" id="vibevoice-cfg" class="form-control-range" 
+                                    min="1.0" max="2.0" step="0.1" value="1.3"
+                                    oninput="document.getElementById('vibevoice-cfg-value').textContent = this.value">
+                                <small class="form-text text-muted">Controls generation guidance strength</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Diffusion Steps <span class="param-value" id="vibevoice-steps-value">20</span></label>
+                                <input type="range" id="vibevoice-steps" class="form-control-range" 
+                                    min="5" max="100" step="5" value="20"
+                                    oninput="document.getElementById('vibevoice-steps-value').textContent = this.value">
+                                <small class="form-text text-muted">Quality vs speed tradeoff</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Temperature <span class="param-value" id="vibevoice-temp-value">1.0</span></label>
+                                <input type="range" id="vibevoice-temperature" class="form-control-range" 
+                                    min="0.1" max="2.0" step="0.1" value="1.0"
+                                    oninput="document.getElementById('vibevoice-temp-value').textContent = this.value">
+                                <small class="form-text text-muted">Sampling randomness</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Top-p <span class="param-value" id="vibevoice-topp-value">0.95</span></label>
+                                <input type="range" id="vibevoice-topp" class="form-control-range" 
+                                    min="0.1" max="1.0" step="0.05" value="0.95"
+                                    oninput="document.getElementById('vibevoice-topp-value').textContent = this.value">
+                                <small class="form-text text-muted">Nucleus sampling</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Seed (optional)</label>
+                                <input type="number" id="vibevoice-seed" class="form-control" 
+                                    placeholder="Random" min="0" max="4294967295">
+                                <small class="form-text text-muted">For reproducible generation</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Attention Type</label>
+                                <select id="vibevoice-attention" class="form-control">
+                                    <option value="auto">Auto</option>
+                                    <option value="sdpa">SDPA</option>
+                                    <option value="flash_attention_2">Flash Attention 2</option>
+                                    <option value="eager">Eager</option>
+                                </select>
+                                <small class="form-text text-muted">Performance optimization</small>
+                            </div>
+                        </div>
+                        <div class="info-box">
+                            <h5>Multi-Speaker Format</h5>
+                            <p>Use these formats for multi-speaker dialogue:</p>
+                            <ul>
+                                <li><code>[1]: Hello there</code></li>
+                                <li><code>Speaker 1: How are you?</code></li>
+                                <li><code>[Speaker1]: Nice to meet you</code></li>
+                            </ul>
+                            <p>Supports up to 4 speakers in a single generation.</p>
                         </div>
                     </div>
                 </div>
@@ -727,5 +779,46 @@
     background: var(--color-danger-bg);
     color: var(--color-danger);
     display: block;
+}
+
+/* Advanced parameter styles */
+.param-value {
+    font-weight: bold;
+    color: var(--color-primary);
+    margin-left: var(--spacing-xs);
+}
+
+.form-control-range {
+    width: 100%;
+    margin: var(--spacing-xs) 0;
+}
+
+.info-box {
+    background: var(--color-info-bg, #e3f2fd);
+    border: 1px solid var(--color-info-border, #90caf9);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    margin-top: var(--spacing-lg);
+}
+
+.info-box h5 {
+    margin-top: 0;
+    color: var(--color-info-text, #1976d2);
+}
+
+.info-box code {
+    background: var(--color-surface);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-family: monospace;
+}
+
+.info-box ul {
+    margin: var(--spacing-sm) 0;
+    padding-left: var(--spacing-lg);
+}
+
+.info-box li {
+    margin: var(--spacing-xs) 0;
 }
 </style>

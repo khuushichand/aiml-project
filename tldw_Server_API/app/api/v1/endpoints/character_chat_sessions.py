@@ -40,8 +40,6 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     MessageCreate,
     MessageResponse,
     MessageListResponse,
-    CharacterChatCompletionRequest,
-    CharacterChatCompletionResponse,
     ChatHistoryExport,
     ChatErrorResponse
 )
@@ -485,158 +483,10 @@ async def delete_chat_session(
 
 
 # ========================================================================
-# Character Chat Completion Endpoint
+# Note: Character chat completions should use the main /api/v1/chat/completions endpoint
+# To get messages formatted for completions, use:
+# GET /api/v1/chats/{chat_id}/messages?format_for_completions=true&include_character_context=true
 # ========================================================================
-
-@router.post("/{chat_id}/complete", response_model=CharacterChatCompletionResponse,
-             summary="Get AI response in character context", tags=["Chat Completion"])
-async def character_chat_completion(
-    request_data: CharacterChatCompletionRequest,
-    chat_id: str = Path(..., description="Chat session ID"),
-    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    current_user: User = Depends(get_request_user),
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """
-    Get an AI response in the context of a character chat.
-    
-    Args:
-        chat_id: Chat session ID
-        request_data: Completion request data
-        db: Database instance
-        current_user: Authenticated user
-        
-    Returns:
-        AI response with message ID
-        
-    Raises:
-        HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
-    """
-    try:
-        # Check rate limits
-        rate_limiter = get_character_rate_limiter()
-        await rate_limiter.check_rate_limit(current_user.id, "chat_completion")
-        
-        # Get conversation and verify access
-        conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Chat session {chat_id} not found"
-            )
-        
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this chat session"
-            )
-        
-        # Get character
-        character_id = conversation.get('character_id')
-        character = db.get_character_card_by_id(character_id)
-        if not character:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Character {character_id} not found"
-            )
-        
-        # Add user message to conversation
-        user_msg_id = str(uuid.uuid4())
-        user_msg_data = {
-            'id': user_msg_id,
-            'conversation_id': chat_id,
-            'sender': 'user',
-            'content': request_data.message,
-            'client_id': str(current_user.id),
-            'version': 1
-        }
-        db.add_message(user_msg_data)
-        
-        # Load conversation history if requested
-        messages = []
-        if request_data.include_history:
-            history = db.get_messages_for_conversation(
-                chat_id, 
-                limit=request_data.history_limit or 20
-            )
-            messages = [
-                {"role": msg['sender'], "content": msg['content']}
-                for msg in history
-                if not msg.get('deleted')
-            ]
-        
-        # Add current message
-        messages.append({"role": "user", "content": request_data.message})
-        
-        # Build system prompt from character
-        system_prompt = f"""You are {character.get('name', 'Assistant')}.
-{character.get('description', '')}
-{character.get('personality', '')}
-{character.get('scenario', '')}
-{character.get('system_prompt', '')}"""
-        
-        # Prepare chat request
-        from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
-        
-        chat_request = ChatCompletionRequest(
-            model="gpt-3.5-turbo",  # Default model
-            messages=[
-                {"role": "system", "content": system_prompt.strip()},
-                *messages
-            ],
-            max_tokens=request_data.max_tokens,
-            temperature=request_data.temperature,
-            stream=request_data.stream
-        )
-        
-        # Get AI response
-        # This would use the existing chat infrastructure
-        # For now, create a simple response
-        # In production, would call: perform_chat_api_call(chat_request)
-        
-        ai_response = f"I understand you said: '{request_data.message}'. As {character.get('name', 'Assistant')}, I'm here to help!"
-        
-        # Save AI response as message
-        ai_msg_id = str(uuid.uuid4())
-        ai_msg_data = {
-            'id': ai_msg_id,
-            'conversation_id': chat_id,
-            'sender': 'assistant',
-            'content': ai_response,
-            'parent_message_id': user_msg_id,
-            'client_id': str(current_user.id),
-            'version': 1
-        }
-        db.add_message(ai_msg_data)
-        
-        # Update conversation last_modified
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE conversations 
-            SET last_modified = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (chat_id,))
-        conn.commit()
-        
-        return CharacterChatCompletionResponse(
-            response=ai_response,
-            message_id=ai_msg_id,
-            usage={
-                "prompt_tokens": len(str(messages)),
-                "completion_tokens": len(ai_response.split()),
-                "total_tokens": len(str(messages)) + len(ai_response.split())
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in chat completion for session {chat_id}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred during chat completion"
-        )
 
 
 # ========================================================================
