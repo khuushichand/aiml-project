@@ -182,6 +182,37 @@ class APIClient {
         });
     }
 
+    getTimeoutForEndpoint(path, customTimeout) {
+        // If custom timeout is provided, use it
+        if (customTimeout !== undefined) {
+            return customTimeout;
+        }
+        
+        // Define longer timeouts for specific endpoints
+        const longTimeoutEndpoints = {
+            '/api/v1/media/process-videos': 600000,    // 10 minutes
+            '/api/v1/media/process-audios': 600000,    // 10 minutes  
+            '/api/v1/media/process-ebooks': 300000,    // 5 minutes
+            '/api/v1/media/process-documents': 300000, // 5 minutes
+            '/api/v1/media/process-pdfs': 300000,      // 5 minutes
+            '/api/v1/media/add': 600000,               // 10 minutes
+            '/api/v1/media/ingest-web-content': 300000,// 5 minutes
+            '/api/v1/media/mediawiki/ingest-dump': 600000, // 10 minutes
+            '/api/v1/media/mediawiki/process-dump': 600000, // 10 minutes
+        };
+        
+        // Check if path matches any long timeout endpoint
+        for (const [endpoint, timeout] of Object.entries(longTimeoutEndpoints)) {
+            if (path.includes(endpoint)) {
+                console.log(`Using extended timeout of ${timeout}ms for ${path}`);
+                return timeout;
+            }
+        }
+        
+        // Default timeout for regular endpoints
+        return 30000; // 30 seconds
+    }
+
     async makeRequest(method, path, options = {}) {
         const {
             body = null,
@@ -189,7 +220,7 @@ class APIClient {
             headers = {},
             streaming = false,
             onProgress = null,
-            timeout = 30000  // Default 30 second timeout
+            timeout = this.getTimeoutForEndpoint(path, options.timeout)  // Dynamic timeout based on endpoint
         } = options;
 
         // Build URL with query parameters
@@ -336,9 +367,14 @@ class APIClient {
             const duration = Date.now() - startTime;
             
             // Check if it's a timeout error
+            let finalError = error;
             if (error.name === 'AbortError') {
-                error.message = `Request timeout after ${timeout}ms`;
-                error.isTimeout = true;
+                // Create a new error object instead of modifying the existing one
+                // (Some browsers have read-only error.message property)
+                finalError = new Error(`Request timeout after ${timeout}ms`);
+                finalError.name = 'TimeoutError';
+                finalError.isTimeout = true;
+                finalError.originalError = error;
             }
             
             // Record error in history with more details
@@ -348,20 +384,20 @@ class APIClient {
                 url: url.toString(),
                 timestamp: startTime,
                 duration,
-                error: error.message,
-                errorStatus: error.status,
+                error: finalError.message,
+                errorStatus: finalError.status,
                 success: false
             });
             
             // Add request context to error
-            error.request = {
+            finalError.request = {
                 method,
                 path,
                 url: url.toString(),
                 duration
             };
             
-            throw error;
+            throw finalError;
         }
     }
 

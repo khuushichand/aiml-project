@@ -104,7 +104,8 @@ class UserDatabase:
         """Initialize database schema if needed."""
         # Determine schema file based on backend type
         schema_name = "users_auth_schema.sql"
-        base_path = Path(__file__).parent.parent.parent.parent
+        # Go up to the project root (tldw_server/)
+        base_path = Path(__file__).parent.parent.parent.parent.parent
         
         if self.backend.backend_type == BackendType.SQLITE:
             schema_path = base_path / "Databases" / "SQLite" / "Schema" / schema_name

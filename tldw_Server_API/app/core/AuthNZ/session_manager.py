@@ -773,6 +773,33 @@ class SessionManager:
             logger.info("Starting session cleanup...")
             
             async with self.db_pool.transaction() as conn:
+                # First check if the sessions table exists
+                if hasattr(conn, 'fetchval'):
+                    # PostgreSQL
+                    table_exists = await conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = 'sessions'
+                        )
+                        """
+                    )
+                else:
+                    # SQLite
+                    cursor = await conn.execute(
+                        """
+                        SELECT name FROM sqlite_master 
+                        WHERE type='table' AND name='sessions'
+                        """
+                    )
+                    result = await cursor.fetchone()
+                    table_exists = result is not None
+                
+                if not table_exists:
+                    logger.debug("Sessions table does not exist, skipping cleanup")
+                    return
+                
+                # Proceed with cleanup if table exists
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     deleted = await conn.fetchval(

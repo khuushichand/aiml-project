@@ -831,8 +831,26 @@
             }
 
             try {
-                Loading.show(responseArea.parentElement, 'Sending request...');
-                responseArea.textContent = '';
+                // Check if this is a long-running operation
+                const longRunningPaths = [
+                    'process-videos', 'process-audios', 'process-ebooks', 
+                    'process-documents', 'process-pdfs', 'mediawiki/ingest-dump',
+                    'mediawiki/process-dump', 'ingest-web-content'
+                ];
+                const isLongRunning = longRunningPaths.some(p => path.includes(p));
+                
+                if (isLongRunning) {
+                    Loading.show(responseArea.parentElement, 'Processing... This may take several minutes. Please wait...');
+                    // Add a visual indicator for long operations
+                    responseArea.innerHTML = '<div style="padding: 10px; background: #f0f8ff; border-left: 4px solid #2196F3; margin: 10px 0;">' +
+                        '<strong>⏳ Processing in progress...</strong><br>' +
+                        'This operation may take several minutes depending on the file size and processing options.<br>' +
+                        'Please do not refresh the page or close this tab.' +
+                        '</div>';
+                } else {
+                    Loading.show(responseArea.parentElement, 'Sending request...');
+                    responseArea.textContent = '';
+                }
 
                 // Replace path parameters like {media_id} with actual values from form inputs
                 const pathParamRegex = /\{([^}]+)\}/g;
@@ -966,8 +984,23 @@
                 Toast.success('Request completed successfully');
             } catch (error) {
                 console.error('Request error:', error);
-                responseArea.textContent = `Error: ${error.message}`;
-                Toast.error(`Request failed: ${error.message}`);
+                
+                // Provide more helpful error messages
+                if (error.isTimeout) {
+                    responseArea.innerHTML = '<div style="padding: 10px; background: #ffebee; border-left: 4px solid #f44336; margin: 10px 0;">' +
+                        '<strong>⏱️ Request Timeout</strong><br>' +
+                        'The operation took longer than expected and timed out.<br>' +
+                        'For large files, try:<br>' +
+                        '• Using smaller files or shorter videos<br>' +
+                        '• Reducing quality settings if available<br>' +
+                        '• Processing files one at a time<br><br>' +
+                        '<small>Error: ' + error.message + '</small>' +
+                        '</div>';
+                    Toast.error('Request timed out. The operation may still be processing on the server.');
+                } else {
+                    responseArea.textContent = `Error: ${error.message}`;
+                    Toast.error(`Request failed: ${error.message}`);
+                }
             } finally {
                 Loading.hide(responseArea.parentElement);
             }

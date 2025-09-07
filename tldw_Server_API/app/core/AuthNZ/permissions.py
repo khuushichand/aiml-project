@@ -13,51 +13,21 @@ from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
-import os
+from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 ########################################################################################################################
 # Database Instance Management
 ########################################################################################################################
 
-_user_db: Optional[UserDatabase] = None
-
-def get_user_database() -> UserDatabase:
+def get_user_database():
     """
-    Get or create the UserDatabase singleton instance.
+    Get or create the UserDatabase singleton instance using centralized configuration.
     
     Returns:
         UserDatabase: The user database instance
     """
-    global _user_db
-    if _user_db is None:
-        settings = get_settings()
-        
-        # Determine backend type from environment or settings
-        backend_type = os.getenv("TLDW_USER_DB_BACKEND", "sqlite").lower()
-        
-        if backend_type == "postgresql" or backend_type == "postgres":
-            # PostgreSQL configuration
-            config = DatabaseConfig(
-                backend_type=BackendType.POSTGRESQL,
-                connection_string=settings.DATABASE_URL,
-                pool_size=int(os.getenv("TLDW_DB_POOL_SIZE", "10")),
-                pool_timeout=float(os.getenv("TLDW_DB_POOL_TIMEOUT", "30"))
-            )
-        else:
-            # SQLite configuration (default)
-            db_path = settings.DATABASE_URL.replace("sqlite:///", "")
-            config = DatabaseConfig(
-                backend_type=BackendType.SQLITE,
-                sqlite_path=db_path,
-                sqlite_wal_mode=True,
-                sqlite_foreign_keys=True
-            )
-        
-        _user_db = UserDatabase(config=config, client_id="auth_service")
-    return _user_db
+    return get_configured_user_database(client_id="auth_service")
 
 ########################################################################################################################
 # Permission Checking Functions
