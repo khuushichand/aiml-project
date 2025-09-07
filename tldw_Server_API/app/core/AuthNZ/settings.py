@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     )
     
     DATABASE_URL: str = Field(
-        default="sqlite:///./Databases/users.db",
+        default="sqlite:///../Databases/Users.db",
         description="Database URL - PostgreSQL for multi-user: postgresql://user:pass@localhost/tldw"
     )
     

@@ -98,6 +98,11 @@ arxiv
 # VectorDB
 chromadb
 #
+# PostgreSQL Support (Optional)
+# Uncomment if you want to use PostgreSQL backend instead of SQLite
+# psycopg2-binary==2.9.9
+# psycopg2-pool==1.2
+#
 #Web-Related
 argon2-cffi
 beautifulsoup4
