@@ -32,32 +32,59 @@ if TYPE_CHECKING:
 def _check_torch_available():
     try:
         import torch
+        # Test basic functionality to ensure proper loading
         return True
-    except ImportError:
+    except ImportError as e:
+        print(f"PyTorch not installed: {e}")
+        return False
+    except OSError as e:
+        print(f"PyTorch library loading failed: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error loading PyTorch: {e}")
         return False
 
 
 def _check_speechbrain_available():
     try:
         import speechbrain
+        # Test if torchaudio loads properly (the actual source of the error)
+        import torchaudio
         return True
-    except ImportError:
+    except (ImportError, OSError) as e:
+        print(f"SpeechBrain/torchaudio not available: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error loading SpeechBrain: {e}")
         return False
 
 
 def _check_sklearn_available():
     try:
         import sklearn
+        # Test basic import
         return True
-    except ImportError:
+    except ImportError as e:
+        print(f"scikit-learn not installed: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error loading scikit-learn: {e}")
         return False
 
 
 def _check_torchaudio_available():
     try:
         import torchaudio
+        # Test basic functionality
         return True
-    except ImportError:
+    except ImportError as e:
+        print(f"TorchAudio not installed: {e}")
+        return False
+    except OSError as e:
+        print(f"TorchAudio library loading failed: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error loading TorchAudio: {e}")
         return False
 
 
