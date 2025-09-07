@@ -24,7 +24,7 @@ https://github.com/tbroadley/ai-safety-conversational-agent
 https://github.com/yichuan-w/LEANN?tab=readme-ov-file
 https://medium.com/@bravekjh/rag-mcp-supercharging-ai-agents-with-retrieval-augmented-generation-and-model-context-protocol-775ff5a7206f
 https://github.com/Aquiles-ai/Aquiles-RAG
-
+https://www.reddit.com/r/Rag/comments/1n98ua7/building_a_productiongrade_rag_on_a_900page/
 https://integral-business-intelligence.github.io/archivist/
 
 https://cloud.google.com/generative-ai-app-builder/docs/check-grounding#claim-level-score-response-examples
