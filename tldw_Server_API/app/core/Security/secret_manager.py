@@ -103,18 +103,21 @@ class SecretManager:
     
     def _load_env_file(self):
         """Load .env file from Config_Files directory if it exists."""
+        # Note: .env loading is now handled by config.py's load_comprehensive_config()
+        # This method is kept for backward compatibility but doesn't duplicate loading
         try:
             current_file_path = Path(__file__).resolve()
             project_root = current_file_path.parent.parent.parent.parent  # Up to tldw_Server_API
             env_path = project_root / 'Config_Files' / '.env'
             
             if env_path.exists():
-                load_dotenv(dotenv_path=str(env_path), override=False)
-                logger.info(f"SecretManager: Loaded .env file from {env_path}")
+                # Don't load again if already loaded by config.py
+                # Just log that we found it
+                logger.debug(f"SecretManager: .env file found at {env_path} (already loaded by config.py)")
             else:
                 logger.debug(f"SecretManager: No .env file found at {env_path}")
         except Exception as e:
-            logger.warning(f"SecretManager: Error loading .env file: {e}")
+            logger.warning(f"SecretManager: Error checking .env file: {e}")
     
     def _get_config_value(self, section: str, key: str, fallback: Optional[str] = None) -> Optional[str]:
         """Get value from existing tldw config system."""

@@ -248,6 +248,34 @@ TTS_sovits = [
   "pydub>=0.25.0"
 ]
 
+# Advanced TTS Providers
+TTS_higgs = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "transformers>=4.30.0",
+  "accelerate>=0.20.0",
+  # Note: higgs-audio must be installed from source:
+  # git clone https://github.com/boson-ai/higgs-audio.git && cd higgs-audio && pip install -e .
+]
+
+TTS_vibevoice = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "transformers>=4.30.0",
+  "accelerate>=0.20.0",
+  "librosa>=0.10.0",
+  # Note: VibeVoice must be installed from source:
+  # git clone https://github.com/microsoft/VibeVoice.git && cd VibeVoice && pip install -e .
+]
+
+TTS_chatterbox = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "chatterbox-tts>=0.1.0",  # If available via pip
+  # Or install from source:
+  # git clone https://github.com/resemble-ai/chatterbox.git && cd chatterbox && pip install -e .
+]
+
 # Backend options
 backend_onnx = [
   "onnxruntime>=1.16.0"
@@ -274,7 +302,7 @@ db_opensearch = [
 
 # All optional dependencies
 all = [
-  "tldw-server[dev,evaluation,data-tools,gradio,media_wiki,web_research,STT_All,TTS_All,backend_onnx,db_postgres]"
+  "tldw-server[dev,evaluation,data-tools,gradio,media_wiki,web_research,STT_All,TTS_All,TTS_higgs,TTS_vibevoice,TTS_chatterbox,backend_onnx,db_postgres]"
 ]
 
 ###########################
