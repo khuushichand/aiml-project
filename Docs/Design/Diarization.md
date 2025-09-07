@@ -1,6 +1,9 @@
 # Diarization
 
 
+https://github.com/narcotic-sh/zanshin
+https://github.com/narcotic-sh/senko
+
 
 
 Implementing speaker diarization using vector embeddings is an excellent, modern approach that avoids the complexities of traditional methods and the specific dependencies of libraries like `pyannote`. This technique hinges on creating a unique "voice fingerprint" (a vector embedding) for each speech segment and then clustering these fingerprints to group segments from the same speaker.

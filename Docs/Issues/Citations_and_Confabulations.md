@@ -63,6 +63,7 @@ RAG
   https://diamantai.substack.com/p/graph-rag-explained?utm_campaign=post&triedRedirect=true
   https://arxiv.org/abs/2410.07176
 
+https://www.archgw.com/blogs/detecting-hallucinations-in-llm-function-calling-with-entropy-part-2
 Finetuning: 
 - https://eugeneyan.com/writing/finetuning/
 

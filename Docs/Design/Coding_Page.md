@@ -11,7 +11,7 @@ https://www.youtube.com/watch?v=zDmW5hJPsvQ&t=2880s
 https://jvns.ca/blog/2021/01/23/firecracker--start-a-vm-in-less-than-a-second/
 https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus
 https://www.fuzzycomputer.com/posts/onboarding?=&aid=recqrDNk2WPeiRuha
-
+https://www.youtube.com/watch?v=Jw-4oC5HtK4
 https://www.npmjs.com/package/@nendo/tree-sitter-mcp
 https://potpie.ai/
 https://github.com/presstab/jrdev

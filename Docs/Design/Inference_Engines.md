@@ -10,6 +10,9 @@ https://huggingface.co/docs/transformers/main/en/conversations
 https://www.youtube.com/watch?v=vW30o4U9BFE
 https://unsloth.ai/blog/dynamic-4bit
 https://github.com/iuliaturc/gguf-docs
+https://github.com/ggml-org/llama.cpp/discussions/15709
+https://www.aleksagordic.com/blog/vllm
+
 
 
 ### Llamafile

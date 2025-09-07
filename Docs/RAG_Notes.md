@@ -12,9 +12,9 @@ Unsorted
 https://www.jeremykun.com/2015/04/06/markov-chain-monte-carlo-without-all-the-bullshit/
 https://medium.com/ai-exploration-journey/how-hirag-turns-data-chaos-into-structured-knowledge-magic-ai-innovations-and-insights-35-d637b9a58d80
 https://arxiv.org/pdf/2506.00054
-
-
-
+https://github.com/hhy-huang/HiRAG
+https://archive.is/W64q3
+https://archive.is/G9rmp
 https://iopscience.iop.org/article/10.1088/2632-2153/ad7228
 https://github.com/lamm-mit/GraphReasoning
 https://arxiv.org/abs/2409.13740

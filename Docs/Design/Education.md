@@ -23,6 +23,10 @@ https://github.com/Fimeg/NetworkChronicles
 https://repo.or.cz/DeDRM_tools-LCP.git
 https://gist.github.com/brumar/5888324c296a8730c55e8ee24cca9043
 https://mochi.cards/
+https://shaeda.io/
+https://incontextlearning.com/
+
+
 https://andymatuschak.org/hmwl/
 
 one2manny
