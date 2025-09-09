@@ -223,7 +223,12 @@ STT_All = [
 
 STT_Parakeet = [
   "nemo-toolkit[asr]>=1.20.0",
-  "cython>=0.29.0"
+  "cython>=0.29.0",
+]
+
+STT_Parakeet_MLX = [
+  "librosa",
+  "parakeet-mlx",
 ]
 
 # Text-to-Speech

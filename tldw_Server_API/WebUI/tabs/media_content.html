@@ -217,23 +217,24 @@
                             <div class="form-group">
                                 <label for="addMedia_media_type">Media Type:</label>
                                 <select id="addMedia_media_type" name="media_type">
-                                    <option value="audio">audio</option>
-                                    <option value="video">video</option>
-                                    <option value="document">document</option>
-                                    <option value="pdf">pdf</option>
-                                    <option value="ebook">ebook</option>
-                                    <option value="xml">xml</option>
-                                    <option value="archive">archive</option>
-                                    <option value="web_page">web_page</option>
-                                    <option value="image">image</option>
-                                    <option value="text">text</option>
-                                    <option value="markdown">markdown</option>
-                                    <option value="csv">csv</option>
-                                    <option value="json">json</option>
-                                    <option value="youtube">youtube</option>
-                                    <option value="url">url</option>
-                                    <option value="sitemap">sitemap</option>
-                                    <option value="mediawiki">mediawiki</option>
+                                    <option value="audio">Audio</option>
+                                    <option value="video">Video</option>
+                                    <option value="document">Document</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="ebook">eBook</option>
+                                    <option value="xml">XML</option>
+                                    <option value="archive">Archive</option>
+                                    <option value="web_page">Web Page</option>
+                                    <option value="podcast">Podcast</option>
+                                    <option value="arxiv">arXiv Paper</option>
+                                    <option value="image">Image</option>
+                                    <option value="text">Text</option>
+                                    <option value="markdown">Markdown</option>
+                                    <option value="csv">CSV</option>
+                                    <option value="json">JSON</option>
+                                    <option value="url">URL</option>
+                                    <option value="sitemap">Sitemap</option>
+                                    <option value="mediawiki">MediaWiki</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -259,20 +260,20 @@
                         </div>
                         <div class="column">
                             <h3>Processing Options</h3>
-                             <div class="form-group checkbox-group">
-                                <input type="checkbox" id="addMedia_overwrite_existing" name="overwrite_existing"> <label for="addMedia_overwrite_existing">Overwrite Existing</label><br>
-                                <input type="checkbox" id="addMedia_keep_original_file" name="keep_original_file"> <label for="addMedia_keep_original_file">Keep Original File</label><br>
-                                <input type="checkbox" id="addMedia_perform_analysis" name="perform_analysis" checked> <label for="addMedia_perform_analysis">Perform Analysis</label><br>
-                                <input type="checkbox" id="addMedia_use_cookies" name="use_cookies"> <label for="addMedia_use_cookies">Use Cookies (for URL download)</label><br>
-                                <input type="checkbox" id="addMedia_diarize" name="diarize"> <label for="addMedia_diarize">Diarize (Audio/Video)</label><br>
-                                <input type="checkbox" id="addMedia_timestamp_option" name="timestamp_option" checked> <label for="addMedia_timestamp_option">Timestamp Option (Audio/Video)</label><br>
-                                <input type="checkbox" id="addMedia_vad_use" name="vad_use"> <label for="addMedia_vad_use">VAD Use (Audio/Video)</label><br>
-                                <input type="checkbox" id="addMedia_perform_confabulation_check_of_analysis" name="perform_confabulation_check_of_analysis"> <label for="addMedia_perform_confabulation_check_of_analysis">Confabulation Check</label><br>
-                                <input type="checkbox" id="addMedia_perform_chunking" name="perform_chunking" checked> <label for="addMedia_perform_chunking">Perform Chunking</label><br>
-                                <input type="checkbox" id="addMedia_use_adaptive_chunking" name="use_adaptive_chunking"> <label for="addMedia_use_adaptive_chunking">Use Adaptive Chunking</label><br>
-                                <input type="checkbox" id="addMedia_use_multi_level_chunking" name="use_multi_level_chunking"> <label for="addMedia_use_multi_level_chunking">Use Multi-Level Chunking</label><br>
-                                <input type="checkbox" id="addMedia_perform_rolling_summarization" name="perform_rolling_summarization"> <label for="addMedia_perform_rolling_summarization">Perform Rolling Summarization</label><br>
-                                <input type="checkbox" id="addMedia_summarize_recursively" name="summarize_recursively"> <label for="addMedia_summarize_recursively">Summarize Recursively</label>
+                             <div class="form-group checkbox-group" style="display: flex; flex-direction: column; gap: 8px;">
+                                <div><input type="checkbox" id="addMedia_overwrite_existing" name="overwrite_existing"> <label for="addMedia_overwrite_existing">Overwrite Existing</label></div>
+                                <div><input type="checkbox" id="addMedia_keep_original_file" name="keep_original_file"> <label for="addMedia_keep_original_file">Keep Original File</label></div>
+                                <div><input type="checkbox" id="addMedia_perform_analysis" name="perform_analysis"> <label for="addMedia_perform_analysis">Perform Analysis</label></div>
+                                <div><input type="checkbox" id="addMedia_use_cookies" name="use_cookies"> <label for="addMedia_use_cookies">Use Cookies (for URL download)</label></div>
+                                <div><input type="checkbox" id="addMedia_diarize" name="diarize"> <label for="addMedia_diarize">Diarize (Audio/Video)</label></div>
+                                <div><input type="checkbox" id="addMedia_timestamp_option" name="timestamp_option" checked> <label for="addMedia_timestamp_option">Timestamp Option (Audio/Video)</label></div>
+                                <div><input type="checkbox" id="addMedia_vad_use" name="vad_use"> <label for="addMedia_vad_use">VAD Use (Audio/Video)</label></div>
+                                <div><input type="checkbox" id="addMedia_perform_confabulation_check_of_analysis" name="perform_confabulation_check_of_analysis"> <label for="addMedia_perform_confabulation_check_of_analysis">Confabulation Check</label></div>
+                                <div><input type="checkbox" id="addMedia_perform_chunking" name="perform_chunking" checked> <label for="addMedia_perform_chunking">Perform Chunking</label></div>
+                                <div><input type="checkbox" id="addMedia_use_adaptive_chunking" name="use_adaptive_chunking"> <label for="addMedia_use_adaptive_chunking">Use Adaptive Chunking</label></div>
+                                <div><input type="checkbox" id="addMedia_use_multi_level_chunking" name="use_multi_level_chunking"> <label for="addMedia_use_multi_level_chunking">Use Multi-Level Chunking</label></div>
+                                <div><input type="checkbox" id="addMedia_perform_rolling_summarization" name="perform_rolling_summarization"> <label for="addMedia_perform_rolling_summarization">Perform Rolling Summarization</label></div>
+                                <div><input type="checkbox" id="addMedia_summarize_recursively" name="summarize_recursively"> <label for="addMedia_summarize_recursively">Summarize Recursively</label></div>
                             </div>
                         </div>
                     </div>

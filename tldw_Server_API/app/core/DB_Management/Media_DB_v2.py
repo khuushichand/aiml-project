@@ -98,7 +98,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 4  # Updated to include MCP, embeddings, and scraping tables
+    _CURRENT_SCHEMA_VERSION = 4  # Schema includes removed UNIQUE constraint on content_hash but stays at v4 for compatibility
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -127,7 +127,7 @@ class MediaDatabase:
         vector_embedding BLOB,
         chunking_status TEXT DEFAULT 'pending' NOT NULL,
         vector_processing INTEGER DEFAULT 0 NOT NULL,
-        content_hash TEXT UNIQUE NOT NULL,
+        content_hash TEXT NOT NULL,
         uuid TEXT UNIQUE NOT NULL,
         last_modified DATETIME NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
@@ -282,7 +282,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_chunking_status ON Media(chunking_status);
     CREATE INDEX IF NOT EXISTS idx_media_vector_processing ON Media(vector_processing);
     CREATE INDEX IF NOT EXISTS idx_media_is_trash ON Media(is_trash);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_media_content_hash ON Media(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_media_content_hash ON Media(content_hash);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_media_uuid ON Media(uuid);
     CREATE INDEX IF NOT EXISTS idx_media_last_modified ON Media(last_modified);
     CREATE INDEX IF NOT EXISTS idx_media_deleted ON Media(deleted);
