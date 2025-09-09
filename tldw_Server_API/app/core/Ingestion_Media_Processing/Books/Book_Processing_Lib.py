@@ -744,7 +744,7 @@ def process_epub(
                 # It will use the 'method' from effective_chunk_options to dispatch correctly.
                 processed_chunks = improved_chunking_process(
                     text=extracted_text,
-                    chunk_options_dict=effective_chunk_options
+                    chunk_options=effective_chunk_options
                     # llm_call_function_for_chunker and llm_api_config_for_chunker can be passed here
                     # if any chunking method requiring LLM calls (like 'rolling_summarize') was to be used.
                     # For 'ebook_chapters', they are not directly needed unless sub-chunking uses an LLM method.
@@ -1230,7 +1230,10 @@ def _process_markup_or_plain_text(
             logging.info(f"Chunking {file_type} content with options: {effective_chunk_options}")
             try:
                 # Use a more generic chunking function
-                processed_chunks = improved_chunking_process(markdown_content, effective_chunk_options)
+                processed_chunks = improved_chunking_process(
+                    text=markdown_content,
+                    chunk_options=effective_chunk_options
+                )
 
                 if not processed_chunks:
                      logging.warning(f"Chunking produced no chunks for {file_path}. Using full text as one chunk.")
