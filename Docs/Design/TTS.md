@@ -165,6 +165,11 @@ https://huggingface.co/stepfun-ai/Step-Audio-2-mini
 
 
 
+Voice Cleanup
+    https://www.lalal.ai/voice-cleaner/
+    https://github.com/kwatcharasupat/bandit-v2
+    https://github.com/resemble-ai/resemble-enhance
+    https://github.com/resemble-ai/resemble-enhance/issues/69
 
 ### Link Dump:
 https://huggingface.co/NexaAIDev/Qwen2-Audio-7B-GGUF
