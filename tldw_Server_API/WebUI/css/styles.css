@@ -1154,6 +1154,97 @@ pre:hover .copy-button {
     margin-bottom: 20px;
 }
 
+/* Media List Container */
+.media-list-container {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    background: var(--bg-secondary);
+}
+
+.media-list-item {
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: var(--bg-primary);
+}
+
+.media-list-item:hover {
+    border-color: var(--color-primary);
+    background: rgba(0, 123, 255, 0.05);
+    transform: translateX(5px);
+}
+
+.media-list-item:last-child {
+    margin-bottom: 0;
+}
+
+.media-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-xs);
+}
+
+.media-item-header h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.media-type-badge {
+    background: var(--color-primary);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+}
+
+.media-list-item .item-author {
+    margin: var(--spacing-xs) 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.media-list-item .item-date {
+    margin: var(--spacing-xs) 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+/* Pagination Controls */
+.pagination-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.pagination-controls button {
+    min-width: 80px;
+}
+
+.pagination-controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.page-info {
+    color: var(--text-secondary);
+    font-weight: 500;
+    min-width: 200px;
+    text-align: center;
+}
+
 #tabMediaAnalysis .search-result-item {
     padding: 12px;
     border: 1px solid var(--color-border);

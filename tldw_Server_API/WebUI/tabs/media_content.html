@@ -1160,11 +1160,21 @@
                         <button class="api-button" onclick="searchMediaForAnalysis()">Search</button>
                     </div>
                     
+                    <!-- Browse All Media Section -->
                     <div class="form-group">
-                        <label for="analysisMediaSelect">Or Select from Recent:</label>
-                        <select id="analysisMediaSelect" onchange="loadMediaForAnalysis()">
-                            <option value="">-- Select a media item --</option>
-                        </select>
+                        <h4>Or Browse All Media:</h4>
+                        <div id="mediaBrowseSection">
+                            <div class="media-browse-controls" style="margin-bottom: 10px;">
+                                <button id="loadMediaListBtn" class="api-button" onclick="mediaAnalysisManager.loadAllMedia(1)">Load Media List</button>
+                                <button id="refreshMediaListBtn" class="api-button" onclick="mediaAnalysisManager.loadAllMedia(mediaAnalysisManager.currentPage)" style="display: none;">Refresh</button>
+                            </div>
+                            <div id="allMediaList" class="media-list-container"></div>
+                            <div id="mediaPagination" class="pagination-controls">
+                                <button id="mediaPrevPage" class="api-button" onclick="mediaAnalysisManager.previousPage()" disabled>Previous</button>
+                                <span id="mediaPageInfo" class="page-info">Page 1 of 1</span>
+                                <button id="mediaNextPage" class="api-button" onclick="mediaAnalysisManager.nextPage()">Next</button>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Search Results -->

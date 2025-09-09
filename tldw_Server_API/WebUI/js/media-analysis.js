@@ -9,6 +9,11 @@ class MediaAnalysisManager {
         this.searchTimeout = null;
         this.isAnalyzing = false;
         this.currentMediaContent = '';
+        // Pagination state
+        this.currentPage = 1;
+        this.totalPages = 1;
+        this.itemsPerPage = 10;
+        this.totalItems = 0;
     }
 
     async initialize() {
@@ -16,6 +21,9 @@ class MediaAnalysisManager {
         
         // Load saved prompts
         await this.loadAvailablePrompts();
+        
+        // Don't automatically load media - let user trigger it
+        // await this.loadAllMedia();
         
         // Set up event listeners
         this.setupEventListeners();
@@ -72,6 +80,9 @@ class MediaAnalysisManager {
                 maxTokensValue.textContent = e.target.value;
             });
         }
+        
+        // Don't automatically load media - let user trigger it
+        // this.loadAllMedia(1);
     }
 
     async searchMediaForAnalysis(query) {
@@ -84,10 +95,10 @@ class MediaAnalysisManager {
         resultsDiv.innerHTML = '<div class="loading">Searching...</div>';
 
         try {
-            const response = await fetch(`/api/v1/media/search?query=${encodeURIComponent(query)}&limit=10`);
-            if (!response.ok) throw new Error('Search failed');
-
-            const data = await response.json();
+            const data = await apiClient.get('/api/v1/media/search', {
+                query: query,
+                limit: 10
+            });
             this.displaySearchResults(data.items || []);
         } catch (error) {
             console.error('Error searching media:', error);
@@ -115,6 +126,93 @@ class MediaAnalysisManager {
         resultsDiv.innerHTML = html;
     }
 
+    async loadAllMedia(page = 1) {
+        const mediaListDiv = document.getElementById('allMediaList');
+        mediaListDiv.innerHTML = '<div class="loading">Loading media items...</div>';
+        
+        // Show refresh button and hide load button after first load
+        const loadBtn = document.getElementById('loadMediaListBtn');
+        const refreshBtn = document.getElementById('refreshMediaListBtn');
+        if (loadBtn) loadBtn.style.display = 'none';
+        if (refreshBtn) refreshBtn.style.display = 'inline-block';
+
+        try {
+            // Use search endpoint with empty query to get all media
+            const data = await apiClient.post('/api/v1/media/search', {
+                query: '',  // Empty query to get all media
+                media_types: [],  // All types
+                tags: [],
+                keywords: []
+            }, {
+                query: {
+                    page: page,
+                    results_per_page: this.itemsPerPage
+                }
+            });
+            
+            // Update pagination state from the pagination object
+            this.currentPage = page;
+            this.totalItems = data.pagination?.total_items || 0;
+            this.totalPages = data.pagination?.total_pages || 1;
+            
+            // Display media items
+            this.displayMediaList(data.items || []);
+            
+            // Update pagination controls
+            this.updatePaginationControls();
+        } catch (error) {
+            console.error('Error loading media:', error);
+            mediaListDiv.innerHTML = '<div class="error">Failed to load media items</div>';
+        }
+    }
+
+    displayMediaList(items) {
+        const mediaListDiv = document.getElementById('allMediaList');
+        
+        if (!items || items.length === 0) {
+            mediaListDiv.innerHTML = '<div class="no-results">No media items available</div>';
+            return;
+        }
+
+        const html = items.map(item => `
+            <div class="media-list-item" onclick="mediaAnalysisManager.loadMediaForAnalysis(${item.id})">
+                <div class="media-item-header">
+                    <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
+                    <span class="media-type-badge">${item.media_type || 'Unknown'}</span>
+                </div>
+                ${item.author ? `<p class="item-author">By: ${this.escapeHtml(item.author)}</p>` : ''}
+                ${item.created_at ? `<p class="item-date">Added: ${new Date(item.created_at).toLocaleDateString()}</p>` : ''}
+            </div>
+        `).join('');
+
+        mediaListDiv.innerHTML = html;
+    }
+
+    updatePaginationControls() {
+        const prevBtn = document.getElementById('mediaPrevPage');
+        const nextBtn = document.getElementById('mediaNextPage');
+        const pageInfo = document.getElementById('mediaPageInfo');
+        
+        // Update page info text
+        pageInfo.textContent = `Page ${this.currentPage} of ${this.totalPages} (${this.totalItems} items)`;
+        
+        // Enable/disable buttons
+        prevBtn.disabled = this.currentPage <= 1;
+        nextBtn.disabled = this.currentPage >= this.totalPages;
+    }
+
+    async previousPage() {
+        if (this.currentPage > 1) {
+            await this.loadAllMedia(this.currentPage - 1);
+        }
+    }
+
+    async nextPage() {
+        if (this.currentPage < this.totalPages) {
+            await this.loadAllMedia(this.currentPage + 1);
+        }
+    }
+
     async loadMediaForAnalysis(mediaId) {
         this.selectedMediaId = mediaId;
         const selectedMediaDiv = document.getElementById('selectedMediaForAnalysis');
@@ -124,10 +222,7 @@ class MediaAnalysisManager {
         selectedMediaDiv.innerHTML = '<div class="loading">Loading media details...</div>';
 
         try {
-            const response = await fetch(`/api/v1/media/${mediaId}`);
-            if (!response.ok) throw new Error('Failed to load media');
-
-            const media = await response.json();
+            const media = await apiClient.get(`/api/v1/media/${mediaId}`);
             
             // Display media info
             selectedMediaDiv.innerHTML = `
@@ -147,14 +242,19 @@ class MediaAnalysisManager {
                 contentSection.style.display = 'block';
             } else {
                 // Try to get content from latest version
-                const versionsResponse = await fetch(`/api/v1/media/${mediaId}/versions?include_content=true&limit=1`);
-                if (versionsResponse.ok) {
-                    const versions = await versionsResponse.json();
+                try {
+                    const versions = await apiClient.get(`/api/v1/media/${mediaId}/versions`, {
+                        include_content: true,
+                        limit: 1
+                    });
                     if (versions.length > 0 && versions[0].content) {
                         this.currentMediaContent = versions[0].content;
                         contentTextarea.value = versions[0].content;
                         contentSection.style.display = 'block';
                     }
+                } catch (versionError) {
+                    console.error('Failed to get versions:', versionError);
+                    contentSection.style.display = 'none';
                 }
             }
 
@@ -172,10 +272,10 @@ class MediaAnalysisManager {
 
     async loadAvailablePrompts() {
         try {
-            const response = await fetch('/api/v1/prompts/list?page=1&per_page=100');
-            if (!response.ok) throw new Error('Failed to load prompts');
-
-            const data = await response.json();
+            const data = await apiClient.get('/api/v1/prompts/list', {
+                page: 1,
+                per_page: 100
+            });
             this.availablePrompts = data.prompts || [];
             this.updatePromptDropdown();
         } catch (error) {
@@ -312,24 +412,16 @@ class MediaAnalysisManager {
                 stream: stream
             };
 
-            const response = await fetch('/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(chatPayload)
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Analysis failed');
-            }
-
             let analysisResult = '';
             if (stream) {
+                // For streaming, we need the raw response
+                const response = await apiClient.makeRequest('POST', '/api/v1/chat/completions', {
+                    body: chatPayload,
+                    streaming: true
+                });
                 analysisResult = await this.handleStreamingResponse(response, resultsDiv);
             } else {
-                const result = await response.json();
+                const result = await apiClient.post('/api/v1/chat/completions', chatPayload);
                 analysisResult = result.choices[0].message.content;
                 this.displayAnalysisResult({
                     analysis: analysisResult,
@@ -413,16 +505,10 @@ class MediaAnalysisManager {
                 analysis_content: analysisResult
             };
 
-            const response = await fetch(`/api/v1/media/${this.selectedMediaId}/versions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                console.error('Failed to save analysis version');
+            try {
+                await apiClient.post(`/api/v1/media/${this.selectedMediaId}/versions`, payload);
+            } catch (error) {
+                console.error('Failed to save analysis version:', error);
             }
         } catch (error) {
             console.error('Error saving analysis version:', error);
@@ -462,10 +548,9 @@ class MediaAnalysisManager {
         container.innerHTML = '<div class="loading">Loading analyses...</div>';
 
         try {
-            const response = await fetch(`/api/v1/media/${mediaId}/versions?include_content=false`);
-            if (!response.ok) throw new Error('Failed to load analyses');
-
-            const versions = await response.json();
+            const versions = await apiClient.get(`/api/v1/media/${mediaId}/versions`, {
+                include_content: false
+            });
             
             // Filter to show only versions with analysis_content
             const analyses = versions.filter(v => v.analysis_content);
@@ -506,10 +591,9 @@ class MediaAnalysisManager {
 
     async viewAnalysis(versionNumber) {
         try {
-            const response = await fetch(`/api/v1/media/${this.selectedMediaId}/versions/${versionNumber}?include_content=true`);
-            if (!response.ok) throw new Error('Failed to load analysis');
-
-            const analysis = await response.json();
+            const analysis = await apiClient.get(`/api/v1/media/${this.selectedMediaId}/versions/${versionNumber}`, {
+                include_content: true
+            });
             
             const resultsDiv = document.getElementById('analysisResults');
             resultsDiv.innerHTML = `
@@ -539,11 +623,7 @@ class MediaAnalysisManager {
         if (!confirm(`Are you sure you want to delete analysis version ${versionNumber}?`)) return;
 
         try {
-            const response = await fetch(`/api/v1/media/${this.selectedMediaId}/versions/${versionNumber}`, {
-                method: 'DELETE'
-            });
-
-            if (!response.ok) throw new Error('Failed to delete analysis');
+            await apiClient.delete(`/api/v1/media/${this.selectedMediaId}/versions/${versionNumber}`);
 
             await this.loadExistingAnalyses(this.selectedMediaId);
             alert('Analysis deleted successfully');
@@ -582,3 +662,10 @@ window.togglePromptSource = () => mediaAnalysisManager?.togglePromptSource();
 window.loadPromptDetails = () => mediaAnalysisManager?.loadPromptDetails();
 window.runMediaAnalysis = () => mediaAnalysisManager?.runMediaAnalysis();
 window.clearAnalysis = () => mediaAnalysisManager?.clearAnalysis();
+
+// Export functions for media list
+window.mediaAnalysisManager = {
+    previousPage: () => mediaAnalysisManager?.previousPage(),
+    nextPage: () => mediaAnalysisManager?.nextPage(),
+    loadAllMedia: (page) => mediaAnalysisManager?.loadAllMedia(page)
+};
