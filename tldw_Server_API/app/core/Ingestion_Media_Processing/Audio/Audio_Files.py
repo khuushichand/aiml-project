@@ -90,6 +90,73 @@ class AudioConversionError(AudioProcessingError):
 # Function Definitions
 #
 
+def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
+    """
+    Check if a transcription model is available or needs to be downloaded.
+    
+    Args:
+        model_name: Name of the transcription model to check
+        
+    Returns:
+        Dictionary with status information:
+        - 'available': True if model is ready, False if needs download
+        - 'message': Human-readable status message
+        - 'model': The model name
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import check_model_exists
+    
+    if check_model_exists(model_name):
+        return {
+            'available': True,
+            'message': f'Model {model_name} is available and ready for use',
+            'model': model_name
+        }
+    else:
+        return {
+            'available': False,
+            'message': f'Model {model_name} is not available locally and will be downloaded on first use. This may take several minutes depending on model size and internet connection.',
+            'model': model_name,
+            'estimated_size': _get_model_estimated_size(model_name)
+        }
+
+def _get_model_estimated_size(model_name: str) -> str:
+    """
+    Get estimated download size for a model.
+    
+    Args:
+        model_name: Name of the model
+        
+    Returns:
+        Estimated size as a string
+    """
+    # Approximate sizes for common models
+    size_map = {
+        'tiny': '39 MB',
+        'tiny.en': '39 MB',
+        'base': '74 MB',
+        'base.en': '74 MB',
+        'small': '244 MB',
+        'small.en': '244 MB',
+        'medium': '769 MB',
+        'medium.en': '769 MB',
+        'large': '1550 MB',
+        'large-v1': '1550 MB',
+        'large-v2': '1550 MB',
+        'large-v3': '1550 MB',
+        'distil-large-v3': '756 MB',
+        'distil-large-v2': '756 MB',
+        'distil-medium.en': '394 MB',
+        'distil-small.en': '166 MB',
+    }
+    
+    # Check for exact match or partial match
+    for key, size in size_map.items():
+        if key in model_name.lower():
+            return size
+    
+    # Default for unknown models
+    return 'Unknown size'
+
 def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = False, cookies: Optional[str | Dict] = None) -> str:
     """
     Downloads an audio file from a URL into a specified temporary directory.
@@ -516,6 +583,26 @@ def process_audio_files(
                         diarize=diarize,
                     )
                     raw_segments = transcription_output
+                    
+                    # Check if this is a model download status message
+                    if (raw_segments and len(raw_segments) == 1 and 
+                        isinstance(raw_segments[0], dict) and 
+                        raw_segments[0].get('status') == 'model_downloading'):
+                        # Model is being downloaded, return status message
+                        model_message = raw_segments[0].get('Text', 'Model is being downloaded...')
+                        item_result["status"] = "ModelDownloading"
+                        item_result["model_status"] = {
+                            "downloading": True,
+                            "message": model_message.replace('[MODEL STATUS] ', '')
+                        }
+                        item_result.setdefault("warnings", [])
+                        item_result["warnings"].append("Model needs to be downloaded. Please retry after download completes.")
+                        update_progress(f"Model download required: {model_message}")
+                        item_result["content"] = ""
+                        item_result["segments"] = []
+                        # Don't continue with chunking/analysis since we don't have transcription
+                        continue
+                    
                     # ... (process segments, set item_result["content"], item_result["segments"]) ...
                     if not raw_segments:
                         item_result.setdefault("warnings", [])

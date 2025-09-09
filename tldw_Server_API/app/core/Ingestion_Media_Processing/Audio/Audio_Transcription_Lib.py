@@ -14,6 +14,7 @@
 #
 # Import necessary libraries to run solo for testing
 import gc
+import glob
 import json
 import multiprocessing
 import os
@@ -1174,6 +1175,78 @@ config = load_and_log_configs()
 processing_choice = config['processing_choice'] or 'cpu'
 total_thread_count = multiprocessing.cpu_count()
 
+# Model download status tracking
+model_download_status = {}
+
+def check_model_exists(model_name: str) -> bool:
+    """
+    Check if a Whisper model is already downloaded.
+    
+    Args:
+        model_name: Name of the model to check
+        
+    Returns:
+        True if model exists locally, False otherwise
+    """
+    tldw_dir = os.path.dirname(os.path.dirname(__file__))
+    default_download_root = os.path.join(tldw_dir, 'models', 'Whisper')
+    
+    # Check if it's a path that exists
+    if os.path.exists(model_name):
+        return True
+    
+    # Check in default download directory
+    model_path = os.path.join(default_download_root, model_name)
+    if os.path.isdir(model_path):
+        return True
+    
+    # Check if it's a Hub ID that might be cached
+    if '/' in model_name:
+        # Convert Hub ID to potential cache path
+        cache_name = model_name.replace('/', '_')
+        cache_path = os.path.join(default_download_root, cache_name)
+        if os.path.isdir(cache_path):
+            return True
+    
+    # Check faster-whisper's default cache location
+    home_cache = os.path.expanduser("~/.cache/huggingface/hub")
+    if os.path.exists(home_cache):
+        # Look for model in HuggingFace cache
+        pattern = os.path.join(home_cache, f"*{model_name.replace('/', '--')}*")
+        if glob.glob(pattern):
+            return True
+    
+    return False
+
+def set_model_download_status(model_name: str, status: str, message: str):
+    """
+    Set the download status for a model.
+    
+    Args:
+        model_name: Name of the model
+        status: Status of the download ('checking', 'downloading', 'completed', 'error')
+        message: Human-readable status message
+    """
+    global model_download_status
+    model_download_status[model_name] = {
+        'status': status,
+        'message': message,
+        'timestamp': time.time()
+    }
+    logging.info(f"Model download status for {model_name}: {status} - {message}")
+
+def get_model_download_status(model_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Get the current download status for a model.
+    
+    Args:
+        model_name: Name of the model
+        
+    Returns:
+        Dictionary with status information or None if no status
+    """
+    return model_download_status.get(model_name)
+
 class WhisperModel(OriginalWhisperModel):
     """
     Custom wrapper for `faster_whisper.WhisperModel` to manage model loading.
@@ -1379,7 +1452,7 @@ def unload_all_transcription_models():
 
 whisper_model_cache = {}
 
-def get_whisper_model(model_name, device):
+def get_whisper_model(model_name, device, check_download_status=False):
     """
     Retrieves or initializes a `WhisperModel` instance, using a cache.
 
@@ -1393,9 +1466,11 @@ def get_whisper_model(model_name, device):
         model_name: The name or path of the Whisper model (e.g., "base.en",
             "/path/to/model", "openai/whisper-large-v3").
         device: The device to load the model on ("cpu", "cuda").
+        check_download_status: If True, check if model needs downloading and return status.
 
     Returns:
-        A `WhisperModel` instance.
+        A `WhisperModel` instance, or a tuple (None, status_dict) if check_download_status
+        is True and model needs downloading.
 
     Raises:
         ValueError: If `WhisperModel` initialization fails (e.g., invalid model name).
@@ -1404,6 +1479,15 @@ def get_whisper_model(model_name, device):
     compute_type = "float16" if "cuda" in device else "int8" # Example compute type logic
     cache_key = (model_name, device, compute_type)
 
+    # If checking download status and model not in cache
+    if check_download_status and cache_key not in whisper_model_cache:
+        if not check_model_exists(model_name):
+            return None, {
+                'status': 'model_downloading',
+                'message': f'Model {model_name} is not available locally and will be downloaded on first use. This may take several minutes depending on your internet connection.',
+                'model': model_name
+            }
+    
     if cache_key not in whisper_model_cache:
         logging.info(f"Cache miss. Initializing WhisperModel for key: {cache_key}")
         try:
@@ -1913,8 +1997,23 @@ def speech_to_text(
 
         transcribe_options = dict(task="transcribe", **options)
 
-        # Get model instance (cached)
-        whisper_model_instance = get_whisper_model(whisper_model, processing_choice)
+        # Check if model needs downloading first
+        model_result = get_whisper_model(whisper_model, processing_choice, check_download_status=True)
+        
+        # Handle the case where model needs downloading
+        if isinstance(model_result, tuple) and model_result[0] is None:
+            _, status_info = model_result
+            logging.info(f"Model download status: {status_info}")
+            # Return special status to indicate model is downloading
+            return [{
+                "start_seconds": 0,
+                "end_seconds": 0,
+                "Text": f"[MODEL STATUS] {status_info['message']}",
+                "status": "model_downloading"
+            }]
+        
+        # Get model instance (cached) - now without status check
+        whisper_model_instance = get_whisper_model(whisper_model, processing_choice, check_download_status=False)
 
         # Perform transcription
         segments_raw, info = whisper_model_instance.transcribe(str(file_path), **transcribe_options)

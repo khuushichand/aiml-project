@@ -2119,7 +2119,7 @@ async def _process_document_like_item(
             logger.info(f"Downloading URL: {processing_source}")
             download_func = functools.partial(smart_download, processing_source, temp_dir) # Pass url, temp_dir positionally
             downloaded_path = await loop.run_in_executor(None, download_func)
-            if downloaded_path and isinstance(downloaded_path, Path) and downloaded_path.exists():
+            if downloaded_path and isinstance(downloaded_path, FilePath) and downloaded_path.exists():
                  processing_filepath = downloaded_path
                  processing_filename = downloaded_path.name
                  if media_type == 'pdf':
@@ -2164,7 +2164,7 @@ async def _process_document_like_item(
             "perform_analysis": form_data.perform_analysis,
             # --- FIX: Pass these arguments ---
             "api_name": form_data.api_name,
-            # api_key removed - retrieved from server config
+            "api_key": None,  # Pass None to use server config defaults
             "custom_prompt": form_data.custom_prompt,
             "system_prompt": form_data.system_prompt,
             # ----------------------------------
@@ -3779,7 +3779,7 @@ async def process_ebooks_endpoint(
 
                 for task, result in zip(download_tasks, download_results):
                     original_url = url_task_map[task] # Get URL associated with this task/result
-                    if isinstance(result, Path):
+                    if isinstance(result, FilePath):
                         # Success
                         downloaded_path = result
                         local_paths_to_process.append((original_url, downloaded_path))
@@ -4205,7 +4205,7 @@ async def process_documents_endpoint(
                     # Get original_url using the pre-built map
                     original_url = url_task_map.get(task, "Unknown URL")  # Use .get for safety
 
-                    if isinstance(result, Path):
+                    if isinstance(result, FilePath):
                         downloaded_path = result
                         local_paths_to_process.append((original_url, downloaded_path))
                         source_map[original_url] = downloaded_path  # Use original_url as key
