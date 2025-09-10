@@ -40,7 +40,9 @@ class StreamingTranscriptionClient {
             chunks: document.getElementById('streamingChunks'),
             responses: document.getElementById('streamingResponses'),
             debug: document.getElementById('streamingDebug'),
-            connectionInfo: document.getElementById('streamingConnectionInfo')
+            connectionInfo: document.getElementById('streamingConnectionInfo'),
+            configHint: document.getElementById('streamingConfigHint'),
+            configHintText: document.querySelector('#streamingConfigHint .config-text')
         };
         
         // Initialize visualizer if canvas exists
@@ -145,6 +147,12 @@ class StreamingTranscriptionClient {
                 this.elements.connectBtn.textContent = 'Disconnect';
                 // Keep Start disabled until config-ack arrives
                 if (this.elements.startBtn) this.elements.startBtn.disabled = true;
+                if (this.elements.configHint) {
+                    this.elements.configHint.style.display = 'inline-flex';
+                    if (this.elements.configHintText) {
+                        this.elements.configHintText.textContent = 'Waiting for server configuration…';
+                    }
+                }
                 
                 // Send configuration immediately after connection
                 setTimeout(() => {
@@ -174,6 +182,9 @@ class StreamingTranscriptionClient {
                 this.elements.connectBtn.textContent = 'Connect to Server';
                 if (this.elements.startBtn) this.elements.startBtn.disabled = true;
                 this.elements.stopBtn.disabled = true;
+                if (this.elements.configHint) {
+                    this.elements.configHint.style.display = 'none';
+                }
                 
                 if (this.isRecording) {
                     this.stopRecording();
@@ -435,11 +446,13 @@ class StreamingTranscriptionClient {
                     this.isConfigured = true;
                     if (this.elements.startBtn) this.elements.startBtn.disabled = false;
                     this.updateStatus('Configured', 'connected');
+                    if (this.elements.configHint) this.elements.configHint.style.display = 'none';
                 } else if (data.state === 'ready') {
                     this.isReady = true;
                     // If configured state was missed for some reason, allow start after ready
                     if (this.elements.startBtn) this.elements.startBtn.disabled = false;
                     this.updateStatus('Ready', 'connected');
+                    if (this.elements.configHint) this.elements.configHint.style.display = 'none';
                 }
                 break;
             

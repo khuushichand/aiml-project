@@ -364,12 +364,31 @@
                     <div class="form-group" id="whisperModelGroup" style="display: none;">
                         <label for="whisperModelSize">Whisper Model:</label>
                         <select id="whisperModelSize">
-                            <option value="tiny">Tiny (39M, fastest)</option>
-                            <option value="base">Base (74M)</option>
-                            <option value="small">Small (244M)</option>
-                            <option value="medium">Medium (769M)</option>
-                            <option value="large-v3">Large v3 (1550M)</option>
-                            <option value="distil-large-v3" selected>Distil-Large v3 (756M, best)</option>
+                            <optgroup label="Core">
+                                <option value="tiny.en">tiny.en</option>
+                                <option value="tiny">tiny</option>
+                                <option value="base.en">base.en</option>
+                                <option value="base">base</option>
+                                <option value="small.en">small.en</option>
+                                <option value="small">small</option>
+                                <option value="medium.en">medium.en</option>
+                                <option value="medium">medium</option>
+                                <option value="large-v1">large-v1</option>
+                                <option value="large-v2">large-v2</option>
+                                <option value="large-v3">large-v3</option>
+                                <option value="large">large</option>
+                            </optgroup>
+                            <optgroup label="Distilled">
+                                <option value="distil-large-v2">distil-large-v2</option>
+                                <option value="distil-medium.en">distil-medium.en</option>
+                                <option value="distil-small.en">distil-small.en</option>
+                                <option value="distil-large-v3" selected>distil-large-v3</option>
+                            </optgroup>
+                            <optgroup label="Community">
+                                <option value="deepdml/faster-distil-whisper-large-v3.5">deepdml/faster-distil-whisper-large-v3.5</option>
+                                <option value="deepdml/faster-whisper-large-v3-turbo-ct2">deepdml/faster-whisper-large-v3-turbo-ct2</option>
+                                <option value="nyrahealth/faster_CrisperWhisper">nyrahealth/faster_CrisperWhisper</option>
+                            </optgroup>
                         </select>
                     </div>
                     
@@ -395,7 +414,10 @@
                             <option value="ru">Russian</option>
                             <option value="ar">Arabic</option>
                             <option value="hi">Hindi</option>
+                            <option value="other">Other…</option>
                         </select>
+                        <input type="text" id="streamingLanguageOther" placeholder="Enter language or locale code (e.g., en, en-US)" style="display:none; margin-top: 8px; width: 100%;">
+                        <small style="color: var(--color-text-muted);">Select Other to provide a specific code.</small>
                     </div>
                 </div>
                 
@@ -439,8 +461,9 @@
             <button class="api-button" onclick="clearStreamingTranscript()">
                 Clear Transcript
             </button>
-            <span id="streamingConfigHint" style="margin-left: 10px; color: var(--color-text-muted); display: none;">
-                Waiting for server configuration…
+            <span id="streamingConfigHint" style="margin-left: 10px; color: var(--color-text-muted); display: none; align-items: center; gap: 6px;">
+                <span class="loading-spinner" style="vertical-align: middle;"></span>
+                <span class="config-text">Waiting for server configuration…</span>
             </span>
         </div>
         
