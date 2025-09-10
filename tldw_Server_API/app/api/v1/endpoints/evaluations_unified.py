@@ -11,7 +11,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status, Query, Request, Response, Header
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -23,7 +23,6 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateRunRequest, RunResponse, RunResultsResponse,
     CreateDatasetRequest, DatasetResponse,
     EvaluationListResponse, RunListResponse, DatasetListResponse,
-    EvaluationMetric,
     
     # tldw-specific schemas
     GEvalRequest, GEvalResponse,
@@ -116,7 +115,7 @@ async def verify_api_key(
     
     # Handle based on authentication mode
     if settings.AUTH_MODE == "single_user":
-        expected_token = os.getenv("API_BEARER") or os.getenv("SINGLE_USER_API_KEY") or settings.SINGLE_USER_API_KEY
+        expected_token = os.getenv("SINGLE_USER_API_KEY") or settings.SINGLE_USER_API_KEY
         
         if not expected_token:
             logger.error("No API key configured for single-user mode")
@@ -129,7 +128,7 @@ async def verify_api_key(
                 }}
             )
         
-        if token == expected_token or (token.startswith("sk-") and token == expected_token):
+        if token == expected_token:
             return "single_user"
             
     elif settings.AUTH_MODE == "multi_user":
@@ -774,7 +773,6 @@ async def delete_evaluation(
 async def create_run(
     eval_id: str,
     run_request: CreateRunRequest,
-    background_tasks: BackgroundTasks,
     user_id: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit)
 ):

@@ -602,6 +602,8 @@ app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["
 
 # Router for Embedding Endpoint (OpenAI-compatible path)
 app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+# Router for Vector Store (OpenAI-compatible) endpoints
+app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
 
 # Router for Media Embeddings Endpoint
 app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])

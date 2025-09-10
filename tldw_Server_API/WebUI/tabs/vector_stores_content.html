@@ -1,0 +1,117 @@
+<!-- Vector Stores Tab -->
+<div id="tabVectorStores" class="tab-content">
+    <div class="endpoint-section" id="vectorStores">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/vector_stores - Vector Stores (OpenAI compatible)</span>
+        </h2>
+        <p>Manage OpenAI-compatible vector stores backed by ChromaDB.</p>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Create Vector Store</h3>
+                <div class="form-group">
+                    <label for="vs_name">Name:</label>
+                    <input id="vs_name" placeholder="Optional name">
+                </div>
+                <div class="form-group">
+                    <label for="vs_dimensions">Dimensions:</label>
+                    <input id="vs_dimensions" type="number" value="1536" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="vs_model">Embedding Model (metadata):</label>
+                    <input id="vs_model" placeholder="text-embedding-3-small">
+                </div>
+                <button class="api-button" onclick="vsCreate()">Create Store</button>
+            </div>
+
+            <div class="column">
+                <h3>Vector Stores</h3>
+                <button class="api-button" onclick="vsList()">Refresh</button>
+                <ul id="vs_list"></ul>
+            </div>
+        </div>
+
+        <hr>
+        <h3>Vectors</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="vs_id">Store ID:</label>
+                    <input id="vs_id" placeholder="vs_...">
+                </div>
+                <div class="form-group">
+                    <label for="vec_text">Content (auto-embed) or Values (JSON array):</label>
+                    <textarea id="vec_text" rows="3" placeholder="Enter text to embed..."></textarea>
+                    <input id="vec_values" placeholder='[0.1, 0.2, ...]' style="margin-top:8px;">
+                </div>
+                <button class="api-button" onclick="vsUpsertVector()">Upsert Vector</button>
+                <button class="api-button" onclick="vsListVectors()">List Vectors</button>
+                <button class="api-button" onclick="vsQuery()">Query</button>
+            </div>
+            <div class="column">
+                <h4>Result</h4>
+                <pre id="vs_result">---</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+async function vsCreate(){
+  const name = document.getElementById('vs_name').value.trim();
+  const dim = parseInt(document.getElementById('vs_dimensions').value || '1536');
+  const model = document.getElementById('vs_model').value.trim();
+  const body = { dimensions: dim };
+  if (name) body.name = name;
+  if (model) body.embedding_model = model;
+  const res = await makeRequestRaw('POST', '/api/v1/vector_stores', body);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
+}
+
+async function vsList(){
+  const res = await makeRequestRaw('GET', '/api/v1/vector_stores');
+  const ul = document.getElementById('vs_list');
+  ul.innerHTML = '';
+  (res.data || []).forEach(s => {
+    const li = document.createElement('li');
+    li.textContent = `${s.name} (${s.id}) — dim=${s.dimensions}`;
+    ul.appendChild(li);
+  });
+}
+
+async function vsUpsertVector(){
+  const id = document.getElementById('vs_id').value.trim();
+  if(!id){ alert('Enter vector store id'); return; }
+  const text = document.getElementById('vec_text').value.trim();
+  const valsStr = document.getElementById('vec_values').value.trim();
+  let record = {};
+  if (text) {
+    record.content = text;
+  } else if (valsStr) {
+    try { record.values = JSON.parse(valsStr); } catch(e){ alert('Invalid values JSON'); return; }
+  } else { alert('Provide content or values'); return; }
+  const body = { records: [record] };
+  const res = await makeRequestRaw('POST', `/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, body);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsListVectors(){
+  const id = document.getElementById('vs_id').value.trim();
+  if(!id){ alert('Enter vector store id'); return; }
+  const res = await makeRequestRaw('GET', `/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsQuery(){
+  const id = document.getElementById('vs_id').value.trim();
+  if(!id){ alert('Enter vector store id'); return; }
+  const q = prompt('Enter query text (leave blank to cancel)');
+  if (q === null) return;
+  const body = { query: q, top_k: 5 };
+  const res = await makeRequestRaw('POST', `/api/v1/vector_stores/${encodeURIComponent(id)}/query`, body);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+</script>
+
