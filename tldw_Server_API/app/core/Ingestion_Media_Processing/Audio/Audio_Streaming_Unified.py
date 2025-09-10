@@ -619,7 +619,8 @@ async def handle_unified_websocket(
         try:
             logger.info("Waiting for configuration message from client...")
             config_message = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)  # Increased timeout
-            logger.info(f"Received message (length={len(config_message)}): {config_message[:500]}")  # Log more of message
+            # Do not log raw payload contents (may include base64 audio); log metadata only
+            logger.info(f"Received message (length={len(config_message)})")
             config_data = json.loads(config_message)
             logger.info(f"Parsed config data type: {config_data.get('type')}")
             
@@ -677,8 +678,10 @@ async def handle_unified_websocket(
                 await websocket.send_json(status_msg)
                 logger.info(f"Sent config acknowledgment: {status_msg}")
             else:
-                logger.warning(f"Received non-config message type: {config_data.get('type')}")
-                logger.warning(f"Full message data: {config_data}")
+                # Do not log full payload to avoid dumping base64 audio
+                msg_type = config_data.get('type')
+                data_len = len(config_data.get('data', '')) if isinstance(config_data.get('data'), str) else 0
+                logger.warning(f"Received non-config message type: {msg_type} (payload length ~{data_len})")
         except asyncio.TimeoutError:
             logger.warning(f"Config message timeout after 15s. Using default configuration: model={config.model}, variant={config.model_variant}")
         except json.JSONDecodeError as e:

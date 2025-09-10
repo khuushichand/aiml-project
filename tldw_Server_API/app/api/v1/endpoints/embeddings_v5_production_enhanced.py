@@ -43,6 +43,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.config import load_comprehensive_config
+from pathlib import Path
+import configparser
+
+# Audit logging
+from tldw_Server_API.app.core.Embeddings.audit_logger import (
+    get_audit_logger, AuditEventType
+)
 
 # Circuit Breaker
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import (

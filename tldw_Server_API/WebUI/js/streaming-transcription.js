@@ -49,6 +49,64 @@ class StreamingTranscriptionClient {
         if (this.elements.visualizer) {
             this.initVisualizer();
         }
+
+        // Language "Other" toggle
+        const langSelect = document.getElementById('streamingLanguage');
+        const langOther = document.getElementById('streamingLanguageOther');
+        if (langSelect && langOther) {
+            const toggleOther = () => {
+                if (langSelect.value === 'other') {
+                    langOther.style.display = 'block';
+                    langOther.focus();
+                } else {
+                    langOther.style.display = 'none';
+                }
+            };
+            langSelect.addEventListener('change', toggleOther);
+            toggleOther();
+        }
+
+        // Helper: set language options per model
+        this.setLanguageOptions = (model) => {
+            const select = document.getElementById('streamingLanguage');
+            if (!select) return;
+            const prevValue = select.value;
+            let html = '<option value="">Auto-detect</option>';
+
+            if (model === 'parakeet' || model === 'canary') {
+                const optionsEU = [
+                    ['Bulgarian', 'bg'], ['Croatian', 'hr'], ['Czech', 'cs'], ['Danish', 'da'],
+                    ['Dutch', 'nl'], ['English', 'en'], ['Estonian', 'et'], ['Finnish', 'fi'],
+                    ['French', 'fr'], ['German', 'de'], ['Greek', 'el'], ['Hungarian', 'hu'],
+                    ['Italian', 'it'], ['Latvian', 'lv'], ['Lithuanian', 'lt'], ['Maltese', 'mt'],
+                    ['Polish', 'pl'], ['Portuguese', 'pt'], ['Romanian', 'ro'], ['Slovak', 'sk'],
+                    ['Slovenian', 'sl'], ['Spanish', 'es'], ['Swedish', 'sv'], ['Russian', 'ru'],
+                    ['Ukrainian', 'uk']
+                ];
+                for (const [name, code] of optionsEU) {
+                    const selected = code === 'en' ? ' selected' : '';
+                    html += `<option value="${code}"${selected}>${name} (${code})</option>`;
+                }
+            } else if (model === 'whisper') {
+                const optionsCommon = [
+                    ['English', 'en'], ['Spanish', 'es'], ['German', 'de'], ['French', 'fr'],
+                    ['Chinese', 'zh'], ['Japanese', 'ja'], ['Korean', 'ko'], ['Russian', 'ru'],
+                    ['Portuguese', 'pt'], ['Italian', 'it'], ['Arabic', 'ar'], ['Hindi', 'hi'],
+                    ['Dutch', 'nl'], ['Turkish', 'tr'], ['Polish', 'pl'], ['Vietnamese', 'vi'],
+                    ['Thai', 'th']
+                ];
+                for (const [name, code] of optionsCommon) {
+                    html += `<option value="${code}">${name} (${code})</option>`;
+                }
+            }
+
+            html += '<option value="other">Other…</option>';
+            select.innerHTML = html;
+            // Restore previous selection if still present, else keep default (Auto for Whisper, en for Parakeet/Canary)
+            if (prevValue && [...select.options].some(o => o.value === prevValue)) {
+                select.value = prevValue;
+            }
+        };
     }
     
     initVisualizer() {
@@ -228,15 +286,31 @@ class StreamingTranscriptionClient {
         if (model === 'parakeet') {
             config.variant = document.getElementById('streamingVariant').value;
             console.log('Parakeet variant selected:', config.variant);
+            const langSelect = document.getElementById('streamingLanguage');
+            const langOther = document.getElementById('streamingLanguageOther');
+            let language = langSelect ? langSelect.value : '';
+            if (language === 'other' && langOther) {
+                language = (langOther.value || '').trim();
+            }
+            if (language) config.language = language;
         } else if (model === 'canary') {
-            config.language = document.getElementById('streamingLanguage').value;
+            const langSelect = document.getElementById('streamingLanguage');
+            const langOther = document.getElementById('streamingLanguageOther');
+            let language = langSelect ? langSelect.value : '';
+            if (language === 'other' && langOther) {
+                language = (langOther.value || '').trim();
+            }
+            if (language) config.language = language;
         } else if (model === 'whisper') {
             config.whisper_model_size = document.getElementById('whisperModelSize').value;
             config.task = document.getElementById('whisperTask').value;
-            const language = document.getElementById('streamingLanguage').value;
-            if (language) {
-                config.language = language;
+            const langSelect = document.getElementById('streamingLanguage');
+            const langOther = document.getElementById('streamingLanguageOther');
+            let language = langSelect ? langSelect.value : '';
+            if (language === 'other' && langOther) {
+                language = (langOther.value || '').trim();
             }
+            if (language) config.language = language;
             // Whisper works better with longer chunks
             config.chunk_duration = 5.0;  // Override to optimal duration for Whisper
         }
@@ -636,19 +710,31 @@ function updateModelOptions() {
     
     if (model === 'parakeet') {
         variantGroup.style.display = 'block';
-        languageGroup.style.display = 'none';
+        languageGroup.style.display = 'block';
         whisperModelGroup.style.display = 'none';
         whisperTaskGroup.style.display = 'none';
+        // Populate language list for Parakeet
+        if (window.streamingClient && typeof window.streamingClient.setLanguageOptions === 'function') {
+            window.streamingClient.setLanguageOptions('parakeet');
+        }
     } else if (model === 'canary') {
         variantGroup.style.display = 'none';
         languageGroup.style.display = 'block';
         whisperModelGroup.style.display = 'none';
         whisperTaskGroup.style.display = 'none';
+        // Populate language list for Canary
+        if (window.streamingClient && typeof window.streamingClient.setLanguageOptions === 'function') {
+            window.streamingClient.setLanguageOptions('canary');
+        }
     } else if (model === 'whisper') {
         variantGroup.style.display = 'none';
         languageGroup.style.display = 'block';
         whisperModelGroup.style.display = 'block';
         whisperTaskGroup.style.display = 'block';
+        // Populate language list for Whisper (auto-detect by default)
+        if (window.streamingClient && typeof window.streamingClient.setLanguageOptions === 'function') {
+            window.streamingClient.setLanguageOptions('whisper');
+        }
     }
 }
 
@@ -657,5 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Only initialize if we're on the streaming tab
     if (document.getElementById('tabAudioStreaming')) {
         console.log('Streaming transcription module loaded');
+        // Ensure language/options are initialized for current model selection
+        try { updateModelOptions(); } catch (e) { /* noop */ }
     }
 });
