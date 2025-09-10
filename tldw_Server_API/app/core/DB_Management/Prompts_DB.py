@@ -999,20 +999,27 @@ class PromptsDatabase:
         client_id = self.client_id
 
         col_name = "id"
+        identifier_value = prompt_id_or_name_or_uuid
+        
         if isinstance(prompt_id_or_name_or_uuid, str):
-            # Could be name or UUID. Check if it's a valid UUID format first.
-            try:
-                uuid.UUID(prompt_id_or_name_or_uuid, version=4)
-                col_name = "uuid"
-            except ValueError:
-                col_name = "name" # Assume it's a name if not a UUID
+            # First check if it's a numeric string (ID)
+            if prompt_id_or_name_or_uuid.isdigit():
+                identifier_value = int(prompt_id_or_name_or_uuid)
+                col_name = "id"
+            else:
+                # Could be name or UUID. Check if it's a valid UUID format first.
+                try:
+                    uuid.UUID(prompt_id_or_name_or_uuid, version=4)
+                    col_name = "uuid"
+                except ValueError:
+                    col_name = "name" # Assume it's a name if not a UUID
 
         try:
             with self.transaction() as conn:
                 cursor = conn.cursor()
                 # Fetch prompt to get its ID (if name/uuid provided), current version, and uuid
                 # Also ensures it's not already deleted
-                cursor.execute(f"SELECT id, uuid, version FROM Prompts WHERE {col_name} = ? AND deleted = 0", (prompt_id_or_name_or_uuid,))
+                cursor.execute(f"SELECT id, uuid, version FROM Prompts WHERE {col_name} = ? AND deleted = 0", (identifier_value,))
                 prompt_info = cursor.fetchone()
                 if not prompt_info:
                     logger.warning(f"Prompt '{prompt_id_or_name_or_uuid}' not found or already deleted.")
@@ -1190,11 +1197,15 @@ class PromptsDatabase:
         if isinstance(prompt_id_or_name_or_uuid, int):
             prompt_data = self.get_prompt_by_id(prompt_id_or_name_or_uuid, include_deleted)
         elif isinstance(prompt_id_or_name_or_uuid, str):
-            try: # Check if UUID
-                uuid.UUID(prompt_id_or_name_or_uuid, version=4)
-                prompt_data = self.get_prompt_by_uuid(prompt_id_or_name_or_uuid, include_deleted)
-            except ValueError: # Assume name
-                prompt_data = self.get_prompt_by_name(prompt_id_or_name_or_uuid, include_deleted)
+            # First, check if it's a numeric string (ID)
+            if prompt_id_or_name_or_uuid.isdigit():
+                prompt_data = self.get_prompt_by_id(int(prompt_id_or_name_or_uuid), include_deleted)
+            else:
+                try: # Check if UUID
+                    uuid.UUID(prompt_id_or_name_or_uuid, version=4)
+                    prompt_data = self.get_prompt_by_uuid(prompt_id_or_name_or_uuid, include_deleted)
+                except ValueError: # Assume name
+                    prompt_data = self.get_prompt_by_name(prompt_id_or_name_or_uuid, include_deleted)
 
         if not prompt_data:
             return None

@@ -338,6 +338,9 @@
                 <button class="top-tab-button" data-toptab="rag" role="tab" aria-selected="false">
                     RAG
                 </button>
+                <button class="top-tab-button" data-toptab="keywords" role="tab" aria-selected="false">
+                    Keywords
+                </button>
                 <button class="top-tab-button" data-toptab="embeddings" role="tab" aria-selected="false">
                     Embeddings
                 </button>
@@ -517,6 +520,23 @@
                 </button>
                 <button class="sub-tab-button" data-content-id="tabEvalsDatasets" data-load-group="evaluations" role="tab">
                     Datasets
+                </button>
+            </div>
+        </div>
+
+        <div id="keywords-subtabs" class="sub-tab-row" role="navigation" aria-label="Keywords sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabKeywordsOverview" data-load-group="keywords" role="tab">
+                    Overview
+                </button>
+                <button class="sub-tab-button" data-content-id="tabKeywordsManage" data-load-group="keywords" role="tab">
+                    Manage Keywords
+                </button>
+                <button class="sub-tab-button" data-content-id="tabKeywordsSync" data-load-group="keywords" role="tab">
+                    Sync & Migrate
+                </button>
+                <button class="sub-tab-button" data-content-id="tabKeywordsAnalytics" data-load-group="keywords" role="tab">
+                    Analytics
                 </button>
             </div>
         </div>
@@ -970,7 +990,10 @@
                 const response = await apiClient.makeRequest(method, processedPath, { body, query });
 
                 // Display response
-                if (typeof response === 'object') {
+                if (response === null || response === undefined) {
+                    // Handle empty responses (e.g., 204 No Content)
+                    responseArea.textContent = '(No content - operation successful)';
+                } else if (typeof response === 'object') {
                     const viewer = new JSONViewer(responseArea, response, {
                         expanded: 2,
                         theme: webUI.theme,

@@ -18,7 +18,6 @@
 import asyncio
 import base64
 import json
-import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List, Callable
@@ -27,6 +26,7 @@ import numpy as np
 import tempfile
 from pathlib import Path
 from fastapi import WebSocketDisconnect
+from loguru import logger
 
 # Import existing implementations
 from .Audio_Streaming_Parakeet import (
@@ -40,8 +40,6 @@ from .Audio_Transcription_Nemo import (
     load_parakeet_model,
     transcribe_with_parakeet
 )
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -119,13 +117,38 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
-            logger.info("Using Parakeet MLX variant (lazy loading)")
+            # First check if MLX dependencies are available
+            try:
+                from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
+                logger.info("Using Parakeet MLX variant (lazy loading)")
+                self.model = "mlx"  # Placeholder to indicate MLX is ready
+                return  # Success
+            except ImportError as e:
+                logger.error(f"Failed to import Parakeet MLX: {e}")
+                raise RuntimeError(f"Parakeet MLX dependencies not available. Install with: pip install mlx mlx-lm")
         else:
-            # Load standard or ONNX variant
-            self.model = load_parakeet_model(variant)
-            if self.model is None:
-                raise RuntimeError(f"Failed to load Parakeet {variant} model")
-            logger.info(f"Loaded Parakeet {variant} model")
+            # Load standard or ONNX variant (requires Nemo)
+            try:
+                self.model = load_parakeet_model(variant)
+                if self.model is None:
+                    raise RuntimeError(f"Failed to load Parakeet {variant} model")
+                logger.info(f"Loaded Parakeet {variant} model")
+            except ImportError as e:
+                if "nemo" in str(e).lower():
+                    logger.warning(f"Nemo toolkit not installed, attempting to fallback to MLX variant")
+                    # Try to fallback to MLX variant
+                    try:
+                        from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
+                        logger.info("Falling back to Parakeet MLX variant due to missing Nemo")
+                        self.config.model_variant = 'mlx'
+                        self.model = "mlx"  # Placeholder to indicate MLX is ready
+                        return  # Success with fallback
+                    except ImportError:
+                        logger.error("MLX fallback failed - MLX dependencies not available")
+                        raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
+                                         f"Install Nemo with: pip install nemo_toolkit[asr] "
+                                         f"OR install MLX with: pip install mlx mlx-lm")
+                raise
     
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
@@ -579,24 +602,50 @@ async def handle_unified_websocket(
         websocket: WebSocket connection
         config: Initial streaming configuration
     """
+    logger.info("=== handle_unified_websocket STARTED ===")
+    
     if not config:
         config = UnifiedStreamingConfig()
+        logger.info("Created default config")
+    else:
+        logger.info(f"Received config from caller: model={config.model}, variant={config.model_variant}")
     
+    logger.info(f"Initial config: model={config.model}, variant={config.model_variant}")
     transcriber = None  # Initialize transcriber after config is set
     
     try:
-        # Wait for configuration message if not provided
-        if config.model is None or config.model == 'parakeet':
-            config_message = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        # Always wait for configuration message from client
+        config_received = False
+        try:
+            logger.info("Waiting for configuration message from client...")
+            config_message = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)  # Increased timeout
+            logger.info(f"Received message (length={len(config_message)}): {config_message[:500]}")  # Log more of message
             config_data = json.loads(config_message)
+            logger.info(f"Parsed config data type: {config_data.get('type')}")
             
             if config_data.get("type") == "config":
                 # Update configuration
-                config.model = config_data.get("model", "parakeet")
-                config.model_variant = config_data.get("variant", "standard")
+                old_variant = config.model_variant
+                raw_model = config_data.get("model", "parakeet")
+                # Allow combined form like "parakeet-mlx" to set variant
+                if isinstance(raw_model, str) and '-' in raw_model:
+                    base_model, suffix = raw_model.split('-', 1)
+                    if base_model.lower() == 'parakeet' and not config_data.get("variant") and not config_data.get("model_variant"):
+                        config.model = 'parakeet'
+                        config.model_variant = suffix.lower()
+                    else:
+                        config.model = base_model
+                        config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
+                else:
+                    config.model = raw_model
+                    config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
                 config.language = config_data.get("language", "en")
                 config.sample_rate = config_data.get("sample_rate", 16000)
                 config.auto_detect_language = config_data.get("auto_detect_language", False)
+                config.chunk_duration = config_data.get("chunk_duration", 2.0)
+                config.enable_partial = config_data.get("enable_partial", True)
+                config.enable_vad = config_data.get("enable_vad", False)
+                config.vad_threshold = config_data.get("vad_threshold", 0.5)
                 
                 # Whisper-specific configuration
                 if config.model.lower() == "whisper":
@@ -605,10 +654,9 @@ async def handle_unified_websocket(
                     config.vad_filter = config_data.get("vad_filter", False)
                     config.task = config_data.get("task", "transcribe")
                 
-                # Create transcriber with updated config (moved here to use updated config)
-                if transcriber is None:
-                    logger.info(f"Creating UnifiedStreamingTranscriber with updated config for model: {config.model}")
-                    transcriber = UnifiedStreamingTranscriber(config)
+                logger.info(f"Config updated: model={config.model}, variant changed from {old_variant} to {config.model_variant}, "
+                           f"sample_rate={config.sample_rate}, chunk_duration={config.chunk_duration}")
+                config_received = True
                 
                 # Send acknowledgment
                 status_msg = {
@@ -627,21 +675,31 @@ async def handle_unified_websocket(
                     status_msg["language"] = config.language if config.language else "auto"
                 
                 await websocket.send_json(status_msg)
+                logger.info(f"Sent config acknowledgment: {status_msg}")
+            else:
+                logger.warning(f"Received non-config message type: {config_data.get('type')}")
+                logger.warning(f"Full message data: {config_data}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Config message timeout after 15s. Using default configuration: model={config.model}, variant={config.model_variant}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse config message as JSON: {e}")
+            logger.warning("Using default configuration due to JSON parse error")
+        except Exception as e:
+            logger.error(f"Unexpected error receiving config message: {e}", exc_info=True)
+            logger.warning("Using default configuration due to error")
         
-        # Initialize transcriber
+        if not config_received:
+            logger.warning(f"No valid config received. Proceeding with: model={config.model}, variant={config.model_variant}")
+        
+        # Create transcriber with config
         if transcriber is None:
-            error_msg = f"No transcriber created for model: {config.model}"
-            logger.error(error_msg)
-            await websocket.send_json({
-                "type": "error",
-                "message": error_msg,
-                "model": config.model
-            })
-            return
+            logger.info(f"Creating UnifiedStreamingTranscriber for model: {config.model}")
+            transcriber = UnifiedStreamingTranscriber(config)
         
         try:
             logger.info(f"Initializing transcriber for model: {config.model}")
-            logger.info(f"Configuration details: whisper_model_size={getattr(config, 'whisper_model_size', 'N/A')}, "
+            logger.info(f"Configuration details: model_variant={config.model_variant}, "
+                       f"whisper_model_size={getattr(config, 'whisper_model_size', 'N/A')}, "
                        f"sample_rate={config.sample_rate}, language={config.language}")
             transcriber.initialize()
             logger.info(f"Transcriber initialized successfully for model: {config.model}")
@@ -649,20 +707,80 @@ async def handle_unified_websocket(
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.error(error_msg, exc_info=True)
             
-            # Send error with more details
-            await websocket.send_json({
-                "type": "error",
-                "message": error_msg,
-                "details": {
-                    "model": config.model,
-                    "error_type": type(e).__name__,
-                    "error_details": str(e)
-                }
-            })
+            # Check if fallback to Whisper is enabled in config
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            comprehensive_config = load_comprehensive_config()
             
-            # Close with error code
-            await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
-            return
+            # ConfigParser returns a ConfigParser object, not a dict
+            fallback_enabled = False
+            try:
+                if comprehensive_config.has_section('STT-Settings'):
+                    fallback_value = comprehensive_config.get('STT-Settings', 'streaming_fallback_to_whisper', fallback='false')
+                    fallback_enabled = str(fallback_value).lower() == 'true'
+                    logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
+            except Exception as config_error:
+                logger.warning(f"Could not read streaming_fallback_to_whisper from config: {config_error}")
+                fallback_enabled = True  # Default to enabled for better user experience
+            
+            # Try to fall back to Whisper if enabled and not already using Whisper
+            if fallback_enabled and config.model.lower() != 'whisper':
+                logger.info("Fallback to Whisper is enabled in config. Attempting to fall back...")
+                try:
+                    original_model = config.model
+                    config.model = 'whisper'
+                    config.whisper_model_size = 'distil-large-v3'
+                    transcriber = UnifiedStreamingTranscriber(config)
+                    transcriber.initialize()
+                    logger.info("Successfully fell back to Whisper model")
+                    
+                    # Notify client about fallback
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": f"{original_model} model unavailable, using Whisper instead",
+                        "fallback": True,
+                        "original_model": original_model,
+                        "active_model": "whisper"
+                    })
+                except Exception as fallback_error:
+                    logger.error(f"Fallback to Whisper also failed: {fallback_error}")
+                    # Send error with more details
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "No transcription models available. Please install required dependencies.",
+                        "details": {
+                            "original_error": str(e),
+                            "fallback_error": str(fallback_error),
+                            "suggestion": "Install nemo_toolkit[asr] for Parakeet/Canary or ensure faster-whisper is installed"
+                        }
+                    })
+                    
+                    # Close with error code
+                    await websocket.close(code=1011, reason="No models available")
+                    return
+            else:
+                # Fallback disabled or already using Whisper
+                suggestion = ""
+                if config.model.lower() in ['parakeet', 'canary']:
+                    suggestion = "Install nemo_toolkit[asr]: pip install nemo_toolkit[asr]"
+                elif config.model.lower() == 'whisper':
+                    suggestion = "Ensure faster-whisper is installed: pip install faster-whisper"
+                
+                # Send error with more details
+                await websocket.send_json({
+                    "type": "error",
+                    "message": error_msg,
+                    "details": {
+                        "model": config.model,
+                        "error_type": type(e).__name__,
+                        "error_details": str(e),
+                        "fallback_enabled": fallback_enabled,
+                        "suggestion": suggestion
+                    }
+                })
+                
+                # Close with error code
+                await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
+                return
         
         # Send ready status
         await websocket.send_json({

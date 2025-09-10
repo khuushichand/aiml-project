@@ -1184,5 +1184,84 @@ function setupProviderChangeListeners() {
     }
 }
 
+// ============================================================================
+// Prompts Tab Functions
+// ============================================================================
+
+async function createPrompt() {
+    const responseEl = document.getElementById('promptsCreate_response');
+    const curlEl = document.getElementById('promptsCreate_curl');
+    
+    try {
+        // Collect form data
+        const name = document.getElementById('promptsCreate_name').value.trim();
+        if (!name) {
+            throw new Error('Name is required');
+        }
+        
+        const payload = {
+            name: name
+        };
+        
+        // Add optional fields if they have values
+        const systemPrompt = document.getElementById('promptsCreate_system_prompt').value.trim();
+        if (systemPrompt) {
+            payload.system_prompt = systemPrompt;
+        }
+        
+        const userPrompt = document.getElementById('promptsCreate_user_prompt').value.trim();
+        if (userPrompt) {
+            payload.user_prompt = userPrompt;
+        }
+        
+        const details = document.getElementById('promptsCreate_details').value.trim();
+        if (details) {
+            payload.details = details;
+        }
+        
+        const author = document.getElementById('promptsCreate_author').value.trim();
+        if (author) {
+            payload.author = author;
+        }
+        
+        const keywordsStr = document.getElementById('promptsCreate_keywords').value.trim();
+        if (keywordsStr) {
+            // Convert comma-separated string to array
+            payload.keywords = keywordsStr.split(',').map(k => k.trim()).filter(k => k);
+        }
+        
+        // Make the API request
+        responseEl.textContent = 'Creating prompt...';
+        
+        // Generate cURL command
+        const curlCommand = apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload });
+        if (curlEl) {
+            curlEl.textContent = curlCommand;
+        }
+        
+        const response = await apiClient.makeRequest('POST', '/api/v1/prompts', { body: payload });
+        responseEl.textContent = JSON.stringify(response, null, 2);
+        
+        // Show success message
+        if (typeof Toast !== 'undefined' && Toast.success) {
+            Toast.success('Prompt created successfully');
+        }
+        
+        // Optionally clear the form
+        document.getElementById('promptsCreate_name').value = '';
+        document.getElementById('promptsCreate_system_prompt').value = '';
+        document.getElementById('promptsCreate_user_prompt').value = '';
+        document.getElementById('promptsCreate_details').value = '';
+        document.getElementById('promptsCreate_author').value = '';
+        document.getElementById('promptsCreate_keywords').value = '';
+        
+    } catch (error) {
+        responseEl.textContent = `Error: ${error.message}`;
+        if (typeof Toast !== 'undefined' && Toast.error) {
+            Toast.error(`Failed to create prompt: ${error.message}`);
+        }
+    }
+}
+
 // Make sure functions are globally available
 console.log('Tab functions loaded successfully');

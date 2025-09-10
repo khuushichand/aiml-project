@@ -112,39 +112,44 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/prompts - Create Prompt</span>
         </h2>
-        <p>Create a new prompt.</p>
+        <p>Create a new prompt with system and user components.</p>
         
         <div class="form-group">
             <label for="promptsCreate_name">Name <span class="required">*</span>:</label>
-            <input type="text" id="promptsCreate_name" placeholder="My Custom Prompt">
+            <input type="text" id="promptsCreate_name" name="name" placeholder="My Custom Prompt" required>
         </div>
         
         <div class="form-group">
-            <label for="promptsCreate_content">Content <span class="required">*</span>:</label>
-            <textarea id="promptsCreate_content" rows="5" placeholder="You are a helpful assistant that...">You are a helpful assistant that provides clear and concise summaries of technical documentation.</textarea>
+            <label for="promptsCreate_system_prompt">System Prompt (optional):</label>
+            <textarea id="promptsCreate_system_prompt" name="system_prompt" rows="5" placeholder="You are a helpful assistant that...">You are a helpful assistant that provides clear and concise summaries of technical documentation.</textarea>
         </div>
         
         <div class="form-group">
-            <label for="promptsCreate_description">Description:</label>
-            <textarea id="promptsCreate_description" rows="3" placeholder="Describe what this prompt does...">This prompt helps create summaries of technical content.</textarea>
+            <label for="promptsCreate_user_prompt">User Prompt (optional):</label>
+            <textarea id="promptsCreate_user_prompt" name="user_prompt" rows="5" placeholder="Please summarize the following text..."></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="promptsCreate_details">Details/Description (optional):</label>
+            <textarea id="promptsCreate_details" name="details" rows="3" placeholder="Describe what this prompt does...">This prompt helps create summaries of technical content.</textarea>
         </div>
         
         <div class="columns">
             <div class="column">
                 <div class="form-group">
-                    <label for="promptsCreate_author">Author:</label>
-                    <input type="text" id="promptsCreate_author" placeholder="Your name">
+                    <label for="promptsCreate_author">Author (optional):</label>
+                    <input type="text" id="promptsCreate_author" name="author" placeholder="Your name">
                 </div>
             </div>
             <div class="column">
                 <div class="form-group">
-                    <label for="promptsCreate_keywords">Keywords (comma-separated):</label>
-                    <input type="text" id="promptsCreate_keywords" placeholder="summary, technical, documentation">
+                    <label for="promptsCreate_keywords">Keywords (comma-separated, optional):</label>
+                    <input type="text" id="promptsCreate_keywords" name="keywords" placeholder="summary, technical, documentation">
                 </div>
             </div>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsCreate', 'POST', '/api/v1/prompts', 'json')">
+        <button class="api-button" onclick="createPrompt()">
             Create Prompt
         </button>
         
@@ -163,11 +168,11 @@
         <p>Get a specific prompt by ID, UUID, or Name.</p>
         
         <div class="form-group">
-            <label for="promptsGet_identifier">Prompt Identifier (ID/UUID/Name) <span class="required">*</span>:</label>
-            <input type="text" id="promptsGet_identifier" placeholder="1 or uuid or prompt-name">
+            <label for="promptsGet_prompt_identifier">Prompt Identifier (ID/UUID/Name) <span class="required">*</span>:</label>
+            <input type="text" id="promptsGet_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsGet', 'GET', '/api/v1/prompts/{identifier}', 'none')">
+        <button class="api-button" onclick="makeRequest('promptsGet', 'GET', '/api/v1/prompts/{prompt_identifier}', 'none')">
             Get Prompt
         </button>
         
@@ -186,23 +191,23 @@
         <p>Update an existing prompt.</p>
         
         <div class="form-group">
-            <label for="promptsUpdate_identifier">Prompt Identifier <span class="required">*</span>:</label>
-            <input type="text" id="promptsUpdate_identifier" placeholder="1 or uuid or prompt-name">
+            <label for="promptsUpdate_prompt_identifier">Prompt Identifier <span class="required">*</span>:</label>
+            <input type="text" id="promptsUpdate_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
         
         <div class="form-group">
             <label for="promptsUpdate_payload">Update Payload (JSON):</label>
             <textarea id="promptsUpdate_payload" class="code-input" rows="12">{
   "name": "Updated Prompt Name",
-  "content": "You are an improved assistant that...",
-  "description": "Updated description",
+  "system_prompt": "You are an improved assistant that...",
+  "user_prompt": "Please help me with...",
+  "details": "Updated description",
   "author": "Your Name",
-  "keywords": ["updated", "keywords"],
-  "version": 1
+  "keywords": ["updated", "keywords"]
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsUpdate', 'PUT', '/api/v1/prompts/{identifier}', 'json')">
+        <button class="api-button" onclick="makeRequest('promptsUpdate', 'PUT', '/api/v1/prompts/{prompt_identifier}', 'json')">
             Update Prompt
         </button>
         
@@ -221,11 +226,11 @@
         <p>Soft delete a prompt.</p>
         
         <div class="form-group">
-            <label for="promptsDelete_identifier">Prompt Identifier <span class="required">*</span>:</label>
-            <input type="text" id="promptsDelete_identifier" placeholder="1 or uuid or prompt-name">
+            <label for="promptsDelete_prompt_identifier">Prompt Identifier <span class="required">*</span>:</label>
+            <input type="text" id="promptsDelete_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
         
-        <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this prompt?')) makeRequest('promptsDelete', 'DELETE', '/api/v1/prompts/{identifier}', 'none')">
+        <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this prompt?')) makeRequest('promptsDelete', 'DELETE', '/api/v1/prompts/{prompt_identifier}', 'none')">
             Delete Prompt
         </button>
         
@@ -243,14 +248,14 @@
             <h3>Add Keyword</h3>
             <label for="promptsKeyword_text">Keyword Text <span class="required">*</span>:</label>
             <input type="text" id="promptsKeyword_text" placeholder="Enter keyword">
-            <button class="api-button" onclick="makeRequest('promptsKeywordAdd', 'POST', '/api/v1/prompts/keywords', 'json')">
+            <button class="api-button" onclick="addPromptKeyword()">
                 Add Keyword
             </button>
         </div>
         
         <div class="form-group mt-3">
             <h3>List Keywords</h3>
-            <button class="api-button" onclick="makeRequest('promptsKeywordsList', 'GET', '/api/v1/prompts/keywords', 'none')">
+            <button class="api-button" onclick="listPromptKeywords()">
                 List All Keywords
             </button>
         </div>
@@ -259,7 +264,7 @@
             <h3>Delete Keyword</h3>
             <label for="promptsKeyword_delete">Keyword to Delete:</label>
             <input type="text" id="promptsKeyword_delete" placeholder="keyword-text">
-            <button class="api-button btn-danger" onclick="if(confirm('Delete this keyword?')) makeRequest('promptsKeywordDelete', 'DELETE', '/api/v1/prompts/keywords/{text}', 'none')">
+            <button class="api-button btn-danger" onclick="deletePromptKeyword()">
                 Delete Keyword
             </button>
         </div>
@@ -267,4 +272,53 @@
         <h3>Response:</h3>
         <pre id="promptsKeywords_response">---</pre>
     </div>
+    
+    <script>
+    async function addPromptKeyword() {
+        const keywordText = document.getElementById('promptsKeyword_text').value.trim();
+        if (!keywordText) {
+            alert('Please enter a keyword');
+            return;
+        }
+        
+        try {
+            const response = await apiClient.post('/api/v1/prompts/keywords/', {
+                keyword_text: keywordText
+            });
+            document.getElementById('promptsKeywords_response').textContent = JSON.stringify(response, null, 2);
+            document.getElementById('promptsKeyword_text').value = '';
+        } catch (error) {
+            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
+        }
+    }
+    
+    async function listPromptKeywords() {
+        try {
+            const keywords = await apiClient.get('/api/v1/prompts/keywords/');
+            document.getElementById('promptsKeywords_response').textContent = JSON.stringify(keywords, null, 2);
+        } catch (error) {
+            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
+        }
+    }
+    
+    async function deletePromptKeyword() {
+        const keywordText = document.getElementById('promptsKeyword_delete').value.trim();
+        if (!keywordText) {
+            alert('Please enter a keyword to delete');
+            return;
+        }
+        
+        if (!confirm(`Delete keyword "${keywordText}"?`)) {
+            return;
+        }
+        
+        try {
+            await apiClient.delete(`/api/v1/prompts/keywords/${encodeURIComponent(keywordText)}`);
+            document.getElementById('promptsKeywords_response').textContent = 'Keyword deleted successfully';
+            document.getElementById('promptsKeyword_delete').value = '';
+        } catch (error) {
+            document.getElementById('promptsKeywords_response').textContent = `Error: ${error.message}`;
+        }
+    }
+    </script>
 </div>

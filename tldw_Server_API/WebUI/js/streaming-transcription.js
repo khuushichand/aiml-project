@@ -12,6 +12,8 @@ class StreamingTranscriptionClient {
         this.visualizer = null;
         this.isRecording = false;
         this.isConnected = false;
+        this.isConfigured = false; // server config-ack received
+        this.isReady = false;      // server model initialized
         this.startTime = null;
         this.chunksSent = 0;
         this.responsesReceived = 0;
@@ -115,20 +117,39 @@ class StreamingTranscriptionClient {
             const baseUrl = window.location.origin.replace('http', 'ws');
             const wsUrl = `${baseUrl}/api/v1/audio/stream/transcribe`;
             
-            // Get API token if available
-            const apiToken = localStorage.getItem('apiToken') || '';
+            // Get API token - first try from global API client, then localStorage
+            let apiToken = '';
+            if (window.apiClient && window.apiClient.token) {
+                apiToken = window.apiClient.token;
+                this.logDebug('Using API key from server config');
+            } else {
+                apiToken = localStorage.getItem('apiToken') || '';
+                if (apiToken) {
+                    this.logDebug('Using API key from localStorage');
+                }
+            }
+            
+            if (!apiToken) {
+                this.logDebug('Warning: No API key found, connection may fail');
+            }
+            
             const finalUrl = apiToken ? `${wsUrl}?token=${encodeURIComponent(apiToken)}` : wsUrl;
             
             this.ws = new WebSocket(finalUrl);
             
             this.ws.onopen = () => {
                 this.isConnected = true;
+                this.isConfigured = false;
+                this.isReady = false;
                 this.updateStatus('Connected', 'connected');
                 this.elements.connectBtn.textContent = 'Disconnect';
-                this.elements.startBtn.disabled = false;
+                // Keep Start disabled until config-ack arrives
+                if (this.elements.startBtn) this.elements.startBtn.disabled = true;
                 
-                // Send configuration
-                this.sendConfiguration();
+                // Send configuration immediately after connection
+                setTimeout(() => {
+                    this.sendConfiguration();
+                }, 100); // Small delay to ensure connection is fully established
                 
                 this.logDebug('WebSocket connected');
                 this.updateConnectionInfo();
@@ -147,9 +168,11 @@ class StreamingTranscriptionClient {
             
             this.ws.onclose = () => {
                 this.isConnected = false;
+                this.isConfigured = false;
+                this.isReady = false;
                 this.updateStatus('Disconnected', 'disconnected');
                 this.elements.connectBtn.textContent = 'Connect to Server';
-                this.elements.startBtn.disabled = true;
+                if (this.elements.startBtn) this.elements.startBtn.disabled = true;
                 this.elements.stopBtn.disabled = true;
                 
                 if (this.isRecording) {
@@ -175,17 +198,25 @@ class StreamingTranscriptionClient {
     }
     
     sendConfiguration() {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            this.logDebug('WebSocket not ready, cannot send configuration');
+            return;
+        }
+        
         const model = document.getElementById('streamingModel').value;
         const config = {
             type: 'config',
             model: model,
             sample_rate: parseInt(document.getElementById('streamingSampleRate').value),
             chunk_duration: parseFloat(document.getElementById('streamingChunkDuration').value),
-            enable_partial: document.getElementById('streamingEnablePartial').checked
+            enable_partial: document.getElementById('streamingEnablePartial').checked,
+            enable_vad: document.getElementById('streamingEnableVAD').checked,
+            vad_threshold: parseFloat(document.getElementById('streamingVADThreshold').value || 0.5)
         };
         
         if (model === 'parakeet') {
             config.variant = document.getElementById('streamingVariant').value;
+            console.log('Parakeet variant selected:', config.variant);
         } else if (model === 'canary') {
             config.language = document.getElementById('streamingLanguage').value;
         } else if (model === 'whisper') {
@@ -195,8 +226,11 @@ class StreamingTranscriptionClient {
             if (language) {
                 config.language = language;
             }
+            // Whisper works better with longer chunks
+            config.chunk_duration = 5.0;  // Override to optimal duration for Whisper
         }
         
+        console.log('Sending configuration:', config);
         this.ws.send(JSON.stringify(config));
         this.logDebug(`Sent config: ${JSON.stringify(config)}`);
     }
@@ -220,28 +254,78 @@ class StreamingTranscriptionClient {
             this.analyser.fftSize = 256;
             source.connect(this.analyser);
             
+            // Log audio context info
+            this.logDebug(`Audio context sample rate: ${this.audioContext.sampleRate}Hz`);
+            this.logDebug(`Configured sample rate: ${parseInt(document.getElementById('streamingSampleRate').value)}Hz`);
+            
             // Create script processor for audio chunks
-            const scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+            // Increased buffer size for better performance and larger chunks
+            const bufferSize = 16384; // Increased from 4096 (~1 second at 16kHz)
+            const scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
             source.connect(scriptProcessor);
             scriptProcessor.connect(this.audioContext.destination);
+            
+            // Initialize audio buffer for accumulation
+            this.audioBuffer = [];
+            this.bufferDuration = 0;
+            const model = document.getElementById('streamingModel').value;
+            
+            // Set target buffer duration based on model
+            const targetDuration = model === 'whisper' ? 5.0 : 2.0; // seconds
+            const configuredSampleRate = parseInt(document.getElementById('streamingSampleRate').value);
+            const targetSamples = targetDuration * configuredSampleRate;
             
             scriptProcessor.onaudioprocess = (event) => {
                 if (!this.isRecording) return;
                 
                 const inputData = event.inputBuffer.getChannelData(0);
-                const float32Array = new Float32Array(inputData);
+                let audioData = inputData;
                 
-                // Convert to base64
-                const base64 = this.arrayBufferToBase64(float32Array.buffer);
+                // Handle sample rate conversion if needed
+                if (this.audioContext.sampleRate !== configuredSampleRate) {
+                    // Simple downsampling/upsampling
+                    const ratio = configuredSampleRate / this.audioContext.sampleRate;
+                    const newLength = Math.floor(inputData.length * ratio);
+                    audioData = new Float32Array(newLength);
+                    
+                    for (let i = 0; i < newLength; i++) {
+                        const srcIndex = i / ratio;
+                        const srcIndexFloor = Math.floor(srcIndex);
+                        const srcIndexCeil = Math.min(Math.ceil(srcIndex), inputData.length - 1);
+                        const fraction = srcIndex - srcIndexFloor;
+                        
+                        // Linear interpolation for resampling
+                        audioData[i] = inputData[srcIndexFloor] * (1 - fraction) + 
+                                      inputData[srcIndexCeil] * fraction;
+                    }
+                }
                 
-                // Send to WebSocket
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify({
-                        type: 'audio',
-                        data: base64
-                    }));
-                    this.chunksSent++;
-                    this.elements.chunks.textContent = this.chunksSent;
+                // Accumulate audio data
+                this.audioBuffer.push(...audioData);
+                
+                // Check if we have enough samples
+                if (this.audioBuffer.length >= targetSamples) {
+                    // Create chunk from accumulated buffer
+                    const chunkToSend = new Float32Array(this.audioBuffer.slice(0, targetSamples));
+                    
+                    // Keep overlap for context (10% of buffer)
+                    const overlapSamples = Math.floor(targetSamples * 0.1);
+                    this.audioBuffer = this.audioBuffer.slice(targetSamples - overlapSamples);
+                    
+                    // Convert to base64
+                    const base64 = this.arrayBufferToBase64(chunkToSend.buffer);
+                    
+                    // Send to WebSocket
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send(JSON.stringify({
+                            type: 'audio',
+                            data: base64
+                        }));
+                        this.chunksSent++;
+                        this.elements.chunks.textContent = this.chunksSent;
+                        
+                        this.logDebug(`Sent audio chunk ${this.chunksSent}: ${chunkToSend.length} samples`);
+                    }
                 }
             };
             
@@ -274,6 +358,23 @@ class StreamingTranscriptionClient {
     stopRecording() {
         if (this.isRecording) {
             this.isRecording = false;
+            
+            // Send any remaining buffered audio before stopping
+            if (this.audioBuffer && this.audioBuffer.length > 0) {
+                const remainingAudio = new Float32Array(this.audioBuffer);
+                const base64 = this.arrayBufferToBase64(remainingAudio.buffer);
+                
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'audio',
+                        data: base64
+                    }));
+                    this.chunksSent++;
+                    this.elements.chunks.textContent = this.chunksSent;
+                }
+                
+                this.audioBuffer = [];
+            }
             
             // Stop audio context
             if (this.audioContext) {
@@ -329,6 +430,24 @@ class StreamingTranscriptionClient {
                 
             case 'status':
                 this.addTranscript(`Status: ${data.state} - ${data.model || ''}`, 'status');
+                // Enable Start only after config-ack (state === 'configured' or 'ready')
+                if (data.state === 'configured') {
+                    this.isConfigured = true;
+                    if (this.elements.startBtn) this.elements.startBtn.disabled = false;
+                    this.updateStatus('Configured', 'connected');
+                } else if (data.state === 'ready') {
+                    this.isReady = true;
+                    // If configured state was missed for some reason, allow start after ready
+                    if (this.elements.startBtn) this.elements.startBtn.disabled = false;
+                    this.updateStatus('Ready', 'connected');
+                }
+                break;
+            
+            case 'warning':
+                this.addTranscript(`Warning: ${data.message}`, 'warning');
+                if (data.fallback) {
+                    this.addTranscript(`Using ${data.active_model} instead of ${data.original_model}`, 'warning');
+                }
                 break;
                 
             default:
@@ -438,10 +557,18 @@ function toggleApiKeyVisibility() {
 
 // Load saved API key on page load
 document.addEventListener('DOMContentLoaded', () => {
-    const savedApiKey = localStorage.getItem('apiToken');
     const apiKeyInput = document.getElementById('streamingApiKey');
-    if (savedApiKey && apiKeyInput) {
-        apiKeyInput.value = savedApiKey;
+    if (apiKeyInput) {
+        // First try to get from global API client (server config)
+        if (window.apiClient && window.apiClient.token) {
+            apiKeyInput.value = window.apiClient.token;
+        } else {
+            // Fall back to localStorage
+            const savedApiKey = localStorage.getItem('apiToken');
+            if (savedApiKey) {
+                apiKeyInput.value = savedApiKey;
+            }
+        }
     }
 });
 
@@ -454,8 +581,23 @@ function toggleStreamingConnection() {
 }
 
 function startStreamingRecording() {
-    if (streamingClient) {
+    // Check if button is actually disabled
+    const startBtn = document.getElementById('startStreamingBtn');
+    if (startBtn && startBtn.disabled) {
+        console.log('Start button is disabled, ignoring click');
+        return;
+    }
+    
+    if (streamingClient && streamingClient.isConnected) {
+        // Ensure server has acknowledged configuration
+        if (!streamingClient.isConfigured && !streamingClient.isReady) {
+            console.log('Waiting for server config-ack before starting recording');
+            streamingClient.addTranscript('Waiting for server configuration acknowledgment...', 'status');
+            return;
+        }
         streamingClient.startRecording();
+    } else {
+        console.error('Cannot start recording: Not connected to server');
     }
 }
 

@@ -475,6 +475,8 @@ nemo_chunk_duration = 120
 # Duration in seconds for chunking long audio (0 to disable)
 nemo_overlap_duration = 15
 # Overlap between chunks in seconds for context
+streaming_fallback_to_whisper = false
+# If true, automatically fall back to Whisper when requested streaming STT model is unavailable
 
 # MLX optimal settings (for Apple Silicon)
 mlx_chunk_duration = 30.0

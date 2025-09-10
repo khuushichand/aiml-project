@@ -350,6 +350,11 @@ class APIClient {
                 throw error;
             }
 
+            // Handle 204 No Content responses (e.g., DELETE operations)
+            if (response.status === 204) {
+                return null; // No content to parse
+            }
+
             // Handle streaming responses
             if (streaming && response.body) {
                 return this.handleStreamingResponse(response, onProgress);

@@ -72,13 +72,20 @@ class TTSAdapterRegistry:
         if config:
             # Override config provided for testing
             self.config_manager = None
-            self.tts_config = config
+            # Ensure config is a dictionary
+            if isinstance(config, dict):
+                self.tts_config = config
+                self.config = config
+            else:
+                # If config is not a dict (e.g., ConfigParser), convert it
+                logger.warning(f"Non-dict config passed to TTSAdapterRegistry: {type(config)}")
+                self.tts_config = {}
+                self.config = {}
         else:
             self.config_manager = get_tts_config_manager()
             self.tts_config = self.config_manager.get_config()
-        
-        # Legacy config support
-        self.config = config or self.tts_config.dict()
+            # Legacy config support - convert Pydantic model to dict
+            self.config = self.tts_config.dict()
         
         self._adapters: Dict[TTSProvider, TTSAdapter] = {}
         self._adapter_classes: Dict[TTSProvider, Type[TTSAdapter]] = self.DEFAULT_ADAPTERS.copy()

@@ -28,6 +28,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Auth.auth_utils import (
     extract_bearer_token,
     validate_api_token
@@ -49,7 +50,6 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 router = APIRouter(
-    prefix="/v1/audio", # Standard OpenAI prefix
     tags=["TTS (OpenAI Compatible)"],
     responses={
         404: {"description": "Not found"},
@@ -663,9 +663,13 @@ async def websocket_transcribe(
     authenticated = False
     
     # Check if token was provided in query parameter
-    if token and token == expected_key:
-        logger.info("WebSocket authenticated via query parameter")
-        authenticated = True
+    if token:
+        if token == expected_key:
+            logger.info("WebSocket authenticated via query parameter")
+            authenticated = True
+        else:
+            logger.warning(f"WebSocket: Invalid token provided in query parameter")
+            authenticated = False
     elif not token:
         # No token in query, wait for authentication message
         try:
@@ -738,10 +742,22 @@ async def websocket_transcribe(
         return
     
     try:
-        # Default configuration - will be updated by client config message
+        # Default configuration - prefer server config for variant/model
+        # This ensures alignment with configured STT defaults even if the
+        # client configuration message arrives late.
+        default_model = 'parakeet'
+        default_variant = 'standard'
+        try:
+            cfg = load_comprehensive_config()
+            if cfg.has_section('STT-Settings'):
+                # Nemo model variant (standard|onnx|mlx)
+                default_variant = cfg.get('STT-Settings', 'nemo_model_variant', fallback='standard').strip().lower()
+        except Exception as e:
+            logger.warning(f"Could not read STT-Settings from config: {e}")
+
         config = UnifiedStreamingConfig(
-            model='parakeet',  # Default model
-            model_variant='standard',  # Default variant
+            model=default_model,
+            model_variant=default_variant,
             sample_rate=16000,
             chunk_duration=2.0,
             overlap_duration=0.5,
@@ -749,6 +765,8 @@ async def websocket_transcribe(
             partial_interval=0.5,
             language='en'  # Default language for Canary
         )
+        
+        logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
         
         # Handle the WebSocket connection with unified handler
         await handle_unified_websocket(websocket, config)
