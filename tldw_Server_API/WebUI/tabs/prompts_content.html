@@ -38,24 +38,36 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/prompts/search - Search Prompts</span>
         </h2>
-        <p>Search prompts with filtering and pagination.</p>
+        <p>Search prompts with query parameters and optional field filtering.</p>
         
         <div class="form-group">
-            <label for="promptsSearch_payload">Search Request (JSON):</label>
-            <textarea id="promptsSearch_payload" class="code-input" rows="10">{
-  "query": "summarization",
-  "filters": {
-    "keywords": ["summary", "tldr"],
-    "tags": ["analysis"]
-  },
-  "limit": 20,
-  "offset": 0,
-  "sort_by": "relevance",
-  "sort_order": "desc"
-}</textarea>
+            <label for="promptsSearch_search_query">Search Query <span class="required">*</span>:</label>
+            <input type="text" id="promptsSearch_search_query" name="search_query" placeholder="Enter search terms..." value="summarization" required>
         </div>
         
-        <button class="api-button" onclick="makeRequest('promptsSearch', 'POST', '/api/v1/prompts/search', 'json')">
+        <div class="form-group">
+            <label for="promptsSearch_search_fields">Search Fields (comma-separated, optional):</label>
+            <input type="text" id="promptsSearch_search_fields" name="search_fields" placeholder="name,author,details,system_prompt,user_prompt,keywords">
+            <small>Leave empty to search all fields. Options: name, author, details, system_prompt, user_prompt, keywords</small>
+        </div>
+        
+        <div class="form-group">
+            <label for="promptsSearch_page">Page:</label>
+            <input type="number" id="promptsSearch_page" name="page" value="1" min="1">
+        </div>
+        
+        <div class="form-group">
+            <label for="promptsSearch_results_per_page">Results Per Page:</label>
+            <input type="number" id="promptsSearch_results_per_page" name="results_per_page" value="20" min="1" max="100">
+        </div>
+        
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="promptsSearch_include_deleted" name="include_deleted"> Include Deleted Prompts
+            </label>
+        </div>
+        
+        <button class="api-button" onclick="makeRequest('promptsSearch', 'POST', '/api/v1/prompts/search', 'query')">
             Search Prompts
         </button>
         
