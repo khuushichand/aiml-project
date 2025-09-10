@@ -403,9 +403,27 @@ async def create_chat_completion(
     # Initialize metrics collector
     metrics = get_chat_metrics()
     
-    # Get provider and model for metrics
-    provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
-    model = request_data.model or "unknown"
+    # Parse provider and model for metrics
+    # Handle model strings with provider prefix (e.g., "anthropic/claude-3-opus")
+    model_str = request_data.model or "unknown"
+    if "/" in model_str:
+        parts = model_str.split("/", 1)
+        if len(parts) == 2:
+            model_provider, model_name = parts
+            # If no explicit api_provider was set, use the one from the model string
+            if not request_data.api_provider:
+                provider = model_provider.lower()
+                model = model_name
+            else:
+                provider = request_data.api_provider.lower()
+                model = model_name
+        else:
+            provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+            model = model_str
+    else:
+        provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+        model = model_str
+    
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
     
     # Initialize audit logger with error handling
@@ -550,7 +568,27 @@ async def create_chat_completion(
         logger.warning(f"Input validation error: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+    # Parse provider from model string if it contains a provider prefix (e.g., "anthropic/claude-3-opus")
+    model_str = request_data.model or ""
+    actual_model = model_str
+    
+    # Check if model contains provider prefix
+    if "/" in model_str:
+        parts = model_str.split("/", 1)
+        if len(parts) == 2:
+            model_provider, actual_model = parts
+            # If no explicit api_provider was set, use the one from the model string
+            if not request_data.api_provider:
+                provider = model_provider.lower()
+            else:
+                provider = request_data.api_provider.lower()
+            # Update the model to just be the model name without provider prefix
+            request_data.model = actual_model
+        else:
+            provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+    else:
+        provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+    
     user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
     logger.info(
         f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
