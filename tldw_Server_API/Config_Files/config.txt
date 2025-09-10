@@ -31,6 +31,10 @@ max_tokens = 1000
 default_rag_prompt = simplified_promptflow_RAG_system_prompt
 
 [Chat-Module]
+# Provider fallback settings
+# When enabled, if the requested provider fails, the system will try alternative providers
+# Set to False to disable automatic fallback (recommended for production)
+enable_provider_fallback = False
 # Request size limits
 max_base64_image_size_mb = 3
 max_text_length_per_message = 400000
@@ -279,7 +283,7 @@ cohere_api_retry = 3
 cohere_api_retry_delay = 1
 #
 # Options: 'deepseek-chat' or 'deepseek-reasoner'
-deepseek_model = deepseek-chat, deepseek-reasoner
+deepseek_model = deepseek-chat
 deepseek_streaming = True
 deepseek_temperature = 0.7
 deepseek_max_tokens = 4096

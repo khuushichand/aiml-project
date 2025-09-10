@@ -175,6 +175,8 @@ MAX_BASE64_BYTES: int = int(_chat_config.get('max_base64_image_size_mb', 3)) * 1
 MAX_TEXT_LENGTH: int = int(_chat_config.get('max_text_length_per_message', 400000))
 MAX_MESSAGES_PER_REQUEST: int = int(_chat_config.get('max_messages_per_request', 1000))
 MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10))
+# Provider fallback setting - disabled by default for production stability
+ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
 
 # --- Helper Functions ---
 
@@ -551,9 +553,8 @@ async def create_chat_completion(
     provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
     user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
     logger.info(
-        "Chat completion request. Provider=%s, Model=%s, User=%s, Stream=%s, ConvID=%s, CharID=%s",
-        provider, request_data.model, user_identifier_for_log,
-        request_data.stream, request_data.conversation_id, request_data.character_id
+        f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
+        f"Stream={request_data.stream}, ConvID={request_data.conversation_id}, CharID={request_data.character_id}"
     )
 
     character_card_for_context: Optional[Dict[str, Any]] = None
@@ -794,18 +795,30 @@ async def create_chat_completion(
         selected_provider = provider
         
         if provider_manager:
-            # Get healthy provider
-            healthy_provider = provider_manager.get_available_provider()
-            if healthy_provider:
-                selected_provider = healthy_provider
-                logger.info(f"Using provider {selected_provider} (health check passed)")
+            # Check if the requested provider is healthy first
+            # Use the circuit breaker check if the provider is registered
+            if provider in provider_manager.circuit_breakers and \
+               provider_manager.circuit_breakers[provider].can_attempt_call():
+                selected_provider = provider
+                logger.info(f"Using requested provider {selected_provider} (health check passed)")
+            elif ENABLE_PROVIDER_FALLBACK:
+                # Only try alternative providers if fallback is enabled
+                healthy_provider = provider_manager.get_available_provider(exclude=[provider])
+                if healthy_provider:
+                    selected_provider = healthy_provider
+                    logger.warning(f"Requested provider {provider} is unhealthy or not registered, using {selected_provider} instead (fallback enabled)")
+                else:
+                    selected_provider = provider
+                    logger.warning(f"No healthy providers available, using {provider} anyway")
             else:
-                logger.warning(f"No healthy providers available, using {provider} anyway")
+                # Fallback disabled - use requested provider even if unhealthy
+                selected_provider = provider
+                logger.info(f"Using requested provider {selected_provider} (fallback disabled, health check not performed)")
         
         # Update provider in cleaned_args
         # Note: chat_api_call expects 'api_endpoint', not 'api_provider'
-        # This is already set in call_params as 'api_endpoint'
-        # cleaned_args['api_provider'] = selected_provider  # REMOVED - causes error
+        # Update the api_endpoint with the selected provider after health check
+        cleaned_args['api_endpoint'] = selected_provider
         
         # TODO: Request Queue Integration (SHIM)
         # ------------------------------------------------------------------------
@@ -907,6 +920,7 @@ async def create_chat_completion(
         else: # Non-streaming
             # Track LLM call
             llm_start_time = time.time()
+            llm_response = None  # Initialize to prevent UnboundLocalError
             try:
                 llm_response = await current_loop.run_in_executor(None, llm_call_func)
                 llm_latency = time.time() - llm_start_time
@@ -924,8 +938,8 @@ async def create_chat_completion(
                 if provider_manager:
                     provider_manager.record_failure(selected_provider, e)
                     
-                    # Try failover provider on certain errors
-                    if isinstance(e, (ChatProviderError, ChatAPIError)):
+                    # Try failover provider on certain errors (only if enabled in config)
+                    if ENABLE_PROVIDER_FALLBACK and isinstance(e, (ChatProviderError, ChatAPIError)):
                         fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                         if fallback_provider:
                             logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
@@ -946,7 +960,7 @@ async def create_chat_completion(
                     raise
             
             content_to_save: Optional[str] = None
-            if isinstance(llm_response, dict): # OpenAI-like
+            if llm_response and isinstance(llm_response, dict): # OpenAI-like
                 choices = llm_response.get("choices")
                 if choices and isinstance(choices, list) and len(choices) > 0:
                     content_to_save = choices[0].get("message", {}).get("content")
@@ -964,7 +978,7 @@ async def create_chat_completion(
                         model=model,
                         provider=provider
                     )
-            elif isinstance(llm_response, str):
+            elif llm_response and isinstance(llm_response, str):
                 content_to_save = llm_response
             elif llm_response is None:
                 logger.error("LLM response is None - this indicates a serious issue with the LLM call")
@@ -977,7 +991,7 @@ async def create_chat_completion(
                 await _save_message_turn_to_db(chat_db, final_conversation_id, {"role": "assistant", "name": asst_name, "content": content_to_save}, use_transaction=True)
 
             # Use CPU-bound handler for large JSON encoding
-            if isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
+            if llm_response and isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
                 # Large response - use CPU handler
                 encoded_json = await process_large_json_async(llm_response)
                 encoded_payload = json.loads(encoded_json)

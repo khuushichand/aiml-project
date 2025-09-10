@@ -1009,7 +1009,11 @@ def chat_with_deepseek(
 
     # ... (logging key, model, temp, streaming, top_p setup) ...
     logging.debug("DeepSeek: Using configured API key")
+    # Strip provider prefix if present (e.g., "deepseek/deepseek-chat" -> "deepseek-chat")
+    if model and '/' in model:
+        model = model.split('/', 1)[1]
     current_model = model or deepseek_config.get('model', 'deepseek-chat')  # Or deepseek-coder
+    logging.info(f"DeepSeek: Received model='{model}', config model='{deepseek_config.get('model')}', using='{current_model}'")
     current_temp = temp if temp is not None else float(deepseek_config.get('temperature', 0.1))
     current_top_p = topp  # Deepseek uses top_p
     current_streaming_cfg = deepseek_config.get('streaming', False)
@@ -1045,8 +1049,10 @@ def chat_with_deepseek(
     if logit_bias is not None: data["logit_bias"] = logit_bias
 
     api_url = deepseek_config.get('api_base_url', 'https://api.deepseek.com').rstrip('/') + '/chat/completions'
+    # Log the actual model being sent
+    logging.info(f"DeepSeek: Sending model='{current_model}' to API")
     logging.debug(
-        f"DeepSeek Request Payload (excluding messages): {{k: v for k, v in data.items() if k != 'messages'}}")
+        f"DeepSeek Request Payload (excluding messages): {dict((k, v) for k, v in data.items() if k != 'messages')}")
 
     try:
         if current_streaming:

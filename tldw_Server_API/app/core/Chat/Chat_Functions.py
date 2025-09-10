@@ -605,11 +605,12 @@ def chat_api_call(
         error_text = getattr(e.response, 'text', str(e))
         log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
 
-        # Log safely first - use repr() to avoid issues with JSON containing curly braces
+        # Log safely first - escape curly braces to avoid loguru formatting issues
         try:
-            logging.error(f"{log_message_base}. Details: {repr(error_text[:500])}", exc_info=False)
+            escaped_details = error_text[:500].replace("{", "{{").replace("}", "}}")
+            logging.error(f"{log_message_base}. Details: {escaped_details}", exc_info=False)
         except Exception as log_e:
-            logging.error(f"Error during logging HTTPError details: {log_e}")
+            logging.error(f"Error during logging HTTPError details: {repr(log_e)}")
 
         detail_message = f"API call to {endpoint_lower} failed with status {status_code}. Response: {error_text[:200]}"
         if status_code == 401:
@@ -637,8 +638,10 @@ def chat_api_call(
         # This catches cases where the handler itself has already processed an error
         # (e.g. non-HTTP error, or it decided to raise a specific Chat*Error type)
         # and raises one of our custom exceptions.
+        # Escape curly braces in the error message to avoid loguru formatting issues
+        escaped_message = e_chat_direct.message.replace("{", "{{").replace("}", "}}")
         logging.error(
-            f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {e_chat_direct.message}",
+            f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
             exc_info=True if e_chat_direct.status_code >= 500 else False)
         raise e_chat_direct  # Re-raise the specific error
     except (ValueError, TypeError, KeyError) as e:

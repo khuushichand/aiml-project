@@ -436,6 +436,27 @@ let chatMessages = [
     {role: 'system', content: 'You are a helpful assistant.'}
 ];
 
+// Function to update the system prompt
+function updateSystemPrompt() {
+    const systemPromptTextarea = document.getElementById('chat-system-prompt');
+    if (systemPromptTextarea) {
+        const newSystemPrompt = systemPromptTextarea.value.trim();
+        if (newSystemPrompt) {
+            // Update the first message in chatMessages (system message)
+            chatMessages[0] = {role: 'system', content: newSystemPrompt};
+            
+            // Update the display in the chat messages
+            const messagesDiv = document.getElementById('chat-messages');
+            const systemMessageDiv = messagesDiv.querySelector('.chat-message.system');
+            if (systemMessageDiv) {
+                systemMessageDiv.textContent = 'System: ' + newSystemPrompt;
+            }
+            
+            console.log('System prompt updated:', newSystemPrompt);
+        }
+    }
+}
+
 async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const messagesDiv = document.getElementById('chat-messages');
@@ -485,12 +506,24 @@ async function sendChatMessage() {
     });
     
     try {
-        const response = await apiClient.post('/api/v1/chat/completions', {
+        // Get the provider if selected
+        const providerSelect = document.getElementById('chat-provider');
+        const provider = providerSelect ? providerSelect.value : '';
+        
+        // Build request payload
+        const requestPayload = {
             model: model,
             messages: chatMessages,
             temperature: 0.7,
             max_tokens: 1000
-        });
+        };
+        
+        // Add provider if selected
+        if (provider) {
+            requestPayload.api_provider = provider;
+        }
+        
+        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
         
         if (response.choices && response.choices[0] && response.choices[0].message) {
             const assistantMessage = response.choices[0].message.content;
@@ -538,15 +571,19 @@ async function sendChatMessage() {
 }
 
 function clearChat() {
+    // Get the current system prompt from the textarea
+    const systemPromptTextarea = document.getElementById('chat-system-prompt');
+    const currentSystemPrompt = systemPromptTextarea ? systemPromptTextarea.value.trim() : 'You are a helpful assistant.';
+    
     chatMessages = [
-        {role: 'system', content: 'You are a helpful assistant.'}
+        {role: 'system', content: currentSystemPrompt}
     ];
     const messagesDiv = document.getElementById('chat-messages');
     // Use DocumentFragment for better performance
     const fragment = document.createDocumentFragment();
     const systemDiv = document.createElement('div');
     systemDiv.className = 'chat-message system';
-    systemDiv.textContent = 'System: You are a helpful assistant.';
+    systemDiv.textContent = 'System: ' + currentSystemPrompt;
     fragment.appendChild(systemDiv);
     messagesDiv.innerHTML = '';
     messagesDiv.appendChild(fragment);
@@ -964,10 +1001,16 @@ function initializeChatCompletionsTab() {
     }
 }
 
+// Store provider data globally for filtering
+let globalProvidersInfo = null;
+
 async function populateModelDropdowns() {
     try {
         // Get available providers from API
         const providersInfo = await apiClient.getAvailableProviders();
+        
+        // Store globally for filtering
+        globalProvidersInfo = providersInfo;
         
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
@@ -1030,10 +1073,113 @@ async function populateModelDropdowns() {
         
         console.log(`Populated model dropdowns with ${providersInfo.total_configured} providers`);
         
+        // Set up provider change event listeners
+        setupProviderChangeListeners();
+        
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         document.querySelectorAll('.llm-model-select').forEach(select => {
             select.innerHTML = '<option value="">Error loading models</option>';
+        });
+    }
+}
+
+// Function to filter models based on selected provider
+function filterModelsByProvider(providerSelectId, modelSelectId) {
+    const providerSelect = document.getElementById(providerSelectId);
+    const modelSelect = document.getElementById(modelSelectId);
+    
+    if (!providerSelect || !modelSelect || !globalProvidersInfo) {
+        return;
+    }
+    
+    const selectedProvider = providerSelect.value;
+    
+    // Clear current options
+    modelSelect.innerHTML = '';
+    
+    if (!selectedProvider || selectedProvider === '') {
+        // If "Default" or no provider selected, show all models grouped by provider
+        const sortedProviders = globalProvidersInfo.providers.sort((a, b) => {
+            if (a.type === 'commercial' && b.type === 'local') return -1;
+            if (a.type === 'local' && b.type === 'commercial') return 1;
+            return a.display_name.localeCompare(b.display_name);
+        });
+        
+        sortedProviders.forEach(provider => {
+            if (provider.models && provider.models.length > 0) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = provider.display_name;
+                
+                provider.models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = `${provider.name}/${model}`;
+                    option.textContent = model;
+                    if (provider.name === globalProvidersInfo.default_provider && model === provider.default_model) {
+                        option.textContent += ' (default)';
+                        option.dataset.default = 'true';
+                    }
+                    optgroup.appendChild(option);
+                });
+                
+                modelSelect.appendChild(optgroup);
+            }
+        });
+        
+        // Select default model if available
+        const defaultOption = modelSelect.querySelector('[data-default="true"]');
+        if (defaultOption) {
+            modelSelect.value = defaultOption.value;
+        }
+    } else {
+        // Show only models for selected provider
+        const provider = globalProvidersInfo.providers.find(p => p.name === selectedProvider);
+        if (provider && provider.models && provider.models.length > 0) {
+            // Add models without optgroup since we're showing only one provider
+            provider.models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = `${provider.name}/${model}`;
+                option.textContent = model;
+                modelSelect.appendChild(option);
+            });
+            
+            // Select first model by default
+            if (provider.models.length > 0) {
+                modelSelect.value = `${provider.name}/${provider.models[0]}`;
+            }
+        } else {
+            // No models for this provider
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No models available for this provider';
+            modelSelect.appendChild(option);
+        }
+    }
+}
+
+// Setup event listeners for provider dropdowns
+function setupProviderChangeListeners() {
+    // Add event listener for chat completions provider dropdown
+    const chatCompletionsProvider = document.getElementById('chatCompletions_provider');
+    if (chatCompletionsProvider) {
+        // Remove any existing listeners first
+        const newProvider = chatCompletionsProvider.cloneNode(true);
+        chatCompletionsProvider.parentNode.replaceChild(newProvider, chatCompletionsProvider);
+        
+        newProvider.addEventListener('change', () => {
+            filterModelsByProvider('chatCompletions_provider', 'chatCompletions_model');
+        });
+    }
+    
+    // Add event listener for interactive chat provider dropdown
+    const chatProvider = document.getElementById('chat-provider');
+    if (chatProvider) {
+        // Remove any existing listeners first
+        const newProvider = chatProvider.cloneNode(true);
+        chatProvider.parentNode.replaceChild(newProvider, chatProvider);
+        
+        newProvider.addEventListener('change', () => {
+            filterModelsByProvider('chat-provider', 'chat-model');
         });
     }
 }

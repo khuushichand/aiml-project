@@ -252,8 +252,10 @@ def chat_api_call(
         # This catches cases where the handler itself has already processed an error
         # (e.g. non-HTTP error, or it decided to raise a specific Chat*Error type)
         # and raises one of our custom exceptions.
+        # Escape curly braces in the error message to avoid loguru formatting issues
+        escaped_message = e_chat_direct.message.replace("{", "{{").replace("}", "}}")
         logging.error(
-            f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {e_chat_direct.message}",
+            f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
             exc_info=True if e_chat_direct.status_code >= 500 else False)
         raise e_chat_direct  # Re-raise the specific error
     except (ValueError, TypeError, KeyError) as e:

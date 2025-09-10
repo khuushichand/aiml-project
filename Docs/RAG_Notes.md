@@ -198,6 +198,31 @@ Context Relevancy
 ```
 
 
+Creating QA Knowledgebase based off chats;
+```
+For every chat conversation you generate an LLM summary with in two part (problem/solution)
+
+Then you you do an embedding of the problem part for your RAG.
+
+Next time a user explain a issue, you RAG it (each summaries) and you got a collection of similar case.
+
+----------
+
+
+    dump chats out, extract timestamps and sender lines with a regex (which breaks every third export for reasons unknown). You want that in the metadata.
+
+    split into chunks, toss each chunk at an LLM with a prompt like: “give me 3-4 questions someone might ask that are answered in this chunk, and the matching answers” so you’re generating Qs for the indexed content, not just summarizing. sometimes it hallucinated wild stuff, but it’s faster than hand-labeling
+
+    batch QA pairs into a big ugly CSV, feed to vector DB
+
+-------
+
+
+prepare an llm(system prompt, proper model and few shot prompts of human generated summaries are enough) for summarizing chats and make it output a json object in a schema, including prompt-response pairs(problem/question - fix/response)
+
+```
+
+
 Improvements
 	https://arxiv.org/pdf/2501.07391
 	https://cobusgreyling.medium.com/four-levels-of-rag-research-from-microsoft-fdc54388f0ff

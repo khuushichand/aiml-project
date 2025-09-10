@@ -222,7 +222,7 @@ def get_configured_providers() -> Dict[str, Any]:
                     'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
                     'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
                     'cohere': ['command-r-plus', 'command-r', 'command'],
-                    'deepseek': ['deepseek-chat', 'deepseek-coder'],
+                    'deepseek': ['deepseek-chat', 'deepseek-reasoner'],
                     'google': ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
                     'groq': ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile', 'mixtral-8x7b-32768'],
                     'mistral': ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'],
