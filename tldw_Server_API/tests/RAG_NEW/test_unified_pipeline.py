@@ -217,7 +217,7 @@ class TestProductionScenarios:
             
             result = await unified_rag_pipeline(**api_request)
             
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
 
 # ========================================================================
 # Performance and Edge Cases
@@ -230,11 +230,14 @@ class TestPerformanceAndEdgeCases:
     @pytest.mark.asyncio
     async def test_large_result_set_handling(self):
         """Test handling of large number of retrieved documents."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            # Simulate large retrieval result
-            large_docs = [{"id": i, "content": f"Doc {i}"} for i in range(100)]
-            mock_retriever_instance.retrieve.return_value = large_docs
+            # Simulate large retrieval result with Document objects
+            large_docs = [
+                Document(id=str(i), content=f"Doc {i}", metadata={}, source=DataSource.MEDIA_DB)
+                for i in range(100)
+            ]
+            mock_retriever_instance.retrieve = AsyncMock(return_value=large_docs)
             mock_retriever.return_value = mock_retriever_instance
             
             result = await unified_rag_pipeline(

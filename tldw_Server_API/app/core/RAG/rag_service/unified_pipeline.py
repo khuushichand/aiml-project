@@ -299,7 +299,36 @@ async def unified_rag_pipeline(
         result.generated_answer = msg
         result.errors.append(msg)
         result.timings["total"] = 0.0
-        return result
+        # Return Pydantic response model for consistency
+        try:
+            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
+            return UnifiedRAGResponse(
+                documents=[],
+                query=query if isinstance(query, str) else "",
+                expanded_queries=[],
+                metadata=result.metadata,
+                timings=result.timings,
+                citations=[],
+                generated_answer=msg,
+                cache_hit=False,
+                errors=result.errors,
+                security_report=None,
+                total_time=0.0,
+            )
+        except Exception:
+            return {
+                "documents": [],
+                "query": query if isinstance(query, str) else "",
+                "expanded_queries": [],
+                "metadata": result.metadata,
+                "timings": result.timings,
+                "citations": [],
+                "generated_answer": msg,
+                "cache_hit": False,
+                "errors": result.errors,
+                "security_report": None,
+                "total_time": 0.0,
+            }
     
     # Initialize monitoring if requested
     metrics = None

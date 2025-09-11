@@ -217,7 +217,7 @@ class TestUnifiedPipelineIntegration:
     async def test_unified_pipeline_basic(self, populated_media_db):
         """Test basic unified pipeline with real database."""
         result = await unified_rag_pipeline(
-            query="What are vector databases?",
+            query="vector databases",
             top_k=5,
             media_db_path=str(populated_media_db.db_path)
         )

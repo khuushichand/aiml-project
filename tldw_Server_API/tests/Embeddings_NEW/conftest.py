@@ -277,15 +277,12 @@ def populated_media_database(media_database) -> MediaDatabase:
     """Create a media database with test data."""
     # Add test media items
     for i in range(5):
-        media_database.add_media(
+        media_database.add_media_with_keywords(
             title=f"Test Document {i}",
             content=f"This is the content of document {i}. It contains various information about topic {i}.",
             media_type="document",
             author=f"Author {i}",
-            metadata={
-                "page_count": 10 + i,
-                "word_count": 1000 + i * 100
-            }
+            ingestion_date=datetime.utcnow().isoformat()
         )
     
     return media_database
