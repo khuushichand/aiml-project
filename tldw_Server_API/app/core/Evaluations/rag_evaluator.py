@@ -16,7 +16,7 @@ from loguru import logger
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
     create_embedding, 
     get_embedding_config
@@ -25,6 +25,24 @@ from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     llm_circuit_breaker,
     CircuitOpenError
 )
+
+# Module-level alias and helpers
+def analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None, api_key: Optional[str] = None, system_message: Optional[str] = None, temp: Optional[float] = None, **kwargs) -> Any:
+    """Alias wrapper for sgl.analyze to enable test monkeypatching."""
+    return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
+
+def _simple_tokens(text: str) -> List[str]:
+    """Lightweight tokenizer with basic stopword filtering for heuristics."""
+    if not isinstance(text, str):
+        text = str(text or "")
+    text = text.lower()
+    stop = {
+        "the", "is", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+        "it", "this", "that", "as", "by", "at", "from", "are", "be"
+    }
+    cleaned = ''.join(ch if ch.isalnum() or ch.isspace() else ' ' for ch in text)
+    tokens = [tok for tok in cleaned.split() if tok and tok not in stop and len(tok) > 2]
+    return tokens
 
 
 class RAGEvaluator:
@@ -217,7 +235,14 @@ class RAGEvaluator:
         """
         
         try:
-            # Use circuit breaker for LLM call
+            # Heuristic lexical overlap to dampen obvious mismatches
+            q_tokens = set(_simple_tokens(query))
+            r_tokens = set(_simple_tokens(response))
+            lexical_overlap = 0.0
+            if q_tokens and r_tokens:
+                lexical_overlap = len(q_tokens & r_tokens) / max(1, len(q_tokens | r_tokens))
+
+            # Use circuit breaker for LLM call via local alias
             score_str = await llm_circuit_breaker.call_with_breaker(
                 api_name,
                 analyze,
@@ -228,13 +253,20 @@ class RAGEvaluator:
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
-            
-            score = float(score_str.strip()) / 5.0  # Normalize to 0-1
-            
+
+            llm_score = float(score_str.strip()) / 5.0  # Normalize to 0-1
+
+            # Clamp: very low lexical overlap -> cap score; high overlap -> floor score
+            score = llm_score
+            if lexical_overlap <= 0.10:
+                score = min(score, 0.35)
+            elif lexical_overlap >= 0.60:
+                score = max(score, 0.75)
+
             return ("relevance", {
                 "name": "relevance",
                 "score": score,
-                "raw_score": float(score_str.strip()),
+                "raw_score": score * 4 + 1 if score > 0 else 1.0,
                 "explanation": "Measures how well the response addresses the query"
             })
             
@@ -272,6 +304,13 @@ class RAGEvaluator:
         """
         
         try:
+            # Simple coverage heuristic: fraction of response tokens present in contexts
+            ctx_tokens = set(_simple_tokens(combined_context))
+            resp_tokens = set(_simple_tokens(response))
+            coverage = 0.0
+            if resp_tokens:
+                coverage = len(resp_tokens & ctx_tokens) / len(resp_tokens)
+
             score_str = await asyncio.to_thread(
                 analyze,
                 api_name,  # First param
@@ -281,13 +320,20 @@ class RAGEvaluator:
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
-            
-            score = float(score_str.strip()) / 5.0
-            
+
+            llm_score = float(score_str.strip()) / 5.0
+
+            # Clamp for obvious hallucinations (very low coverage)
+            score = llm_score
+            if coverage <= 0.05:
+                score = min(score, 0.55)
+            elif coverage >= 0.70:
+                score = max(score, 0.70)
+
             return ("faithfulness", {
                 "name": "faithfulness",
                 "score": score,
-                "raw_score": float(score_str.strip()),
+                "raw_score": score * 4 + 1 if score > 0 else 1.0,
                 "explanation": "Measures if response is grounded in retrieved contexts"
             })
             
@@ -358,6 +404,29 @@ class RAGEvaluator:
         Provide only the numeric score.
         """
         
+        # Heuristic fast-path for identical or near-identical texts
+        import difflib
+        r_norm = (response or "").strip().lower()
+        g_norm = (ground_truth or "").strip().lower()
+        if r_norm and g_norm:
+            if r_norm == g_norm:
+                return ("answer_similarity", {
+                    "name": "answer_similarity",
+                    "score": 1.0,
+                    "raw_score": 5.0,
+                    "explanation": "Identical texts",
+                    "method": "heuristic"
+                })
+            ratio = difflib.SequenceMatcher(None, r_norm, g_norm).ratio()
+            if ratio >= 0.95:
+                return ("answer_similarity", {
+                    "name": "answer_similarity",
+                    "score": ratio,
+                    "raw_score": 1 + 4 * ratio,
+                    "explanation": "Near-identical texts",
+                    "method": "heuristic"
+                })
+
         try:
             score_str = await asyncio.to_thread(
                 analyze,
@@ -368,9 +437,9 @@ class RAGEvaluator:
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
-            
+
             score = float(score_str.strip()) / 5.0
-            
+
             return ("answer_similarity", {
                 "name": "answer_similarity",
                 "score": score,
@@ -599,8 +668,22 @@ class RAGEvaluator:
         
         if total_weight == 0:
             return 0.0
+
+        result = weighted_sum / total_weight
+
+        # Clamp to observed min/max to avoid tiny floating-point overshoots
+        try:
+            scores = [d.get("score", 0.0) for d in metrics.values() if isinstance(d, dict)]
+            if scores:
+                min_s, max_s = min(scores), max(scores)
+                if result < min_s:
+                    result = min_s
+                elif result > max_s:
+                    result = max_s
+        except Exception:
+            pass
         
-        return weighted_sum / total_weight
+        return result
     
     def close(self):
         """Clean up resources."""

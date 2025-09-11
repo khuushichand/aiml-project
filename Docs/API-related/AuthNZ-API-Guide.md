@@ -12,7 +12,7 @@
 
 ## Overview
 
-The AuthNZ module provides comprehensive authentication and authorization for the tldw_server API. It supports both single-user (API key) and multi-user (JWT) modes with enterprise-grade security features.
+The AuthNZ module provides authentication and authorization for the tldw_server API. It supports both single-user (API key) and multi-user (JWT) modes with robust security features (JWT sessions, rate-limited auth endpoints, audit events). Some features (e.g., public API key CRUD endpoints) are planned but not yet exposed.
 
 ### Base URL
 ```
@@ -49,7 +49,7 @@ JWT-based authentication with user management:
 - **Configuration**: Set `AUTH_MODE=multi_user` in `.env`
 - **Authentication**: Username/password login returns JWT tokens
 - **Header**: `Authorization: Bearer <token>`
-- **Features**: User registration, roles, permissions, API key management
+- **Features**: User registration, roles, permissions; API key CRUD endpoints are not yet public
 - **Use Case**: Team deployments, production environments
 
 ## API Endpoints
@@ -61,12 +61,19 @@ JWT-based authentication with user management:
 POST /api/v1/auth/login
 ```
 
-**Request Body:**
-```json
-{
-  "username": "user@example.com",
-  "password": "secure_password"
-}
+**Request (form-encoded):**
+Content-Type: `application/x-www-form-urlencoded`
+
+Fields:
+- `username`: string (username or email)
+- `password`: string
+
+Example curl:
+```bash
+curl -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=user@example.com&password=secure_password" \
+  http://localhost:8000/api/v1/auth/login
 ```
 
 **Response:**
@@ -75,13 +82,7 @@ POST /api/v1/auth/login
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
   "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
   "token_type": "bearer",
-  "expires_in": 1800,
-  "user": {
-    "id": 1,
-    "username": "user@example.com",
-    "email": "user@example.com",
-    "role": "user"
-  }
+  "expires_in": 1800
 }
 ```
 
@@ -143,11 +144,11 @@ POST /api/v1/auth/register
 **Response:**
 ```json
 {
-  "id": 2,
+  "message": "Registration successful",
+  "user_id": 2,
   "username": "newuser",
   "email": "newuser@example.com",
-  "role": "user",
-  "created_at": "2024-01-15T10:30:00Z"
+  "requires_verification": true
 }
 ```
 
@@ -165,10 +166,12 @@ Authorization: Bearer your-jwt-token
 ```json
 {
   "id": 1,
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
   "username": "user@example.com",
   "email": "user@example.com",
   "role": "user",
   "is_active": true,
+  "is_verified": true,
   "storage_quota_mb": 5120,
   "storage_used_mb": 1024,
   "created_at": "2024-01-01T00:00:00Z",
@@ -178,7 +181,7 @@ Authorization: Bearer your-jwt-token
 
 #### Update Password
 ```http
-PUT /api/v1/auth/password
+POST /api/v1/users/change-password
 ```
 
 **Headers:**
@@ -197,123 +200,19 @@ Authorization: Bearer your-jwt-token
 **Response:**
 ```json
 {
-  "message": "Password updated successfully"
+  "message": "Password changed successfully"
 }
 ```
 
-### API Key Management (Multi-User Mode)
+### API Key Management (Status)
 
-#### List API Keys
-```http
-GET /api/v1/auth/api-keys
-```
-
-**Headers:**
-```http
-Authorization: Bearer your-jwt-token
-```
-
-**Response:**
-```json
-{
-  "api_keys": [
-    {
-      "id": 1,
-      "name": "Production Key",
-      "key_prefix": "tldw_ak_1234",
-      "scope": "read",
-      "status": "active",
-      "created_at": "2024-01-01T00:00:00Z",
-      "last_used_at": "2024-01-15T08:30:00Z",
-      "expires_at": "2024-04-01T00:00:00Z"
-    }
-  ]
-}
-```
-
-#### Create API Key
-```http
-POST /api/v1/auth/api-keys
-```
-
-**Headers:**
-```http
-Authorization: Bearer your-jwt-token
-```
-
-**Request Body:**
-```json
-{
-  "name": "CI/CD Pipeline Key",
-  "description": "Used for automated deployments",
-  "scope": "write",
-  "expires_in_days": 90
-}
-```
-
-**Response:**
-```json
-{
-  "id": 2,
-  "key": "tldw_ak_5678_AbCdEfGhIjKlMnOpQrStUvWxYz",
-  "name": "CI/CD Pipeline Key",
-  "scope": "write",
-  "expires_at": "2024-04-15T10:30:00Z",
-  "message": "Save this key - it won't be shown again"
-}
-```
-
-#### Rotate API Key
-```http
-POST /api/v1/auth/api-keys/{key_id}/rotate
-```
-
-**Headers:**
-```http
-Authorization: Bearer your-jwt-token
-```
-
-**Response:**
-```json
-{
-  "old_key_id": 2,
-  "new_key_id": 3,
-  "new_key": "tldw_ak_9012_ZyXwVuTsRqPoNmLkJiHgFeDcBa",
-  "expires_at": "2024-07-15T10:30:00Z",
-  "message": "Key rotated successfully. Old key will remain active for 24 hours."
-}
-```
-
-#### Revoke API Key
-```http
-DELETE /api/v1/auth/api-keys/{key_id}
-```
-
-**Headers:**
-```http
-Authorization: Bearer your-jwt-token
-```
-
-**Request Body (Optional):**
-```json
-{
-  "reason": "Key compromised"
-}
-```
-
-**Response:**
-```json
-{
-  "message": "API key revoked successfully",
-  "revoked_at": "2024-01-15T10:30:00Z"
-}
-```
+Public API endpoints for API key CRUD (list/create/rotate/revoke) are not yet exposed. In single-user mode, use the `X-API-KEY` header (key printed at startup). In multi-user mode, authenticate via JWT using the login and refresh endpoints above.
 
 ### Session Management
 
 #### List Active Sessions
 ```http
-GET /api/v1/auth/sessions
+GET /api/v1/users/sessions
 ```
 
 **Headers:**
@@ -323,23 +222,21 @@ Authorization: Bearer your-jwt-token
 
 **Response:**
 ```json
-{
-  "sessions": [
-    {
-      "id": "sess_123",
-      "ip_address": "192.168.1.100",
-      "user_agent": "Mozilla/5.0...",
-      "created_at": "2024-01-15T08:00:00Z",
-      "last_activity": "2024-01-15T10:00:00Z",
-      "is_current": true
-    }
-  ]
-}
+[
+  {
+    "id": 123,
+    "ip_address": "192.168.1.100",
+    "user_agent": "Mozilla/5.0...",
+    "created_at": "2024-01-15T08:00:00Z",
+    "last_activity": "2024-01-15T10:00:00Z",
+    "expires_at": "2024-01-15T12:00:00Z"
+  }
+]
 ```
 
 #### Revoke Session
 ```http
-DELETE /api/v1/auth/sessions/{session_id}
+DELETE /api/v1/users/sessions/{session_id}
 ```
 
 **Headers:**
@@ -351,6 +248,24 @@ Authorization: Bearer your-jwt-token
 ```json
 {
   "message": "Session revoked successfully"
+}
+```
+
+#### Revoke All Sessions
+```http
+POST /api/v1/users/sessions/revoke-all
+```
+
+**Headers:**
+```http
+Authorization: Bearer your-jwt-token
+```
+
+**Response:**
+```json
+{
+  "message": "Successfully revoked 2 sessions",
+  "details": {"sessions_revoked": 2}
 }
 ```
 
@@ -377,9 +292,9 @@ async function login(username, password) {
   const response = await fetch('http://localhost:8000/api/v1/auth/login', {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/x-www-form-urlencoded'
     },
-    body: JSON.stringify({ username, password })
+    body: new URLSearchParams({ username, password })
   });
   
   if (!response.ok) {
@@ -471,7 +386,8 @@ class TLDWClient:
         """Login and store tokens"""
         response = self.session.post(
             f'{self.base_url}/api/v1/auth/login',
-            json={'username': username, 'password': password}
+            data={'username': username, 'password': password},
+            headers={'Content-Type': 'application/x-www-form-urlencoded'}
         )
         response.raise_for_status()
         
@@ -667,14 +583,9 @@ curl -X POST \
 - **Authenticated**: 60 requests/minute
 - **Service Accounts**: 1000 requests/minute
 
-### Rate Limit Headers
+### Rate Limiting
 
-```http
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1705318800
-X-RateLimit-Reset-After: 30
-```
+Auth endpoints enforce strict rate limits. When limits are exceeded, responses include HTTP 429 with a `Retry-After` header (in seconds). Some non-auth modules may additionally return `X-RateLimit-*` headers, but AuthNZ endpoints use `Retry-After`.
 
 ### Handling Rate Limits
 
@@ -684,8 +595,8 @@ async function makeRequestWithRetry(url, options, maxRetries = 3) {
     const response = await fetch(url, options);
     
     if (response.status === 429) {
-      // Get retry delay from header
-      const retryAfter = response.headers.get('X-RateLimit-Reset-After');
+      // Get retry delay from standard header
+      const retryAfter = response.headers.get('Retry-After');
       const delay = retryAfter ? parseInt(retryAfter) * 1000 : (i + 1) * 1000;
       
       console.log(`Rate limited. Retrying after ${delay}ms...`);
@@ -768,11 +679,11 @@ If migrating from the old Gradio interface:
 ### Test Endpoints
 
 ```bash
-# Test single-user mode
-curl -H "X-API-KEY: your-key" http://localhost:8000/api/v1/auth/test
+# Test single-user mode (use a protected API with X-API-KEY)
+curl -H "X-API-KEY: your-key" http://localhost:8000/api/v1/media/search
 
 # Test multi-user mode (after login)
-curl -H "Authorization: Bearer your-token" http://localhost:8000/api/v1/auth/test
+curl -H "Authorization: Bearer your-token" http://localhost:8000/api/v1/auth/me
 ```
 
 ### Postman Collection
@@ -810,15 +721,15 @@ Import this collection for testing:
       "name": "Login",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {"key": "Content-Type", "value": "application/x-www-form-urlencoded"}
+        ],
         "body": {
-          "mode": "raw",
-          "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"password\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "username", "value": "admin", "type": "text"},
+            {"key": "password", "value": "password", "type": "text"}
+          ]
         },
         "url": {
           "raw": "{{base_url}}/auth/login",

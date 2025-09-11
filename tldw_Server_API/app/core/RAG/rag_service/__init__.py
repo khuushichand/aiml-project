@@ -18,4 +18,12 @@ Main components:
 from .config import RAGConfig
 from .types import DataSource, Document, SearchResult
 
-__all__ = ['RAGConfig', 'DataSource', 'Document', 'SearchResult']
+# Expose commonly patched submodules for tests
+from . import semantic_cache  # noqa: F401
+from . import chromadb_optimizer  # noqa: F401
+from . import advanced_reranking  # noqa: F401
+
+__all__ = [
+    'RAGConfig', 'DataSource', 'Document', 'SearchResult',
+    'semantic_cache', 'chromadb_optimizer', 'advanced_reranking'
+]

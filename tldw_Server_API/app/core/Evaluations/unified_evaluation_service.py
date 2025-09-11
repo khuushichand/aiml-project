@@ -945,8 +945,16 @@ class UnifiedEvaluationService:
     async def health_check(self) -> Dict[str, Any]:
         """Check service health"""
         try:
-            # Check database
-            db_healthy = self.db.get_evaluation("test") is not None or True
+            # Check database connectivity with a lightweight probe
+            db_healthy = False
+            try:
+                with self.db.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT 1")
+                    _ = cur.fetchone()
+                    db_healthy = True
+            except Exception as db_err:
+                logger.error(f"DB health probe failed: {db_err}")
             
             # Check circuit breaker
             from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitState

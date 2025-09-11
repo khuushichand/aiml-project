@@ -434,13 +434,11 @@ Date: 2024-01-15 10:30:00
 ### Request/Response Examples
 
 #### Login Request
-```json
+```bash
 POST /auth/login
-{
-  "username": "john.doe",
-  "password": "SecurePass123!",
-  "mfa_token": "123456"  // Optional, required if MFA enabled
-}
+Content-Type: application/x-www-form-urlencoded
+
+username=john.doe&password=SecurePass123!
 ```
 
 #### Login Response
@@ -453,15 +451,14 @@ POST /auth/login
 }
 ```
 
-#### Error Response
+#### Error Response (rate limited)
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+Content-Type: application/json
+
 ```json
 {
-  "detail": "Invalid credentials",
-  "status_code": 401,
-  "headers": {
-    "X-RateLimit-Remaining": "4",
-    "X-RateLimit-Reset": "1234567890"
-  }
+  "detail": "Too many authentication attempts. Retry after 60 seconds"
 }
 ```
 

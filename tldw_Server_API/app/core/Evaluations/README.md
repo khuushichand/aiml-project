@@ -1,5 +1,13 @@
 # tldw Evaluations Module
 
+> Deprecation Notice (CLI)
+>
+> The legacy CLI at `tldw_Server_API/app/core/Evaluations/cli/evals_cli.py` is deprecated.
+> Please use the unified CLI exposed via the console script `tldw-evals`,
+> or run it directly with `python -m tldw_Server_API.cli.evals_cli`.
+> The unified CLI includes health/status, evaluation execution, database/config
+> management, users, webhooks, testing utilities, and export/import commands.
+
 A comprehensive, modular evaluation system for benchmarking language models with support for standard benchmarks, custom evaluations, and advanced analysis tools.
 
 ## 🚀 Quick Start
@@ -353,7 +361,7 @@ tldw-evals run benchmark --log-level DEBUG
 
 ## 📝 License
 
-This module is part of tldw_server, licensed under AGPL-3.0 for open source use, with commercial licensing available.
+This module is part of tldw_server and is licensed under the Apache 2.0 License.
 
 ## 🙏 Acknowledgments
 

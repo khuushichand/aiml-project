@@ -11,7 +11,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -185,6 +185,7 @@ async def check_evaluation_rate_limit(
     else:
         limit = 60
         endpoint_type = "eval_standard"
+
     
     allowed, metadata = await rate_limiter.check_rate_limit(
         client_ip,
@@ -773,6 +774,7 @@ async def delete_evaluation(
 async def create_run(
     eval_id: str,
     run_request: CreateRunRequest,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit)
 ):
@@ -854,6 +856,7 @@ async def evaluate_geval(
     
     G-Eval evaluates summaries on fluency, consistency, relevance, and coherence.
     """
+    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         result = await get_evaluation_service().evaluate_geval(
             source_text=request.source_text,
@@ -901,6 +904,7 @@ async def evaluate_rag(
     
     Evaluates relevance, faithfulness, answer similarity, and context precision.
     """
+    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         result = await get_evaluation_service().evaluate_rag(
             query=request.query,
@@ -950,6 +954,7 @@ async def evaluate_response_quality(
     
     Checks relevance, completeness, accuracy, and format compliance.
     """
+    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         result = await get_evaluation_service().evaluate_response_quality(
             prompt=request.prompt,
@@ -1085,6 +1090,7 @@ async def batch_evaluate(
     
     Supports running multiple evaluation types with configurable parallelism.
     """
+    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         start_time = time.time()
         service = get_evaluation_service()

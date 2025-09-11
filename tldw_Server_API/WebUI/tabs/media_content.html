@@ -97,6 +97,69 @@
                 </div>
             </div>
 
+            <!-- Create Vector Store from Media -->
+            <div class="endpoint-section" id="mediaToVectorStore">
+                <h2>Create/Update Vector Store from Media</h2>
+                <div class="columns">
+                    <div class="column">
+                        <div class="form-group">
+                            <label for="vs_media_store_name">Store Name (for new store):</label>
+                            <input id="vs_media_store_name" placeholder="My Media Store">
+                        </div>
+                        <div class="form-group">
+                            <label for="vs_media_dimensions">Dimensions:</label>
+                            <input id="vs_media_dimensions" type="number" value="1536" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="vs_media_model">Embedding Model (optional):</label>
+                            <input id="vs_media_model" placeholder="text-embedding-3-small">
+                        </div>
+                        <div class="form-group">
+                            <label for="vs_media_ids">Media IDs (comma-separated):</label>
+                            <input id="vs_media_ids" placeholder="1,2,3">
+                        </div>
+                        <div class="form-group">
+                            <label for="vs_media_keywords">Keywords (comma-separated):</label>
+                            <input id="vs_media_keywords" placeholder="finance, earnings">
+                        </div>
+                        <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                            <button class="api-button" onclick="uiCreateStoreFromMedia()">Create New Store</button>
+                            <input id="vs_media_existing_store_id" placeholder="Existing Store ID (vs_...)" style="flex:1;"/>
+                            <select id="vs_media_existing_store_select" style="max-width: 260px;">
+                                <option value="">-- Select Existing Store --</option>
+                            </select>
+                            <button class="api-button" onclick="uiLoadExistingStores()">Load Stores</button>
+                            <button class="api-button" onclick="uiUpdateStoreFromMedia()">Update Existing Store</button>
+                            <button class="api-button" onclick="uiRenameSelectedStore()">Rename Selected</button>
+                        </div>
+                        <div class="form-group" style="display:flex; gap:8px;">
+                            <label for="vs_media_chunk_size">Chunk Size:</label>
+                            <input id="vs_media_chunk_size" type="number" value="500" min="50" style="width:100px;">
+                            <label for="vs_media_chunk_overlap">Overlap:</label>
+                            <input id="vs_media_chunk_overlap" type="number" value="100" min="0" style="width:100px;">
+                            <label for="vs_media_chunk_method">Method:</label>
+                            <select id="vs_media_chunk_method">
+                                <option value="words" selected>words</option>
+                                <option value="sentences">sentences</option>
+                                <option value="paragraphs">paragraphs</option>
+                                <option value="tokens">tokens</option>
+                                <option value="semantic">semantic</option>
+                            </select>
+                            <small style="color: var(--color-text-muted);">Note: when method is 'tokens', Chunk Size is in tokens.</small>
+                            <label>
+                              <input type="checkbox" id="vs_media_use_existing" /> Use existing media embeddings
+                            </label>
+                            <label for="vs_media_language">Language:</label>
+                            <input id="vs_media_language" placeholder="en" style="width:100px;"/>
+                        </div>
+                    </div>
+                    <div class="column">
+                        <h4>Result</h4>
+                        <pre id="vs_media_result">---</pre>
+                    </div>
+                </div>
+            </div>
+
             <!-- Media Versioning Tab -->
             <div id="tabMediaVersioning" class="tab-content">
                 <!-- POST /api/v1/media/{media_id}/versions -->
@@ -1305,6 +1368,64 @@
             </div>
 
 <script>
+async function uiCreateStoreFromMedia(){
+    const name = document.getElementById('vs_media_store_name')?.value.trim();
+    if (!name){ alert('Enter store name'); return; }
+    const dimensions = parseInt(document.getElementById('vs_media_dimensions')?.value || '1536');
+    const model = document.getElementById('vs_media_model')?.value.trim();
+    const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+    const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
+    const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
+    const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
+    const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
+    const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
+    const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
+    const body = { store_name: name, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings };
+    const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
+    document.getElementById('vs_media_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function uiUpdateStoreFromMedia(){
+    let existing = document.getElementById('vs_media_existing_store_id')?.value.trim();
+    const sel = document.getElementById('vs_media_existing_store_select');
+    if (!existing && sel && sel.value) existing = sel.value;
+    if (!existing){ alert('Enter existing store id'); return; }
+    const name = document.getElementById('vs_media_store_name')?.value.trim();
+    const dimensions = parseInt(document.getElementById('vs_media_dimensions')?.value || '1536');
+    const model = document.getElementById('vs_media_model')?.value.trim();
+    const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+    const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
+    const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
+    const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
+    const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
+    const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
+    const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
+    const body = { store_name: name || existing, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings, update_existing_store_id: existing };
+    const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
+    document.getElementById('vs_media_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function uiLoadExistingStores(){
+    const sel = document.getElementById('vs_media_existing_store_select');
+    if (!sel) return;
+    const res = await apiClient.get('/api/v1/vector_stores');
+    const list = (res.data || []);
+    sel.innerHTML = '<option value="">-- Select Existing Store --</option>' +
+        list.map(s => `<option value="${s.id}">${s.name} (${s.id})</option>`).join('');
+}
+
+async function uiRenameSelectedStore(){
+    let existing = document.getElementById('vs_media_existing_store_id')?.value.trim();
+    const sel = document.getElementById('vs_media_existing_store_select');
+    if (!existing && sel && sel.value) existing = sel.value;
+    if (!existing){ alert('Select existing store'); return; }
+    const newName = (document.getElementById('vs_media_store_name')?.value || '').trim();
+    if (!newName){ alert('Enter a new store name in the Store Name field'); return; }
+    const res = await apiClient.patch(`/api/v1/vector_stores/${encodeURIComponent(existing)}`, { name: newName });
+    alert('Renamed successfully');
+    try { await uiLoadExistingStores(); } catch(e) {}
+}
+
 // Initialize media tabs
 function initializeMediaTabs() {
     console.log('Media tabs initialized');
@@ -1382,4 +1503,3 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
-

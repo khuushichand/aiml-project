@@ -279,14 +279,25 @@ def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
         eval_manager = EvaluationManager()
-        
-        # Get recent evaluation count (this is a simple example)
-        recent_evals = eval_manager.get_evaluation_history(limit=10)
+
+        # get_history is async; run it synchronously here
+        history = asyncio.run(eval_manager.get_history(limit=10))
+        items = history.get('items', []) if isinstance(history, dict) else []
+
+        # Determine last evaluation timestamp if available
+        last_eval_display = 'None'
+        if items:
+            last_created = items[0].get('created_at')
+            try:
+                last_eval_display = format_timestamp(last_created)
+            except Exception:
+                last_eval_display = str(last_created)
+
         status_data['evaluations'] = {
-            'recent_count': len(recent_evals),
-            'last_evaluation': format_timestamp(recent_evals[0]['timestamp']) if recent_evals else 'None'
+            'recent_count': len(items),
+            'last_evaluation': last_eval_display
         }
-        
+
     except Exception as e:
         logger.warning(f"Could not get evaluation stats: {e}")
         status_data['evaluations'] = {'error': str(e)}

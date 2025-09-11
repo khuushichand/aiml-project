@@ -354,8 +354,20 @@ class ChromaDBAdapter(VectorStoreAdapter):
             dimension = self.config.embedding_dim  # Default
             if count > 0:
                 sample = collection.get(limit=1, include=["embeddings"])
-                if sample and sample.get("embeddings"):
-                    dimension = len(sample["embeddings"][0])
+                if sample is not None:
+                    emb = sample.get("embeddings")
+                    # emb may be a list or numpy array; avoid truthiness ambiguity
+                    try:
+                        if isinstance(emb, list) and len(emb) > 0:
+                            dimension = len(emb[0])
+                        elif hasattr(emb, "__len__") and len(emb) > 0:
+                            first = emb[0]
+                            try:
+                                dimension = len(first)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             
             return {
                 "name": collection_name,

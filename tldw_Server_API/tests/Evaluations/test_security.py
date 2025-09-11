@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import queue
 import time
 
 # Add parent directory to path for imports

@@ -723,7 +723,8 @@ async def handle_unified_websocket(
                     logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
             except Exception as config_error:
                 logger.warning(f"Could not read streaming_fallback_to_whisper from config: {config_error}")
-                fallback_enabled = True  # Default to enabled for better user experience
+                # Defer Whisper fallback unless explicitly configured
+                fallback_enabled = False
             
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':

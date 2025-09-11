@@ -274,7 +274,7 @@ For issues or questions:
 
 ## License
 
-This module is part of the TLDW Server project and follows the same licensing terms (AGPL-3.0 / Commercial dual license).
+This module is part of the TLDW Server project and follows the same licensing terms (Apache 2.0).
 
 ---
 

@@ -41,6 +41,7 @@ from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as ch
 #
 # Embedding Endpoint (v5 enhanced version with circuit breaker)
 from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
+from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
 #
 # Media Endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import router as media_router

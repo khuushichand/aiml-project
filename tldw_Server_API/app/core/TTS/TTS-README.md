@@ -428,8 +428,7 @@ pytest tests/TTS/ --cov=tldw_Server_API.app.core.TTS
 ## License
 
 The TTS module follows the main project's dual license:
-- AGPL-3.0 for open source use
-- Commercial license available
+- Apache 2.0 License
 
 Individual model licenses:
 - Kokoro: Apache 2.0

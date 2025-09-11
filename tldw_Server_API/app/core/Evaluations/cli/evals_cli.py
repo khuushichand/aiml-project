@@ -1,8 +1,10 @@
 """
-Simple CLI for the evaluation module.
+Simple CLI for the evaluation module (DEPRECATED).
 
-This provides a standalone CLI interface for running evaluations
-without needing the full API server.
+DEPRECATION NOTICE:
+- This CLI has been superseded by the unified CLI at
+  `tldw_Server_API/cli/evals_cli.py` and the console script `tldw-evals`.
+- Please switch to: `tldw-evals` (recommended) or `python -m tldw_Server_API.cli.evals_cli`.
 """
 
 import sys
@@ -13,6 +15,7 @@ from collections import defaultdict
 
 import click
 from loguru import logger
+import warnings
 from tabulate import tabulate
 
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
@@ -29,13 +32,28 @@ from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
 from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
 
 
+DEPRECATION_MSG = (
+    "DEPRECATION: This CLI is deprecated. Use 'tldw-evals' or 'python -m tldw_Server_API.cli.evals_cli' instead.\n"
+)
+
+
 @click.group(context_settings={'help_option_names': ['-h', '--help']})
 @click.option('--config', type=click.Path(exists=True), help='Config file path')
 @click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR']), 
               default='INFO', help='Logging level')
 @click.pass_context
 def cli(ctx, config, log_level):
-    """tldw Evaluations CLI - Run evaluation benchmarks."""
+    """tldw Evaluations CLI (deprecated) - Run evaluation benchmarks."""
+    # Emit deprecation warning
+    try:
+        warnings.warn(
+            "This CLI module is deprecated; use tldw_Server_API.cli.evals_cli instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    except Exception:
+        pass
+    click.secho(DEPRECATION_MSG, fg='yellow', err=True)
     # Configure logging
     logger.remove()
     logger.add(sys.stderr, level=log_level)
@@ -498,7 +516,8 @@ def health():
 
 
 def main():
-    """Entry point for the CLI."""
+    """Entry point for the (deprecated) CLI."""
+    click.secho(DEPRECATION_MSG, fg='yellow', err=True)
     cli(obj={})
 
 

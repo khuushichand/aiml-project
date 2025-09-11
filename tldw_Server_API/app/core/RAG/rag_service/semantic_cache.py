@@ -6,6 +6,7 @@ cached results for semantically similar queries, not just exact matches.
 """
 
 import time
+import asyncio
 import hashlib
 import pickle
 import json
@@ -22,16 +23,17 @@ from .advanced_cache import CacheEntry, MemoryCache
 
 @dataclass
 class SemanticCacheEntry(CacheEntry):
-    """Extended cache entry with semantic information."""
+    """Extended cache entry with semantic information.
+
+    Inherits timing and access fields from CacheEntry (created_at, last_accessed,
+    access_count, ttl). Adds query text and optional normalized embedding.
+    """
     query: str = ""
     embedding: Optional[np.ndarray] = None
-    access_count: int = 0
-    last_access: float = field(default_factory=time.time)
-    
-    def access(self):
-        """Update access statistics."""
-        self.access_count += 1
-        self.last_access = time.time()
+
+    def access(self) -> None:
+        """Compatibility helper used by older code paths."""
+        self.update_access()
 
 
 class SemanticCache:
@@ -259,18 +261,22 @@ class SemanticCache:
             metadata: Optional metadata to store
         """
         key = self._generate_key(query)
-        
+
         # Generate embedding for semantic matching
         embedding = None
         if self.embedding_model:
             embedding = await self.get_embedding(query)
-        
+
+        now = time.time()
         with self._lock:
-            # Create cache entry
+            # Create cache entry aligned with CacheEntry fields
             entry = SemanticCacheEntry(
+                key=key,
                 value=value,
-                timestamp=time.time(),
+                created_at=now,
+                last_accessed=now,
                 ttl=ttl or self.default_ttl,
+                metadata={"query": query},
                 query=query,
                 embedding=embedding
             )
@@ -294,7 +300,7 @@ class SemanticCache:
         # Find LRU entry
         lru_key = min(
             self._cache.keys(),
-            key=lambda k: self._cache[k].last_access
+            key=lambda k: self._cache[k].last_accessed
         )
         
         # Remove from cache
@@ -418,13 +424,16 @@ class SemanticCache:
                 
                 # Restore cache entries
                 for key, entry_data in state.get("cache", {}).items():
+                    created_at = entry_data.get("timestamp", time.time())
+                    last_accessed = entry_data.get("last_access", created_at)
                     entry = SemanticCacheEntry(
+                        key=key,
                         value=entry_data["value"],
-                        query=entry_data["query"],
-                        timestamp=entry_data["timestamp"],
+                        created_at=created_at,
+                        last_accessed=last_accessed,
                         ttl=entry_data.get("ttl"),
-                        access_count=entry_data.get("access_count", 0),
-                        last_access=entry_data.get("last_access", time.time())
+                        metadata={},
+                        query=entry_data.get("query", "")
                     )
                     
                     if not entry.is_expired():

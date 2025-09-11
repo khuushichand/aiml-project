@@ -368,8 +368,7 @@ Supported formats vary by provider:
 ## License
 
 This module is part of the tldw_server project and follows the same dual licensing:
-- AGPL-3.0 for open source use
-- Commercial license available
+- Apache 2.0 License
 
 ## Contributing
 

@@ -14,14 +14,14 @@ version = "0.1.2"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.9"
 readme = "README.md"
-license = { text = "AGPL-3.0-or-later OR Commercial" }
+# Use SPDX license expression as a string to avoid deprecation warnings.
+# Project is licensed under Apache 2.0.
+license = "Apache-2.0"
 keywords = ["transcription", "summarization", "media-processing", "llm", "rag", "fastapi", "research-assistant"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
-    "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -315,7 +315,8 @@ all = [
 ###########################
 [project.scripts]
 tldw-server = "tldw_Server_API.app.main:run_server"
-tldw-evals = "tldw_Server_API.app.core.Evaluations.cli.evals_cli:main"
+# Point tldw-evals to the richer, unified CLI
+tldw-evals = "tldw_Server_API.cli.evals_cli:main"
 
 ###########################
 # Tools - Package Discovery

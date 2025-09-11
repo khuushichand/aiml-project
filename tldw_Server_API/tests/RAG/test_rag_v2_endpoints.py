@@ -21,7 +21,7 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.api.v1.endpoints.rag_api import router as rag_router
+from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_router
 from tldw_Server_API.app.core.config import settings
 
 
@@ -64,12 +64,16 @@ class TestRAGV2Endpoints:
         # Clean up test directory
         shutil.rmtree(cls.test_dir, ignore_errors=True)
         
-        # Clear any cached services
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(rag_service_manager.cleanup_expired())
-        loop.close()
+        # Clear any cached services (best-effort; legacy path)
+        try:
+            import asyncio
+            from tldw_Server_API.app.core.RAG.ARCHIVE.rag_v2 import rag_service_manager  # legacy
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(rag_service_manager.cleanup_expired())
+            loop.close()
+        except Exception:
+            pass
     
     @classmethod
     def setup_test_databases(cls):

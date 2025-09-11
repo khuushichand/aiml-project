@@ -14,6 +14,7 @@ from loguru import logger
 from tldw_Server_API.cli.utils.output import (
     print_error, print_success, print_info
 )
+import asyncio
 
 
 @click.group()
@@ -38,14 +39,30 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
         
         eval_manager = EvaluationManager()
-        
-        # Get evaluation history
-        evaluations = eval_manager.get_evaluation_history(limit=limit or 1000)
-        
+
+        # Get evaluation history (async API)
+        history = asyncio.run(eval_manager.get_history(limit=limit or 1000))
+        evaluations = history.get('items', []) if isinstance(history, dict) else []
+
         # Filter by days if specified
         if days:
-            cutoff_date = datetime.now().timestamp() - (days * 24 * 60 * 60)
-            evaluations = [e for e in evaluations if e.get('timestamp', 0) > cutoff_date]
+            cutoff_dt = datetime.now().timestamp() - (days * 24 * 60 * 60)
+            def _to_ts(val):
+                try:
+                    # Support datetime object or numeric timestamp
+                    return val.timestamp() if hasattr(val, 'timestamp') else float(val)
+                except Exception:
+                    return 0.0
+            evaluations = [e for e in evaluations if _to_ts(e.get('created_at', 0)) > cutoff_dt]
+
+        # Normalize datetime fields for export
+        for e in evaluations:
+            for key in ('created_at', 'completed_at'):
+                if key in e and hasattr(e[key], 'isoformat'):
+                    try:
+                        e[key] = e[key].isoformat()
+                    except Exception:
+                        e[key] = str(e[key])
         
         # Ensure output directory exists
         output_file.parent.mkdir(parents=True, exist_ok=True)

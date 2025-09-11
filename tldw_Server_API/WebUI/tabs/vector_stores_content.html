@@ -29,6 +29,33 @@
                 <h3>Vector Stores</h3>
                 <button class="api-button" onclick="vsList()">Refresh</button>
                 <ul id="vs_list"></ul>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+                    <input id="vs_duplicate_name" placeholder="Duplicate as name">
+                    <button class="api-button" onclick="vsDuplicateSelected()">Duplicate Selected</button>
+                    <input id="vs_rename_name" placeholder="Rename selected to" style="margin-left:12px;">
+                    <button class="api-button" onclick="vsRenameSelectedFromPanel()">Rename Selected</button>
+                </div>
+            </div>
+        </div>
+
+        <h3>Edit Store</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="vs_edit_id">Store ID:</label>
+                    <input id="vs_edit_id" placeholder="vs_...">
+                </div>
+                <div class="form-group">
+                    <label for="vs_edit_name">Name:</label>
+                    <input id="vs_edit_name" placeholder="Name">
+                </div>
+                <div class="form-group">
+                    <label for="vs_edit_metadata">Metadata (JSON):</label>
+                    <textarea id="vs_edit_metadata" rows="4" placeholder='{"description":"..."}'></textarea>
+                </div>
+                <button class="api-button" onclick="vsLoadStore()">Load</button>
+                <button class="api-button" onclick="vsSaveStore()">Save</button>
+                <button class="api-button btn-danger" onclick="vsDeleteStore()">Delete Store</button>
             </div>
         </div>
 
@@ -46,12 +73,30 @@
                     <input id="vec_values" placeholder='[0.1, 0.2, ...]' style="margin-top:8px;">
                 </div>
                 <button class="api-button" onclick="vsUpsertVector()">Upsert Vector</button>
-                <button class="api-button" onclick="vsListVectors()">List Vectors</button>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                    <button class="api-button" onclick="vsListVectors()">List Vectors</button>
+                    <label for="vs_limit" style="margin-left:8px;">Page Size:</label>
+                    <input id="vs_limit" type="number" value="50" min="1" max="1000" style="width:80px;">
+                    <button class="api-button" onclick="vsPrevPage()">Prev</button>
+                    <button class="api-button" onclick="vsNextPage()">Next</button>
+                    <span id="vs_page_info" style="color: var(--color-text-muted);"></span>
+                </div>
                 <button class="api-button" onclick="vsQuery()">Query</button>
+                <div class="form-group" style="margin-top:12px;">
+                    <label for="vs_bulk">Bulk Upsert (JSON array of records or newline-separated texts):</label>
+                    <textarea id="vs_bulk" rows="6" placeholder='[{"id":"1","content":"text"},{"values":[...],"metadata":{}}] OR one text per line'></textarea>
+                    <button class="api-button" onclick="vsBulkUpsert()">Bulk Upsert</button>
+                </div>
+                <div class="form-group">
+                    <label for="vec_delete_id">Delete Vector ID:</label>
+                    <input id="vec_delete_id" placeholder="vector id">
+                    <button class="api-button btn-danger" onclick="vsDeleteVector()">Delete Vector</button>
+                </div>
             </div>
             <div class="column">
                 <h4>Result</h4>
                 <pre id="vs_result">---</pre>
+                <div id="vs_vector_list"></div>
             </div>
         </div>
     </div>
@@ -65,20 +110,64 @@ async function vsCreate(){
   const body = { dimensions: dim };
   if (name) body.name = name;
   if (model) body.embedding_model = model;
-  const res = await makeRequestRaw('POST', '/api/v1/vector_stores', body);
+  const res = await apiClient.post('/api/v1/vector_stores', body);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
   await vsList();
 }
 
 async function vsList(){
-  const res = await makeRequestRaw('GET', '/api/v1/vector_stores');
+  const res = await apiClient.get('/api/v1/vector_stores');
   const ul = document.getElementById('vs_list');
   ul.innerHTML = '';
   (res.data || []).forEach(s => {
     const li = document.createElement('li');
-    li.textContent = `${s.name} (${s.id}) — dim=${s.dimensions}`;
+    li.innerHTML = `${s.name} (<code>${s.id}</code>) — dim=${s.dimensions} ` +
+                   `<button class="btn-small" onclick="vsRenameQuick('${s.id}')">Rename</button>` +
+                   ` <button class="btn-small" onclick="vsSelect('${s.id}','${s.name.replace(/"/g,'&quot;')}')">Select</button>`;
+    li.style.cursor = 'pointer';
+    li.onclick = () => {
+      document.getElementById('vs_edit_id').value = s.id;
+      document.getElementById('vs_edit_name').value = s.name || '';
+      document.getElementById('vs_edit_metadata').value = JSON.stringify(s.metadata || {}, null, 2);
+      document.getElementById('vs_id').value = s.id;
+    };
     ul.appendChild(li);
   });
+}
+
+async function vsLoadStore(){
+  const id = document.getElementById('vs_edit_id').value.trim();
+  if(!id){ alert('Enter store id'); return; }
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}`);
+  document.getElementById('vs_edit_name').value = res.name || '';
+  document.getElementById('vs_edit_metadata').value = JSON.stringify(res.metadata || {}, null, 2);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsSaveStore(){
+  const id = document.getElementById('vs_edit_id').value.trim();
+  if(!id){ alert('Enter store id'); return; }
+  let md = {};
+  const name = document.getElementById('vs_edit_name').value.trim();
+  const mdText = document.getElementById('vs_edit_metadata').value.trim();
+  if (mdText){
+    try { md = JSON.parse(mdText); } catch(e){ alert('Invalid metadata JSON'); return; }
+  }
+  const payload = {};
+  if (name) payload.name = name;
+  payload.metadata = md;
+  const res = await apiClient.patch(`/api/v1/vector_stores/${encodeURIComponent(id)}`, payload);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
+}
+
+async function vsDeleteStore(){
+  const id = document.getElementById('vs_edit_id').value.trim();
+  if(!id){ alert('Enter store id'); return; }
+  if(!confirm('Delete this vector store?')) return;
+  const res = await apiClient.delete(`/api/v1/vector_stores/${encodeURIComponent(id)}`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
 }
 
 async function vsUpsertVector(){
@@ -93,15 +182,24 @@ async function vsUpsertVector(){
     try { record.values = JSON.parse(valsStr); } catch(e){ alert('Invalid values JSON'); return; }
   } else { alert('Provide content or values'); return; }
   const body = { records: [record] };
-  const res = await makeRequestRaw('POST', `/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, body);
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, body);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
 }
 
 async function vsListVectors(){
   const id = document.getElementById('vs_id').value.trim();
   if(!id){ alert('Enter vector store id'); return; }
-  const res = await makeRequestRaw('GET', `/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`);
+  const limit = parseInt(document.getElementById('vs_limit').value || '50');
+  const offset = window.__vs_offset || 0;
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, { limit, offset });
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  renderVectorList(res.data || []);
+  const pageInfo = document.getElementById('vs_page_info');
+  if (pageInfo) {
+    const total = res.pagination?.total ?? 0;
+    const end = Math.min((offset + (res.data||[]).length), total);
+    pageInfo.textContent = total ? `Showing ${offset+1}-${end} of ${total}` : '';
+  }
 }
 
 async function vsQuery(){
@@ -110,8 +208,209 @@ async function vsQuery(){
   const q = prompt('Enter query text (leave blank to cancel)');
   if (q === null) return;
   const body = { query: q, top_k: 5 };
-  const res = await makeRequestRaw('POST', `/api/v1/vector_stores/${encodeURIComponent(id)}/query`, body);
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/query`, body);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsBulkUpsert(){
+  const id = document.getElementById('vs_id').value.trim();
+  if(!id){ alert('Enter vector store id'); return; }
+  const text = document.getElementById('vs_bulk').value.trim();
+  if(!text){ alert('Enter bulk payload'); return; }
+  let records = [];
+  try {
+    // Try parse JSON array
+    const maybe = JSON.parse(text);
+    if (Array.isArray(maybe)) {
+      records = maybe;
+    } else {
+      throw new Error('not array');
+    }
+  } catch(e){
+    // Fallback: treat as newline-separated texts
+    records = text.split('\n').map(line => ({ content: line.trim() })).filter(r => r.content);
+  }
+  if (!records.length){ alert('No records to upsert'); return; }
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, { records });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsDeleteVector(){
+  const storeId = document.getElementById('vs_id').value.trim();
+  const vecId = document.getElementById('vec_delete_id').value.trim();
+  if (!storeId || !vecId){ alert('Enter store id and vector id'); return; }
+  const res = await apiClient.delete(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/vectors/${encodeURIComponent(vecId)}`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+function renderVectorList(items){
+  const container = document.getElementById('vs_vector_list');
+  if (!container) return;
+  if (!items.length){ container.innerHTML = '<div class="muted">No vectors on this page.</div>'; return; }
+  const storeId = document.getElementById('vs_id').value.trim();
+  const rows = items.map(it => {
+    const md = (it.metadata && Object.keys(it.metadata).length) ? JSON.stringify(it.metadata) : '';
+    const content = (it.content || '').slice(0, 100).replace(/</g,'&lt;');
+    return `<div class="list-row" style="display:flex; gap:8px; align-items:center; border-bottom:1px solid var(--color-border); padding:6px 0;">
+      <code style="flex:0 0 260px; overflow:hidden; text-overflow:ellipsis;">${it.id}</code>
+      <span style="flex:1 1 auto; color: var(--color-text-muted);">${content}</span>
+      <span style="flex:0 0 200px; color: var(--color-text-muted);">${md}</span>
+      <button class="btn-small btn-danger" onclick="vsDeleteVectorInline('${encodeURIComponent(storeId)}','${encodeURIComponent(it.id)}')">Delete</button>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div style="margin-top:8px;">${rows}</div>`;
+}
+
+async function vsDeleteVectorInline(encStoreId, encVecId){
+  const storeId = decodeURIComponent(encStoreId);
+  const vecId = decodeURIComponent(encVecId);
+  if(!confirm(`Delete vector ${vecId}?`)) return;
+  const res = await apiClient.delete(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/vectors/${encodeURIComponent(vecId)}`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  // Refresh current page
+  await vsListVectors();
+}
+
+async function vsPrevPage(){
+  const current = window.__vs_offset || 0;
+  const limit = parseInt(document.getElementById('vs_limit').value || '50');
+  window.__vs_offset = Math.max(0, current - limit);
+  await vsListVectors();
+}
+
+async function vsNextPage(){
+  const id = document.getElementById('vs_id').value.trim();
+  if(!id){ alert('Enter vector store id'); return; }
+  const limit = parseInt(document.getElementById('vs_limit').value || '50');
+  const offset = window.__vs_offset || 0;
+  // Peek next page availability using pagination.next_offset from last result if available
+  // Fallback: optimistic increment
+  window.__vs_offset = offset + limit;
+  await vsListVectors();
+}
+
+async function vsRenameQuick(id){
+  const name = prompt('New name for store', '');
+  if (name === null) return;
+  const res = await apiClient.patch(`/api/v1/vector_stores/${encodeURIComponent(id)}`, { name });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
+}
+
+function vsSelect(id, name){
+  const idInput = document.getElementById('vs_id');
+  if (idInput) idInput.value = id;
+  const existingSel = document.getElementById('vs_media_existing_store_select');
+  const existingId = document.getElementById('vs_media_existing_store_id');
+  if (existingSel){ existingSel.value = id; }
+  if (existingId){ existingId.value = id; }
+  const dupName = document.getElementById('vs_duplicate_name');
+  if (dupName){ dupName.value = `${name}-copy`; }
+}
+
+async function vsDuplicateSelected(){
+  const id = document.getElementById('vs_id').value.trim();
+  if (!id){ alert('Select a store first (click on list item or use Select button)'); return; }
+  const new_name = document.getElementById('vs_duplicate_name').value.trim();
+  if (!new_name){ alert('Enter a name for the duplicate'); return; }
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/duplicate`, { new_name });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
+}
+
+async function vsRenameSelectedFromPanel(){
+  const id = document.getElementById('vs_id').value.trim();
+  if (!id){ alert('Select a store first'); return; }
+  const new_name = document.getElementById('vs_rename_name').value.trim();
+  if (!new_name){ alert('Enter a new name'); return; }
+  const res = await apiClient.patch(`/api/v1/vector_stores/${encodeURIComponent(id)}`, { name: new_name });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  await vsList();
 }
 </script>
 
+<!-- Vector Batches Tab -->
+<div id="tabVectorBatches" class="tab-content">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/vector_stores/batches - Recent Vector Batches</span>
+    </h2>
+    <div class="card" style="padding:10px; border:1px solid var(--color-border); border-radius:6px; margin-bottom:10px;">
+      <h3 style="margin:0 0 8px 0;">Admin: Discover Users</h3>
+      <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+        <button class="api-button" onclick="vbLoadUsers()">Load Users</button>
+        <select id="vb_user_select" style="min-width:220px;">
+          <option value="">-- Select User --</option>
+        </select>
+        <small style="color: var(--color-text-muted);">Select a user to populate the filter below.</small>
+      </div>
+      <div id="vb_users_info" class="muted"></div>
+    </div>
+    <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+      <label for="vb_status">Status:</label>
+      <select id="vb_status">
+        <option value="">All</option>
+        <option value="processing">Processing</option>
+        <option value="completed">Completed</option>
+        <option value="failed">Failed</option>
+      </select>
+      <label for="vb_limit">Limit:</label>
+      <input id="vb_limit" type="number" value="50" min="1" max="500" style="width:100px;"/>
+      <label for="vb_offset">Offset:</label>
+      <input id="vb_offset" type="number" value="0" min="0" style="width:100px;"/>
+      <label for="vb_user">User ID (admin):</label>
+      <input id="vb_user" type="text" placeholder="user id" style="width:160px;"/>
+      <button class="api-button" onclick="vbList()">Refresh</button>
+    </div>
+    <div id="vb_list"></div>
+    <pre id="vb_result">---</pre>
+  </div>
+</div>
+
+<script>
+async function vbList(){
+  const status = document.getElementById('vb_status').value;
+  const limit = parseInt(document.getElementById('vb_limit').value||'50');
+  const offset = parseInt(document.getElementById('vb_offset').value||'0');
+  const user = document.getElementById('vb_user').value.trim();
+  const query = {};
+  if (status) query.status = status;
+  query.limit = limit; query.offset = offset;
+  // Backend currently defaults to current user; user override is admin-only and a future enhancement
+  const res = await apiClient.get('/api/v1/vector_stores/batches', query);
+  document.getElementById('vb_result').textContent = JSON.stringify(res, null, 2);
+  const list = document.getElementById('vb_list');
+  const rows = (res.data||[]).map(r=>{
+    const err = r.error? `<span style='color:var(--color-danger)'>${(r.error||'').slice(0,120)}</span>`:'';
+    return `<div class='list-row' style='display:flex; gap:8px; border-bottom:1px solid var(--color-border); padding:6px 0;'>
+      <code style='flex:0 0 220px;'>${r.id}</code>
+      <code style='flex:0 0 220px;'>${r.store_id}</code>
+      <span style='flex:0 0 80px;'>${r.status}</span>
+      <span style='flex:0 0 80px;'>${r.upserted}</span>
+      <span style='flex:1 1 auto; color:var(--color-text-muted);'>${err}</span>
+    </div>`;
+  }).join('');
+  list.innerHTML = `<div style='margin-top:8px;'>${rows || '<div class="muted">No batches found</div>'}</div>`;
+}
+
+async function vbLoadUsers(){
+  const info = document.getElementById('vb_users_info');
+  const sel = document.getElementById('vb_user_select');
+  try {
+    const res = await apiClient.get('/api/v1/vector_stores/admin/users');
+    const rows = res.data || [];
+    if (!rows.length){ info.textContent = 'No users found.'; return; }
+    sel.innerHTML = '<option value="">-- Select User --</option>' +
+      rows.map(u => `<option value="${u.user_id}">${u.user_id} (stores: ${u.store_count}, batches: ${u.batch_count})</option>`).join('');
+    sel.onchange = () => {
+      const val = sel.value;
+      const vbUser = document.getElementById('vb_user');
+      if (vbUser) vbUser.value = val;
+    };
+    info.textContent = `Loaded ${rows.length} users.`;
+  } catch (e){
+    info.textContent = `Failed to load users: ${e.message || e}`;
+  }
+}
+</script>

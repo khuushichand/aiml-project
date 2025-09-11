@@ -20,16 +20,13 @@ async def register_user():
     })
     return response.json()
 
-# Login
-async def login(username: str, password: str, mfa_token: str = None):
-    data = {
-        "username": username,
-        "password": password
-    }
-    if mfa_token:
-        data["mfa_token"] = mfa_token
-    
-    response = await client.post("/auth/login", json=data)
+# Login (form-encoded)
+async def login(username: str, password: str):
+    response = await client.post(
+        "/auth/login",
+        data={"username": username, "password": password},
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
     return response.json()
 
 # Use authenticated endpoints
@@ -49,10 +46,11 @@ class AuthenticatedClient:
         self.refresh_token = None
     
     async def login(self, username: str, password: str):
-        response = await self.client.post("/auth/login", json={
-            "username": username,
-            "password": password
-        })
+        response = await self.client.post(
+            "/auth/login",
+            data={"username": username, "password": password},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
         data = response.json()
         self.access_token = data["access_token"]
         self.refresh_token = data["refresh_token"]
@@ -105,12 +103,8 @@ class AuthClient {
     async login(username: string, password: string, mfaToken?: string): Promise<AuthResponse> {
         const response = await fetch(`${this.baseURL}/auth/login`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                username,
-                password,
-                mfa_token: mfaToken
-            })
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ username, password })
         });
 
         if (!response.ok) {
@@ -538,7 +532,7 @@ async def handle_auth_response(response):
         raise AuthException(AuthError.INVALID_CREDENTIALS, detail)
     
     elif response.status_code == 429:
-        retry_after = response.headers.get("X-RateLimit-Reset")
+        retry_after = response.headers.get("Retry-After")
         raise AuthException(
             AuthError.RATE_LIMITED,
             detail,
@@ -610,7 +604,7 @@ class AuthErrorHandler {
                 throw new AuthError('INVALID_CREDENTIALS', detail, 401);
 
             case 429:
-                const retryAfter = response.headers.get('X-RateLimit-Reset');
+                const retryAfter = response.headers.get('Retry-After');
                 throw new AuthError(
                     'RATE_LIMITED',
                     detail,
@@ -671,6 +665,8 @@ class AuthErrorHandler {
 
 ## Rate Limiting
 
+Auth endpoints return HTTP 429 with a `Retry-After` header indicating seconds to wait. Other modules (e.g., Evaluations, Chat, RAG) may include `X-RateLimit-*` headers for client visibility.
+
 ### Handling Rate Limits
 
 ```python
@@ -684,7 +680,9 @@ class RateLimitHandler:
     
     def update_limits(self, endpoint: str, headers: dict):
         """Update rate limit info from response headers"""
+        retry_after = headers.get("Retry-After")
         self.limits[endpoint] = {
+            "retry_after": int(retry_after) if retry_after else None,
             "remaining": int(headers.get("X-RateLimit-Remaining", 0)),
             "reset": int(headers.get("X-RateLimit-Reset", 0)),
             "limit": int(headers.get("X-RateLimit-Limit", 100))
@@ -904,9 +902,11 @@ app.add_middleware(
     allow_credentials=True,  # Required for auth cookies
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-MFA-Secret"],
-    expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    expose_headers=["Retry-After"],
     max_age=3600  # Cache preflight requests
 )
+
+Note: Enhanced endpoints such as MFA and password reset are implemented in `auth_enhanced.py`. Ensure they are routed in `main.py` if you plan to expose them.
 ```
 
 ---

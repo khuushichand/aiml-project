@@ -508,6 +508,22 @@ class EntityExpansion(QueryExpansionStrategy):
         )
 
 
+# --- Compatibility helper functions for tests ---
+async def expand_acronyms(query: str) -> str:
+    """
+    Expand acronyms in a query and return a simple expanded string.
+
+    Provided for test compatibility where a function-level helper
+    `expand_acronyms` is patched. Uses AcronymExpansion under the hood.
+    """
+    expander = AcronymExpansion()
+    expanded = await expander.expand(query)
+    # Return a basic string: original + first variation (if any)
+    if expanded.variations:
+        return f"{query} {expanded.variations[0]}"
+    return query
+
+
 class HybridQueryExpansion(QueryExpansionStrategy):
     """
     Combines multiple expansion strategies for comprehensive query expansion.

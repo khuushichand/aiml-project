@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Generator, AsyncGenerator, Dict, Any
 from datetime import datetime
 import pytest
+import os
 import pytest_asyncio
 
 # Import application components
@@ -35,6 +36,9 @@ from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations
 
 def pytest_configure(config):
     """Register custom markers."""
+    # Ensure TEST_MODE is enabled for the Evaluations test suite to bypass
+    # global API rate limiting paths that are unrelated to unit correctness.
+    os.environ.setdefault("TEST_MODE", "true")
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests with generated data")

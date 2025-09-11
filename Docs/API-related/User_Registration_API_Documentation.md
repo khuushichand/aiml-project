@@ -284,18 +284,16 @@ Authorization: Bearer <access_token>
 
 **Response** (200 OK):
 ```json
-{
-  "sessions": [
-    {
-      "id": 1,
-      "ip_address": "192.168.1.100",
-      "user_agent": "Mozilla/5.0...",
-      "created_at": "2025-01-14T10:00:00Z",
-      "last_activity": "2025-01-14T15:30:00Z",
-      "is_current": true
-    }
-  ]
-}
+[
+  {
+    "id": 1,
+    "ip_address": "192.168.1.100",
+    "user_agent": "Mozilla/5.0...",
+    "created_at": "2025-01-14T10:00:00Z",
+    "last_activity": "2025-01-14T15:30:00Z",
+    "expires_at": "2025-01-14T16:00:00Z"
+  }
+]
 ```
 
 ---
@@ -328,15 +326,11 @@ Authorization: Bearer <access_token>
 **Response** (200 OK):
 ```json
 {
-  "quota_mb": 5120,
-  "used_mb": 1024,
-  "available_mb": 4096,
-  "percentage_used": 20,
-  "breakdown": {
-    "media_mb": 800,
-    "documents_mb": 150,
-    "embeddings_mb": 74
-  }
+  "user_id": 123,
+  "storage_used_mb": 1024.5,
+  "storage_quota_mb": 5120,
+  "available_mb": 4095.5,
+  "usage_percentage": 20.0
 }
 ```
 
@@ -797,13 +791,8 @@ The API implements rate limiting to prevent abuse:
 
 ### Rate Limit Headers
 
-Responses include rate limit information:
-
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1736870400
-```
+- Authentication endpoints return HTTP 429 with a `Retry-After` header (seconds) when rate limited.
+- Some non-auth modules may include `X-RateLimit-*` headers (e.g., Evaluations, Chat, RAG) for client visibility.
 
 ### Rate Limit Response
 

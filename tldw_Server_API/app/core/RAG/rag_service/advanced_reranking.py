@@ -189,6 +189,20 @@ class FlashRankReranker(BaseReranker):
             ]
 
 
+# --- Compatibility helper for tests ---
+def rerank_by_similarity(documents: List[Document], top_k: int = 10) -> List[Document]:
+    """
+    Simple similarity-based rerank placeholder to satisfy unit tests that patch
+    this function. Sorts by `metadata.score` or `doc.score` if present.
+    """
+    def score_of(d: Document) -> float:
+        try:
+            return float(d.metadata.get('score', d.score))
+        except Exception:
+            return getattr(d, 'score', 0.0)
+    return sorted(documents, key=score_of, reverse=True)[:top_k]
+
+
 class DiversityReranker(BaseReranker):
     """
     Maximal Marginal Relevance (MMR) reranking for diversity.

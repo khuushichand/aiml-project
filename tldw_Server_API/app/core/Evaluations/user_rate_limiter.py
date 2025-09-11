@@ -327,11 +327,10 @@ class UserRateLimiter:
             cursor = conn.cursor()
             
             # Count requests in last minute
-            cursor.execute("""
-                SELECT COUNT(*) FROM rate_limit_tracking
-                WHERE user_id = ? AND timestamp > ?
-                AND endpoint LIKE ?
-            """, (user_id, minute_ago, f"%{endpoint}%"))
+            cursor.execute(
+                "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint LIKE ?",
+                (user_id, minute_ago.isoformat(), f"%{endpoint}%")
+            )
             
             request_count = cursor.fetchone()[0]
             
@@ -342,11 +341,10 @@ class UserRateLimiter:
             if request_count >= limit:
                 # Check if within burst window
                 burst_window = now - timedelta(seconds=10)
-                cursor.execute("""
-                    SELECT COUNT(*) FROM rate_limit_tracking
-                    WHERE user_id = ? AND timestamp > ?
-                    AND endpoint LIKE ?
-                """, (user_id, burst_window, f"%{endpoint}%"))
+                cursor.execute(
+                    "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint LIKE ?",
+                    (user_id, burst_window.isoformat(), f"%{endpoint}%")
+                )
                 
                 burst_count = cursor.fetchone()[0]
                 
@@ -439,10 +437,10 @@ class UserRateLimiter:
         
         with sqlite3.connect(self.db_path) as conn:
             # Record in tracking table
-            conn.execute("""
-                INSERT INTO rate_limit_tracking (user_id, endpoint, timestamp, tokens_used, cost)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, endpoint, now, tokens_used, cost))
+            conn.execute(
+                "INSERT INTO rate_limit_tracking (user_id, endpoint, timestamp, tokens_used, cost) VALUES (?, ?, ?, ?, ?)",
+                (user_id, endpoint, now.isoformat(), tokens_used, cost)
+            )
             
             # Update daily usage
             conn.execute("""
@@ -506,6 +504,9 @@ class UserRateLimiter:
             
             # Apply custom limits if provided
             if custom_limits:
+                # If moving to CUSTOM with partial overrides, default to no burst unless specified
+                if new_tier == UserTier.CUSTOM and 'burst_size' not in custom_limits:
+                    config.burst_size = 0
                 for key, value in custom_limits.items():
                     if hasattr(config, key):
                         setattr(config, key, value)

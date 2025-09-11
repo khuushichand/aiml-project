@@ -12,6 +12,7 @@ from fastapi import \
     FastAPI  # Removed: Body, File, UploadFile, Form, Depends, APIRouter, HTTPException, status (FastAPI itself is enough for app instance)
 from pydantic import BaseModel, Field
 from fastapi.testclient import TestClient
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 #
 # Local Imports
 # The actual router from your application
@@ -138,7 +139,9 @@ app_for_testing_with_real_router.include_router(actual_chunking_endpoint_router,
 def client():
     global mock_general_llm_analyzer_call_history_for_test
     mock_general_llm_analyzer_call_history_for_test = []  # Reset for each test
-    with TestClient(app_for_testing_with_real_router) as c:
+    settings = get_settings()
+    default_headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+    with TestClient(app_for_testing_with_real_router, headers=default_headers) as c:
         yield c
 
 
