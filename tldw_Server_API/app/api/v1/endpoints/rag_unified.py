@@ -9,7 +9,7 @@ import time
 from typing import Optional, Dict, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request
 from loguru import logger
 
 # Dependencies
@@ -18,6 +18,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -37,6 +38,23 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
 )
 
 router = APIRouter(prefix="/api/v1/rag", tags=["RAG - Unified"])
+
+# Basic rate limiting using SlowAPI (consistent with other endpoints)
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+    limiter = Limiter(key_func=get_remote_address)
+    limit_search = limiter.limit("30/minute")
+    limit_read = limiter.limit("60/minute")
+    limit_batch = limiter.limit("10/minute")
+except Exception:
+    limiter = None
+    def limit_search(func):
+        return func
+    def limit_read(func):
+        return func
+    def limit_batch(func):
+        return func
 
 
 def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGResponse:
@@ -96,9 +114,11 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
     Simply set any feature parameter to enable it. All parameters are optional
     except the query itself.
     """,
-    response_description="Search results with all requested features applied"
+    response_description="Search results with all requested features applied",
+    dependencies=[Depends(check_rate_limit)]
 )
 async def unified_search_endpoint(
+    request_raw: Request,
     request: UnifiedRAGRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
@@ -118,7 +138,8 @@ async def unified_search_endpoint(
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
-            "notes_db_path": None,  # TODO: Get from dependency when available
+            # Notes are stored in ChaChaNotes DB by design; reuse its path for notes_db
+            "notes_db_path": chacha_db.db_path if chacha_db else None,
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
@@ -257,9 +278,11 @@ async def unified_search_endpoint(
     All parameters from the single search endpoint are available and will
     be applied to all queries in the batch.
     """,
-    response_description="Batch processing results"
+    response_description="Batch processing results",
+    dependencies=[Depends(check_rate_limit)]
 )
 async def unified_batch_endpoint(
+    request_raw: Request,
     request: UnifiedBatchRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
@@ -331,9 +354,11 @@ async def unified_batch_endpoint(
     - Reranking enabled
     - No query expansion
     """,
-    response_description="Search results"
+    response_description="Search results",
+    dependencies=[Depends(check_rate_limit)]
 )
 async def simple_search_endpoint(
+    request: Request,
     query: str,
     top_k: int = 10,
     current_user: User = Depends(get_request_user),
@@ -383,9 +408,11 @@ async def simple_search_endpoint(
     - Table processing
     - Performance analysis
     """,
-    response_description="Full search results with analysis"
+    response_description="Full search results with analysis",
+    dependencies=[Depends(check_rate_limit)]
 )
 async def advanced_search_endpoint(
+    request: Request,
     query: str,
     with_citations: bool = True,
     with_answer: bool = True,
@@ -493,9 +520,10 @@ async def list_features():
     "/health",
     summary="Health Check",
     description="Check the health of the unified RAG pipeline",
-    response_description="Health status"
+    response_description="Health status",
+    dependencies=[Depends(check_rate_limit)]
 )
-async def health_check():
+async def health_check(request: Request):
     """
     Health check for the unified pipeline.
     """

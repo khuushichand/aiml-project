@@ -1,8 +1,7 @@
 """
-Fixed integration tests for RAG v2 endpoints.
+Integration tests for Unified RAG endpoints.
 
-These tests properly test the endpoints without excessive mocking,
-following the pattern from test_rag_endpoints_integration.py
+Covers the primary Unified API surface with light fixtures and no heavy mocking.
 """
 
 import json
@@ -25,8 +24,8 @@ from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_route
 from tldw_Server_API.app.core.config import settings
 
 
-class TestRAGV2Endpoints:
-    """Fixed integration tests for RAG v2 endpoints."""
+class TestRAGUnifiedEndpoints:
+    """Integration tests for Unified RAG endpoints."""
     
     @classmethod
     def setup_class(cls):
@@ -64,16 +63,8 @@ class TestRAGV2Endpoints:
         # Clean up test directory
         shutil.rmtree(cls.test_dir, ignore_errors=True)
         
-        # Clear any cached services (best-effort; legacy path)
-        try:
-            import asyncio
-            from tldw_Server_API.app.core.RAG.ARCHIVE.rag_v2 import rag_service_manager  # legacy
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(rag_service_manager.cleanup_expired())
-            loop.close()
-        except Exception:
-            pass
+        # No special cleanup required for unified endpoints
+        pass
     
     @classmethod
     def setup_test_databases(cls):
@@ -151,194 +142,76 @@ class TestRAGV2Endpoints:
         # Store the conversation ID for later use
         cls.test_conversation_id = conv_id
     
-    # ============= Search Tests =============
-    
-    def test_simple_search_semantic(self):
-        """Test simple semantic search without mocking."""
-        response = self.client.post(
-            "/api/v1/rag/search",
-            headers=self.auth_headers,
-            json={
-                "query": "machine learning concepts",
-                "search_type": "semantic",
-                "databases": ["media_db"]
-            }
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "results" in data
-        assert isinstance(data["results"], list)
-        assert "total_results" in data
-        assert data["total_results"] >= 0
-    
-    def test_advanced_search_with_filters(self):
-        """Test advanced search without mocking."""
-        response = self.client.post(
-            "/api/v1/rag/advanced",
-            headers=self.auth_headers,
-            json={
-                "query": "advanced query",
-                "search_config": {
-                    "search_type": "hybrid",
-                    "limit": 20,
-                    "databases": ["media_db"]
-                }
-            }
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "results" in data
-        assert isinstance(data["results"], list)
-    
-    # ============= Agent Tests =============
-    
-    def test_simple_agent_qa(self):
-        """Test simple agent Q&A without mocking."""
-        # Mock only the LLM call since we don't want to make real API calls
-        with MockLLMResponse("RAG is a technique that combines information retrieval with text generation."):
-            response = self.client.post(
-                "/api/v1/rag/agent",
-                headers=self.auth_headers,
-                json={
-                    "message": "What is RAG?",
-                    "search_databases": ["media_db"],
-                    "model": "gpt-4"
-                }
-            )
-        
-        if response.status_code != 200:
-            print(f"Response status: {response.status_code}")
-            print(f"Response body: {response.text}")
-        assert response.status_code == 200
-        data = response.json()
-        assert "response" in data
-        assert "conversation_id" in data
-        assert "sources" in data
-    
-    def test_simple_agent_with_conversation(self):
-        """Test simple agent with conversation context."""
-        # Use the conversation ID from setup
-        with MockLLMResponse("Follow-up answer based on context."):
-            response = self.client.post(
-                "/api/v1/rag/agent",
-                headers=self.auth_headers,
-                json={
-                    "message": "Tell me more",
-                    "conversation_id": self.test_conversation_id,
-                    "search_databases": ["media_db"]
-                }
-            )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "response" in data
-        assert data["conversation_id"] == self.test_conversation_id
-    
-    def test_advanced_agent_research_mode(self):
-        """Test advanced agent in research mode."""
-        with MockLLMResponse("Comprehensive research answer."):
-            response = self.client.post(
-                "/api/v1/rag/agent/advanced",
-                headers=self.auth_headers,
-                json={
-                    "message": "Research RAG techniques",
-                    "mode": "research",
-                    "search_config": {
-                        "databases": ["media_db"],
-                        "search_type": "hybrid",
-                        "limit": 10
-                    },
-                    "generation_config": {
-                        "model": "gpt-4",
-                        "temperature": 0.7
-                    }
-                }
-            )
-        
-        if response.status_code != 200:
-            print(f"Response status: {response.status_code}")
-            print(f"Response body: {response.text}")
-        assert response.status_code == 200
-        data = response.json()
-        assert "response" in data
-        assert "sources" in data
-        assert "mode_used" in data
-        assert data["mode_used"] == "research"
-    
-    def test_advanced_agent_streaming(self):
-        """Test advanced agent with streaming (non-streaming fallback)."""
-        # Streaming is complex to test, so we test the non-streaming fallback
-        with MockLLMResponse("Streaming response content."):
-            response = self.client.post(
-                "/api/v1/rag/agent/advanced",
-                headers=self.auth_headers,
-                json={
-                    "message": "Stream this response",
-                    "generation_config": {
-                        "stream": False  # Use non-streaming for simplicity
-                    }
-                }
-            )
-        
-        if response.status_code != 200:
-            print(f"Response status: {response.status_code}")
-            print(f"Response body: {response.text}")
-        assert response.status_code == 200
-        data = response.json()
-        assert "response" in data
-    
-    def test_search_error_handling(self):
-        """Test error handling with invalid request."""
-        response = self.client.post(
-            "/api/v1/rag/search",
-            headers=self.auth_headers,
-            json={
-                # Invalid: missing required 'query' field
-                "search_type": "semantic"
-            }
-        )
-        
-        # Should return validation error
-        assert response.status_code == 422
-        data = response.json()
-        assert "detail" in data
+    # ============= Unified Endpoints =============
+
+    def test_unified_search_basic(self):
+        """POST /api/v1/rag/search with minimal params."""
+        payload = {
+            "query": "machine learning concepts",
+            "sources": ["media_db"],
+            "search_mode": "hybrid",
+            "top_k": 5
+        }
+        resp = self.client.post("/api/v1/rag/search", headers=self.auth_headers, json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("query") == payload["query"]
+        assert isinstance(data.get("documents", []), list)
+
+    def test_unified_search_with_citations_and_generation(self):
+        """Enable citations and generation flags and verify response shape."""
+        payload = {
+            "query": "what is rag?",
+            "sources": ["media_db"],
+            "enable_citations": True,
+            "enable_generation": True,
+            "top_k": 3
+        }
+        resp = self.client.post("/api/v1/rag/search", headers=self.auth_headers, json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "documents" in data
+        assert "citations" in data
+        # generated_answer may be empty; ensure key exists
+        assert "generated_answer" in data
+
+    def test_unified_simple_and_advanced(self):
+        # Simple GET
+        resp_simple = self.client.get("/api/v1/rag/simple", params={"query": "neural networks", "top_k": 2}, headers=self.auth_headers)
+        assert resp_simple.status_code == 200
+        ds = resp_simple.json()
+        assert "documents" in ds
+
+        # Advanced GET
+        resp_adv = self.client.get("/api/v1/rag/advanced", params={"query": "deep learning", "with_citations": True}, headers=self.auth_headers)
+        assert resp_adv.status_code == 200
+        da = resp_adv.json()
+        assert "documents" in da
+
+    def test_unified_batch_and_health(self):
+        # Batch POST
+        batch = {
+            "queries": ["ai", "ml"],
+            "sources": ["media_db"],
+            "top_k": 2
+        }
+        rb = self.client.post("/api/v1/rag/batch", headers=self.auth_headers, json=batch)
+        assert rb.status_code == 200
+        bd = rb.json()
+        assert bd.get("total_queries") == 2
+        assert isinstance(bd.get("results", []), list)
+
+        # Health GET
+        rh = self.client.get("/api/v1/rag/health", headers=self.auth_headers)
+        assert rh.status_code == 200
+        hd = rh.json()
+        assert "status" in hd
+
+    def test_unified_validation_error(self):
+        # Missing required query
+        resp = self.client.post("/api/v1/rag/search", headers=self.auth_headers, json={"top_k": 1})
+        assert resp.status_code == 422
+        assert "detail" in resp.json()
 
 
-class MockLLMResponse:
-    """Context manager to mock LLM responses."""
-    
-    def __init__(self, response_text):
-        self.response_text = response_text
-        self.original_func = None
-    
-    def __enter__(self):
-        """Mock the LLM call."""
-        from tldw_Server_API.app.core.RAG.rag_service.integration import RAGService
-        import unittest.mock as mock
-        
-        # Create a mock for generate_answer method that returns proper format
-        async def mock_generate(*args, **kwargs):
-            # Check if called with 'messages' parameter (advanced agent)
-            if 'messages' in kwargs:
-                # Advanced agent expects a string response
-                return self.response_text
-            else:
-                # Simple agent expects a dict with 'answer' key
-                return {
-                    "answer": self.response_text,
-                    "sources": [],
-                    "metadata": {}
-                }
-        
-        # Patch the RAGService.generate_answer method
-        self.patcher = mock.patch.object(RAGService, 'generate_answer', new=mock_generate)
-        self.patcher.start()
-        
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Stop the patch."""
-        if hasattr(self, 'patcher'):
-            self.patcher.stop()
+# Agent-specific tests have been removed in favor of unified search/generation flags.

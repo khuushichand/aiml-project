@@ -143,6 +143,10 @@ class ElevenLabsAdapter(TTSAdapter):
             "description": "Turbo model for low latency English"
         }
     }
+
+# Backward-compat alias expected by some tests
+class ElevenLabsTTSAdapter(ElevenLabsAdapter):
+    pass
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)

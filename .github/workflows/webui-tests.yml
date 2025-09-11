@@ -1,0 +1,51 @@
+name: WebUI Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  webui-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install WebUI unit test deps
+        working-directory: tldw_Server_API/WebUI
+        run: |
+          npm ci || npm install
+
+      - name: Run WebUI unit tests (Vitest)
+        working-directory: tldw_Server_API/WebUI
+        run: |
+          npm test
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps
+
+      - name: Run WebUI E2E tests (Playwright)
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          python -m pytest -m "e2e" -v tldw_Server_API/tests/webui_e2e/
+

@@ -524,6 +524,60 @@ async def expand_acronyms(query: str) -> str:
     return query
 
 
+async def expand_synonyms(query: str) -> List[str]:
+    """Return a small list of synonym-based variations for compatibility."""
+    expander = SynonymExpansion()
+    expanded = await expander.expand(query)
+    return expanded.variations or []
+
+
+async def domain_specific_expansion(query: str) -> List[str]:
+    """Return domain-specific variations for compatibility."""
+    expander = DomainExpansion()
+    expanded = await expander.expand(query)
+    return expanded.variations or []
+
+
+async def entity_recognition_expansion(query: str) -> List[str]:
+    """Return entity-based variations for compatibility."""
+    expander = EntityExpansion()
+    expanded = await expander.expand(query)
+    return expanded.variations or []
+
+
+async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] = None) -> str:
+    """Combined quick expansion used by unified pipeline tests.
+
+    Returns a simple string that concatenates the first available expansion.
+    """
+    strategies = strategies or ["acronym", "synonym"]
+    first_variation: Optional[str] = None
+
+    if "acronym" in strategies:
+        try:
+            ac = await expand_acronyms(query)
+            if isinstance(ac, str) and ac.strip() and ac != query:
+                first_variation = ac.replace(query, "").strip()
+        except Exception:
+            pass
+    if not first_variation and "synonym" in strategies:
+        try:
+            syns = await expand_synonyms(query)
+            if syns:
+                first_variation = syns[0]
+        except Exception:
+            pass
+    if not first_variation and "domain" in strategies:
+        try:
+            dom = await domain_specific_expansion(query)
+            if dom:
+                first_variation = dom[0]
+        except Exception:
+            pass
+
+    return f"{query} {first_variation}".strip() if first_variation else query
+
+
 class HybridQueryExpansion(QueryExpansionStrategy):
     """
     Combines multiple expansion strategies for comprehensive query expansion.

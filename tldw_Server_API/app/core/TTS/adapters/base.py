@@ -83,6 +83,15 @@ class TTSCapabilities:
     sample_rate: int = 24000
     default_format: AudioFormat = AudioFormat.MP3
 
+# Backward-compatibility for tests expecting VoiceSettings
+@dataclass
+class VoiceSettings:
+    id: str
+    name: str
+    language: str = "en"
+    gender: Optional[str] = None
+    style: Optional[str] = None
+
 @dataclass
 class TTSRequest:
     """Unified TTS request format"""

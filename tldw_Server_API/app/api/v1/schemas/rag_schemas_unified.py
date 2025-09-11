@@ -30,6 +30,24 @@ class UnifiedRAGRequest(BaseModel):
         description="Databases to search: media_db, notes, characters, chats",
         example=["media_db", "notes"]
     )
+
+    @validator("sources", pre=True, always=True)
+    def _validate_sources(cls, v):
+        allowed = {"media_db", "notes", "characters", "chats"}
+        alias_map = {"media": "media_db", "character_cards": "characters"}
+        if v is None:
+            return ["media_db"]
+        if not isinstance(v, list):
+            raise ValueError("sources must be a list of strings")
+        normalized = []
+        for s in v:
+            if not isinstance(s, str):
+                raise ValueError("sources entries must be strings")
+            key = alias_map.get(s.strip().lower(), s.strip().lower())
+            if key not in allowed:
+                raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(list(allowed))}")
+            normalized.append(key)
+        return normalized
     
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = Field(

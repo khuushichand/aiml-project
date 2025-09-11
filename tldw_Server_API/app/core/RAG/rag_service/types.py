@@ -92,7 +92,7 @@ class Document:
     id: str  # Unique identifier
     content: str  # The actual text content
     metadata: Dict[str, Any]  # Source-specific metadata
-    source: DataSource  # Where this document came from
+    source: DataSource = DataSource.MEDIA_DB  # Default for compatibility with tests
     score: float = 0.0  # Relevance score (set during retrieval)
     embedding: Optional[np.ndarray] = None  # Vector embedding if available
     

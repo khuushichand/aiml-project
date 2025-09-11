@@ -978,6 +978,14 @@ class MultiDatabaseRetriever:
         
         return all_documents
     
+# ---------------------------------------------------------------------------
+# Backward compatibility aliases for test suites expecting older names
+try:
+    # Some tests import MediaDatabaseRetriever; map to MediaDBRetriever for compatibility
+    MediaDatabaseRetriever = MediaDBRetriever  # type: ignore[name-defined]
+except Exception:
+    pass
+
     async def retrieve_with_fusion(
         self,
         query: str,

@@ -130,6 +130,10 @@ class OpenAIAdapter(TTSAdapter):
                 provider=self.provider_name,
                 details={"error": str(e)}
             )
+
+# Backward-compat alias expected by some tests
+class OpenAITTSAdapter(OpenAIAdapter):
+    pass
     
     async def get_capabilities(self) -> TTSCapabilities:
         """Get OpenAI TTS capabilities"""
