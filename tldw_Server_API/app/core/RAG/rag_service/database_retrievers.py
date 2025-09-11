@@ -810,7 +810,7 @@ class CharacterCardsRetriever(BaseRetriever):
                     "creator": row["creator"],
                     "version": row["version"],
                     "type": "character_card",
-                    "source": "character_cards"
+                    "source": "characters"
                 },
                 score=score
             )
@@ -850,7 +850,7 @@ class CharacterCardsRetriever(BaseRetriever):
                         "timestamp": row["timestamp"],
                         "character": row["character_name"],
                         "type": "chat_message",
-                        "source": "character_chats"
+                        "source": "characters"
                     },
                     score=0.5  # Lower base score for chat messages
                 )

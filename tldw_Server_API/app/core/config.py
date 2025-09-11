@@ -447,17 +447,22 @@ def load_settings():
         ),
 
         # Merge relevant parts from comprehensive_config
-        # Embedding Config
-        "EMBEDDING_CONFIG": comprehensive_config.get("embedding_config", {
-            'embedding_provider': 'openai', # Fallback defaults
-            'embedding_model': 'text-embedding-3-small',
-            'onnx_model_path': "./Models/onnx_models/text-embedding-3-small.onnx",
-            'model_dir': "./Models",
-            'embedding_api_url': "http://localhost:8080/v1/embeddings",
-            'embedding_api_key': '',
-            'chunk_size': 400,
-            'chunk_overlap': 200
-        }),
+        # Embedding Config: support both 'embedding_config' and 'Embeddings' sections
+        "EMBEDDING_CONFIG": (
+            comprehensive_config.get("embedding_config")
+            or comprehensive_config.get("Embeddings")
+            or comprehensive_config.get("EMBEDDINGS")
+            or {
+                'embedding_provider': 'openai', # Fallback defaults
+                'embedding_model': 'text-embedding-3-small',
+                'onnx_model_path': "./Models/onnx_models/text-embedding-3-small.onnx",
+                'model_dir': "./Models",
+                'embedding_api_url': "http://localhost:8080/v1/embeddings",
+                'embedding_api_key': '',
+                'chunk_size': 400,
+                'chunk_overlap': 200
+            }
+        ),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections

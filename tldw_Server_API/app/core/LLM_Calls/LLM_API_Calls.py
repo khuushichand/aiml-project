@@ -242,8 +242,9 @@ def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Option
         logging.error(error_message, exc_info=True)
         raise  # Re-raise the HTTPError
     except requests.exceptions.RequestException as e:
-        logging.error(f"OpenAI Embeddings (batch): Error making API request: {str(e)}", exc_info=True)
-        raise ValueError(f"OpenAI Embeddings (batch): Error making API request: {str(e)}")
+        # Propagate request exceptions so upstream retry logic can handle transient failures
+        logging.error(f"OpenAI Embeddings (batch): RequestException: {str(e)}", exc_info=True)
+        raise
     except Exception as e:
         logging.error(f"OpenAI Embeddings (batch): Unexpected error: {str(e)}", exc_info=True)
         raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}")

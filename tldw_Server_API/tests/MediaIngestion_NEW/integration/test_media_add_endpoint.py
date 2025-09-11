@@ -19,7 +19,7 @@ from pathlib import Path
 class TestAddMediaEndpoint:
     """Test the /media/add endpoint."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('yt_dlp.YoutubeDL.extract_info')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.transcribe_audio')
     def test_add_video_from_url(self, mock_transcribe, mock_yt_dlp, test_client, auth_headers):
@@ -53,7 +53,7 @@ class TestAddMediaEndpoint:
         assert data["message"] == "Media added successfully"
         assert "media_id" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_add_document_with_content(self, test_client, auth_headers, populated_media_db):
         """Test adding a document with direct content."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -87,7 +87,7 @@ class TestAddMediaEndpoint:
         finally:
             app.dependency_overrides.clear()
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_add_with_invalid_url(self, test_client, auth_headers):
         """Test adding media with invalid URL."""
         response = test_client.post(
@@ -104,7 +104,7 @@ class TestAddMediaEndpoint:
         data = response.json()
         assert "error" in data or "detail" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_add_without_required_fields(self, test_client, auth_headers):
         """Test adding media without required fields."""
         response = test_client.post(
@@ -125,7 +125,7 @@ class TestAddMediaEndpoint:
 class TestChunkingStrategies:
     """Test different chunking strategies during media addition."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_add_with_token_chunking(self, test_client, auth_headers, populated_media_db):
         """Test adding media with token-based chunking."""
         from tldw_Server_API.app.main import app
@@ -153,7 +153,7 @@ class TestChunkingStrategies:
         finally:
             app.dependency_overrides.clear()
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_add_with_sentence_chunking(self, test_client, auth_headers, populated_media_db):
         """Test adding media with sentence-based chunking."""
         from tldw_Server_API.app.main import app
@@ -188,7 +188,7 @@ class TestChunkingStrategies:
 class TestDatabasePersistence:
     """Test that media is properly persisted to database."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_media_persisted_correctly(self, test_client, auth_headers, media_database):
         """Test that media is correctly saved to database."""
         from tldw_Server_API.app.main import app
@@ -221,7 +221,7 @@ class TestDatabasePersistence:
         finally:
             app.dependency_overrides.clear()
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_media_versioning(self, test_client, auth_headers, media_database):
         """Test that media versions are tracked."""
         from tldw_Server_API.app.main import app
@@ -270,7 +270,7 @@ class TestDatabasePersistence:
 class TestErrorHandling:
     """Test error handling in the add media endpoint."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.transcribe_audio')
     def test_transcription_failure_handling(self, mock_transcribe, test_client, auth_headers):
         """Test handling of transcription failures."""
@@ -290,7 +290,7 @@ class TestErrorHandling:
         # Should handle gracefully - either succeed without transcription or return error
         assert response.status_code in [status.HTTP_200_OK, status.HTTP_500_INTERNAL_SERVER_ERROR]
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_database_failure_handling(self, test_client, auth_headers):
         """Test handling of database failures."""
         from tldw_Server_API.app.main import app
@@ -325,7 +325,7 @@ class TestErrorHandling:
 class TestFileUpload:
     """Test file upload functionality."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_upload_text_file(self, test_client, auth_headers, test_text_file):
         """Test uploading a text file."""
         with open(test_text_file, 'rb') as f:
@@ -345,7 +345,7 @@ class TestFileUpload:
                 data = response.json()
                 assert "media_id" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     def test_upload_invalid_file_type(self, test_client, auth_headers, test_media_dir):
         """Test rejection of invalid file types."""
         exe_file = test_media_dir / "test.exe"

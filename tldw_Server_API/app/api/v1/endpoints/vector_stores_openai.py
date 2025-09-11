@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from loguru import logger
+import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
@@ -18,6 +19,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 import pathlib
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
     create_embeddings_batch,
@@ -56,6 +58,70 @@ except Exception as _e:
 
 # In-memory store dimension registry (authoritative if present)
 _STORE_DIMENSIONS: Dict[str, int] = {}
+
+
+# ==========================
+# Helpers: policy + token limits
+# ==========================
+
+def _allowed_providers() -> Optional[List[str]]:
+    try:
+        vals = settings.get("ALLOWED_EMBEDDING_PROVIDERS", [])
+        if isinstance(vals, list) and vals:
+            return [str(v).lower() for v in vals]
+    except Exception:
+        pass
+    return None
+
+
+def _allowed_models() -> Optional[List[str]]:
+    try:
+        vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
+        if isinstance(vals, list) and vals:
+            return [str(v) for v in vals]
+    except Exception:
+        pass
+    return None
+
+
+def _model_allowed(model: str, allowed: List[str]) -> bool:
+    for pat in allowed:
+        if pat.endswith("*") and model.startswith(pat[:-1]):
+            return True
+        if model == pat:
+            return True
+    return False
+
+
+def _get_model_max_tokens(provider: str, model: str) -> int:
+    try:
+        mapping = settings.get("EMBEDDING_MODEL_MAX_TOKENS", {}) or {}
+        key = f"{provider}:{model}"
+        if key in mapping:
+            return int(mapping[key])
+        if model in mapping:
+            return int(mapping[model])
+    except Exception:
+        pass
+    # default
+    if provider.lower() == 'openai':
+        return 8192
+    return 8192
+
+
+def _get_tokenizer(model_name: str):
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except Exception:
+        return tiktoken.get_encoding("cl100k_base")
+
+
+def _count_tokens(text: str, model_name: str) -> int:
+    try:
+        enc = _get_tokenizer(model_name)
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
 
 
 # ==========================
@@ -475,6 +541,32 @@ async def upsert_vectors(
         app_config = {"embedding_config": embedding_settings}
         # Default model id
         model_id = embedding_settings.get("default_model_id") or embedding_settings.get("embedding_model") or "text-embedding-3-small"
+        provider = embedding_settings.get("embedding_provider", "openai")
+
+        # Provider/model allowlist enforcement
+        provs = _allowed_providers()
+        if provs is not None and provider.lower() not in provs:
+            raise HTTPException(status_code=403, detail=f"Provider '{provider}' is not allowed for embeddings")
+        mods = _allowed_models()
+        if mods is not None and not _model_allowed(model_id, mods):
+            raise HTTPException(status_code=403, detail=f"Model '{model_id}' is not allowed for embeddings")
+
+        # Token length checks
+        max_tokens = _get_model_max_tokens(provider, model_id)
+        too_long: List[Tuple[int, int]] = []
+        for idx, tx in enumerate(texts_to_embed):
+            tok = _count_tokens(tx, model_id)
+            if tok > max_tokens:
+                too_long.append((idx, tok))
+        if too_long:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "input_too_long",
+                    "message": f"One or more inputs exceed max tokens {max_tokens} for model {model_id}",
+                    "details": [{"index": i, "tokens": tok} for (i, tok) in too_long]
+                }
+            )
         try:
             loop = asyncio.get_running_loop()
             embedded = await loop.run_in_executor(None, create_embeddings_batch, texts_to_embed, app_config, model_id)
@@ -638,6 +730,23 @@ async def query_vectors(
         embedding_settings = settings.get("EMBEDDING_CONFIG", {})
         app_config = {"embedding_config": embedding_settings}
         model_id = embedding_settings.get("default_model_id") or embedding_settings.get("embedding_model") or "text-embedding-3-small"
+        provider = embedding_settings.get("embedding_provider", "openai")
+
+        # Allowlist + token checks
+        provs = _allowed_providers()
+        if provs is not None and provider.lower() not in provs:
+            raise HTTPException(status_code=403, detail=f"Provider '{provider}' is not allowed for embeddings")
+        mods = _allowed_models()
+        if mods is not None and not _model_allowed(model_id, mods):
+            raise HTTPException(status_code=403, detail=f"Model '{model_id}' is not allowed for embeddings")
+        max_tokens = _get_model_max_tokens(provider, model_id)
+        token_len = _count_tokens(payload.query, model_id)
+        if token_len > max_tokens:
+            raise HTTPException(status_code=400, detail={
+                "error": "input_too_long",
+                "message": f"Query exceeds max tokens {max_tokens} for model {model_id}",
+                "details": [{"tokens": token_len}]
+            })
         try:
             loop = asyncio.get_running_loop()
             embedded = await loop.run_in_executor(None, create_embeddings_batch, [payload.query], app_config, model_id)
@@ -761,7 +870,14 @@ async def list_vector_batches(
     requested_user_id = str(getattr(current_user,'id','1'))
     # If an override is requested, require admin
     if user_id is not None and user_id != requested_user_id:
-        if not getattr(current_user, 'is_admin', False):
+        # Allow in single-user mode; otherwise require admin
+        allow_override = False
+        try:
+            if is_single_user_mode():
+                allow_override = True
+        except Exception:
+            pass
+        if not allow_override and not getattr(current_user, 'is_admin', False):
             raise HTTPException(status_code=403, detail="Admin privileges required to view other users' batches")
         requested_user_id = str(user_id)
     rows = db_list_batches(user_id=requested_user_id, status=status, limit=limit, offset=offset)
@@ -933,6 +1049,26 @@ async def create_store_from_media(
     step = 64
     for start in range(0, len(texts), step):
         subtexts = texts[start:start+step]
+        # Allowlist + token checks per slice
+        provider = embedding_settings.get("embedding_provider", "openai")
+        provs = _allowed_providers()
+        if provs is not None and provider.lower() not in provs:
+            raise HTTPException(status_code=403, detail=f"Provider '{provider}' is not allowed for embeddings")
+        mods = _allowed_models()
+        if mods is not None and not _model_allowed(model_id, mods):
+            raise HTTPException(status_code=403, detail=f"Model '{model_id}' is not allowed for embeddings")
+        max_tokens = _get_model_max_tokens(provider, model_id)
+        too_long: List[Tuple[int, int]] = []
+        for i, tx in enumerate(subtexts):
+            tok = _count_tokens(tx, model_id)
+            if tok > max_tokens:
+                too_long.append((start + i, tok))
+        if too_long:
+            raise HTTPException(status_code=400, detail={
+                "error": "input_too_long",
+                "message": f"One or more inputs exceed max tokens {max_tokens} for model {model_id}",
+                "details": [{"index": i, "tokens": tok} for (i, tok) in too_long]
+            })
         try:
             loop = asyncio.get_running_loop()
             vecs = await loop.run_in_executor(None, create_embeddings_batch, subtexts, app_config, model_id)

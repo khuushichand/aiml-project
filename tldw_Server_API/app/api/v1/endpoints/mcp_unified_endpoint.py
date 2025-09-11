@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import (
     get_jwt_manager
 )
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["MCP Unified"])
@@ -130,6 +131,11 @@ async def require_admin(
     user: TokenData = Depends(require_user)
 ) -> TokenData:
     """Require admin role"""
+    try:
+        if is_single_user_mode():
+            return user
+    except Exception:
+        pass
     if UserRole.ADMIN.value not in user.roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

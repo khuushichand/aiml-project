@@ -1,0 +1,62 @@
+import os
+import time
+from fastapi.testclient import TestClient
+from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+
+
+class _FakeMediaDB:
+    def __init__(self):
+        self._items = {
+            123: {"id": 123, "title": "Doc", "author": "A", "content": {"content": "short text"}},
+        }
+
+    def get_media_by_id(self, media_id: int):
+        return self._items.get(media_id)
+
+
+def _client():
+    c = TestClient(app)
+    c.cookies.set("csrf_token", "test-csrf")
+    return c
+
+
+def test_media_embedding_job_lifecycle():
+    os.environ["TESTING"] = "true"
+    try:
+        # Keep token limits permissive
+        settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai", "huggingface"]
+        settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-small", "sentence-transformers/all-MiniLM-L6-v2"]
+        settings["EMBEDDING_MODEL_MAX_TOKENS"] = {"openai:text-embedding-3-small": 8192}
+
+        # Override media DB dependency
+        app.dependency_overrides[get_media_db_for_user] = lambda: _FakeMediaDB()
+
+        client = _client()
+        # Start job
+        r = client.post("/api/v1/media/123/embeddings", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("status") == "accepted"
+        job_id = body.get("job_id")
+        assert job_id
+
+        # Get job status (may be processing/completed/failed depending on environment)
+        r2 = client.get(f"/api/v1/media/embeddings/jobs/{job_id}")
+        assert r2.status_code == 200
+        data = r2.json()
+        assert data.get("id") == job_id
+        assert data.get("media_id") == 123
+        assert data.get("status") in ("processing", "completed", "failed")
+
+        # List jobs
+        r3 = client.get("/api/v1/media/embeddings/jobs")
+        assert r3.status_code == 200
+        j = r3.json()
+        assert isinstance(j.get("data"), list)
+        assert any(row.get("id") == job_id for row in j["data"]) 
+    finally:
+        os.environ.pop("TESTING", None)
+        app.dependency_overrides.pop(get_media_db_for_user, None)
+

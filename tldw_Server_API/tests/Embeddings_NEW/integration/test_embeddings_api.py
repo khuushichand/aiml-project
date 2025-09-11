@@ -20,7 +20,7 @@ from typing import List, Dict, Any
 class TestMediaEmbeddingsEndpoint:
     """Test the /api/v1/media/embeddings endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_create_embeddings_for_media(self, test_client, auth_headers, populated_media_database):
         """Test creating embeddings for a media item."""
         # Add a media item first
@@ -46,7 +46,7 @@ class TestMediaEmbeddingsEndpoint:
             assert "status" in data
             assert data["status"] == "processing"
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_get_embedding_status(self, test_client, auth_headers):
         """Test getting embedding job status."""
         job_id = "test-job-123"
@@ -61,7 +61,7 @@ class TestMediaEmbeddingsEndpoint:
             data = response.json()
             assert "error" in data or "detail" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
     async def test_batch_embeddings_creation(self, mock_transformer, test_client, auth_headers, populated_media_database):
         """Test creating embeddings for multiple media items."""
@@ -87,7 +87,7 @@ class TestMediaEmbeddingsEndpoint:
             assert "job_ids" in data
             assert len(data["job_ids"]) == len(media_ids)
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_search_by_embeddings(self, test_client, auth_headers, populated_chroma_collection):
         """Test searching using embeddings."""
         response = test_client.post(
@@ -112,7 +112,7 @@ class TestMediaEmbeddingsEndpoint:
 class TestEmbeddingModelsManagement:
     """Test embedding model management endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_list_available_models(self, test_client, auth_headers):
         """Test listing available embedding models."""
         response = test_client.get(
@@ -126,7 +126,7 @@ class TestEmbeddingModelsManagement:
             # Should have at least the default model
             assert any("all-MiniLM-L6-v2" in model for model in data)
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_get_model_info(self, test_client, auth_headers):
         """Test getting information about a specific model."""
         response = test_client.get(
@@ -140,7 +140,7 @@ class TestEmbeddingModelsManagement:
             assert data["dimension"] == 384
             assert "max_tokens" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
     async def test_warmup_model(self, mock_transformer, test_client, auth_headers):
         """Test model warmup endpoint."""
@@ -166,7 +166,7 @@ class TestEmbeddingModelsManagement:
 class TestChromaDBCollectionManagement:
     """Test ChromaDB collection management endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_create_collection(self, test_client, auth_headers, chroma_client):
         """Test creating a new ChromaDB collection."""
         response = test_client.post(
@@ -187,7 +187,7 @@ class TestChromaDBCollectionManagement:
             collections = chroma_client.list_collections()
             assert any(c.name == "test_collection" for c in collections)
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_list_collections(self, test_client, auth_headers, populated_chroma_collection):
         """Test listing ChromaDB collections."""
         response = test_client.get(
@@ -200,7 +200,7 @@ class TestChromaDBCollectionManagement:
             assert isinstance(data, list)
             assert len(data) > 0
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_delete_collection(self, test_client, auth_headers, chroma_collection):
         """Test deleting a ChromaDB collection."""
         collection_name = chroma_collection.name
@@ -215,7 +215,7 @@ class TestChromaDBCollectionManagement:
             with pytest.raises(Exception):
                 chroma_collection.get()
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_get_collection_stats(self, test_client, auth_headers, populated_chroma_collection):
         """Test getting collection statistics."""
         response = test_client.get(
@@ -236,7 +236,7 @@ class TestChromaDBCollectionManagement:
 class TestEmbeddingGenerationPipeline:
     """Test the full embedding generation pipeline."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
     async def test_full_pipeline_text_to_storage(self, mock_transformer, test_client, auth_headers, media_database):
         """Test full pipeline from text to stored embeddings."""
@@ -277,7 +277,7 @@ class TestEmbeddingGenerationPipeline:
                 status_data = status_response.json()
                 assert status_data["job_id"] == job_id
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_pipeline_with_custom_chunking(self, test_client, auth_headers, media_database):
         """Test pipeline with custom chunking strategy."""
         media_id = media_database.add_media(
@@ -307,7 +307,7 @@ class TestEmbeddingGenerationPipeline:
 class TestWorkerOrchestrationIntegration:
     """Test worker orchestration in integration scenarios."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_concurrent_job_processing(self, test_client, auth_headers, populated_media_database):
         """Test processing multiple concurrent embedding jobs."""
         # Get multiple media items
@@ -330,7 +330,7 @@ class TestWorkerOrchestrationIntegration:
                 status.HTTP_200_OK
             ]
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_job_priority_handling(self, test_client, auth_headers, media_database):
         """Test that high-priority jobs are processed first."""
         # Create media items
@@ -369,7 +369,7 @@ class TestWorkerOrchestrationIntegration:
 class TestErrorHandlingIntegration:
     """Test error handling in integration scenarios."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_invalid_model_error(self, test_client, auth_headers):
         """Test error handling for invalid model."""
         response = test_client.post(

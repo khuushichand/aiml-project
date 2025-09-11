@@ -65,6 +65,58 @@ def get_chatbook_service(
     return ChatbookService(str(user.id), db)
 
 
+@router.get("/health", summary="Chatbooks service health")
+async def chatbooks_health():
+    """Lightweight health endpoint for the Chatbooks subsystem."""
+    from datetime import datetime
+    from pathlib import Path
+    import os
+    import tempfile
+
+    health = {
+        "service": "chatbooks",
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "components": {}
+    }
+
+    try:
+        # Mirror base path selection logic from service
+        if os.environ.get('TLDW_USER_DATA_PATH'):
+            base_data_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
+        elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
+            base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
+        else:
+            base_data_dir = Path('/var/lib/tldw/user_data')
+
+        exists = base_data_dir.exists()
+        writable = False
+        if exists:
+            try:
+                test_file = base_data_dir / ".chatbooks_health_check"
+                test_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(test_file, "w") as f:
+                    f.write("ok")
+                os.remove(test_file)
+                writable = True
+            except Exception:
+                writable = False
+
+        health["components"]["storage_base"] = {
+            "path": str(base_data_dir),
+            "exists": exists,
+            "writable": writable
+        }
+
+        if not exists or not writable:
+            health["status"] = "degraded"
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["error"] = str(e)
+
+    return health
+
+
 @router.post("/export", response_model=CreateChatbookResponse)
 @limiter.limit("5/minute")  # Rate limit: 5 exports per minute
 async def create_chatbook(

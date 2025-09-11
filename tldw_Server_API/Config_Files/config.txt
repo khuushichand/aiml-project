@@ -232,6 +232,8 @@ contextual_chunk_method = situate_context
 # Method for adding context: 'situate_context' adds document-aware summaries
 # huggingface: model = dunzhang/stella_en_400M_v5
 
+
+
 # Resource Management Settings
 max_models_in_memory = 3
 # Maximum number of embedding models to keep loaded in memory simultaneously
@@ -243,6 +245,8 @@ model_lru_ttl_seconds = 3600
 
 [RAG]
 # RAG (Retrieval-Augmented Generation) Settings
+vector_store_type = chromadb
+#
 enable_parent_expansion = false
 # When enabled, expands retrieved chunks with parent document context
 parent_expansion_size = 500

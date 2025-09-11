@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 from typing import List, Dict, Any, Optional
+import os
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response
 from loguru import logger
 
@@ -112,13 +113,28 @@ async def check_evaluation_rate_limit(
         # Standard limit for single evaluations
         limit = 10
         endpoint_type = "eval_standard"
+
+    # Test-mode overrides for deterministic rate limiting in integration tests
+    try:
+        test_limit_env = os.getenv("TEST_EVALUATIONS_RATE_LIMIT")
+        if test_limit_env is not None:
+            limit = max(1, int(test_limit_env))
+    except Exception:
+        pass
     
     # Check rate limit
+    window_minutes = 1
+    try:
+        window_env = os.getenv("TEST_EVALUATIONS_RATE_WINDOW_MINUTES")
+        if window_env is not None:
+            window_minutes = max(1, int(window_env))
+    except Exception:
+        pass
     allowed, metadata = await rate_limiter.check_rate_limit(
         client_ip,
         endpoint_type,
         limit=limit,
-        window_minutes=1
+        window_minutes=window_minutes
     )
     retry_after = metadata.get("retry_after", 60)
     

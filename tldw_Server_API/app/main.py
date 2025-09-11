@@ -426,6 +426,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Global SlowAPI rate limiting (consistent 429 handling across endpoints)
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.middleware import SlowAPIMiddleware
+    app.state.limiter = Limiter(key_func=get_remote_address)
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+    logger.info("Global rate limiter initialized (SlowAPI)")
+except Exception as _e:
+    logger.warning(f"Global rate limiter not initialized: {_e}")
+
 # Display API key information on startup for single user mode
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 

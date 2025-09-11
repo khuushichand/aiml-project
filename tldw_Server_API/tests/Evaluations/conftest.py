@@ -17,6 +17,8 @@ from datetime import datetime
 import pytest
 import os
 import pytest_asyncio
+from aiohttp import web
+
 
 # Import application components
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
@@ -39,6 +41,9 @@ def pytest_configure(config):
     # Ensure TEST_MODE is enabled for the Evaluations test suite to bypass
     # global API rate limiting paths that are unrelated to unit correctness.
     os.environ.setdefault("TEST_MODE", "true")
+    # Set deterministic, low rate limits for integration tests
+    os.environ.setdefault("TEST_EVALUATIONS_RATE_LIMIT", "2")
+    os.environ.setdefault("TEST_EVALUATIONS_RATE_WINDOW_MINUTES", "1")
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests with generated data")
@@ -238,6 +243,95 @@ def mock_rate_limiter(monkeypatch):
         pass  # slowapi not installed in test environment
     
     return mock_limiter
+
+
+# ============================================================================
+# Webhook Receiver Fixtures (real local HTTP servers)
+# ============================================================================
+
+@pytest_asyncio.fixture(scope="function")
+async def webhook_receiver_server():
+    """Start a real local HTTP server to receive webhooks.
+
+    Returns a dict with 'url' and 'received' list of captured requests.
+    """
+    app = web.Application()
+    received = []
+
+    async def handle(request: web.Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        received.append({
+            "path": request.path,
+            "headers": dict(request.headers),
+            "json": payload,
+            "body": await request.text()
+        })
+        return web.json_response({"ok": True})
+
+    app.add_routes([web.post('/webhook', handle)])
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', 0)
+    await site.start()
+
+    # Discover the bound port
+    sockets = getattr(site, '_server').sockets  # type: ignore[attr-defined]
+    port = sockets[0].getsockname()[1]
+    url = f"http://127.0.0.1:{port}/webhook"
+
+    try:
+        yield {"url": url, "received": received}
+    finally:
+        await runner.cleanup()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def flaky_webhook_receiver_server():
+    """Local webhook receiver that fails the first two attempts (500), then succeeds.
+
+    Useful for testing retry logic without mocks.
+    """
+    app = web.Application()
+    received = []
+    call_count = {"n": 0}
+
+    async def handle(request: web.Request):
+        call_count["n"] += 1
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        received.append({
+            "attempt": call_count["n"],
+            "path": request.path,
+            "headers": dict(request.headers),
+            "json": payload,
+            "body": await request.text()
+        })
+        # Fail first two attempts
+        if call_count["n"] < 3:
+            return web.Response(status=500, text="temporary failure")
+        return web.json_response({"ok": True})
+
+    app.add_routes([web.post('/webhook', handle)])
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', 0)
+    await site.start()
+
+    sockets = getattr(site, '_server').sockets  # type: ignore[attr-defined]
+    port = sockets[0].getsockname()[1]
+    url = f"http://127.0.0.1:{port}/webhook"
+
+    try:
+        yield {"url": url, "received": received}
+    finally:
+        await runner.cleanup()
 
 
 # ============================================================================

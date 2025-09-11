@@ -1,1 +1,2 @@
-# __init__.py for Evaluations tests
+"""Package marker for Evaluations tests."""
+

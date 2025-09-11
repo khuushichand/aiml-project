@@ -23,6 +23,15 @@ from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.core.config import settings, load_comprehensive_config
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
+import asyncio
+
+from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
+    init_db as jobs_init_db,
+    create_job as jobs_create,
+    update_job as jobs_update,
+    get_job as jobs_get,
+    list_jobs as jobs_list,
+)
 
 router = APIRouter(prefix="/media", tags=["Media Embeddings"])
 
@@ -70,6 +79,7 @@ class GenerateEmbeddingsResponse(BaseModel):
     embedding_count: Optional[int] = None
     embedding_model: str
     chunks_processed: Optional[int] = None
+    job_id: Optional[str] = None
 
 
 async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
@@ -301,7 +311,8 @@ async def generate_embeddings_for_media(
 @router.get("/{media_id}/embeddings/status", response_model=EmbeddingsStatusResponse)
 async def get_embeddings_status(
     media_id: int,
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user)
 ) -> EmbeddingsStatusResponse:
     """Check if embeddings exist for a media item"""
     try:
@@ -313,26 +324,42 @@ async def get_embeddings_status(
                 detail=f"Media item {media_id} not found"
             )
         
-        # Check if embeddings exist by trying to query ChromaDB
-        # Use per-user collection
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
-        manager = get_default_chroma_manager()
-        user_id = getattr(manager, 'user_id', '0')
+        # Check if embeddings exist by querying the per-user collection in ChromaDB
+        user_id = str(getattr(current_user, 'id', '1'))
+        from tldw_Server_API.app.core.config import settings as app_settings
+        embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
+        embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+        manager = ChromaDBManager(user_id=user_id, user_embedding_config=embedding_config)
         collection_name = f"user_{user_id}_media_embeddings"
-        has_embeddings = False  # Simplified for now
-        
-        response = EmbeddingsStatusResponse(
+
+        has_embeddings = False
+        embedding_count: Optional[int] = None
+        embedding_model: Optional[str] = None
+        last_generated: Optional[str] = None
+
+        try:
+            collection = manager.get_or_create_collection(collection_name)
+            # Try a filtered get to see if any vectors exist for this media_id
+            data = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=100000)
+            ids = (data or {}).get("ids") or []
+            has_embeddings = len(ids) > 0
+            if has_embeddings:
+                embedding_count = len(ids)
+                # Try to infer embedding model from first metadata
+                md_list = (data or {}).get("metadatas") or []
+                if md_list:
+                    first_md = md_list[0]
+                    embedding_model = first_md.get("embedding_model") if isinstance(first_md, dict) else None
+        except Exception as e:
+            logger.warning(f"ChromaDB status check failed for media {media_id}: {e}")
+
+        return EmbeddingsStatusResponse(
             media_id=media_id,
-            has_embeddings=has_embeddings
+            has_embeddings=has_embeddings,
+            embedding_count=embedding_count,
+            embedding_model=embedding_model,
+            last_generated=last_generated,
         )
-        
-        if has_embeddings:
-            # Get additional info if embeddings exist
-            # Note: This would need ChromaDB query implementation
-            response.embedding_count = None  # TODO: Get actual count from ChromaDB
-            response.embedding_model = None  # TODO: Get from ChromaDB metadata
-        
-        return response
         
     except HTTPException:
         raise
@@ -366,32 +393,52 @@ async def generate_embeddings(
         # Get media content
         media_content = await get_media_content(media_id, db)
         
-        # Generate embeddings synchronously for now
-        # In production, this should be done in a background task
-        result = await generate_embeddings_for_media(
+        # Persist a job record and run generation in the background
+        jobs_init_db(user_id)
+        import uuid
+        job_id = f"mej_{uuid.uuid4().hex[:20]}"
+        try:
+            jobs_create(job_id=job_id, media_id=media_id, user_id=user_id, embedding_model=embedding_model)
+        except Exception as e:
+            logger.warning(f"Failed to persist media embedding job: {e}")
+
+        async def _run_job():
+            try:
+                result = await generate_embeddings_for_media(
+                    media_id=media_id,
+                    media_content=media_content,
+                    embedding_model=embedding_model,
+                    embedding_provider=embedding_provider,
+                    chunk_size=request.chunk_size,
+                    chunk_overlap=request.chunk_overlap,
+                    user_id=user_id
+                )
+                try:
+                    jobs_update(job_id=job_id, user_id=user_id, status='completed',
+                                embedding_count=result.get('embedding_count'),
+                                chunks_processed=result.get('chunks_processed'))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Background embeddings generation failed for media {media_id}: {e}")
+                try:
+                    jobs_update(job_id=job_id, user_id=user_id, status='failed', error=str(e))
+                except Exception:
+                    pass
+
+        # Use create_task within background task runner
+        background_tasks.add_task(asyncio.create_task, _run_job())
+
+        # Return accepted response with job id
+        return GenerateEmbeddingsResponse(
             media_id=media_id,
-            media_content=media_content,
+            status="accepted",
+            message="Embedding generation started",
+            embedding_count=None,
             embedding_model=embedding_model,
-            embedding_provider=embedding_provider,
-            chunk_size=request.chunk_size,
-            chunk_overlap=request.chunk_overlap,
-            user_id=user_id
+            chunks_processed=None,
+            job_id=job_id
         )
-        
-        if result["status"] == "success":
-            return GenerateEmbeddingsResponse(
-                media_id=media_id,
-                status="success",
-                message=result["message"],
-                embedding_count=result.get("embedding_count"),
-                embedding_model=embedding_model,
-                chunks_processed=result.get("chunks_processed")
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result["message"]
-            )
             
     except HTTPException:
         raise
@@ -406,7 +453,8 @@ async def generate_embeddings(
 @router.delete("/{media_id}/embeddings")
 async def delete_embeddings(
     media_id: int,
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user)
 ) -> Dict[str, Any]:
     """Delete embeddings for a media item"""
     try:
@@ -418,18 +466,29 @@ async def delete_embeddings(
                 detail=f"Media item {media_id} not found"
             )
         
-        # Delete embeddings from per-user collection
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
-        manager = get_default_chroma_manager()
-        user_id = getattr(manager, 'user_id', '0')
+        # Delete embeddings from per-user collection using a where filter
+        user_id = str(getattr(current_user, 'id', '1'))
+        from tldw_Server_API.app.core.config import settings as app_settings
+        embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
+        embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+        manager = ChromaDBManager(user_id=user_id, user_embedding_config=embedding_config)
         collection_name = f"user_{user_id}_media_embeddings"
-        # TODO: Implement actual deletion from ChromaDB
-        # For now, just return success
+        collection = manager.get_or_create_collection(collection_name)
+        try:
+            # Use where-based delete if supported
+            collection.delete(where={"media_id": str(media_id)})
+        except Exception as e:
+            # Fall back to fetching IDs then deleting by ids
+            logger.warning(f"Where-delete failed, falling back to id-based delete: {e}")
+            data = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=100000)
+            ids = (data or {}).get("ids") or []
+            if ids:
+                collection.delete(ids=ids)
+
         return {
             "status": "success",
-            "message": f"Embeddings deletion scheduled for media item {media_id}"
+            "message": f"Embeddings deleted for media item {media_id}"
         }
-            
     except HTTPException:
         raise
     except Exception as e:
@@ -438,3 +497,27 @@ async def delete_embeddings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting embeddings: {str(e)}"
         )
+
+
+@router.get("/embeddings/jobs/{job_id}")
+async def get_media_embedding_job(
+    job_id: str,
+    current_user: User = Depends(get_request_user)
+):
+    uid = str(getattr(current_user, 'id', '1'))
+    rec = jobs_get(job_id, uid)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return rec
+
+
+@router.get("/embeddings/jobs")
+async def list_media_embedding_jobs(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_request_user)
+):
+    uid = str(getattr(current_user, 'id', '1'))
+    rows = jobs_list(user_id=uid, status=status, limit=limit, offset=offset)
+    return {"data": rows, "pagination": {"limit": limit, "offset": offset, "count": len(rows)}}

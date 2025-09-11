@@ -70,7 +70,7 @@ def mock_user():
 ########################################################################################################################
 # Project Endpoints Tests
 
-@pytest.mark.integration
+@pytest.mark.unit
 class TestProjectEndpoints:
     """Test project-related API endpoints."""
     
@@ -218,25 +218,25 @@ class TestPromptEndpoints:
         if not project_id:
             pytest.skip("Project creation failed")
         
-            prompt_data = {
-                "project_id": project_id,
-                "name": "Test Prompt",
-                "system_prompt": "You are a helpful assistant.",
-                "user_prompt": "Please help with: {task}",
-                "version_number": 1,
-                "change_description": "Initial version"
-            }
-            
-            response = client.post(
-                "/api/v1/prompt-studio/prompts",
-                json=prompt_data,
-                headers=auth_headers
-            )
-            
-            assert response.status_code in [200, 201]
-            data = response.json()
-            assert data["name"] == "Test Prompt"
-            assert data["project_id"] == project_id
+        prompt_data = {
+            "project_id": project_id,
+            "name": "Test Prompt",
+            "system_prompt": "You are a helpful assistant.",
+            "user_prompt": "Please help with: {task}",
+            "version_number": 1,
+            "change_description": "Initial version"
+        }
+        
+        response = client.post(
+            "/api/v1/prompt-studio/prompts",
+            json=prompt_data,
+            headers=auth_headers
+        )
+        
+        assert response.status_code in [200, 201]
+        data = response.json()
+        assert data["name"] == "Test Prompt"
+        assert data["project_id"] == project_id
     
     def test_list_prompts(self, client, auth_headers, mock_user, project_id):
         """Test listing prompts for a project."""

@@ -12,6 +12,11 @@ os.environ["TEST_MODE"] = "true"
 os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
 os.environ["API_BEARER"] = "default-secret-key-for-single-user"
 os.environ["SINGLE_USER_API_KEY"] = "default-secret-key-for-single-user"
+# Deterministic chat rate limits for integration tests
+os.environ.setdefault("TEST_CHAT_PER_USER_RPM", "2")
+os.environ.setdefault("TEST_CHAT_PER_CONVERSATION_RPM", "2")
+os.environ.setdefault("TEST_CHAT_GLOBAL_RPM", "10")
+os.environ.setdefault("TEST_CHAT_TOKENS_PER_MINUTE", "1000")
 
 # Load config to get API keys
 from tldw_Server_API.app.core.config import load_and_log_configs

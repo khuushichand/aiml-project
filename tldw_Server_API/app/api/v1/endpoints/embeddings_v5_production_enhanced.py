@@ -37,9 +37,11 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
+from pydantic import BaseModel
 
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -238,6 +240,42 @@ PROVIDER_MODELS = {
         "sentence-transformers/all-mpnet-base-v2"
     ]
 }
+
+# Optional allowlists and per-model token limits (override via settings)
+def _get_allowed_providers() -> Optional[List[str]]:
+    try:
+        vals = settings.get("ALLOWED_EMBEDDING_PROVIDERS", [])
+        if isinstance(vals, list) and vals:
+            return [str(v).lower() for v in vals]
+    except Exception:
+        pass
+    return None
+
+def _get_allowed_models() -> Optional[List[str]]:
+    try:
+        vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
+        if isinstance(vals, list) and vals:
+            return [str(v) for v in vals]
+    except Exception:
+        pass
+    return None
+
+def _get_model_max_tokens(provider: str, model: str) -> int:
+    # Settings-driven override map: {"provider:model": max_tokens} or {"model": max_tokens}
+    try:
+        mapping = settings.get("EMBEDDING_MODEL_MAX_TOKENS", {}) or {}
+        key1 = f"{provider}:{model}"
+        if key1 in mapping:
+            return int(mapping[key1])
+        if model in mapping:
+            return int(mapping[model])
+    except Exception:
+        pass
+    # Reasonable defaults
+    if provider == "openai":
+        return 8192
+    # Default for HF/local_api/others if not configured
+    return 8192
 
 # ============================================================================
 # Enhanced TTL Cache with Better Cleanup
@@ -513,6 +551,39 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 # ============================================================================
+# Models and Warmup/Download Utilities
+# ============================================================================
+
+def is_model_allowed(provider: str, model: str) -> bool:
+    providers = _get_allowed_providers()
+    models = _get_allowed_models()
+    if providers is not None and provider.lower() not in providers:
+        return False
+    if models is not None:
+        for pat in models:
+            if pat.endswith("*") and model.startswith(pat[:-1]):
+                return True
+            if model == pat:
+                return True
+        return False
+    return True
+
+def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None) -> str:
+    if explicit_provider:
+        return explicit_provider.lower()
+    if ":" in model:
+        p, _ = model.split(":", 1)
+        return p.lower()
+    # Heuristic for HF-style ids
+    if "/" in model or model.startswith((
+        "sentence-transformers/","BAAI/","thenlper/","intfloat/","hkunlp/","Qwen/","microsoft/",
+        "google/","facebook/","all-MiniLM-","all-mpnet-","bert-","roberta-","xlm-","distilbert-"
+    )):
+        if model not in ["text-embedding-3-small","text-embedding-3-large","text-embedding-ada-002"]:
+            return "huggingface"
+    return "openai"
+
+# ============================================================================
 # Provider Configuration Builders
 # ============================================================================
 
@@ -732,6 +803,12 @@ async def create_embeddings_batch_async(
 
 def require_admin(user: User) -> None:
     """Require admin privileges for endpoint"""
+    # In single-user mode, the sole user is considered admin for admin-only ops
+    try:
+        if is_single_user_mode():
+            return
+    except Exception:
+        pass
     if not user or not getattr(user, 'is_admin', False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -809,6 +886,23 @@ async def create_embedding_endpoint(
                 detail=f"Unknown provider: {provider}"
             )
         
+        # Provider/model allowlist enforcement
+        allowed_providers = _get_allowed_providers()
+        if allowed_providers is not None and provider.lower() not in allowed_providers:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Provider '{provider}' is not allowed")
+
+        allowed_models = _get_allowed_models()
+        if allowed_models is not None:
+            def _model_allowed(m: str) -> bool:
+                for pat in allowed_models:
+                    if pat.endswith("*") and m.startswith(pat[:-1]):
+                        return True
+                    if m == pat:
+                        return True
+                return False
+            if not _model_allowed(model):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
+
         # Parse and validate input
         texts_to_embed: List[str] = []
         
@@ -843,6 +937,23 @@ async def create_embedding_endpoint(
                 detail="Invalid input type"
             )
         
+        # Enforce per-model token length limits (fail-fast)
+        max_tokens = _get_model_max_tokens(provider, model)
+        too_long: List[Tuple[int, int]] = []  # (index, token_count)
+        for idx, t in enumerate(texts_to_embed):
+            tok = count_tokens(t, model)
+            if tok > max_tokens:
+                too_long.append((idx, tok))
+        if too_long:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "input_too_long",
+                    "message": f"One or more inputs exceed max tokens {max_tokens} for model {model}",
+                    "details": [{"index": i, "tokens": tok} for (i, tok) in too_long]
+                }
+            )
+
         # Create embeddings with circuit breaker
         try:
             embeddings = await create_embeddings_batch_async(
@@ -918,6 +1029,98 @@ async def create_embedding_endpoint(
         
     finally:
         active_embedding_requests.dec()
+
+# ============================================================================
+# Model Management Endpoints
+# ============================================================================
+
+@router.get("/embeddings/models", summary="List available embedding models")
+async def list_embedding_models():
+    """List configured/known models with allowlist status."""
+    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+    default_model = cfg.get("default_model_id") or cfg.get("embedding_model") or "text-embedding-3-small"
+    default_provider = cfg.get("embedding_provider", "openai")
+
+    # Collect known models from provider table + default
+    known: List[Dict[str, Any]] = []
+    seen = set()
+    # static provider models
+    for prov, lst in PROVIDER_MODELS.items():
+        for m in lst:
+            key = (prov.value, m)
+            if key in seen:
+                continue
+            seen.add(key)
+            allowed = is_model_allowed(prov.value, m)
+            known.append({"provider": prov.value, "model": m, "allowed": allowed, "default": False})
+    # add default
+    default_marked = False
+    for item in known:
+        if item.get("provider") == default_provider and item.get("model") == default_model:
+            item["default"] = True
+            default_marked = True
+            break
+    if not default_marked:
+        known.append({
+            "provider": default_provider,
+            "model": default_model,
+            "allowed": is_model_allowed(default_provider, default_model),
+            "default": True
+        })
+
+    return {"data": known, "allowed_providers": _get_allowed_providers(), "allowed_models": _get_allowed_models()}
+
+
+class ModelActionRequest(BaseModel):
+    model: str
+    provider: Optional[str] = None
+
+
+@router.post("/embeddings/models/warmup", summary="Warmup (preload) an embedding model (admin)")
+async def warmup_model(
+    payload: ModelActionRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    provider = guess_provider_for_model(payload.model, payload.provider)
+    if not is_model_allowed(provider, payload.model):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
+    try:
+        await create_embeddings_batch_async(
+            texts=["model warmup test"],
+            provider=provider,
+            model_id=payload.model
+        )
+        return {"status": "ok", "provider": provider, "model": payload.model, "warmed": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Warmup failed for {provider}:{payload.model}: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}")
+
+
+@router.post("/embeddings/models/download", summary="Download/prepare a model (admin)")
+async def download_model(
+    payload: ModelActionRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    provider = guess_provider_for_model(payload.model, payload.provider)
+    if not is_model_allowed(provider, payload.model):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
+    try:
+        # Trigger a load without depending on real content by generating a small embedding
+        await create_embeddings_batch_async(
+            texts=["download model"],
+            provider=provider,
+            model_id=payload.model
+        )
+        return {"status": "ok", "provider": provider, "model": payload.model, "downloaded": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download failed for {provider}:{payload.model}: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Download failed: {e}")
 
 @router.delete(
     "/embeddings/cache",

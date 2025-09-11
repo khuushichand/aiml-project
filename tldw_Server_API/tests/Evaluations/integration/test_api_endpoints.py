@@ -150,7 +150,6 @@ class TestGEvalEndpoint:
         assert stored_eval is not None
 
 
-@pytest.mark.integration
 class TestRAGEvaluationEndpoint:
     """Integration tests for RAG evaluation endpoint."""
     
@@ -200,39 +199,42 @@ class TestRAGEvaluationEndpoint:
             assert "answer_similarity" in result["metrics"]
     
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_rag_concurrent_evaluations(self, async_api_client, auth_headers):
-        """Test multiple concurrent RAG evaluations."""
-        from unittest.mock import patch, AsyncMock
-        
-        # Mock the rate limiter dependency to always allow requests
-        with patch('tldw_Server_API.app.api.v1.endpoints.evals.check_evaluation_rate_limit', new_callable=AsyncMock) as mock_check:
-            mock_check.return_value = None  # No rate limiting
-            
-            # Create multiple evaluation requests
-            requests = [SampleDataGenerator.generate_rag_evaluation_data() for _ in range(5)]
-            
-            # Send concurrent requests with small delays to avoid rate limiting
-            tasks = []
-            for i, req_data in enumerate(requests):
-                # Add a small delay between requests to avoid rate limiting
-                if i > 0:
-                    await asyncio.sleep(0.1)
-                task = async_api_client.post(
-                    "/api/v1/evaluations/rag",
-                    json=req_data,
-                    headers=auth_headers
-                )
-                tasks.append(task)
-            
-            responses = await asyncio.gather(*tasks)
-            
-            # All should succeed with mocked rate limiter
-            for response in responses:
-                assert response.status_code == 200
-                # evaluation_id is nested in metadata
-                result = response.json()
-                assert "metadata" in result
-                assert "evaluation_id" in result["metadata"]
+        """Test multiple concurrent RAG evaluations without mocking.
+
+        Keeps total requests under default rate limits and staggers slightly.
+        """
+        # Create multiple evaluation requests (keep payloads small)
+        requests = []
+        for _ in range(5):
+            data = SampleDataGenerator.generate_rag_evaluation_data()
+            # Ensure small texts to avoid token-based rate limiting
+            data["question"] = "Short?"
+            data["answer"] = "Short."
+            data["ground_truth"] = "Short."
+            requests.append(data)
+
+        # Send concurrent requests with small delays to avoid rate limiting
+        tasks = []
+        for i, req_data in enumerate(requests):
+            if i > 0:
+                await asyncio.sleep(0.15)
+            task = async_api_client.post(
+                "/api/v1/evaluations/rag",
+                json=req_data,
+                headers=auth_headers
+            )
+            tasks.append(task)
+
+        responses = await asyncio.gather(*tasks)
+
+        # All should succeed
+        for response in responses:
+            assert response.status_code == 200
+            result = response.json()
+            assert "metadata" in result
+            assert "evaluation_id" in result["metadata"]
 
 
 @pytest.mark.integration
@@ -287,7 +289,7 @@ class TestResponseQualityEndpoint:
         assert 0 <= result["overall_quality"] <= 1
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 class TestBatchEvaluationEndpoint:
     """Integration tests for batch evaluation."""
     
@@ -521,6 +523,7 @@ class TestWebhookEndpoints:
         assert webhook_id in webhook_ids
     
     @pytest.mark.asyncio
+    @pytest.mark.unit
     async def test_webhook_delivery_on_evaluation(self, async_api_client, auth_headers):
         """Test that webhooks are triggered on evaluation completion."""
         import httpx
@@ -571,31 +574,23 @@ class TestRateLimitEndpoints:
     
     @pytest.mark.asyncio
     async def test_rate_limit_enforcement(self, async_api_client, auth_headers):
-        """Test that rate limits are enforced."""
-        # Send multiple rapid requests
-        requests_sent = 0
-        rate_limited = False
-        
-        for i in range(15):  # Exceed typical rate limit
-            response = await async_api_client.post(
+        """Test that rate limits are enforced (deterministic in TEST_MODE)."""
+        # With TEST_EVALUATIONS_RATE_LIMIT=2, 3 quick requests should trigger 429
+        statuses = []
+        for i in range(3):
+            resp = await async_api_client.post(
                 "/api/v1/evaluations/geval",
                 json={
                     "source_text": f"Text {i}",
                     "summary": f"Summary {i}",
-                    "criteria": "coherence"
+                    "metrics": ["coherence"],
+                    "api_name": "openai",
+                    "api_key": "test"
                 },
                 headers=auth_headers
             )
-            
-            requests_sent += 1
-            
-            if response.status_code == 429:  # Rate limited
-                rate_limited = True
-                break
-        
-        # Should hit rate limit at some point
-        # (Exact limit depends on configuration)
-        assert requests_sent > 0
+            statuses.append(resp.status_code)
+        assert 429 in statuses
     
     @pytest.mark.asyncio
     async def test_rate_limit_status_endpoint(self, async_api_client, auth_headers):

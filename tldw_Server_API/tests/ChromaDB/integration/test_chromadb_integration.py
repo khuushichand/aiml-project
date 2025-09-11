@@ -336,7 +336,7 @@ class TestChromaDBManagerIntegration:
         assert "doc_50" in results["ids"][0]  # Should find itself
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 class TestEmbeddingGeneration:
     """Test real embedding generation."""
     

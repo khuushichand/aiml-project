@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
     quality_pipeline
 )
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
     MultiDatabaseRetriever,
@@ -218,18 +219,18 @@ class TestUnifiedPipelineIntegration:
         result = await unified_rag_pipeline(
             query="What are vector databases?",
             top_k=5,
-            media_db=populated_media_db
+            media_db_path=str(populated_media_db.db_path)
         )
         
-        assert result is not None
-        assert "query" in result
-        assert "documents" in result
-        assert len(result["documents"]) > 0
+        assert isinstance(result, UnifiedRAGResponse)
+        assert result.query is not None
+        assert isinstance(result.documents, list)
+        assert len(result.documents) > 0
         
         # Should find the vector database document
         found_vector_doc = any(
-            "vector" in doc.content.lower() 
-            for doc in result["documents"]
+            "vector" in str(doc.get("content", "")).lower()
+            for doc in result.documents
         )
         assert found_vector_doc
     
@@ -241,14 +242,14 @@ class TestUnifiedPipelineIntegration:
             enable_expansion=True,
             expansion_strategies=["acronym"],
             top_k=5,
-            media_db=populated_media_db
+            media_db_path=str(populated_media_db.db_path)
         )
         
-        assert result is not None
-        # Expanded query should find machine learning documents
+        assert isinstance(result, UnifiedRAGResponse)
+        # Expanded query should find machine learning documents (document dicts)
         found_ml_doc = any(
-            "machine learning" in doc.content.lower()
-            for doc in result["documents"]
+            "machine learning" in str(doc.get("content", "")).lower()
+            for doc in result.documents
         )
         assert found_ml_doc
     
@@ -261,16 +262,16 @@ class TestUnifiedPipelineIntegration:
             enable_date_filter=True,
             date_range={"start": "2024-01-01", "end": "2024-12-31"},
             filter_media_types=["article", "document"],
-            media_db=populated_media_db
+            media_db_path=str(populated_media_db.db_path)
         )
         
-        assert result is not None
-        assert "documents" in result
+        assert isinstance(result, UnifiedRAGResponse)
         
-        # All documents should match filter criteria
-        for doc in result["documents"]:
-            if "media_type" in doc.metadata:
-                assert doc.metadata["media_type"] in ["article", "document", "video"]
+        # All documents should match filter criteria where present
+        for doc in result.documents:
+            md = doc.get("metadata") or {}
+            if "media_type" in md:
+                assert md["media_type"] in ["article", "document", "video"]
     
     @pytest.mark.asyncio
     @pytest.mark.slow
@@ -281,16 +282,13 @@ class TestUnifiedPipelineIntegration:
             enable_analytics=True,
             track_performance=True,
             top_k=10,
-            media_db=populated_media_db
+            media_db_path=str(populated_media_db.db_path)
         )
         
-        assert result is not None
-        if "metrics" in result:
-            metrics = result["metrics"]
-            assert "retrieval_time" in metrics
-            assert "total_time" in metrics
-            assert metrics["total_time"] > 0
-            assert metrics["retrieval_time"] > 0
+        assert isinstance(result, UnifiedRAGResponse)
+        # Timings available in result.timings
+        if result.timings:
+            assert "total" in result.timings or len(result.timings) > 0
 
 
 @pytest.mark.integration

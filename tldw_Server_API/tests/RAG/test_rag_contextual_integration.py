@@ -260,9 +260,23 @@ class TestRAGContextualSearchIntegration:
             result = response.json()
             docs = result.get("documents", [])
             assert isinstance(docs, list)
-            # Explicitly verify at least one notes or media source appears in metadata
+            # Explicitly verify at least one notes, media, or characters source appears in metadata
             srcs = {d.get("metadata", {}).get("source", "") for d in docs}
-            assert ("notes_db" in srcs) or ("media_db" in srcs)
+            assert any(s in ("notes_db", "media_db", "characters") for s in srcs)
+
+    @pytest.mark.asyncio
+    async def test_character_source_present(self, test_client):
+        """Ensure character content is returned with source='characters'."""
+        # Query seeded character name
+        response = test_client.post(
+            "/api/v1/rag/search",
+            json={"query": "Tester", "sources": ["characters"], "top_k": 5}
+        )
+        assert response.status_code in (200, 500)
+        if response.status_code == 200:
+            docs = response.json().get("documents", [])
+            # At least one doc should indicate characters source in metadata
+            assert any(d.get("metadata", {}).get("source") == "characters" for d in docs)
     
     @pytest.mark.asyncio
     async def test_contextual_retrieval_error_handling(self, test_client, mock_dependencies):

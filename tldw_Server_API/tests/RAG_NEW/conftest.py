@@ -71,7 +71,13 @@ def populated_media_db(media_database) -> MediaDatabase:
     ]
     
     for item in test_items:
-        media_database.add_media(**item)
+        media_database.add_media_with_keywords(
+            title=item["title"],
+            content=item["content"],
+            media_type=item["media_type"],
+            author=item.get("author"),
+            ingestion_date=item.get("ingestion_date")
+        )
     
     return media_database
 
@@ -85,6 +91,21 @@ def mock_llm():
     mock_llm = AsyncMock()
     mock_llm.generate.return_value = "This is a generated response based on the retrieved context."
     return mock_llm
+
+# Additional fixtures used by unified pipeline tests
+@pytest.fixture
+def mock_media_database(media_database) -> MediaDatabase:
+    """Alias fixture to match test naming expectations."""
+    return media_database
+
+@pytest.fixture
+def mock_semantic_cache():
+    """Simple mock semantic cache with get/find_similar methods."""
+    from unittest.mock import MagicMock
+    cache = MagicMock()
+    cache.get = MagicMock()
+    cache.find_similar = MagicMock()
+    return cache
 
 # =====================================================================
 # RAG Configuration Fixtures

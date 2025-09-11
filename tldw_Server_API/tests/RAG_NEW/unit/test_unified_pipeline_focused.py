@@ -26,11 +26,7 @@ class TestUnifiedPipelineCore:
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(
-                    document=Document(id="1", content="RAG is a retrieval technique", metadata={}),
-                    score=0.9,
-                    source=DataSource.MEDIA_DB
-                )
+                Document(id="1", content="RAG is a retrieval technique", metadata={}, source=DataSource.MEDIA_DB, score=0.9)
             ])
             mock_retriever.return_value = mock_retriever_instance
             
@@ -50,10 +46,10 @@ class TestUnifiedPipelineCore:
                 )
                 
                 assert result is not None
-                assert result["query"] == "What is RAG?"
-                assert "answer" in result
-                assert "documents" in result
-                assert len(result["documents"]) > 0
+                assert result.query == "What is RAG?"
+                assert result.generated_answer is not None
+                assert isinstance(result.documents, list)
+                assert len(result.documents) > 0
     
     @pytest.mark.asyncio
     async def test_common_user_parameters(self):
@@ -79,7 +75,7 @@ class TestUnifiedPipelineCore:
                 )
                 
                 assert result is not None
-                assert result["query"] == "How does machine learning work?"
+                assert result.query == "How does machine learning work?"
                 # Should have attempted retrieval
                 mock_retriever_instance.retrieve.assert_called_once()
     
@@ -89,11 +85,7 @@ class TestUnifiedPipelineCore:
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(
-                    document=Document(id="1", content="Test content", metadata={}),
-                    score=0.8,
-                    source=DataSource.MEDIA_DB
-                )
+                Document(id="1", content="Test content", metadata={}, source=DataSource.MEDIA_DB, score=0.8)
             ])
             mock_retriever.return_value = mock_retriever_instance
             
@@ -128,7 +120,7 @@ class TestUnifiedPipelineCore:
             # Should return a result even with error
             assert result is not None
             # Should indicate error or provide fallback answer
-            assert "error" in result or "answer" in result
+            assert len(getattr(result, 'errors', []) or []) > 0 or (result.generated_answer is not None)
     
     @pytest.mark.asyncio
     async def test_empty_retrieval_results(self):
@@ -153,8 +145,8 @@ class TestUnifiedPipelineCore:
                 )
                 
                 assert result is not None
-                assert "answer" in result
-                assert len(result.get("documents", [])) == 0
+                assert result.generated_answer is not None
+                assert len(result.documents) == 0
 
 
 @pytest.mark.unit
@@ -207,8 +199,8 @@ class TestUnifiedPipelineFeatures:
             )
             
             # Should return cached result
-            assert result["cached"] is True
-            assert result["answer"] == "Cached answer"
+            assert result.cache_hit is True
+            assert result.generated_answer == "Cached answer"
             mock_semantic_cache.get.assert_called_once()
     
     @pytest.mark.asyncio
@@ -223,7 +215,7 @@ class TestUnifiedPipelineFeatures:
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(document=doc, score=doc.metadata["initial_score"], source=DataSource.MEDIA_DB)
+                Document(id=doc.id, content=doc.content, metadata=doc.metadata, source=DataSource.MEDIA_DB, score=doc.metadata["initial_score"])
                 for doc in initial_docs
             ])
             mock_retriever.return_value = mock_retriever_instance
@@ -251,9 +243,9 @@ class TestUnifiedPipelineFeatures:
                     # Should have reranked
                     mock_reranker.rerank.assert_called_once()
                     # Should only return top 2 after reranking
-                    assert len(result["documents"]) == 2
+                    assert len(result.documents) == 2
                     # Most relevant should be first
-                    assert result["documents"][0].id == "2"
+                    assert result.documents[0]["id"] == "2"
     
     @pytest.mark.asyncio
     async def test_filtering_features(self):
@@ -261,24 +253,8 @@ class TestUnifiedPipelineFeatures:
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(
-                    document=Document(
-                        id="1", 
-                        content="Recent document",
-                        metadata={"date": "2024-06-01", "media_type": "article"}
-                    ),
-                    score=0.9,
-                    source=DataSource.MEDIA_DB
-                ),
-                SearchResult(
-                    document=Document(
-                        id="2",
-                        content="Old document", 
-                        metadata={"date": "2023-01-01", "media_type": "video"}
-                    ),
-                    score=0.85,
-                    source=DataSource.MEDIA_DB
-                )
+                Document(id="1", content="Recent document", metadata={"date": "2024-06-01", "media_type": "article"}, source=DataSource.MEDIA_DB, score=0.9),
+                Document(id="2", content="Old document", metadata={"date": "2023-01-01", "media_type": "video"}, source=DataSource.MEDIA_DB, score=0.85)
             ])
             mock_retriever.return_value = mock_retriever_instance
             
@@ -309,15 +285,7 @@ class TestUnifiedPipelineRealWorldScenarios:
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(
-                    document=Document(
-                        id="1",
-                        content="Python is a high-level programming language known for its simplicity.",
-                        metadata={"source": "tutorial", "author": "Expert"}
-                    ),
-                    score=0.95,
-                    source=DataSource.MEDIA_DB
-                )
+                Document(id="1", content="Python is a high-level programming language known for its simplicity.", metadata={"source": "tutorial", "author": "Expert"}, source=DataSource.MEDIA_DB, score=0.95)
             ])
             mock_retriever.return_value = mock_retriever_instance
             
@@ -337,9 +305,9 @@ class TestUnifiedPipelineRealWorldScenarios:
                 )
                 
                 assert result is not None
-                assert "answer" in result
-                assert "Python" in result["answer"]
-                assert result["documents"][0].content is not None
+                assert result.generated_answer is not None
+                assert "Python" in (result.generated_answer or "")
+                assert result.documents[0]["content"] is not None
     
     @pytest.mark.asyncio
     async def test_research_query(self):
@@ -348,11 +316,7 @@ class TestUnifiedPipelineRealWorldScenarios:
             mock_retriever_instance = MagicMock()
             # Multiple relevant documents for research
             mock_retriever_instance.retrieve = AsyncMock(return_value=[
-                SearchResult(
-                    document=Document(id=f"doc_{i}", content=f"Research finding {i}", metadata={"citation": f"Source {i}"}),
-                    score=0.9 - i*0.05,
-                    source=DataSource.MEDIA_DB
-                )
+                Document(id=f"doc_{i}", content=f"Research finding {i}", metadata={"citation": f"Source {i}"}, source=DataSource.MEDIA_DB, score=0.9 - i*0.05)
                 for i in range(5)
             ])
             mock_retriever.return_value = mock_retriever_instance
@@ -373,7 +337,7 @@ class TestUnifiedPipelineRealWorldScenarios:
                 )
                 
                 assert result is not None
-                assert len(result["documents"]) > 1  # Multiple sources
+                assert len(result.documents) > 1  # Multiple sources
     
     @pytest.mark.asyncio
     async def test_api_endpoint_usage(self):
@@ -404,8 +368,7 @@ class TestUnifiedPipelineRealWorldScenarios:
                 result = await unified_rag_pipeline(**api_params)
                 
                 assert result is not None
-                assert "metadata" in result
-                assert result["metadata"]["user_id"] == "user123"
+                assert result.metadata["user_id"] == "user123"
     
     @pytest.mark.asyncio
     async def test_streaming_response(self):
@@ -431,8 +394,8 @@ class TestUnifiedPipelineRealWorldScenarios:
                     query="What is RAG?",
                     enable_streaming=True
                 )
-                
-                # Result should be streamable
+
+                # Result should be streamable (only if streaming is supported)
                 if hasattr(result, '__aiter__'):
                     chunks = []
                     async for chunk in result:
@@ -457,7 +420,7 @@ class TestUnifiedPipelineValidation:
             # Should handle gracefully
             assert result is not None
             # Should indicate invalid query
-            assert "error" in result or result.get("answer", "").lower().find("invalid") >= 0
+            assert (result.generated_answer or "").lower().find("invalid") >= 0 or len(result.errors) > 0
     
     @pytest.mark.asyncio
     async def test_parameter_bounds(self):

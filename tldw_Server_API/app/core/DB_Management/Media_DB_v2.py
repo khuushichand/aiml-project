@@ -854,6 +854,26 @@ class MediaDatabase:
         # Use ISO 8601 format with Z for UTC, more standard
         return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
+    # --- Backwards Compatibility Helpers ---
+    def initialize_db(self):
+        """
+        Backwards-compatibility wrapper for legacy tests/consumers.
+
+        Historically, callers invoked `initialize_db()` after constructing the
+        database. The current implementation initializes the schema during
+        `__init__`. This method simply re-validates (idempotent) schema state
+        and returns self, preserving older calling patterns.
+
+        Returns:
+            MediaDatabase: self, to allow call-chaining in legacy code.
+        """
+        try:
+            self._initialize_schema()
+        except Exception as e:
+            # Re-raise as DatabaseError for consistent error semantics
+            raise DatabaseError(f"Database initialization failed: {e}") from e
+        return self
+
     def _generate_uuid(self) -> str:
         """
         Internal helper to generate a new UUID string.

@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -221,6 +222,12 @@ async def require_admin(
     Raises:
         HTTPException: If user is not admin
     """
+    # In single-user mode treat the sole user as admin
+    try:
+        if is_single_user_mode():
+            return current_user
+    except Exception:
+        pass
     if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

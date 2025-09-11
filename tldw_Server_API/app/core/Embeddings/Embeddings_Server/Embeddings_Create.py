@@ -248,17 +248,13 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
                         f"Retrying in {delay}s. Error: {e}"
                     )
                     time.sleep(delay)
-                except Exception as e:  # Catch other potentially transient errors (be cautious)
-                    # For now, this will retry on any exception other than RequestException.
-                    # Consider if this is too broad.
-                    if attempt == max_retries:
-                        logging.error(
-                            f"Final attempt ({attempt + 1}/{max_retries + 1}) failed for {fn.__name__}. Error: {e}")
-                        raise
-                    delay = base_delay * (2 ** attempt)
-                    logging.warning(
-                        f"Attempt {attempt + 1}/{max_retries + 1} for {fn.__name__} failed. Retrying in {delay}s. Error: {e}")
-                    time.sleep(delay)
+                except Exception as e:
+                    # Non-network/configuration errors should not be retried to avoid amplifying failures
+                    logging.error(
+                        f"Non-retryable error for {fn.__name__}: {e}",
+                        exc_info=True
+                    )
+                    raise
 
         return wrapper
 

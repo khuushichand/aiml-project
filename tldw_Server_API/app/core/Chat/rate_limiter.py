@@ -7,6 +7,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
+import os
 from loguru import logger
 
 #######################################################################################################################
@@ -344,5 +345,23 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
     """
     global _rate_limiter
     config = config or RateLimitConfig()
+    # Test-mode overrides via environment for deterministic integration testing
+    try:
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            per_user = os.getenv("TEST_CHAT_PER_USER_RPM")
+            per_conv = os.getenv("TEST_CHAT_PER_CONVERSATION_RPM")
+            global_rpm = os.getenv("TEST_CHAT_GLOBAL_RPM")
+            tokens_per_min = os.getenv("TEST_CHAT_TOKENS_PER_MINUTE")
+            if per_user:
+                config.per_user_rpm = max(1, int(per_user))
+            if per_conv:
+                config.per_conversation_rpm = max(1, int(per_conv))
+            if global_rpm:
+                config.global_rpm = max(1, int(global_rpm))
+            if tokens_per_min:
+                config.per_user_tokens_per_minute = max(1, int(tokens_per_min))
+    except Exception:
+        # Ignore env parse errors and use defaults
+        pass
     _rate_limiter = ConversationRateLimiter(config)
     return _rate_limiter

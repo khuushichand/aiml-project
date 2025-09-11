@@ -16,7 +16,6 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
 import aiohttp
-from aioresponses import aioresponses
 
 # Import test configuration
 import sys
@@ -368,87 +367,72 @@ class TestWebhookManager:
             assert status[0]["active"] is False or status[0]["active"] == 0
     
     @pytest.mark.asyncio
-    async def test_webhook_delivery(self, webhook_manager):
-        """Test webhook delivery with mock server."""
+    @pytest.mark.integration
+    async def test_webhook_delivery(self, webhook_manager, webhook_receiver_server):
+        """Test webhook delivery using a real local receiver (no mocks)."""
         import asyncio
-        from unittest.mock import patch, AsyncMock
-        
+
         user_id = "delivery_user"
-        url = "https://webhook.example.com/endpoint"
-        
-        # Register webhook
+        url = webhook_receiver_server["url"]
+
+        # Register webhook with validation skipped for localhost
         await webhook_manager.register_webhook(
-            user_id, url, [WebhookEvent.EVALUATION_COMPLETED]
+            user_id, url, [WebhookEvent.EVALUATION_COMPLETED], skip_validation=True
         )
-        
-        # Mock the actual HTTP call within webhook manager
-        with patch('httpx.AsyncClient.post', new_callable=AsyncMock) as mock_post:
-            # Configure the mock response
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {"status": "received"}
-            mock_post.return_value = mock_response
-            
-            # Send webhook
-            await webhook_manager.send_webhook(
-                user_id,
-                WebhookEvent.EVALUATION_COMPLETED,
-                "eval_123",
-                {"score": 0.95, "model": "gpt-4"}
-            )
-            
-            # Allow async operations to complete
-            await asyncio.sleep(0.1)
-            
-            # Verify the request was made
-            assert mock_post.call_count > 0
-            
-            # Check the call arguments
-            call_args = mock_post.call_args
-            assert call_args is not None
-            
-            # Verify URL
-            assert url in str(call_args)
-            
-            # Check headers if present in kwargs
-            if 'headers' in call_args.kwargs:
-                headers = call_args.kwargs['headers']
-                # Webhook manager should add these headers
-                assert any('webhook' in k.lower() or 'signature' in k.lower() for k in headers)
+
+        # Send webhook
+        await webhook_manager.send_webhook(
+            user_id,
+            WebhookEvent.EVALUATION_COMPLETED,
+            "eval_123",
+            {"score": 0.95, "model": "gpt-4"}
+        )
+
+        # Allow async delivery to complete
+        await asyncio.sleep(0.2)
+
+        received = webhook_receiver_server["received"]
+        assert len(received) >= 1
+        # Validate headers and payload
+        headers = received[0]["headers"]
+        assert any(h.lower() == "x-webhook-signature" for h in headers)
+        body = received[0]["json"]
+        assert body is not None
+        assert body.get("event") == "evaluation.completed"
+        assert body.get("evaluation_id") == "eval_123"
     
     @pytest.mark.asyncio
-    async def test_webhook_retry_on_failure(self, webhook_manager):
-        """Test webhook retry logic on failure."""
+    @pytest.mark.integration
+    async def test_webhook_retry_on_failure(self, webhook_manager, flaky_webhook_receiver_server):
+        """Test webhook retry logic with a real flaky receiver (no mocks)."""
+        import asyncio
+
         user_id = "retry_user"
-        url = "https://webhook.example.com/retry"
-        
-        # Register webhook with custom retry settings
+        url = flaky_webhook_receiver_server["url"]
+
+        # Register webhook and speed up retry delays
         await webhook_manager.register_webhook(
-            user_id, url, [WebhookEvent.EVALUATION_FAILED]
+            user_id, url, [WebhookEvent.EVALUATION_FAILED], skip_validation=True
         )
-        
-        # Override retry delays for faster testing
-        webhook_manager.retry_delays = [0.1, 0.2, 0.3]
-        
-        # Mock failures then success
-        with aioresponses() as m:
-            # First two attempts fail
-            m.post(url, status=500)
-            m.post(url, status=500)
-            # Third attempt succeeds
-            m.post(url, status=200)
-            
-            # Send webhook
-            await webhook_manager.send_webhook(
-                user_id,
-                WebhookEvent.EVALUATION_FAILED,
-                "eval_failed_123",
-                {"error": "Model timeout"}
-            )
-            
-            # Should have made 3 requests (2 failures + 1 success)
-            await asyncio.sleep(1)  # Wait for retries
-            # Note: Actual retry count depends on implementation
+        webhook_manager.retry_delays = [0.05, 0.05, 0.05]
+
+        # Send webhook (first 2 attempts 500, then 200)
+        await webhook_manager.send_webhook(
+            user_id,
+            WebhookEvent.EVALUATION_FAILED,
+            "eval_failed_123",
+            {"error": "Model timeout"}
+        )
+
+        # Wait for retries to complete
+        await asyncio.sleep(0.4)
+
+        received = flaky_webhook_receiver_server["received"]
+        # Expect at least 3 attempts
+        assert len(received) >= 3
+        # Ensure attempts were recorded with correct sequencing
+        attempts = [r.get("attempt") for r in received]
+        assert attempts[:3] == [1, 2, 3]
     
     @pytest.mark.asyncio
     async def test_webhook_signature_generation(self, webhook_manager):

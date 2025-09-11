@@ -20,7 +20,7 @@ from pathlib import Path
 class TestTTSGenerateEndpoint:
     """Test the /api/v1/tts/generate endpoint."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
     async def test_generate_basic_audio(self, mock_post, test_client, auth_headers):
         """Test basic TTS generation endpoint."""
@@ -51,7 +51,7 @@ class TestTTSGenerateEndpoint:
         assert "provider" in data
         assert data["provider"] == "openai"
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_generate_without_provider(self, test_client, auth_headers):
         """Test generation using default provider."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate') as mock_generate:
@@ -73,7 +73,7 @@ class TestTTSGenerateEndpoint:
             
             assert response.status_code == status.HTTP_200_OK
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_generate_with_voice_settings(self, test_client, auth_headers):
         """Test generation with voice settings."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate') as mock_generate:
@@ -104,7 +104,7 @@ class TestTTSGenerateEndpoint:
             call_args = mock_generate.call_args[0][0]
             assert call_args.voice_settings is not None
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_generate_with_invalid_provider(self, test_client, auth_headers):
         """Test generation with invalid provider."""
         response = test_client.post(
@@ -121,7 +121,7 @@ class TestTTSGenerateEndpoint:
         data = response.json()
         assert "error" in data or "detail" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_generate_with_long_text(self, test_client, auth_headers):
         """Test generation with long text that needs chunking."""
         long_text = " ".join(["This is sentence number {}.".format(i) for i in range(500)])
@@ -153,7 +153,7 @@ class TestTTSGenerateEndpoint:
 class TestTTSStreamingEndpoint:
     """Test the /api/v1/tts/generate/stream endpoint."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_streaming_generation(self, test_client, auth_headers):
         """Test streaming TTS generation."""
         async def mock_stream():
@@ -183,7 +183,7 @@ class TestTTSStreamingEndpoint:
             
             assert len(chunks) > 0
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_streaming_with_error(self, test_client, auth_headers):
         """Test streaming handles errors gracefully."""
         async def mock_error_stream():
@@ -214,7 +214,7 @@ class TestTTSStreamingEndpoint:
 class TestProviderManagementEndpoints:
     """Test TTS provider management endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_list_providers(self, test_client, auth_headers):
         """Test listing available TTS providers."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_providers') as mock_list:
@@ -232,7 +232,7 @@ class TestProviderManagementEndpoints:
             assert "openai" in data
             assert "elevenlabs" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_get_provider_info(self, test_client, auth_headers):
         """Test getting specific provider information."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_provider_info') as mock_info:
@@ -255,7 +255,7 @@ class TestProviderManagementEndpoints:
             assert "tts-1" in data["models"]
             assert "alloy" in data["voices"]
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_switch_default_provider(self, test_client, auth_headers):
         """Test switching the default TTS provider."""
         response = test_client.post(
@@ -276,7 +276,7 @@ class TestProviderManagementEndpoints:
 class TestVoiceManagementEndpoints:
     """Test voice management endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_list_voices(self, test_client, auth_headers):
         """Test listing available voices for a provider."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
@@ -298,7 +298,7 @@ class TestVoiceManagementEndpoints:
             assert len(data) == 3
             assert any(v["id"] == "alloy" for v in data)
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_get_voice_details(self, test_client, auth_headers):
         """Test getting details for a specific voice."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_voice_info') as mock_info:
@@ -332,7 +332,7 @@ class TestVoiceManagementEndpoints:
 class TestFileDownloadEndpoints:
     """Test audio file download endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_download_generated_audio(self, test_client, auth_headers, sample_audio_bytes):
         """Test downloading generated audio as file."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate') as mock_generate:
@@ -364,7 +364,7 @@ class TestFileDownloadEndpoints:
 class TestErrorHandling:
     """Test error handling in TTS endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_rate_limit_error_handling(self, test_client, auth_headers):
         """Test handling of rate limit errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSRateLimitError
@@ -385,7 +385,7 @@ class TestErrorHandling:
             data = response.json()
             assert "retry_after" in data
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_quota_exceeded_error(self, test_client, auth_headers):
         """Test handling of quota exceeded errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
@@ -407,7 +407,7 @@ class TestErrorHandling:
             data = response.json()
             assert "quota" in str(data).lower()
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_provider_not_configured(self, test_client, auth_headers):
         """Test handling of unconfigured provider errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSProviderNotConfiguredError
@@ -434,7 +434,7 @@ class TestErrorHandling:
 class TestBatchProcessing:
     """Test batch TTS processing endpoints."""
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_batch_tts_generation(self, test_client, auth_headers):
         """Test batch generation of multiple texts."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate') as mock_generate:
@@ -462,7 +462,7 @@ class TestBatchProcessing:
                 assert "results" in data
                 assert len(data["results"]) == 3
     
-    @pytest.mark.integration
+    @pytest.mark.unit
     async def test_batch_with_partial_failures(self, test_client, auth_headers):
         """Test batch processing with some failures."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError

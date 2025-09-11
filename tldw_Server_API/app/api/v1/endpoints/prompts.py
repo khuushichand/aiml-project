@@ -55,6 +55,65 @@ from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 
 router = APIRouter()
 
+@router.get(
+    "/health",
+    summary="Prompts service health",
+    tags=["Prompts"]
+)
+async def prompts_health():
+    """Lightweight health endpoint for the Prompts subsystem."""
+    from tldw_Server_API.app.core.config import settings
+    from pathlib import Path
+    import importlib
+    import os
+
+    health = {
+        "service": "prompts",
+        "status": "healthy",
+        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "components": {}
+    }
+
+    try:
+        base_dir = settings.get("USER_DB_BASE_DIR")
+        exists = Path(base_dir).exists() if base_dir else False
+        writable = False
+        if exists:
+            try:
+                test_path = Path(base_dir) / ".prompts_health_check"
+                with open(test_path, "w") as f:
+                    f.write("ok")
+                os.remove(test_path)
+                writable = True
+            except Exception:
+                writable = False
+
+        health["components"]["storage"] = {
+            "base_dir": str(base_dir) if base_dir else None,
+            "exists": exists,
+            "writable": writable
+        }
+
+        # Library availability
+        try:
+            importlib.import_module("tldw_Server_API.app.core.DB_Management.Prompts_DB")
+            lib_ok = True
+        except Exception as e:
+            lib_ok = False
+            health["components"]["library_error"] = str(e)
+
+        health["components"]["library"] = {"import_ok": lib_ok}
+
+        if not base_dir or not exists or not lib_ok:
+            health["status"] = "degraded"
+        if base_dir and exists and not writable:
+            health["status"] = "degraded"
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["error"] = str(e)
+
+    return health
+
 # --- Sync Log Endpoints ---
 @router.get(
     "/sync-log",

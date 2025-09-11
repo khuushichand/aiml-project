@@ -181,10 +181,9 @@ class TestDatabaseIntegration:
     """Test database persistence and retrieval."""
     
     @pytest.mark.integration
-    @patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call')
-    def test_conversation_saved_to_database(self, mock_chat_call, test_client, populated_chacha_db, mock_llm_response, auth_headers):
-        """Test that conversations are saved to database."""
-        mock_chat_call.return_value = mock_llm_response
+    @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
+    def test_conversation_saved_to_database(self, test_client, populated_chacha_db, auth_headers):
+        """Test that conversations are saved to database with real provider."""
         
         # Override dependency to use our test database
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -259,13 +258,20 @@ class TestErrorHandling:
     """Test error handling in the API."""
     
     @pytest.mark.integration
-    @patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call')
-    def test_rate_limit_error_handling(self, mock_chat_call, test_client, auth_headers):
-        """Test handling of rate limit errors."""
-        from tldw_Server_API.app.core.Chat.Chat_Functions import ChatRateLimitError
-        mock_chat_call.side_effect = ChatRateLimitError("Rate limit exceeded", provider="openai")
-        
-        pass  # Cannot reliably test rate limit without hitting it
+    def test_rate_limit_error_handling(self, test_client, auth_headers):
+        """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
+        statuses = []
+        for i in range(3):
+            resp = test_client.post(
+                "/api/v1/chat/completions",
+                json={
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": f"Ping {i}"}]
+                },
+                headers=auth_headers
+            )
+            statuses.append(resp.status_code)
+        assert 429 in statuses
     
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
@@ -299,7 +305,7 @@ class TestErrorHandling:
             else:
                 del os.environ["OPENAI_API_KEY"]
     
-    @pytest.mark.integration 
+    @pytest.mark.unit 
     @patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call')
     def test_general_error_handling(self, mock_chat_call, test_client, auth_headers):
         """Test handling of general errors."""

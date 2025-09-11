@@ -10,6 +10,8 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from typing import Dict, Any
 
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
+from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
 # ========================================================================
 # Unit Tests - Minimal mocking, focus on pipeline logic
@@ -24,9 +26,14 @@ class TestUnifiedPipelineUnit:
         """Test the most basic query execution with minimal parameters."""
         # This represents 90% of actual usage
         # Mock the dependencies that unified_rag_pipeline uses
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            # Simulate large retrieval result with Document objects
+            large_docs = [
+                Document(id=str(i), content=f"Doc {i}", metadata={}, source=DataSource.MEDIA_DB)
+                for i in range(100)
+            ]
+            mock_retriever_instance.retrieve = AsyncMock(return_value=large_docs)
             mock_retriever.return_value = mock_retriever_instance
             
             # Call the actual function with minimal params
@@ -35,18 +42,17 @@ class TestUnifiedPipelineUnit:
                 top_k=5
             )
             
-            # Verify basic structure
-            assert isinstance(result, dict)
-            assert "query" in result
-            assert result["query"] == "What is RAG?"
+            # Verify basic structure (Pydantic response)
+            assert isinstance(result, UnifiedRAGResponse)
+            assert result.query == "What is RAG?"
     
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_query_with_common_parameters(self):
         """Test query with parameters commonly used in production."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             result = await unified_rag_pipeline(
@@ -57,8 +63,8 @@ class TestUnifiedPipelineUnit:
                 temperature=0.7
             )
             
-            assert isinstance(result, dict)
-            assert "query" in result
+            assert isinstance(result, UnifiedRAGResponse)
+            assert result.query == "Explain machine learning"
     
     @pytest.mark.unit
     @pytest.mark.asyncio 
@@ -67,18 +73,17 @@ class TestUnifiedPipelineUnit:
         # Empty query should be handled gracefully
         result = await unified_rag_pipeline(query="")
         
-        assert isinstance(result, dict)
+        assert isinstance(result, UnifiedRAGResponse)
         # Should handle empty query without crashing
-        assert "query" in result
-        assert result["query"] == ""
+        assert result.query == ""
     
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_sources_parameter(self):
         """Test different data source configurations."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             # Test with specific sources
@@ -87,7 +92,7 @@ class TestUnifiedPipelineUnit:
                 sources=["media_db", "notes"]
             )
             
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
 
 # ========================================================================
 # Integration Tests - No mocking, use real MediaDatabase
@@ -109,8 +114,8 @@ class TestUnifiedPipelineIntegration:
             # database=populated_media_db
         )
         
-        assert isinstance(result, dict)
-        assert "query" in result
+        assert isinstance(result, UnifiedRAGResponse)
+        assert result.query is not None
     
     @pytest.mark.integration
     @pytest.mark.asyncio
@@ -122,10 +127,9 @@ class TestUnifiedPipelineIntegration:
             top_k=10
         )
         
-        assert isinstance(result, dict)
-        # Check if documents were retrieved
-        if "documents" in result:
-            assert isinstance(result["documents"], list)
+        assert isinstance(result, UnifiedRAGResponse)
+        # Check if documents were retrieved (list of dicts)
+        assert isinstance(result.documents, list)
     
     @pytest.mark.integration
     @pytest.mark.asyncio
@@ -147,7 +151,7 @@ class TestUnifiedPipelineIntegration:
         
         assert len(results) == len(queries)
         for result in results:
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
 
 # ========================================================================
 # Common Production Scenarios
@@ -160,9 +164,9 @@ class TestProductionScenarios:
     @pytest.mark.asyncio
     async def test_chatbot_query_pattern(self):
         """Test typical chatbot interaction pattern."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             result = await unified_rag_pipeline(
@@ -173,15 +177,15 @@ class TestProductionScenarios:
                 user_id="test_user_123"
             )
             
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
     
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_research_query_pattern(self):
         """Test research/analysis query pattern."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             result = await unified_rag_pipeline(
@@ -193,15 +197,15 @@ class TestProductionScenarios:
                 min_relevance_score=0.7
             )
             
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
     
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_api_endpoint_pattern(self):
         """Test pattern used by API endpoints."""
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             # Simulate API request parameters
@@ -238,7 +242,7 @@ class TestPerformanceAndEdgeCases:
                 top_k=100
             )
             
-            assert isinstance(result, dict)
+            assert isinstance(result, UnifiedRAGResponse)
     
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -254,8 +258,8 @@ class TestPerformanceAndEdgeCases:
         for query in dangerous_queries:
             # Should handle safely without throwing exceptions
             result = await unified_rag_pipeline(query=query)
-            assert isinstance(result, dict)
-            assert "query" in result
+            assert isinstance(result, UnifiedRAGResponse)
+            assert result.query == query
     
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -284,12 +288,12 @@ class TestPerformanceAndEdgeCases:
             }
         ]
         
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MediaDatabaseRetriever') as mock_retriever:
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
-            mock_retriever_instance.retrieve.return_value = []
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
             
             for params in test_cases:
                 result = await unified_rag_pipeline(**params)
-                assert isinstance(result, dict)
-                assert "query" in result
+                assert isinstance(result, UnifiedRAGResponse)
+                assert result.query is not None

@@ -13,6 +13,70 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 
 router = APIRouter()
 
+@router.get("/llm/health", summary="LLM inference health", response_model=Dict[str, Any])
+async def llm_health():
+    """Health endpoint for the LLM inference subsystem (providers, queue, rate limiter)."""
+    from datetime import datetime
+    from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+    from tldw_Server_API.app.core.Chat.request_queue import get_request_queue
+    from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
+
+    health: Dict[str, Any] = {
+        "service": "llm_inference",
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "components": {}
+    }
+
+    try:
+        # Provider manager
+        pm = get_provider_manager()
+        if pm is None:
+            health["components"]["providers"] = {"initialized": False}
+            health["status"] = "degraded"
+        else:
+            report = pm.get_health_report()
+            any_unhealthy = any(v.get("status") in ["unhealthy", "circuit_open"] for v in report.values())
+            health["components"]["providers"] = {
+                "initialized": True,
+                "count": len(report),
+                "report": report
+            }
+            if any_unhealthy and health["status"] == "healthy":
+                health["status"] = "degraded"
+
+        # Request queue
+        rq = get_request_queue()
+        if rq is None:
+            health["components"]["queue"] = {"initialized": False}
+            health["status"] = "degraded"
+        else:
+            q_status = rq.get_queue_status()
+            health["components"]["queue"] = {"initialized": True, **q_status}
+
+        # Rate limiter
+        rl = get_rate_limiter()
+        if rl is None:
+            health["components"]["rate_limiter"] = {"initialized": False}
+            # Not critical, keep status as-is
+        else:
+            cfg = rl.config
+            health["components"]["rate_limiter"] = {
+                "initialized": True,
+                "limits": {
+                    "global_rpm": cfg.global_rpm,
+                    "per_user_rpm": cfg.per_user_rpm,
+                    "per_conversation_rpm": cfg.per_conversation_rpm,
+                    "per_user_tokens_per_minute": cfg.per_user_tokens_per_minute
+                }
+            }
+    except Exception as e:
+        logger.error(f"LLM health check error: {e}")
+        health["status"] = "unhealthy"
+        health["error"] = str(e)
+
+    return health
+
 def parse_model_string(model_value: str) -> List[str]:
     """
     Parse a model string which could be a single model or comma-separated list.

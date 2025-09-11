@@ -46,11 +46,17 @@ def test_media_add_db_and_list(page, server_url):
     page.get_by_role("tab", name="Media").click()
     page.get_by_role("tab", name="Media Management").click()
 
-    # Trigger list call
-    page.locator("#listAllMedia").get_by_text("Send Request").click()
-    page.wait_for_selector("#listAllMedia_response")
-    list_text = page.locator("#listAllMedia_response").inner_text()
-    assert title in list_text or "e2e_sample.txt" in list_text
+    # Trigger list call with brief retries to absorb DB latency
+    found_in_list = False
+    for _ in range(5):
+        page.locator("#listAllMedia").get_by_text("Send Request").click()
+        page.wait_for_selector("#listAllMedia_response")
+        list_text = page.locator("#listAllMedia_response").inner_text()
+        if title in list_text or "e2e_sample.txt" in list_text:
+            found_in_list = True
+            break
+        page.wait_for_timeout(500)
+    assert found_in_list, "Media item not found in list after retries"
 
     # Also verify via Search endpoint using the title as query
     page.locator("#searchMediaItems").scroll_into_view_if_needed()
@@ -63,7 +69,14 @@ def test_media_add_db_and_list(page, server_url):
     # Fill textarea with JSON
     page.fill("#searchMediaItems_payload", __import__("json").dumps(search_payload, indent=2))
     # Trigger search in the scoped section
-    page.locator("#searchMediaItems").get_by_text("Send Request").click()
-    page.wait_for_selector("#searchMediaItems_response")
-    search_text = page.locator("#searchMediaItems_response").inner_text()
-    assert title in search_text or "e2e_sample.txt" in search_text
+    found = False
+    for _ in range(5):
+        page.locator("#searchMediaItems").get_by_text("Send Request").click()
+        page.wait_for_selector("#searchMediaItems_response")
+        search_text = page.locator("#searchMediaItems_response").inner_text()
+        if title in search_text or "e2e_sample.txt" in search_text:
+            found = True
+            break
+        # brief wait before retrying
+        page.wait_for_timeout(500)
+    assert found, "Media item not found via search after retries"

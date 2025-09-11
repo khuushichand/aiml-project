@@ -116,6 +116,55 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
 
 
 # --- Notes Endpoints ---
+
+@router.get(
+    "/health",
+    summary="Notes service health",
+    tags=["Notes"]
+)
+async def notes_health() -> Dict[str, Any]:
+    """Lightweight health endpoint for the Notes subsystem."""
+    from tldw_Server_API.app.core.config import settings
+    import os
+    from pathlib import Path
+
+    health = {
+        "service": "notes",
+        "status": "healthy",
+        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "components": {}
+    }
+
+    try:
+        base_dir = settings.get("USER_DB_BASE_DIR")
+        base_ok = base_dir is not None
+        exists = Path(base_dir).exists() if base_ok else False
+        writable = False
+        if exists:
+            try:
+                test_path = Path(base_dir) / ".health_check"
+                with open(test_path, "w") as f:
+                    f.write("ok")
+                os.remove(test_path)
+                writable = True
+            except Exception:
+                writable = False
+
+        health["components"]["storage"] = {
+            "base_dir": str(base_dir) if base_dir else None,
+            "exists": exists,
+            "writable": writable
+        }
+
+        if not base_ok or not exists:
+            health["status"] = "degraded"
+        if base_ok and exists and not writable:
+            health["status"] = "degraded"
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["error"] = str(e)
+
+    return health
 @router.post(
     "/",
     response_model=NoteResponse,
