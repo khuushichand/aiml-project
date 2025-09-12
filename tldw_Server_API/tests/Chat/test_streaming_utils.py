@@ -373,6 +373,67 @@ class TestCreateStreamingResponseWithTimeout:
         heartbeat_msgs = [m for m in messages if "heartbeat" in m]
         assert len(heartbeat_msgs) >= 1
 
+    @pytest.mark.asyncio
+    async def test_async_generator_close_no_runtime_error(self):
+        """Closing the async generator should not raise RuntimeError on GeneratorExit."""
+        handler = StreamingResponseHandler("conv_close", "gpt-4")
+
+        async def mock_stream():
+            yield "Hello"
+            await asyncio.sleep(0)
+            yield "World"
+
+        agen = handler.safe_stream_generator(mock_stream())
+
+        # Prime the generator (consume stream_start)
+        _ = await agen.__anext__()
+
+        # Closing should not raise
+        try:
+            await agen.aclose()
+        except Exception as e:
+            pytest.fail(f"aclose() raised an exception: {e}")
+
+        assert handler.is_cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_stream_start_emitted_once_and_close_early(self):
+        """Ensure stream_start is emitted only once and early close is clean."""
+        async def slow_stream():
+            yield "chunk1"
+            await asyncio.sleep(0.05)
+            yield "chunk2"
+
+        gen = create_streaming_response_with_timeout(
+            stream=slow_stream(),
+            conversation_id="conv_start_once",
+            model_name="gpt-4",
+            idle_timeout=5,
+            heartbeat_interval=0.2,
+        )
+
+        # Get first message and ensure it's stream_start
+        first = await gen.__anext__()
+        assert "event: stream_start" in first
+
+        # Pull a couple more messages, then close early
+        messages = []
+        for _ in range(3):
+            try:
+                messages.append(await gen.__anext__())
+            except StopAsyncIteration:
+                break
+
+        # Close early; should not raise
+        try:
+            await gen.aclose()
+        except Exception as e:
+            pytest.fail(f"Early aclose() raised an exception: {e}")
+
+        # Verify only one stream_start was seen in all collected messages
+        start_count = sum(1 for m in [first] + messages if "event: stream_start" in m)
+        assert start_count == 1
+
 
 class TestConstants:
     """Test module constants."""

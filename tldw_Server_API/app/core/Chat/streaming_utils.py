@@ -189,7 +189,12 @@ class StreamingResponseHandler:
             # Client disconnected
             logger.info(f"Client disconnected from stream for {self.conversation_id}")
             self.cancel()
-            
+        except GeneratorExit:
+            # Generator is being closed; do not yield anything here
+            logger.info(f"Stream generator closed for {self.conversation_id}")
+            self.cancel()
+            # Re-raise to ensure proper generator closure semantics
+            raise
         except Exception as e:
             # Unexpected error
             logger.error(f"Unexpected error in stream for {self.conversation_id}: {e}", exc_info=True)
@@ -199,6 +204,10 @@ class StreamingResponseHandler:
         finally:
             # Cleanup and final message
             try:
+                # If cancelled (e.g., client disconnect or generator close), do not yield or await
+                if self.is_cancelled:
+                    return
+
                 if not self.error_occurred and not self.is_cancelled:
                     # Send completion message
                     done_payload = {
@@ -212,8 +221,13 @@ class StreamingResponseHandler:
                     yield f"data: {json.dumps(done_payload)}\n\n"
                     yield "data: [DONE]\n\n"
                 
-                # Save the full response if callback provided
-                if save_callback and self.full_response and not self.error_occurred:
+                # Save the full response if callback provided (only when not cancelled)
+                if (
+                    not self.is_cancelled
+                    and save_callback
+                    and self.full_response
+                    and not self.error_occurred
+                ):
                     full_text = "".join(self.full_response)
                     try:
                         await save_callback(full_text)
@@ -221,8 +235,9 @@ class StreamingResponseHandler:
                     except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
                 
-                # Send stream end event
-                yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+                # Send stream end event (only when not cancelled)
+                if not self.is_cancelled:
+                    yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
                 
             except Exception as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")
@@ -257,49 +272,61 @@ async def create_streaming_response_with_timeout(
         heartbeat_interval=heartbeat_interval
     )
     
-    # Create tasks for streaming and heartbeat
+    # Create tasks for streaming and heartbeat using persistent generator instances
     async def stream_with_heartbeat():
-        stream_task = asyncio.create_task(
-            handler.safe_stream_generator(stream, save_callback).__aiter__().__anext__()
-        )
-        heartbeat_task = asyncio.create_task(
-            handler.heartbeat_generator().__aiter__().__anext__()
-        )
-        
-        while not handler.is_cancelled and not handler.error_occurred:
-            done, pending = await asyncio.wait(
-                {stream_task, heartbeat_task},
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            
-            for task in done:
-                try:
-                    result = task.result()
-                    if task == stream_task:
-                        yield result
-                        # Create new stream task
-                        stream_task = asyncio.create_task(
-                            handler.safe_stream_generator(stream, save_callback).__aiter__().__anext__()
-                        )
-                    else:
-                        # Heartbeat
-                        yield result
-                        # Create new heartbeat task
-                        heartbeat_task = asyncio.create_task(
-                            handler.heartbeat_generator().__aiter__().__anext__()
-                        )
-                except StopAsyncIteration:
-                    # Stream ended
-                    handler.cancel()
-                    break
-                except Exception as e:
-                    logger.error(f"Error in streaming task: {e}")
-                    handler.error_occurred = True
-                    break
-        
-        # Cancel pending tasks
-        for task in pending:
-            task.cancel()
+        stream_gen = handler.safe_stream_generator(stream, save_callback)
+        heartbeat_gen = handler.heartbeat_generator()
+
+        stream_task = asyncio.create_task(stream_gen.__anext__())
+        heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
+
+        try:
+            while not handler.is_cancelled and not handler.error_occurred:
+                done, pending = await asyncio.wait(
+                    {stream_task, heartbeat_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                for task in done:
+                    try:
+                        result = task.result()
+                        if task == stream_task:
+                            # Stream chunk
+                            if result is not None:
+                                yield result
+                            # Schedule next chunk
+                            stream_task = asyncio.create_task(stream_gen.__anext__())
+                        else:
+                            # Heartbeat
+                            if result is not None:
+                                yield result
+                            # Schedule next heartbeat
+                            heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
+                    except StopAsyncIteration:
+                        # Stream ended
+                        handler.cancel()
+                        break
+                    except asyncio.CancelledError:
+                        handler.cancel()
+                        break
+                    except Exception as e:
+                        logger.error(f"Error in streaming task: {e}")
+                        handler.error_occurred = True
+                        break
+
+                # Cancel any pending tasks before continuing or exiting
+                for task in pending:
+                    task.cancel()
+        finally:
+            # Ensure generators are properly closed; avoid yielding here
+            try:
+                await stream_gen.aclose()
+            except Exception:
+                pass
+            try:
+                await heartbeat_gen.aclose()
+            except Exception:
+                pass
     
     async for message in stream_with_heartbeat():
         yield message

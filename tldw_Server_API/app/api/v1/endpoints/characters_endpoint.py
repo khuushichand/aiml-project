@@ -989,6 +989,7 @@ async def attach_world_book_to_character(
         
         return CharacterWorldBookResponse(
             **book,
+            world_book_id=book.get('id', attachment.world_book_id),
             attachment_enabled=attachment.enabled,
             attachment_priority=attachment.priority
         )
@@ -1061,8 +1062,11 @@ async def get_character_world_books(
         response_books = []
         for book in books:
             entries = service.get_entries(book['id'], enabled_only=False)
-            book['entry_count'] = len(entries)
-            response_books.append(CharacterWorldBookResponse(**book))
+            # Build response dict with explicit world_book_id alias
+            book_dict = dict(book)
+            book_dict['entry_count'] = len(entries)
+            book_dict['world_book_id'] = book_dict.get('id')
+            response_books.append(CharacterWorldBookResponse(**book_dict))
         
         return response_books
         

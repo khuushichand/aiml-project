@@ -673,26 +673,27 @@ class ChromaDBManager:
                 num_results_for_first_query = len(results['ids'][0])
                 for i in range(num_results_for_first_query):
                     item = {}
-                    # Check if the key exists in results before trying to access results[key][0]
-                    # And also check if the specific field was requested in effective_include_fields
-                    if "documents" in effective_include_fields and results.get('documents') and results['documents'] and \
-                            results['documents'][0]:
-                        item["content"] = results['documents'][0][i]
-                    if "metadatas" in effective_include_fields and results.get('metadatas') and results['metadatas'] and \
-                            results['metadatas'][0]:
-                        item["metadata"] = results['metadatas'][0][i]
-                    if "distances" in effective_include_fields and results.get('distances') and results['distances'] and \
-                            results['distances'][0]:
-                        item["distance"] = results['distances'][0][i]
-                    if "embeddings" in effective_include_fields and results.get('embeddings') and results[
-                        'embeddings'] and results['embeddings'][0]:
-                        item["embedding"] = results['embeddings'][0][i]
-                    if "uris" in effective_include_fields and results.get('uris') and results['uris'] and \
-                            results['uris'][0]:  # Added uris
-                        item["uri"] = results['uris'][0][i]
-                    if "data" in effective_include_fields and results.get('data') and results['data'] and \
-                            results['data'][0]:  # Added data
-                        item["data"] = results['data'][0][i]
+                    # Helper accessors to avoid ambiguous truthiness (e.g., numpy arrays)
+                    docs = results.get('documents')
+                    metas = results.get('metadatas')
+                    dists = results.get('distances')
+                    embs = results.get('embeddings')
+                    uris = results.get('uris')
+                    data_field = results.get('data')
+
+                    # Only fill fields when requested and present with expected outer/inner lengths
+                    if "documents" in effective_include_fields and docs is not None and len(docs) > 0 and len(docs[0]) > 0:
+                        item["content"] = docs[0][i]
+                    if "metadatas" in effective_include_fields and metas is not None and len(metas) > 0 and len(metas[0]) > 0:
+                        item["metadata"] = metas[0][i]
+                    if "distances" in effective_include_fields and dists is not None and len(dists) > 0 and len(dists[0]) > 0:
+                        item["distance"] = dists[0][i]
+                    if "embeddings" in effective_include_fields and embs is not None and len(embs) > 0 and len(embs[0]) > 0:
+                        item["embedding"] = embs[0][i]
+                    if "uris" in effective_include_fields and uris is not None and len(uris) > 0 and len(uris[0]) > 0:
+                        item["uri"] = uris[0][i]
+                    if "data" in effective_include_fields and data_field is not None and len(data_field) > 0 and len(data_field[0]) > 0:
+                        item["data"] = data_field[0][i]
 
                     # IDs are generally always included by ChromaDB if results are found
                     if results.get('ids') and results['ids'][0]:
