@@ -158,6 +158,45 @@ class TestCharacterCardEndpoints:
         )
         assert get_response.status_code == 404
 
+    @pytest.mark.integration
+    def test_update_character_version_conflict(self, test_client, auth_headers):
+        """Updating with wrong expected_version returns 409."""
+        # Create character
+        create_response = test_client.post(
+            "/api/v1/characters/",
+            json={'name': 'Version Test', 'description': 'v1', 'personality': 'p', 'first_message': 'hi'},
+            headers=auth_headers
+        )
+        char_id = create_response.json()['id']
+        current_version = create_response.json()['version']
+
+        # Use wrong expected_version
+        bad_version = current_version + 1
+        response = test_client.put(
+            f"/api/v1/characters/{char_id}?expected_version={bad_version}",
+            json={'description': 'should fail'},
+            headers=auth_headers
+        )
+        assert response.status_code == 409
+
+    @pytest.mark.integration
+    def test_delete_character_version_conflict(self, test_client, auth_headers):
+        """Deleting with wrong expected_version returns 409."""
+        create_response = test_client.post(
+            "/api/v1/characters/",
+            json={'name': 'Del Version', 'description': 'v1', 'personality': 'p', 'first_message': 'hi'},
+            headers=auth_headers
+        )
+        char_id = create_response.json()['id']
+        current_version = create_response.json()['version']
+
+        bad_version = current_version + 1
+        response = test_client.delete(
+            f"/api/v1/characters/{char_id}?expected_version={bad_version}",
+            headers=auth_headers
+        )
+        assert response.status_code == 409
+
 # ========================================================================
 # Chat Session Endpoint Tests
 # ========================================================================
@@ -298,6 +337,66 @@ class TestChatSessionEndpoints:
         
         assert delete_response.status_code == 204  # No Content status
         # 204 No Content doesn't have a response body
+
+
+class TestWorldBookEndpoints:
+    """World book endpoint coverage."""
+
+    @pytest.mark.integration
+    def test_world_book_crud_and_attach(self, test_client, auth_headers):
+        """Create a world book, list, attach to character, list attached, then delete."""
+        # Create world book
+        wb_resp = test_client.post(
+            "/api/v1/characters/world-books",
+            json={
+                'name': 'WB1',
+                'description': 'A test world book'
+            },
+            headers=auth_headers
+        )
+        assert wb_resp.status_code == 201
+        wb_id = wb_resp.json()['id']
+
+        # List
+        list_resp = test_client.get(
+            "/api/v1/characters/world-books",
+            headers=auth_headers
+        )
+        assert list_resp.status_code == 200
+        assert any(wb['id'] == wb_id for wb in list_resp.json()['world_books'])
+
+        # Create character
+        char_resp = test_client.post(
+            "/api/v1/characters/",
+            json={'name': 'WBChar', 'description': 'd', 'personality': 'p', 'first_message': 'hi'},
+            headers=auth_headers
+        )
+        char_id = char_resp.json()['id']
+
+        # Attach world book to character
+        attach_resp = test_client.post(
+            f"/api/v1/characters/{char_id}/world-books",
+            json={'world_book_id': wb_id},
+            headers=auth_headers
+        )
+        assert attach_resp.status_code == 200
+
+        # List character world books
+        char_wb_resp = test_client.get(
+            f"/api/v1/characters/{char_id}/world-books",
+            headers=auth_headers
+        )
+        assert char_wb_resp.status_code == 200
+        wb_ids = [wb['world_book_id'] for wb in char_wb_resp.json()]
+        assert wb_id in wb_ids
+
+        # Delete world book
+        del_resp = test_client.delete(
+            f"/api/v1/characters/world-books/{wb_id}",
+            params={'expected_version': 1},
+            headers=auth_headers
+        )
+        assert del_resp.status_code == 200
 
 # ========================================================================
 # Message Endpoint Tests

@@ -360,7 +360,7 @@ def mock_tokenizer():
     """Mock tokenizer for token-based chunking."""
     tokenizer = MagicMock()
     tokenizer.encode = Mock(side_effect=lambda text: text.split())
-    tokenizer.decode = Mock(side_effect=lambda tokens: ' '.join(tokens))
+    tokenizer.decode = Mock(side_effect=lambda tokens, **kwargs: ' '.join(tokens))
     tokenizer.tokenize = Mock(side_effect=lambda text: text.split())
     tokenizer.convert_tokens_to_string = Mock(side_effect=lambda tokens: ' '.join(tokens))
     return tokenizer

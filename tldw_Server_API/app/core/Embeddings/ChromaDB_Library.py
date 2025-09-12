@@ -439,7 +439,7 @@ class ChromaDBManager:
                     # TODO: Point 4 - Async/Batching for create_embeddings_batch if it supports async
                     embeddings = create_embeddings_batch(
                         texts=texts_for_embedding_generation,
-                        user_embedding_config=self.user_embedding_config,
+                        user_app_config=self.user_embedding_config,
                         model_id_override=current_op_embedding_model_id
                     )
 

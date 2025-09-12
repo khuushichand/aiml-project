@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 import uuid
 import json
 from datetime import datetime
+import asyncio
 from loguru import logger
 
 from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
@@ -18,7 +19,8 @@ from ..schemas.prompt_studio_schemas import (
     EvaluationResponse,
     EvaluationList,
     EvaluationUpdate,
-    EvaluationMetrics
+    EvaluationMetrics,
+    EvaluationConfig,
 )
 
 router = APIRouter(prefix="/api/v1/prompt-studio")
@@ -43,44 +45,53 @@ async def create_evaluation(
         Created evaluation response
     """
     try:
-        # Use EvaluationManager to handle the evaluation
+        # Normalize config
+        cfg: Optional[EvaluationConfig] = evaluation.config
+        model_name = (cfg.model_name if cfg and cfg.model_name else "gpt-3.5-turbo")
+        temperature = (cfg.temperature if cfg and cfg.temperature is not None else 0.7)
+        max_tokens = (cfg.max_tokens if cfg and cfg.max_tokens is not None else 1000)
+
+        # Use EvaluationManager for sync path; for async we create a record and update later
         eval_manager = EvaluationManager(db)
-        
-        # Get model and parameters from config
-        model = evaluation.config.model if evaluation.config else "gpt-3.5-turbo"
-        temperature = evaluation.config.temperature if evaluation.config else 0.7
-        max_tokens = evaluation.config.max_tokens if evaluation.config else 1000
-        
-        # Run evaluation (can be made async with background tasks)
+
         if getattr(evaluation, 'run_async', False):
-            # Queue for background processing
-            background_tasks.add_task(
-                eval_manager.run_evaluation,
-                prompt_id=evaluation.prompt_id,
-                test_case_ids=evaluation.test_case_ids or [],
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            
-            # Create pending evaluation record
+            # Create a pending evaluation record tied to this request
             eval_uuid = str(uuid.uuid4())
             conn = db.get_connection()
             cursor = conn.cursor()
-            cursor.execute("""
+            model_configs = json.dumps({
+                "model_name": model_name,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            })
+            cursor.execute(
+                """
                 INSERT INTO prompt_studio_evaluations (
-                    uuid, prompt_id, model, status, test_case_ids, client_id
-                ) VALUES (?, ?, ?, 'pending', ?, ?)
-            """, (
-                eval_uuid,
-                evaluation.prompt_id,
-                model,
-                json.dumps(evaluation.test_case_ids or []),
-                user_context.get("client_id", "api")
-            ))
+                    uuid, project_id, prompt_id, name, description,
+                    test_case_ids, model_configs, status, client_id, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+                """,
+                (
+                    eval_uuid,
+                    evaluation.project_id,
+                    evaluation.prompt_id,
+                    evaluation.name or "Evaluation",
+                    evaluation.description or "",
+                    json.dumps(evaluation.test_case_ids or []),
+                    model_configs,
+                    user_context.get("client_id", "api"),
+                ),
+            )
             eval_id = cursor.lastrowid
             conn.commit()
-            
+
+            # Defer execution which will update this record to running/completed
+            background_tasks.add_task(
+                run_evaluation_async,
+                evaluation_id=eval_id,
+                db=db,
+            )
+
             return EvaluationResponse(
                 id=eval_id,
                 uuid=eval_uuid,
@@ -89,18 +100,18 @@ async def create_evaluation(
                 name=evaluation.name or "Evaluation",
                 description=evaluation.description or "",
                 status="pending",
-                created_at=datetime.now().isoformat()
+                created_at=datetime.now().isoformat(),
             )
         else:
             # Run synchronously and return results
             result = eval_manager.run_evaluation(
                 prompt_id=evaluation.prompt_id,
                 test_case_ids=evaluation.test_case_ids or [],
-                model=model,
+                model=model_name,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
             )
-            
+
             return EvaluationResponse(
                 id=result["id"],
                 uuid=result["uuid"],
@@ -110,7 +121,7 @@ async def create_evaluation(
                 description=evaluation.description or "",
                 status=result["status"],
                 created_at=datetime.now().isoformat(),
-                metrics=result.get("metrics")
+                metrics=result.get("metrics"),
             )
         
     except Exception as e:
@@ -270,40 +281,233 @@ async def delete_evaluation(
         logger.error(f"Failed to delete evaluation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+########################################################################################################################
+# Background Task Health
+
+# Minimal in-memory ping registry for background tasks health checks
+_BG_PINGS: Dict[str, Dict[str, Any]] = {}
+
+
+async def _complete_ping(ping_id: str):
+    try:
+        # Yield to event loop briefly to simulate background work
+        await asyncio.sleep(0.01)
+        _BG_PINGS[ping_id]["status"] = "completed"
+        _BG_PINGS[ping_id]["completed_at"] = datetime.now().isoformat()
+    except Exception:
+        _BG_PINGS[ping_id]["status"] = "failed"
+
+
+@router.post("/background/ping")
+async def background_ping(background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """Schedule a trivial background task to verify background execution works."""
+    pid = str(uuid.uuid4())
+    _BG_PINGS[pid] = {"id": pid, "status": "processing", "created_at": datetime.now().isoformat()}
+    background_tasks.add_task(_complete_ping, pid)
+    return _BG_PINGS[pid]
+
+
+@router.get("/background/pings/{ping_id}")
+async def get_ping_status(ping_id: str) -> Dict[str, Any]:
+    if ping_id not in _BG_PINGS:
+        raise HTTPException(status_code=404, detail="Ping not found")
+    return _BG_PINGS[ping_id]
+
 async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
     """
-    Run evaluation asynchronously.
-    
-    Args:
-        evaluation_id: Evaluation ID
-        db: Database instance
+    Execute an evaluation and update the existing record.
+
+    Best-effort: computes simple metrics; tolerates missing LLM credentials by
+    marking failures while still completing the record.
     """
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
+    from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+    import json as _json
+
+    conn = db.get_connection()
+    cursor = conn.cursor()
     try:
-        # This is a placeholder for async evaluation logic
-        # In a real implementation, this would run tests and calculate metrics
-        logger.info(f"Running async evaluation {evaluation_id}")
-        
-        # Update status to completed
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE prompt_studio_evaluations
-            SET status = 'completed', completed_at = ?
+        # Load the evaluation record
+        cursor.execute(
+            """
+            SELECT id, project_id, prompt_id, test_case_ids, model_configs
+            FROM prompt_studio_evaluations
             WHERE id = ?
-        """, (datetime.now().isoformat(), evaluation_id))
+            """,
+            (evaluation_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError("Evaluation not found")
+
+        # Move to running
+        cursor.execute(
+            """
+            UPDATE prompt_studio_evaluations
+            SET status = 'running', started_at = ?
+            WHERE id = ?
+            """,
+            (datetime.now().isoformat(), evaluation_id),
+        )
         conn.commit()
-        
+
+        _id, project_id, prompt_id, tc_ids_json, model_cfg_json = row
+        try:
+            test_case_ids = _json.loads(tc_ids_json) if tc_ids_json else []
+        except Exception:
+            test_case_ids = []
+        try:
+            cfg = _json.loads(model_cfg_json) if model_cfg_json else {}
+        except Exception:
+            cfg = {}
+        model_name = cfg.get("model_name") or cfg.get("model") or "gpt-3.5-turbo"
+        temperature = cfg.get("temperature", 0.7)
+        max_tokens = cfg.get("max_tokens", 1000)
+
+        # Fetch prompt
+        cursor.execute(
+            """
+            SELECT system_prompt, user_prompt, name
+            FROM prompt_studio_prompts
+            WHERE id = ? AND deleted = 0
+            """,
+            (prompt_id,),
+        )
+        prompt_row = cursor.fetchone()
+        if not prompt_row:
+            raise RuntimeError(f"Prompt {prompt_id} not found")
+        system_prompt, user_prompt, prompt_name = prompt_row
+        system_prompt = system_prompt or ""
+        user_prompt = user_prompt or ""
+
+        # Fetch test cases
+        if not test_case_ids:
+            results = []
+        else:
+            placeholders = ",".join("?" * len(test_case_ids))
+            cursor.execute(
+                f"""
+                SELECT id, inputs, expected_outputs
+                FROM prompt_studio_test_cases
+                WHERE id IN ({placeholders}) AND deleted = 0
+                """,
+                test_case_ids,
+            )
+            tc_rows = cursor.fetchall()
+
+            results = []
+            total_score = 0.0
+            for tc in tc_rows:
+                tc_id, inputs_json, expected_json = tc
+                try:
+                    inputs = _json.loads(inputs_json) if inputs_json else {}
+                except Exception:
+                    inputs = {}
+                try:
+                    expected = _json.loads(expected_json) if expected_json else {}
+                except Exception:
+                    expected = {}
+
+                # Format user prompt with inputs
+                formatted_user_prompt = user_prompt
+                try:
+                    for k, v in (inputs or {}).items():
+                        formatted_user_prompt = formatted_user_prompt.replace(f"{{{k}}}", str(v))
+                except Exception:
+                    pass
+
+                # LLM call best-effort
+                actual_output = ""
+                error = None
+                try:
+                    resp = chat_api_call(
+                        api_endpoint="openai",
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": formatted_user_prompt},
+                        ],
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if isinstance(resp, list) and resp:
+                        actual_output = resp[0]
+                except Exception as e:
+                    error = str(e)
+
+                # Score: simple exact/contains match on 'response' field
+                def _score(exp: dict, act: dict) -> float:
+                    if not exp:
+                        return 1.0
+                    exp_str = str(exp.get("response", "")).lower().strip()
+                    act_str = str(act.get("response", "")).lower().strip()
+                    if exp_str == act_str:
+                        return 1.0
+                    if exp_str and act_str and (exp_str in act_str or act_str in exp_str):
+                        return 0.5
+                    if not exp_str:
+                        return 0.0
+                    exp_words = set(exp_str.split())
+                    act_words = set(act_str.split())
+                    if not exp_words:
+                        return 0.0
+                    overlap = len(exp_words & act_words)
+                    return overlap / max(1, len(exp_words))
+
+                actual = {"response": actual_output} if not error else {"error": error}
+                score = _score(expected, {"response": actual_output}) if not error else 0.0
+                total_score += score
+                results.append(
+                    {
+                        "test_case_id": tc_id,
+                        "inputs": inputs,
+                        "expected": expected,
+                        "actual": actual,
+                        "score": score,
+                        "passed": score >= 0.5,
+                    }
+                )
+
+        passed = sum(1 for r in results if r.get("passed"))
+        total = len(results)
+        aggregate_metrics = {
+            "average_score": (sum(r.get("score", 0.0) for r in results) / total) if total else 0.0,
+            "total_tests": total,
+            "passed": passed,
+            "failed": total - passed,
+            "pass_rate": (passed / total) if total else 0.0,
+        }
+
+        # Update evaluation to completed with metrics
+        cursor.execute(
+            """
+            UPDATE prompt_studio_evaluations
+            SET status = 'completed',
+                completed_at = ?,
+                aggregate_metrics = ?,
+                test_run_ids = ?
+            WHERE id = ?
+            """,
+            (
+                datetime.now().isoformat(),
+                _json.dumps(aggregate_metrics),
+                _json.dumps([r["test_case_id"] for r in results]) if results else _json.dumps([]),
+                evaluation_id,
+            ),
+        )
+        conn.commit()
+
     except Exception as e:
         logger.error(f"Failed to run async evaluation: {e}")
-        # Update status to failed
         try:
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE prompt_studio_evaluations
                 SET status = 'failed', error_message = ?
                 WHERE id = ?
-            """, (str(e), evaluation_id))
+                """,
+                (str(e), evaluation_id),
+            )
             conn.commit()
-        except:
+        except Exception:
             pass

@@ -297,3 +297,5 @@ uv.lock
 /models
 /cache
 /.tmp
+/tldw_Server_API/Test_Cache
+/logs

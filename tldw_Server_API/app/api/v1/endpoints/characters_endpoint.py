@@ -319,6 +319,56 @@ async def filter_characters_by_tags(
         )
 
 
+
+# --- World Book List (moved up to avoid route conflicts) ---
+
+## list_world_books route moved above to avoid conflict with /{character_id}
+@router.get("/world-books", response_model=WorldBookListResponse, summary="List world books", tags=["World Books"], include_in_schema=False)
+async def list_world_books_prioritized(
+        include_disabled: bool = Query(False, description="Include disabled world books"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    """List all world books for the user (priority route)."""
+    try:
+        service = WorldBookService(db)
+        books = service.list_world_books(include_disabled=include_disabled)
+        
+        # Add entry counts
+        for book in books:
+            entries = service.get_entries(book['id'], enabled_only=False)
+            book['entry_count'] = len(entries)
+        
+        # Convert to response models (filter unexpected fields)
+        allowed_keys = {
+            'id', 'name', 'description', 'scan_depth', 'token_budget',
+            'recursive_scanning', 'enabled', 'created_at', 'last_modified',
+            'version', 'entry_count'
+        }
+        filtered = []
+        for book in books:
+            filtered_dict = {k: book.get(k) for k in allowed_keys if k in book}
+            filtered.append(WorldBookResponse(**filtered_dict))
+        book_responses = filtered
+        
+        # Calculate statistics
+        enabled_count = sum(1 for b in book_responses if b.enabled)
+        disabled_count = len(book_responses) - enabled_count
+        
+        return WorldBookListResponse(
+            world_books=book_responses,
+            total=len(book_responses),
+            enabled_count=enabled_count,
+            disabled_count=disabled_count
+        )
+        
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error listing world books: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+
+
 @router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["Characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
         character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
@@ -515,8 +565,17 @@ async def list_world_books(
             entries = service.get_entries(book['id'], enabled_only=False)
             book['entry_count'] = len(entries)
         
-        # Convert to response models
-        book_responses = [WorldBookResponse(**book) for book in books]
+        # Convert to response models (filter unexpected fields)
+        allowed_keys = {
+            'id', 'name', 'description', 'scan_depth', 'token_budget',
+            'recursive_scanning', 'enabled', 'created_at', 'last_modified',
+            'version', 'entry_count'
+        }
+        filtered = []
+        for book in books:
+            filtered_dict = {k: book.get(k) for k in allowed_keys if k in book}
+            filtered.append(WorldBookResponse(**filtered_dict))
+        book_responses = filtered
         
         # Calculate statistics
         enabled_count = sum(1 for b in book_responses if b.enabled)
@@ -884,8 +943,8 @@ async def delete_world_book_entry(
 
 # --- Character-World Book Association Endpoints ---
 
-@router.post("/{character_id}/world-books", response_model=CharacterWorldBookResponse,
-             status_code=status.HTTP_201_CREATED, summary="Attach world book to character", tags=["World Books"])
+@router.post("/{character_id:int}/world-books", response_model=CharacterWorldBookResponse,
+             status_code=status.HTTP_200_OK, summary="Attach world book to character", tags=["World Books"])
 async def attach_world_book_to_character(
         character_id: int,
         attachment: CharacterWorldBookAttachment,
@@ -944,7 +1003,7 @@ async def attach_world_book_to_character(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
-@router.delete("/{character_id}/world-books/{world_book_id}", response_model=DeletionResponse,
+@router.delete("/{character_id:int}/world-books/{world_book_id:int}", response_model=DeletionResponse,
                summary="Detach world book from character", tags=["World Books"])
 async def detach_world_book_from_character(
         character_id: int = FastAPIPath(..., description="Character ID", gt=0),
@@ -978,7 +1037,7 @@ async def detach_world_book_from_character(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
-@router.get("/{character_id}/world-books", response_model=List[CharacterWorldBookResponse],
+@router.get("/{character_id:int}/world-books", response_model=List[CharacterWorldBookResponse],
             summary="List character's world books", tags=["World Books"])
 async def get_character_world_books(
         character_id: int = FastAPIPath(..., description="Character ID", gt=0),

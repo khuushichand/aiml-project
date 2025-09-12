@@ -2,6 +2,7 @@
 # API endpoints for Prompt Studio prompt management with versioning
 
 from typing import List, Optional, Dict, Any
+import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from loguru import logger
 
@@ -43,7 +44,6 @@ router = APIRouter(
 @router.post("/create", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
 async def create_prompt(
     prompt_data: PromptCreate,
-    _: bool = Depends(lambda: require_project_write_access(prompt_data.project_id)),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)
@@ -74,39 +74,64 @@ async def create_prompt(
                 detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
         
+        # Ensure write access to the project
+        await require_project_write_access(prompt_data.project_id, user_context=user_context, db=db)
+
         # Create prompt in database
         conn = db.get_connection()
-        cursor = conn.cursor()
-        
+        import time
         import uuid
         import json
-        
+        cursor = conn.cursor()
         prompt_uuid = str(uuid.uuid4())
-        
-        # Convert few_shot_examples and modules_config to JSON
+
         few_shot_json = None
         if prompt_data.few_shot_examples:
             few_shot_json = json.dumps([ex.dict() for ex in prompt_data.few_shot_examples])
-        
         modules_json = None
         if prompt_data.modules_config:
             modules_json = json.dumps([mod.dict() for mod in prompt_data.modules_config])
-        
-        cursor.execute("""
-            INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, version_number, name,
-                system_prompt, user_prompt, few_shot_examples, modules_config,
-                parent_version_id, change_description, client_id
-            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            prompt_uuid, prompt_data.project_id, prompt_data.signature_id,
-            prompt_data.name, prompt_data.system_prompt, prompt_data.user_prompt,
-            few_shot_json, modules_json, prompt_data.parent_version_id,
-            prompt_data.change_description, user_context["client_id"]
-        ))
-        
-        prompt_id = cursor.lastrowid
-        conn.commit()
+
+        # Retry on transient database locks
+        max_retries = 5
+        base_delay = 0.05
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO prompt_studio_prompts (
+                        uuid, project_id, signature_id, version_number, name,
+                        system_prompt, user_prompt, few_shot_examples, modules_config,
+                        parent_version_id, change_description, client_id
+                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prompt_uuid,
+                        prompt_data.project_id,
+                        prompt_data.signature_id,
+                        prompt_data.name,
+                        prompt_data.system_prompt,
+                        prompt_data.user_prompt,
+                        few_shot_json,
+                        modules_json,
+                        prompt_data.parent_version_id,
+                        prompt_data.change_description,
+                        user_context["client_id"],
+                    ),
+                )
+                prompt_id = cursor.lastrowid
+                conn.commit()
+                break
+            except sqlite3.OperationalError as e:
+                last_err = e
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+                raise
+
+        if last_err and 'prompt_id' not in locals():
+            raise last_err
         
         # Get created prompt
         prompt = db.get_prompt(prompt_id)

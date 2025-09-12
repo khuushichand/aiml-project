@@ -109,6 +109,7 @@ class CharacterWorldBookAttachment(BaseModel):
 
 class CharacterWorldBookResponse(WorldBookResponse):
     """Schema for world book attached to a character."""
+    world_book_id: int = Field(..., description="World book ID (alias of id)")
     attachment_enabled: bool = Field(..., description="Whether attachment is enabled")
     attachment_priority: int = Field(..., description="Priority for this character")
 

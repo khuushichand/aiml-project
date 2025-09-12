@@ -102,27 +102,50 @@ class TestCaseManager:
             raise InputError("Test case name cannot be empty")
         
         try:
+            import time
             conn = self.db.get_connection()
             cursor = conn.cursor()
-            
+
             # Generate UUID
             test_case_uuid = str(uuid.uuid4())
-            
+
             # Convert tags to string
             tags_str = ",".join(tags) if tags else None
-            
-            # Insert test case
-            cursor.execute("""
-                INSERT INTO prompt_studio_test_cases (
-                    uuid, project_id, signature_id, name, description,
-                    inputs, expected_outputs, tags, is_golden, client_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                test_case_uuid, project_id, signature_id, name, description,
-                json.dumps(inputs), json.dumps(expected_outputs) if expected_outputs else None,
-                tags_str, int(is_golden), self.client_id
-            ))
-            
+
+            # Insert test case with retry on locked DB
+            max_retries = 5
+            base_delay = 0.05
+            last_err = None
+            for attempt in range(max_retries):
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO prompt_studio_test_cases (
+                            uuid, project_id, signature_id, name, description,
+                            inputs, expected_outputs, tags, is_golden, client_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            test_case_uuid,
+                            project_id,
+                            signature_id,
+                            name,
+                            description,
+                            json.dumps(inputs),
+                            json.dumps(expected_outputs) if expected_outputs else None,
+                            tags_str,
+                            int(is_golden),
+                            self.client_id,
+                        ),
+                    )
+                    break
+                except sqlite3.OperationalError as e:
+                    last_err = e
+                    if "database is locked" in str(e) and attempt < max_retries - 1:
+                        time.sleep(base_delay * (2 ** attempt))
+                        continue
+                    raise
+
             test_case_id = cursor.lastrowid
             conn.commit()
             
@@ -146,6 +169,7 @@ class TestCaseManager:
         Returns:
             Test case record or None
         """
+        import time
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
@@ -235,7 +259,20 @@ class TestCaseManager:
         """
         params.extend([per_page, offset])
         
-        cursor.execute(query, params)
+        # Retry on locked DB
+        max_retries = 5
+        base_delay = 0.05
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                cursor.execute(query, params)
+                break
+            except sqlite3.OperationalError as e:
+                last_err = e
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+                raise
         test_cases = []
         for row in cursor.fetchall():
             test_case = self.db._row_to_dict(cursor, row)
@@ -324,14 +361,30 @@ class TestCaseManager:
         conn = self.db.get_connection()
         cursor = conn.cursor()
         
-        if hard_delete:
-            cursor.execute("DELETE FROM prompt_studio_test_cases WHERE id = ?", (test_case_id,))
-        else:
-            cursor.execute("""
-                UPDATE prompt_studio_test_cases
-                SET deleted = 1, deleted_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND deleted = 0
-            """, (test_case_id,))
+        import time
+        max_retries = 5
+        base_delay = 0.05
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                if hard_delete:
+                    cursor.execute("DELETE FROM prompt_studio_test_cases WHERE id = ?", (test_case_id,))
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE prompt_studio_test_cases
+                        SET deleted = 1, deleted_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND deleted = 0
+                        """,
+                        (test_case_id,),
+                    )
+                break
+            except sqlite3.OperationalError as e:
+                last_err = e
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+                raise
         
         success = cursor.rowcount > 0
         if success:
@@ -357,25 +410,56 @@ class TestCaseManager:
             List of created test case records
         """
         created_cases = []
-        
+
         try:
+            import time
             with self.db.transaction() as conn:
+                cur = conn.cursor()
+                max_retries = 5
+                base_delay = 0.05
                 for test_case_data in test_cases:
-                    test_case = self.create_test_case(
-                        project_id=project_id,
-                        name=test_case_data.get("name"),
-                        description=test_case_data.get("description"),
-                        inputs=test_case_data["inputs"],
-                        expected_outputs=test_case_data.get("expected_outputs"),
-                        tags=test_case_data.get("tags"),
-                        is_golden=test_case_data.get("is_golden", False),
-                        signature_id=signature_id or test_case_data.get("signature_id")
+                    test_case_uuid = str(uuid.uuid4())
+                    tags_str = ",".join(test_case_data.get("tags") or []) if test_case_data.get("tags") else None
+                    params = (
+                        test_case_uuid,
+                        project_id,
+                        signature_id or test_case_data.get("signature_id"),
+                        test_case_data.get("name"),
+                        test_case_data.get("description"),
+                        json.dumps(test_case_data["inputs"]),
+                        json.dumps(test_case_data.get("expected_outputs")) if test_case_data.get("expected_outputs") else None,
+                        tags_str,
+                        int(test_case_data.get("is_golden", False)),
+                        self.client_id,
                     )
-                    created_cases.append(test_case)
-            
+                    last_err = None
+                    for attempt in range(max_retries):
+                        try:
+                            cur.execute(
+                                """
+                                INSERT INTO prompt_studio_test_cases (
+                                    uuid, project_id, signature_id, name, description,
+                                    inputs, expected_outputs, tags, is_golden, client_id
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                params,
+                            )
+                            break
+                        except sqlite3.OperationalError as e:
+                            last_err = e
+                            if "database is locked" in str(e) and attempt < max_retries - 1:
+                                time.sleep(base_delay * (2 ** attempt))
+                                continue
+                            raise
+                    new_id = cur.lastrowid
+                    conn.commit()
+                    created = self.get_test_case(new_id)
+                    if created:
+                        created_cases.append(created)
+
             logger.info(f"Created {len(created_cases)} test cases in bulk")
             return created_cases
-            
+
         except Exception as e:
             logger.error(f"Failed to create test cases in bulk: {e}")
             raise DatabaseError(f"Bulk creation failed: {e}")

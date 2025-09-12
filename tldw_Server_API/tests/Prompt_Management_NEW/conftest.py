@@ -66,40 +66,98 @@ def pytest_configure(config):
                 self.db_directory = Path(db_directory)
                 self.client_id = client_id
                 self._db_instance = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.close()
+                return False
+
             def _ensure_db(self):
                 if self._db_instance is None:
                     db_path = str(self.db_directory / 'prompts.db')
                     self._db_instance = PromptsDatabase(db_path=db_path, client_id=self.client_id)
-            # CRUD and helpers used by tests delegate to DB instance
+
+            # CRUD and helpers used by tests mapped to current DB API
             def create_prompt(self, name, content, author=None, keywords=None, **kwargs):
                 self._ensure_db()
-                return self._db_instance.create_prompt(name=name, content=content, author=author, keywords=keywords)
+                pid, _uuid, _msg = self._db_instance.add_prompt(
+                    name=name,
+                    author=author,
+                    details=content,
+                    system_prompt=None,
+                    user_prompt=None,
+                    keywords=keywords or [],
+                    overwrite=False
+                )
+                return pid
+
             def get_prompt(self, prompt_id=None, **kwargs):
                 self._ensure_db()
-                return self._db_instance.get_prompt(prompt_id)
+                rec = self._db_instance.fetch_prompt_details(prompt_id)
+                if not rec:
+                    return None
+                # Map to legacy keys expected by tests
+                rec = dict(rec)
+                if 'details' in rec:
+                    rec['content'] = rec.get('details')
+                return rec
+
             def list_prompts(self):
                 self._ensure_db()
-                return self._db_instance.list_prompts()
-            def update_prompt(self, *args, **kwargs):
+                items, _tp, _cp, _ti = self._db_instance.list_prompts(page=1, per_page=100, include_deleted=False)
+                # Map details->content for tests
+                for it in items:
+                    if 'details' in it:
+                        it['content'] = it.get('details')
+                return items
+
+            def update_prompt(self, prompt_id=None, content=None, **kwargs):
                 self._ensure_db()
-                return self._db_instance.update_prompt(*args, **kwargs)
+                update_payload = {}
+                if content is not None:
+                    update_payload['details'] = content
+                # Allow passing name/author via kwargs if provided
+                for k in ('name', 'author', 'system_prompt', 'user_prompt'):
+                    if k in kwargs and kwargs[k] is not None:
+                        update_payload[k] = kwargs[k]
+                _uuid, _msg = self._db_instance.update_prompt_by_id(prompt_id, update_payload)
+                return {"success": True}
+
             def delete_prompt(self, prompt_id):
                 self._ensure_db()
-                return self._db_instance.delete_prompt(prompt_id)
+                ok = self._db_instance.soft_delete_prompt(prompt_id)
+                return {"success": bool(ok)}
+
             def restore_prompt(self, prompt_id):
+                # No direct restore; simulate by updating deleted flag via update (handled in DB as active)
                 self._ensure_db()
-                return self._db_instance.restore_prompt(prompt_id)
+                # Fetch to ensure it exists; update_prompt_by_id marks deleted=0
+                _uuid, msg = self._db_instance.update_prompt_by_id(prompt_id, {})
+                return {"success": _uuid is not None}
+
             def get_prompt_versions(self, prompt_id):
-                self._ensure_db()
-                return self._db_instance.get_prompt_versions(prompt_id)
+                # Not available; return empty list for compatibility
+                return []
+
             def restore_version(self, prompt_id, version):
-                self._ensure_db()
-                return self._db_instance.restore_version(prompt_id, version)
+                # Not implemented; report success False
+                return {"success": False}
+
             def get_version_diff(self, *args, **kwargs):
                 return {"added": [], "removed": [], "modified": []}
+
             def search_prompts(self, query=None):
                 self._ensure_db()
-                return self._db_instance.search_prompts(query=query)
+                results, _total = self._db_instance.search_prompts(
+                    search_query=query,
+                    search_fields=None,
+                    page=1,
+                    results_per_page=50,
+                    include_deleted=False
+                )
+                return results
             def filter_prompts(self, *args, **kwargs):
                 return []
             def get_prompts_by_category(self, *args, **kwargs):
@@ -139,20 +197,39 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture(scope="session")
-def test_env_vars():
-    """Set up test environment variables."""
+def test_env_vars(tmp_path_factory):
+    """Set up test environment variables and reset settings for isolation."""
     original_env = os.environ.copy()
-    
-    # Set test mode
+
+    # Point user DB base dir to a temp path so API uses isolated DB
+    user_db_base = tmp_path_factory.mktemp("user_dbs")
+
+    # Configure single-user mode with a deterministic API key
+    os.environ["AUTH_MODE"] = "single_user"
+    os.environ["SINGLE_USER_API_KEY"] = "test_api_key_abcdefghijklmnopqrstuvwxyz012345"
+    os.environ["USER_DB_BASE_DIR"] = str(user_db_base)
+
+    # Extra guards for tests
     os.environ["TEST_MODE"] = "true"
-    os.environ["PROMPTS_DB_PATH"] = ":memory:"
     os.environ["MAX_PROMPT_LENGTH"] = "10000"
-    
+
+    # Ensure settings pick up the above env vars
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
 
 # =====================================================================
 # Database Fixtures
@@ -175,17 +252,90 @@ def test_db_path() -> Generator[Path, None, None]:
 
 @pytest.fixture
 def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
-    """Create a real PromptsDB instance for testing."""
-    db = PromptsDB(db_path=str(test_db_path))
-    db.initialize_db()
-    
-    yield db
-    
-    # Cleanup
+    """Return a PromptsDB-like adapter backed by PromptsDatabase."""
+    RealDB = PromptsDB  # Alias to actual PromptsDatabase
+    real = RealDB(db_path=str(test_db_path), client_id="test_client")
+
+    class PromptsDBAdapter:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def initialize_db(self):
+            return None
+
+        def create_prompt(self, name, content, author=None, keywords=None, **kwargs):
+            pid, _uuid, _msg = self._inner.add_prompt(
+                name=name,
+                author=author,
+                details=content,
+                system_prompt=None,
+                user_prompt=None,
+                keywords=keywords or [],
+                overwrite=False
+            )
+            return pid
+
+        def get_prompt(self, prompt_id):
+            rec = self._inner.fetch_prompt_details(prompt_id)
+            if not rec:
+                return None
+            rec = dict(rec)
+            if 'details' in rec:
+                rec['content'] = rec.get('details')
+            return rec
+
+        def list_prompts(self):
+            items, _tp, _cp, _ti = self._inner.list_prompts(page=1, per_page=100, include_deleted=False)
+            for it in items:
+                if 'details' in it:
+                    it['content'] = it.get('details')
+            return items
+
+        def update_prompt(self, prompt_id, content=None, version_comment=None, **kwargs):
+            payload = {}
+            if content is not None:
+                payload['details'] = content
+            for k in ('name', 'author', 'system_prompt', 'user_prompt'):
+                if k in kwargs and kwargs[k] is not None:
+                    payload[k] = kwargs[k]
+            _uuid, _msg = self._inner.update_prompt_by_id(prompt_id, payload)
+            return {"success": True}
+
+        def delete_prompt(self, prompt_id):
+            ok = self._inner.soft_delete_prompt(prompt_id)
+            return {"success": bool(ok)}
+
+        def restore_prompt(self, prompt_id):
+            _uuid, msg = self._inner.update_prompt_by_id(prompt_id, {})
+            return {"success": _uuid is not None}
+
+        def get_prompt_versions(self, prompt_id):
+            return []
+
+        def restore_version(self, prompt_id, version):
+            return {"success": False}
+
+        def search_prompts(self, query):
+            results, _total = self._inner.search_prompts(
+                search_query=query,
+                search_fields=None,
+                page=1,
+                results_per_page=50,
+                include_deleted=False
+            )
+            return results
+
+        def close(self):
+            try:
+                self._inner.close_connection()
+            except Exception:
+                pass
+
+    adapter = PromptsDBAdapter(real)
     try:
-        db.close()
-    except:
-        pass
+        yield adapter
+    finally:
+        adapter.close()
 
 @pytest.fixture
 def populated_prompts_db(prompts_db) -> PromptsDB:
@@ -233,8 +383,7 @@ def prompts_service(test_db_path) -> Generator[PromptsInteropService, None, None
         )
         
         # Create a test database
-        test_db = PromptsDB(db_path=str(test_db_path))
-        test_db.initialize_db()
+        test_db = PromptsDB(db_path=str(test_db_path), client_id="test_client")
         
         # Inject the test database
         service._db_instance = test_db
@@ -567,9 +716,11 @@ def test_client(test_env_vars):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+    """Authentication headers for API requests (single-user mode)."""
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    api_key = get_settings().SINGLE_USER_API_KEY
     return {
-        "Authorization": "Bearer test-api-key",
+        "X-API-KEY": api_key,
         "Content-Type": "application/json"
     }
 

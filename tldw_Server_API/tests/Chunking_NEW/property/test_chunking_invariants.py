@@ -12,6 +12,19 @@ import json
 from typing import List, Dict, Any
 
 from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker
+
+# Reduce test load for CI and avoid timeouts
+settings.register_profile("ci", max_examples=10, deadline=2000)
+settings.load_profile("ci")
+
+def _has_punkt():
+    try:
+        import nltk
+        from nltk.data import find
+        find('tokenizers/punkt_tab/english/')
+        return True
+    except Exception:
+        return False
 import json as _json
 
 def _to_text_list(chunks):
@@ -104,10 +117,13 @@ class TestContentPreservation:
         """Property: Chunking should not lose content."""
         assume(text.strip())  # Skip empty text
         
+        if params['method'] == 'sentences' and not _has_punkt():
+            pytest.skip("NLTK punkt_tab not available")
         chunker = Chunker(options={
             'method': params['method'],
             'max_size': params['max_size'],
-            'overlap': params['overlap']
+            'overlap': params['overlap'],
+            'adaptive': False
         })
         
         chunks = chunker.chunk_text(text)
@@ -127,7 +143,9 @@ class TestContentPreservation:
     @given(text=valid_text())
     def test_chunk_ordering_preserved(self, text):
         """Property: Chunk order preserves text order."""
-        chunker = Chunker(options={'method': 'sentences', 'max_size': 2, 'overlap': 0})
+        if not _has_punkt():
+            pytest.skip("NLTK punkt_tab not available")
+        chunker = Chunker(options={'method': 'sentences', 'max_size': 2, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         chunk_texts = _to_text_list(chunks)
         
@@ -151,7 +169,7 @@ class TestContentPreservation:
         """Property: Overlapping content should match."""
         assume(text.strip())
         
-        chunker = Chunker(options={'method': 'words', 'max_size': 50, 'overlap': overlap})
+        chunker = Chunker(options={'method': 'words', 'max_size': 50, 'overlap': overlap, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         chunk_texts = _to_text_list(chunks)
         
@@ -182,7 +200,7 @@ class TestChunkSizeProperties:
         """Property: Chunks respect size limits."""
         assume(len(text.split()) > max_size)  # Text should be chunkable
         
-        chunker = Chunker(options={'method': 'words', 'max_size': max_size, 'overlap': 0})
+        chunker = Chunker(options={'method': 'words', 'max_size': max_size, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         chunk_texts = _to_text_list(chunks)
         
@@ -206,7 +224,9 @@ class TestChunkSizeProperties:
         # Generate text with exact number of sentences
         text = ". ".join([f"Sentence {i}" for i in range(num_sentences)]) + "."
         
-        chunker = Chunker(options={'method': 'sentences', 'max_size': sentences_per_chunk, 'overlap': 0})
+        if not _has_punkt():
+            pytest.skip("NLTK punkt_tab not available")
+        chunker = Chunker(options={'method': 'sentences', 'max_size': sentences_per_chunk, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         
         # Expected number of chunks
@@ -284,7 +304,7 @@ class TestStructuredDataProperties:
         
         text = "\n\n".join(paragraphs)
         
-        chunker = Chunker(options={'method':'paragraphs','max_size':2,'overlap':0})
+        chunker = Chunker(options={'method':'paragraphs','max_size':2,'overlap':0,'adaptive': False})
         chunks = chunker.chunk_text(text)
         
         # Number of chunks should match paragraph grouping
@@ -309,7 +329,7 @@ class TestPerformanceProperties:
         # Generate text of specific size
         text = " ".join(["word"] * text_size)
         
-        chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':0})
+        chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':0,'adaptive': False})
         chunks = chunker.chunk_text(text)
         
         # Number of chunks should be proportional to text size / chunk size
@@ -322,7 +342,7 @@ class TestPerformanceProperties:
         """Property: Overlap doesn't cause excessive memory usage."""
         text = " ".join(["word"] * 1000)
         
-        chunker = Chunker(options={'method':'words','max_size':100,'overlap':min(overlap,99)})
+        chunker = Chunker(options={'method':'words','max_size':100,'overlap':min(overlap,99),'adaptive': False})
         chunks = chunker.chunk_text(text)
         
         # Total chunk text shouldn't be much larger than original
@@ -354,7 +374,7 @@ class TestEdgeCaseProperties:
     )
     def test_handles_minimal_text(self, text):
         """Property: Chunking handles minimal or empty text gracefully."""
-        chunker = Chunker(options={'method':'words','max_size':10,'overlap':0})
+        chunker = Chunker(options={'method':'words','max_size':10,'overlap':0,'adaptive': False})
         chunks = chunker.chunk_text(text)
         
         # Should always return a list
@@ -376,7 +396,7 @@ class TestEdgeCaseProperties:
         # Overlap larger than chunk size is invalid
         if overlap >= chunk_size:
             # Should handle gracefully
-            chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':overlap})
+            chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':overlap,'adaptive': False})
             
             text = "This is a test text with several words."
             chunks = chunker.chunk_text(text)

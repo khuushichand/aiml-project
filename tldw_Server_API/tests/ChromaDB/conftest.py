@@ -78,10 +78,16 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: Tests that take > 1 second")
     config.addinivalue_line("markers", "requires_model: Tests that need ML models")
     config.addinivalue_line("markers", "concurrent: Tests with concurrent operations")
-    # The ChromaDB tests target a different manager/client API than present.
-    # Skip this suite until alignment is completed to avoid noise.
-    import pytest as _pytest
-    _pytest.skip("ChromaDB tests target legacy implementation; skipping until aligned", allow_module_level=True)
+    # Register collection-level skipping for unstable suites
+    config.addinivalue_line("markers", "legacy_skip: Skip tests targeting legacy behaviors")
+
+def pytest_collection_modifyitems(config, items):
+    """Skip heavy/legacy tests while enabling unit tests that map to current API."""
+    skip_marker = pytest.mark.skip(reason="ChromaDB integration/property suite not yet aligned")
+    for item in items:
+        nid = item.nodeid
+        if "/integration/" in nid or "/property/" in nid:
+            item.add_marker(skip_marker)
 
 # =====================================================================
 # Database Fixtures using MediaDatabase
@@ -154,6 +160,7 @@ def mock_chroma_client():
     # Setup collection behavior
     mock_collection.count.return_value = 0
     mock_collection.add.return_value = None
+    mock_collection.upsert.return_value = None
     mock_collection.query.return_value = {
         "ids": [["test_id_1", "test_id_2"]],
         "embeddings": None,
@@ -179,11 +186,23 @@ def mock_chroma_client():
 @pytest.fixture
 def chromadb_manager(mock_chroma_client, temp_media_db):
     """Create a ChromaDBManager instance with mocked dependencies."""
-    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb') as mock_chromadb:
-        mock_chromadb.PersistentClient.return_value = mock_chroma_client
+    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as mock_pclient:
+        mock_pclient.return_value = mock_chroma_client
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
         manager = ChromaDBManager(
             user_id="test_user",
-            user_embedding_config={"provider": "openai", "model": "text-embedding-ada-002"}
+            user_embedding_config={
+                "USER_DB_BASE_DIR": base_dir,
+                "embedding_config": {
+                    "default_model_id": "text-embedding-ada-002",
+                    "models": {
+                        "text-embedding-ada-002": {
+                            "provider": "openai",
+                            "model_name_or_path": "text-embedding-ada-002"
+                        }
+                    }
+                }
+            }
         )
         manager.db_path = temp_media_db
         yield manager

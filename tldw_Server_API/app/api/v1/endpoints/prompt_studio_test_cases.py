@@ -369,7 +369,6 @@ async def delete_test_case(
 @router.post("/import", response_model=StandardResponse)
 async def import_test_cases(
     import_data: TestCaseImportRequest,
-    _: bool = Depends(lambda: require_project_write_access(import_data.project_id)),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)
@@ -387,6 +386,9 @@ async def import_test_cases(
         Import results
     """
     try:
+        # Ensure write access
+        await require_project_write_access(import_data.project_id, user_context=user_context, db=db)
+
         manager = TestCaseManager(db)
         io_manager = TestCaseIO(manager)
         
@@ -436,8 +438,8 @@ async def import_test_cases(
 async def export_test_cases(
     project_id: int = Path(..., description="Project ID"),
     export_request: TestCaseExportRequest = ...,
-    _: bool = Depends(lambda: require_project_access(project_id)),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Export test cases to CSV or JSON.
@@ -451,6 +453,9 @@ async def export_test_cases(
         Exported data
     """
     try:
+        # Ensure read access
+        await require_project_access(project_id, user_context=user_context, db=db)
+
         manager = TestCaseManager(db)
         io_manager = TestCaseIO(manager)
         

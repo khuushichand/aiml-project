@@ -71,9 +71,9 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "anthropic": {
-        "claude-3-5-sonnet-20241022": {
+        "claude-opus-4.1": {
             "context_window": 200_000,
-            "max_output_tokens": None,
+            "max_output_tokens": 8192,
             "capabilities": {
                 "vision": True,
                 "audio_input": False,
@@ -82,14 +82,16 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "json_mode": False,
                 "function_calling": True,
                 "streaming": True,
-                "thinking": False,
+                "thinking": False
             },
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-            "notes": "Claude 3.5 Sonnet with tools and vision.",
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Opus 4.1 with tools and vision.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
         },
-        "claude-3-5-haiku-20241022": {
+        "claude-sonnet-4": {
             "context_window": 200_000,
-            "max_output_tokens": None,
+            "max_output_tokens": 8192,
             "capabilities": {
                 "vision": True,
                 "audio_input": False,
@@ -98,29 +100,51 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "json_mode": False,
                 "function_calling": True,
                 "streaming": True,
-                "thinking": False,
+                "thinking": False
             },
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-            "notes": "Claude 3.5 Haiku with tools and vision.",
-        },
-        "claude-3-opus-20240229": {
-            "context_window": 200_000,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": False,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-            "notes": "Claude 3 Opus with tools and vision.",
-        },
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Sonnet 4 with tools and vision.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
+        }
     },
     "google": {
+        "gemini-2.5-pro": {
+            "context_window": 1_048_576,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Pro on Vertex AI; 1,048,576 max input tokens per docs.",
+            "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-pro",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-lite": {
+            "context_window": 1_048_576,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash Lite on Vertex AI; large context window per docs.",
+            "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-lite",
+            "last_verified": None,
+        },
         "gemini-1.5-pro": {
             "context_window": None,
             "max_output_tokens": None,
@@ -171,6 +195,78 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "mistral": {
+        "mistral-large-2411": {
+            "context_window": 131_072,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Mistral Large 2411; ~131k context window.",
+            "source_url": "https://docs.mistral.ai/getting-started/models/models_overview/",
+            "last_verified": None,
+        },
+        "mistral-medium-3.1": {
+            "context_window": 131_072,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Mistral Medium 3.1; text-only.",
+            "source_url": "https://docs.mistral.ai/getting-started/models/models_overview/",
+            "last_verified": None,
+        },
+        "mistral-small-3.2-24b-instruct": {
+            "context_window": 128_000,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Mistral Small 3.2 Instruct with image understanding.",
+            "source_url": "https://docs.mistral.ai/getting-started/models/models_overview/",
+            "last_verified": None,
+        },
+        "pixtral-large-2411": {
+            "context_window": 131_072,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Pixtral Large 2411 vision model.",
+            "source_url": "https://docs.mistral.ai/getting-started/models/models_overview/",
+            "last_verified": None,
+        },
         "mistral-large-latest": {
             "context_window": None,
             "max_output_tokens": None,
@@ -296,7 +392,7 @@ def _default_model_metadata(provider: str, model: str) -> Dict[str, Any]:
     return {
         "name": model,
         "context_window": None,
-        "max_output_tokens": None,
+        "max_output_tokens": 4096,
         "capabilities": {
             "vision": False,
             "audio_input": False,
@@ -410,7 +506,7 @@ def parse_model_string(model_value: str) -> List[str]:
     # Single model
     return [model_value.strip()] if model_value.strip() else []
 
-def get_configured_providers() -> Dict[str, Any]:
+def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]:
     """
     Get list of configured LLM providers with their models from the config file.
     
@@ -592,17 +688,28 @@ def get_configured_providers() -> Dict[str, Any]:
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
             
-            # If no models found in config, do not inject hardcoded defaults.
-            # This prevents surfacing outdated or deprecated models unintentionally.
+            # If no models found in config, inject safe, current defaults only for Anthropic
+            # per project direction to use 4.0/4.1 and avoid deprecated 3.5.
             if not models:
-                models = []
+                if provider_name == 'anthropic':
+                    models = ['claude-opus-4.1', 'claude-sonnet-4']
+                else:
+                    models = []
             
+            # Build models and metadata
+            models_info = [get_model_metadata(provider_name, m) for m in models]
+            if not include_deprecated:
+                # Filter out deprecated models by default
+                filtered = [mi for mi in models_info if not mi.get('deprecated', False)]
+                models_info = filtered
+                models = [mi['name'] for mi in models_info]
+
             provider_data = {
                 'name': provider_name,
                 'display_name': provider_info['display_name'],
                 'models': models,
                 # New: detailed metadata per model
-                'models_info': [get_model_metadata(provider_name, m) for m in models],
+                'models_info': models_info,
                 'type': provider_info['type'],
                 'default_model': models[0] if models else None,
                 'is_configured': is_configured  # Add configuration status
@@ -685,7 +792,7 @@ def get_all_available_models() -> List[str]:
     summary="Get configured LLM providers",
     description="Returns a list of all configured LLM providers with their models from config",
     response_model=Dict[str, Any])
-async def get_llm_providers():
+async def get_llm_providers(include_deprecated: bool = False):
     """
     Get all configured LLM providers and their models.
     
@@ -696,7 +803,7 @@ async def get_llm_providers():
         - total_configured: Number of configured providers
     """
     try:
-        result = get_configured_providers()
+        result = get_configured_providers(include_deprecated=include_deprecated)
         
         if result['total_configured'] == 0:
             logger.warning("No LLM providers are configured")
@@ -722,9 +829,9 @@ async def get_llm_providers():
     summary="Get model metadata across providers",
     description="Returns flattened model metadata for all providers",
     response_model=Dict[str, Any])
-async def get_models_metadata():
+async def get_models_metadata(include_deprecated: bool = False):
     try:
-        result = get_configured_providers()
+        result = get_configured_providers(include_deprecated=include_deprecated)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):
@@ -747,7 +854,7 @@ async def get_models_metadata():
     summary="Get specific provider details",
     description="Returns details for a specific LLM provider",
     response_model=Dict[str, Any])
-async def get_provider_details(provider_name: str):
+async def get_provider_details(provider_name: str, include_deprecated: bool = False):
     """
     Get details for a specific LLM provider.
     
@@ -758,7 +865,7 @@ async def get_provider_details(provider_name: str):
         Provider details including models and configuration
     """
     try:
-        result = get_configured_providers()
+        result = get_configured_providers(include_deprecated=include_deprecated)
         
         # Find the specific provider
         for provider in result['providers']:
@@ -785,7 +892,7 @@ async def get_provider_details(provider_name: str):
     summary="Get all available models",
     description="Returns a flat list of all available models across all providers",
     response_model=List[str])
-async def get_all_models():
+async def get_all_models(include_deprecated: bool = False):
     """
     Get all available models from all configured providers.
     
@@ -793,7 +900,11 @@ async def get_all_models():
         List of model names with provider prefix
     """
     try:
-        models = get_all_available_models()
+        result = get_configured_providers(include_deprecated=include_deprecated)
+        models: List[str] = []
+        for provider in result.get('providers', []):
+            for model in provider.get('models', []):
+                models.append(f"{provider['name']}/{model}")
         logger.info(f"Found {len(models)} total models across all providers")
         return models
     except Exception as e:

@@ -79,7 +79,17 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient):
     lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 5})
     assert lst.status_code == 200
     data = lst.json()
+    # Strict schema checks for list response
+    assert isinstance(data, dict)
     assert "items" in data and isinstance(data["items"], list)
+    assert "pagination" in data and isinstance(data["pagination"], dict)
+    for key in ("page", "results_per_page", "total_pages", "total_items"):
+        assert key in data["pagination"]
+    # Validate an item shape if present
+    if data["items"]:
+        item = data["items"][0]
+        for k in ("id", "title", "type", "url"):
+            assert k in item
     # Search media using POST /search
     search = client.post(
         "/api/v1/media/search",
@@ -88,6 +98,12 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient):
     )
     assert search.status_code == 200
     sdata = search.json()
+    # Strict schema checks for search response
+    assert isinstance(sdata, dict)
+    assert "items" in sdata and isinstance(sdata["items"], list)
+    assert "pagination" in sdata and isinstance(sdata["pagination"], dict)
+    for key in ("page", "results_per_page", "total_pages", "total_items"):
+        assert key in sdata["pagination"]
     assert any("Alpha" in item.get("title", "") for item in sdata.get("items", []))
 
 
