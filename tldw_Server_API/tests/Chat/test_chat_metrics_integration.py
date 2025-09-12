@@ -5,6 +5,7 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import pytest
+pytestmark = pytest.mark.unit
 
 from tldw_Server_API.app.core.Chat.chat_metrics import (
     ChatMetricsCollector,

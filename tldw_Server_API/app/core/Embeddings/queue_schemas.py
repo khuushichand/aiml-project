@@ -9,12 +9,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class JobStatus(str, Enum):
     PENDING = "pending"
+    PROCESSING = "processing"  # Backward-compat alias used in tests
     CHUNKING = "chunking"
     EMBEDDING = "embedding"
     STORING = "storing"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+# Backward-compat job type enum used by some tests
+class JobType(str, Enum):
+    EMBEDDING = "embedding"
+    CHUNKING = "chunking"
+    STORAGE = "storage"
 
 
 class JobPriority(int, Enum):
@@ -138,6 +145,29 @@ class WorkerMetrics(BaseModel):
     available_memory_mb: Optional[float] = None
     gpu_utilization: Optional[float] = None
     last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat simple job request/result schemas expected by tests
+
+class JobRequest(BaseModel):
+    """Simplified job request schema for tests"""
+    job_id: str
+    job_type: JobType
+    media_id: int
+    collection_name: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=50, ge=0, le=100)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class JobResult(BaseModel):
+    """Simplified job result schema for tests"""
+    job_id: str
+    status: JobStatus
+    result: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    completed_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 # Queue configuration

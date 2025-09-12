@@ -13,6 +13,7 @@ from prometheus_client import start_http_server, Gauge, Counter
 from .job_manager import EmbeddingJobManager, JobManagerConfig
 from .worker_config import (
     OrchestrationConfig,
+    WorkerPoolConfig,
     ChunkingWorkerPoolConfig,
     EmbeddingWorkerPoolConfig,
     StorageWorkerPoolConfig,

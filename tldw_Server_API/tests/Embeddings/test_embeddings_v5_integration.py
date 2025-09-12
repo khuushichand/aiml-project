@@ -5,6 +5,7 @@ import asyncio
 import os
 from datetime import datetime
 import pytest
+pytestmark = pytest.mark.integration
 import numpy as np
 
 from fastapi.testclient import TestClient

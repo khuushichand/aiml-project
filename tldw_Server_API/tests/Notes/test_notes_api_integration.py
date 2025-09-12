@@ -3,6 +3,7 @@
 #
 # Imports
 import pytest
+pytestmark = pytest.mark.unit
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, patch

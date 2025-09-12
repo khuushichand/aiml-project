@@ -10,6 +10,8 @@ import json
 import base64
 from fastapi import status
 from unittest.mock import patch, AsyncMock, MagicMock
+import pytest
+pytestmark = pytest.mark.unit
 import tempfile
 from pathlib import Path
 

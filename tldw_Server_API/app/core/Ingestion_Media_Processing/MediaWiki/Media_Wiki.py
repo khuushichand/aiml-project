@@ -69,7 +69,21 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
         # Build safe log directory path
         base_dir = Path(__file__).parent.resolve()
         project_root = base_dir.parent.parent.parent.parent.resolve()
-        log_dir = project_root / 'Logs'
+
+        # Allow overriding the log directory via environment for test/CI
+        env_log_dir = os.getenv('TLDB_LOG_DIR')
+        if env_log_dir:
+            candidate = Path(env_log_dir)
+            if not candidate.is_absolute():
+                candidate = (project_root / candidate).resolve()
+            # Ensure the chosen directory remains within the project root for safety
+            try:
+                common = os.path.commonpath([str(candidate), str(project_root)])
+                log_dir = candidate if common == str(project_root) else (project_root / 'Logs')
+            except ValueError:
+                log_dir = project_root / 'Logs'
+        else:
+            log_dir = project_root / 'Logs'
         
         # Create log directory if it doesn't exist
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +111,9 @@ def setup_media_wiki_logger(name: str, level: Union[int, str] = "INFO", log_file
     """Set up the logger with the given name and level."""
     logger.remove()
     logger.add(sys.stdout, format="{time} - {name} - {level} - {message}", level=level)
-    if log_file:
+    # Optionally disable file-based logs (useful in sandboxed test runs)
+    disable_file_logs = os.getenv('TLDB_DISABLE_FILE_LOGS', '0') == '1'
+    if log_file and not disable_file_logs:
         safe_log_path = get_safe_log_path(log_file)
         if safe_log_path:
             logger.add(str(safe_log_path), format="{time} - {name} - {level} - {message}", level=level)

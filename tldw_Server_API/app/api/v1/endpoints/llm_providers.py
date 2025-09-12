@@ -13,6 +13,319 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 
 router = APIRouter()
 
+# ----------------------------------------------------------------------------------
+# Model metadata registry
+# ----------------------------------------------------------------------------------
+# Note: These are conservative, best-effort defaults to enrich the providers API.
+# They can be overridden later via config if needed.
+
+MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "openai": {
+        "gpt-4o": {
+            "context_window": 128_000,
+            "max_output_tokens": 4096,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": True,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Vision multimodal; tool use supported.",
+        },
+        "gpt-4o-mini": {
+            "context_window": 128_000,
+            "max_output_tokens": 4096,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": True,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Smaller 4o variant with vision.",
+        },
+        "gpt-3.5-turbo": {
+            "context_window": 16_384,
+            "max_output_tokens": 4096,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": True,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Legacy model; function calling supported.",
+        },
+    },
+    "anthropic": {
+        "claude-3-5-sonnet-20241022": {
+            "context_window": 200_000,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Claude 3.5 Sonnet with tools and vision.",
+        },
+        "claude-3-5-haiku-20241022": {
+            "context_window": 200_000,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Claude 3.5 Haiku with tools and vision.",
+        },
+        "claude-3-opus-20240229": {
+            "context_window": 200_000,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Claude 3 Opus with tools and vision.",
+        },
+    },
+    "google": {
+        "gemini-1.5-pro": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
+            "notes": "Multimodal Gemini; context may be very large.",
+        },
+        "gemini-1.5-flash": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
+            "notes": "Fast multimodal Gemini variant.",
+        },
+        "gemini-2.0-flash-exp": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
+            "notes": "Experimental Gemini variant.",
+        },
+    },
+    "mistral": {
+        "mistral-large-latest": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Tool use supported.",
+        },
+        "mistral-medium-latest": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": None,
+        },
+        "mistral-small-latest": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": None,
+        },
+    },
+    "groq": {
+        "llama-3.3-70b-versatile": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Groq-hosted Llama; fast inference.",
+        },
+    },
+    "ollama": {
+        "llama3.2": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Defaults vary by local model build.",
+        },
+        "mistral": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": None,
+        },
+        "codellama": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "notes": "Code-focused local model.",
+        },
+    },
+}
+
+
+def _default_model_metadata(provider: str, model: str) -> Dict[str, Any]:
+    """Return a conservative default metadata object for unknown models."""
+    return {
+        "name": model,
+        "context_window": None,
+        "max_output_tokens": None,
+        "capabilities": {
+            "vision": False,
+            "audio_input": False,
+            "audio_output": False,
+            "tool_use": False,
+            "json_mode": False,
+            "function_calling": False,
+            "streaming": True if provider in {"openai", "anthropic", "google", "mistral", "groq", "openrouter"} else False,
+            "thinking": False,
+        },
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "notes": None,
+    }
+
+
+def get_model_metadata(provider: str, model: str) -> Dict[str, Any]:
+    """Get metadata for a given provider/model with safe fallbacks."""
+    provider = (provider or "").lower()
+    model = model or ""
+    md = MODEL_METADATA.get(provider, {}).get(model)
+    base = _default_model_metadata(provider, model)
+    if md is None:
+        # Still include name field in final payload
+        return base
+    # Merge on top of defaults to ensure stable schema
+    merged = {**base, **{k: v for k, v in md.items() if k != "name"}}
+    merged["name"] = model
+    return merged
+
 @router.get("/llm/health", summary="LLM inference health", response_model=Dict[str, Any])
 async def llm_health():
     """Health endpoint for the LLM inference subsystem (providers, queue, rate limiter)."""
@@ -279,35 +592,17 @@ def get_configured_providers() -> Dict[str, Any]:
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
             
-            # If no models found in config, use defaults based on provider
+            # If no models found in config, do not inject hardcoded defaults.
+            # This prevents surfacing outdated or deprecated models unintentionally.
             if not models:
-                # Define default models for each provider
-                default_models = {
-                    'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
-                    'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-                    'cohere': ['command-r-plus', 'command-r', 'command'],
-                    'deepseek': ['deepseek-chat', 'deepseek-reasoner'],
-                    'google': ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-                    'groq': ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile', 'mixtral-8x7b-32768'],
-                    'mistral': ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'],
-                    'huggingface': ['meta-llama/Llama-2-70b-chat-hf', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
-                    'openrouter': ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'meta-llama/llama-3.1-405b-instruct'],
-                    # Local providers
-                    'llama': ['local-model'],
-                    'kobold': ['local-model'],
-                    'ooba': ['local-model'],
-                    'tabby': ['local-model'],
-                    'vllm': ['local-model'],
-                    'ollama': ['llama3.2', 'mistral', 'codellama'],
-                    'aphrodite': ['local-model'],
-                    'custom_openai_api': ['custom-model']
-                }
-                models = default_models.get(provider_name, ['default-model'])
+                models = []
             
             provider_data = {
                 'name': provider_name,
                 'display_name': provider_info['display_name'],
                 'models': models,
+                # New: detailed metadata per model
+                'models_info': [get_model_metadata(provider_name, m) for m in models],
                 'type': provider_info['type'],
                 'default_model': models[0] if models else None,
                 'is_configured': is_configured  # Add configuration status
@@ -420,6 +715,32 @@ async def get_llm_providers():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve LLM providers: {str(e)}"
+        )
+
+
+@router.get("/llm/models/metadata",
+    summary="Get model metadata across providers",
+    description="Returns flattened model metadata for all providers",
+    response_model=Dict[str, Any])
+async def get_models_metadata():
+    try:
+        result = get_configured_providers()
+        flattened: List[Dict[str, Any]] = []
+        for provider in result.get('providers', []):
+            for mi in provider.get('models_info', []):
+                flattened.append({
+                    'provider': provider.get('name'),
+                    **mi,
+                })
+        return {
+            'models': flattened,
+            'total': len(flattened)
+        }
+    except Exception as e:
+        logger.error(f"Error getting models metadata: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve model metadata: {str(e)}"
         )
 
 @router.get("/llm/providers/{provider_name}",

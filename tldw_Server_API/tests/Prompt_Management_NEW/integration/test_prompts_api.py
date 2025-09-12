@@ -5,6 +5,7 @@ Tests the complete API flow with real components, no mocking.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import json
 from datetime import datetime
 from fastapi.testclient import TestClient

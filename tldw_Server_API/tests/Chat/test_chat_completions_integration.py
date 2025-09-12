@@ -1,5 +1,6 @@
 # tests/integration/api/v1/test_chat_completions_integration.py
 import pytest
+pytestmark = pytest.mark.unit
 import os
 import json
 from fastapi import status

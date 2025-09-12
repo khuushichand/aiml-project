@@ -12,6 +12,7 @@ import shutil
 import sys
 from typing import Optional
 import pytest
+pytestmark = pytest.mark.integration
 import tempfile
 from pathlib import Path
 

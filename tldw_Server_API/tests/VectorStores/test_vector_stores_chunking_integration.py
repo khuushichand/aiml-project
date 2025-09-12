@@ -1,4 +1,6 @@
 import os
+import pytest
+pytestmark = pytest.mark.unit
 import types
 import pytest
 from fastapi.testclient import TestClient

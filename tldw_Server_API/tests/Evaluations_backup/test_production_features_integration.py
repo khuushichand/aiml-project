@@ -7,6 +7,7 @@ Integration tests for production features:
 """
 
 import pytest
+pytestmark = pytest.mark.unit
 import asyncio
 import sqlite3
 import json

@@ -3,6 +3,7 @@
 #
 # Imports
 import pytest
+pytestmark = pytest.mark.integration
 import os
 import asyncio
 import platform

@@ -3,6 +3,7 @@ Integration tests for user management endpoints using real database.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import uuid
 from datetime import datetime, timedelta
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService

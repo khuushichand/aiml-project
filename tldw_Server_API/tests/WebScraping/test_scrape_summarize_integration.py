@@ -1,5 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
+import pytest
+pytestmark = pytest.mark.unit
 
 
 # Mock data for different scraping methods

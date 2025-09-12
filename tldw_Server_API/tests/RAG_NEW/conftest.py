@@ -13,6 +13,8 @@ import pytest
 
 # Import actual MediaDatabase for integration tests
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+from tldw_Server_API.app.core.RAG.rag_service.metrics_collector import QueryMetrics
 
 # =====================================================================
 # Test Markers
@@ -106,6 +108,40 @@ def mock_semantic_cache():
     cache.get = MagicMock()
     cache.find_similar = MagicMock()
     return cache
+
+# =====================================================================
+# Common Sample Fixtures for RAG tests
+# =====================================================================
+
+@pytest.fixture
+def sample_documents():
+    """Provide a small set of sample Document objects."""
+    return [
+        Document(id="1", content="First doc", metadata={"initial_score": 0.8}, source=DataSource.MEDIA_DB, score=0.8),
+        Document(id="2", content="Second doc", metadata={"initial_score": 0.6}, source=DataSource.MEDIA_DB, score=0.6),
+        Document(id="3", content="Third doc", metadata={"initial_score": 0.4}, source=DataSource.MEDIA_DB, score=0.4),
+    ]
+
+@pytest.fixture
+def query_metrics():
+    """Provide a QueryMetrics instance for timer/metrics tests."""
+    import time as _time
+    return QueryMetrics(query_id="q-test", query="test", timestamp=_time.time(), total_duration=0.0)
+
+@pytest.fixture
+def mock_multi_db_retriever(sample_documents):
+    """Mock MultiDatabaseRetriever with retrieve returning sample docs."""
+    m = MagicMock()
+    m.retrieve = AsyncMock(return_value=sample_documents)
+    return m
+
+@pytest.fixture
+def mock_vector_store():
+    return MagicMock()
+
+@pytest.fixture
+def mock_embeddings():
+    return MagicMock()
 
 # =====================================================================
 # RAG Configuration Fixtures

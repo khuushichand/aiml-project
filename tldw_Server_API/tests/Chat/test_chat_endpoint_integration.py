@@ -4,6 +4,7 @@
 # NO MOCKING - These are true integration tests
 
 import pytest
+pytestmark = pytest.mark.unit
 import asyncio
 import json
 import tempfile

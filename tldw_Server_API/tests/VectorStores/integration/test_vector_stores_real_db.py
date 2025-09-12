@@ -1,6 +1,7 @@
 import os
 import pathlib
 import pytest
+pytestmark = pytest.mark.integration
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app

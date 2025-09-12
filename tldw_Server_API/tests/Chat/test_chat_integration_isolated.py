@@ -3,6 +3,7 @@ Integration tests for chat functionality using isolated fixtures.
 These tests require the mock OpenAI server to be running.
 """
 import pytest
+pytestmark = pytest.mark.integration
 from fastapi import status
 
 # Import isolated fixtures

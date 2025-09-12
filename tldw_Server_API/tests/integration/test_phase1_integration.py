@@ -10,6 +10,7 @@ working together in realistic scenarios.
 """
 
 import pytest
+pytestmark = pytest.mark.unit
 import asyncio
 import json
 import tempfile

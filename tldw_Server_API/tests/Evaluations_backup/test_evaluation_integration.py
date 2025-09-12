@@ -10,6 +10,7 @@ Tests the complete evaluation pipeline including:
 """
 
 import pytest
+pytestmark = pytest.mark.unit
 import asyncio
 import tempfile
 import os

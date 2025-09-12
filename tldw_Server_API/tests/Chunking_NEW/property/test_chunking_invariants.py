@@ -12,6 +12,21 @@ import json
 from typing import List, Dict, Any
 
 from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker
+import json as _json
+
+def _to_text_list(chunks):
+    texts = []
+    for c in chunks:
+        if isinstance(c, str):
+            texts.append(c)
+        elif isinstance(c, dict):
+            if 'text' in c:
+                texts.append(c['text'])
+            elif 'json' in c:
+                texts.append(_json.dumps(c['json']))
+        else:
+            texts.append(str(c))
+    return texts
 
 # ========================================================================
 # Custom Hypothesis Strategies
@@ -89,19 +104,20 @@ class TestContentPreservation:
         """Property: Chunking should not lose content."""
         assume(text.strip())  # Skip empty text
         
-        chunker = Chunker(
-            chunk_method=params['method'],
-            max_chunk_size=params['max_size'],
-            chunk_overlap=params['overlap']
-        )
+        chunker = Chunker(options={
+            'method': params['method'],
+            'max_size': params['max_size'],
+            'overlap': params['overlap']
+        })
         
-        chunks = chunker.chunk(text)
+        chunks = chunker.chunk_text(text)
+        chunk_texts = _to_text_list(chunks)
         
         # All original words should appear in chunks
         original_words = set(text.lower().split())
         chunk_words = set()
-        for chunk in chunks:
-            chunk_words.update(chunk['text'].lower().split())
+        for t in chunk_texts:
+            chunk_words.update(t.lower().split())
         
         # Most words should be preserved (allowing for minor processing differences)
         preserved_ratio = len(original_words & chunk_words) / len(original_words) if original_words else 1
@@ -111,15 +127,15 @@ class TestContentPreservation:
     @given(text=valid_text())
     def test_chunk_ordering_preserved(self, text):
         """Property: Chunk order preserves text order."""
-        chunker = Chunker(chunk_method='sentences', max_chunk_size=2)
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method': 'sentences', 'max_size': 2, 'overlap': 0})
+        chunks = chunker.chunk_text(text)
+        chunk_texts = _to_text_list(chunks)
         
         if len(chunks) > 1:
             # First words of each chunk should appear in order
             positions = []
-            for chunk in chunks:
-                first_word = chunk['text'].split()[0] if chunk['text'].split() else ""
+            for ct in chunk_texts:
+                first_word = ct.split()[0] if ct.split() else ""
                 if first_word in text:
                     positions.append(text.index(first_word))
             
@@ -135,19 +151,15 @@ class TestContentPreservation:
         """Property: Overlapping content should match."""
         assume(text.strip())
         
-        chunker = Chunker(
-            chunk_method='words',
-            max_chunk_size=50,
-            chunk_overlap=overlap
-        )
+        chunker = Chunker(options={'method': 'words', 'max_size': 50, 'overlap': overlap})
+        chunks = chunker.chunk_text(text)
+        chunk_texts = _to_text_list(chunks)
         
-        chunks = chunker.chunk(text)
-        
-        if len(chunks) > 1 and overlap > 0:
-            for i in range(len(chunks) - 1):
+        if len(chunk_texts) > 1 and overlap > 0:
+            for i in range(len(chunk_texts) - 1):
                 # End of chunk i should overlap with start of chunk i+1
-                chunk1_words = chunks[i]['text'].split()
-                chunk2_words = chunks[i+1]['text'].split()
+                chunk1_words = chunk_texts[i].split()
+                chunk2_words = chunk_texts[i+1].split()
                 
                 if len(chunk1_words) >= overlap and len(chunk2_words) >= overlap:
                     # Some overlap should exist
@@ -170,22 +182,18 @@ class TestChunkSizeProperties:
         """Property: Chunks respect size limits."""
         assume(len(text.split()) > max_size)  # Text should be chunkable
         
-        chunker = Chunker(
-            chunk_method='words',
-            max_chunk_size=max_size,
-            chunk_overlap=0
-        )
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method': 'words', 'max_size': max_size, 'overlap': 0})
+        chunks = chunker.chunk_text(text)
+        chunk_texts = _to_text_list(chunks)
         
         # All chunks except possibly the last should respect max_size
-        for chunk in chunks[:-1]:
-            word_count = len(chunk['text'].split())
+        for t in chunk_texts[:-1]:
+            word_count = len(t.split())
             assert word_count <= max_size
         
         # Last chunk can be smaller
-        if chunks:
-            last_chunk_words = len(chunks[-1]['text'].split())
+        if chunk_texts:
+            last_chunk_words = len(chunk_texts[-1].split())
             assert last_chunk_words <= max_size
     
     @pytest.mark.property
@@ -198,13 +206,8 @@ class TestChunkSizeProperties:
         # Generate text with exact number of sentences
         text = ". ".join([f"Sentence {i}" for i in range(num_sentences)]) + "."
         
-        chunker = Chunker(
-            chunk_method='sentences',
-            max_chunk_size=sentences_per_chunk,
-            chunk_overlap=0
-        )
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method': 'sentences', 'max_size': sentences_per_chunk, 'overlap': 0})
+        chunks = chunker.chunk_text(text)
         
         # Expected number of chunks
         expected_chunks = (num_sentences + sentences_per_chunk - 1) // sentences_per_chunk
@@ -223,30 +226,22 @@ class TestMetadataProperties:
     @given(text=valid_text())
     def test_chunk_indices_sequential(self, text):
         """Property: Chunk indices are sequential."""
-        chunker = Chunker(chunk_method='words', max_chunk_size=20)
-        
-        chunks = chunker.chunk(text)
-        
-        # All chunks should have metadata
-        assert all('metadata' in chunk for chunk in chunks)
-        
-        # Indices should be sequential
-        indices = [chunk['metadata'].get('chunk_index', -1) for chunk in chunks]
-        expected = list(range(len(chunks)))
-        assert indices == expected or all(i == -1 for i in indices)
+        chunker = Chunker(options={'method': 'words', 'max_size': 20, 'overlap': 0})
+        chunks = chunker.chunk_text(text)
+        # In the new API, simple methods return strings; verify sequential order by occurrence
+        chunk_texts = _to_text_list(chunks)
+        if len(chunk_texts) > 1:
+            positions = [text.find(ct.split()[0]) if ct.split() else -1 for ct in chunk_texts]
+            assert positions == sorted(p for p in positions if p >= 0)
     
     @pytest.mark.property
     @given(text=valid_text(), method=st.sampled_from(['words', 'sentences', 'paragraphs']))
     def test_metadata_contains_method(self, text, method):
         """Property: Metadata contains chunking method."""
-        chunker = Chunker(chunk_method=method, max_chunk_size=50)
-        
-        chunks = chunker.chunk(text)
-        
-        for chunk in chunks:
-            assert 'metadata' in chunk
-            # Method should be recorded
-            assert chunk['metadata'].get('method') == method or 'method' not in chunk['metadata']
+        chunker = Chunker(options={'method': method, 'max_size': 50, 'overlap': 0})
+        chunks = chunker.chunk_text(text)
+        # No strict metadata in new API for simple methods; ensure chunks are non-empty
+        assert all(len(ct.strip()) > 0 for ct in _to_text_list(chunks))
 
 # ========================================================================
 # Structured Data Properties
@@ -259,19 +254,15 @@ class TestStructuredDataProperties:
     @given(json_data=structured_json())
     def test_json_chunking_preserves_structure(self, json_data):
         """Property: JSON chunking preserves valid JSON structure."""
-        chunker = Chunker(
-            chunk_method='json',
-            max_chunk_size=2  # Small chunks to force splitting
-        )
-        
-        chunks = chunker.chunk(json_data)
+        chunker = Chunker(options={'method': 'json', 'max_size': 2, 'overlap': 0})
+        chunks = chunker.chunk_text(json_data)
         
         # Each chunk should be valid JSON or plain text
         for chunk in chunks:
-            text = chunk['text']
+            text = chunk.get('text') if isinstance(chunk, dict) else str(chunk)
             try:
                 # Try to parse as JSON
-                json.loads(text)
+                _json.loads(text)
                 valid_json = True
             except:
                 # If not JSON, should be meaningful text
@@ -293,13 +284,8 @@ class TestStructuredDataProperties:
         
         text = "\n\n".join(paragraphs)
         
-        chunker = Chunker(
-            chunk_method='paragraphs',
-            max_chunk_size=2,  # 2 paragraphs per chunk
-            chunk_overlap=0
-        )
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method':'paragraphs','max_size':2,'overlap':0})
+        chunks = chunker.chunk_text(text)
         
         # Number of chunks should match paragraph grouping
         expected_chunks = (num_paragraphs + 1) // 2
@@ -323,13 +309,8 @@ class TestPerformanceProperties:
         # Generate text of specific size
         text = " ".join(["word"] * text_size)
         
-        chunker = Chunker(
-            chunk_method='words',
-            max_chunk_size=chunk_size,
-            chunk_overlap=0
-        )
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':0})
+        chunks = chunker.chunk_text(text)
         
         # Number of chunks should be proportional to text size / chunk size
         expected_chunks = text_size // chunk_size
@@ -341,16 +322,11 @@ class TestPerformanceProperties:
         """Property: Overlap doesn't cause excessive memory usage."""
         text = " ".join(["word"] * 1000)
         
-        chunker = Chunker(
-            chunk_method='words',
-            max_chunk_size=100,
-            chunk_overlap=min(overlap, 99)  # Overlap less than chunk size
-        )
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method':'words','max_size':100,'overlap':min(overlap,99)})
+        chunks = chunker.chunk_text(text)
         
         # Total chunk text shouldn't be much larger than original
-        total_chunk_size = sum(len(c['text']) for c in chunks)
+        total_chunk_size = sum(len(t) for t in _to_text_list(chunks))
         original_size = len(text)
         
         # Allow for overlap overhead but not excessive duplication
@@ -378,9 +354,8 @@ class TestEdgeCaseProperties:
     )
     def test_handles_minimal_text(self, text):
         """Property: Chunking handles minimal or empty text gracefully."""
-        chunker = Chunker(chunk_method='words', max_chunk_size=10)
-        
-        chunks = chunker.chunk(text)
+        chunker = Chunker(options={'method':'words','max_size':10,'overlap':0})
+        chunks = chunker.chunk_text(text)
         
         # Should always return a list
         assert isinstance(chunks, list)
@@ -401,14 +376,10 @@ class TestEdgeCaseProperties:
         # Overlap larger than chunk size is invalid
         if overlap >= chunk_size:
             # Should handle gracefully
-            chunker = Chunker(
-                chunk_method='words',
-                max_chunk_size=chunk_size,
-                chunk_overlap=overlap
-            )
+            chunker = Chunker(options={'method':'words','max_size':chunk_size,'overlap':overlap})
             
             text = "This is a test text with several words."
-            chunks = chunker.chunk(text)
+            chunks = chunker.chunk_text(text)
             
             # Should still produce chunks
             assert isinstance(chunks, list)

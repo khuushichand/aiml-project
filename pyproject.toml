@@ -127,6 +127,7 @@ dependencies = [
   "optimum>=1.13.0",
   "torch>=2.0.0",
   "transformers>=4.35.0",
+  "sentence-transformers>=2.2.0",
   
   # Research/Web
   "arxiv>=2.0.0",

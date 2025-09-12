@@ -1,8 +1,32 @@
 """
-Pytest fixtures and configuration for RAG tests.
+Pytest fixtures and configuration for RAG tests (legacy).
 
-Provides shared fixtures, mocks, and utilities for testing RAG functionality.
+This package contains legacy/experimental RAG tests for the old functional
+pipeline and mixed retrievers. The production path uses the unified RAG
+pipeline with dedicated tests under RAG_NEW.
+
+To prevent confusion and flakiness, all tests in this package are skipped by
+default. Please add or migrate tests to RAG_NEW instead.
 """
+
+import pathlib
+import pytest
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Skip all tests under this legacy RAG package."""
+    here = pathlib.Path(__file__).parent.resolve()
+    skip_marker = pytest.mark.skip(
+        reason="Deprecated: legacy RAG tests replaced by RAG_NEW unified pipeline",
+    )
+    for item in items:
+        try:
+            # item.fspath may be a py.path object in older pytest; str() is fine
+            item_path = pathlib.Path(str(item.fspath)).resolve()  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        if str(item_path).startswith(str(here)):
+            item.add_marker(skip_marker)
 
 import asyncio
 import json

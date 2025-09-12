@@ -3,6 +3,7 @@ Integration tests for authentication endpoints using real database.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import asyncio
 from datetime import datetime, timedelta
 

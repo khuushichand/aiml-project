@@ -105,6 +105,9 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
             "media_item": media_item,
             "content": content
         }
+    except HTTPException:
+        # Propagate explicit HTTP errors (e.g., 404 Not Found)
+        raise
     except Exception as e:
         logger.error(f"Error retrieving media content: {e}")
         raise HTTPException(

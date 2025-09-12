@@ -4,6 +4,7 @@ Tests the fixes for issues identified in the code review.
 """
 
 import pytest
+pytestmark = pytest.mark.unit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.main import app
 import asyncio

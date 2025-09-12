@@ -6,6 +6,7 @@ without mocking to verify end-to-end functionality.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import tempfile
 import shutil
 import uuid
@@ -394,27 +395,7 @@ class TestEmbeddingGeneration:
         # Model should be unloaded
         assert embedder.model is None
     
-    def test_embedding_batch_creation(self):
-        """Test batch embedding creation."""
-        texts = ["text1", "text2", "text3", "text4", "text5"]
-        
-        with pytest.mock.patch('tldw_Server_API.app.core.Embeddings.Embeddings_Create.create_embeddings') as mock_create:
-            # Simulate API that only handles 2 texts at a time
-            def create_small_batch(batch_texts, *args, **kwargs):
-                return [[0.1] * 384 for _ in batch_texts]
-            
-            mock_create.side_effect = create_small_batch
-            
-            embeddings = create_embeddings_batch(
-                texts,
-                provider="openai",
-                model="text-embedding-ada-002",
-                max_batch_size=2
-            )
-            
-            assert len(embeddings) == 5
-            # Should be called 3 times (2+2+1)
-            assert mock_create.call_count == 3
+    # Moved to unit suite: see tests/ChromaDB/unit/test_embedding_batch_creation.py
 
 
 @pytest.mark.integration

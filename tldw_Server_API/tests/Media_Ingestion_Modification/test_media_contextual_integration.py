@@ -6,6 +6,8 @@ Tests the full flow of media ingestion with contextual features.
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
+import pytest
+pytestmark = pytest.mark.unit
 from fastapi.testclient import TestClient
 from fastapi import FastAPI, UploadFile
 import json

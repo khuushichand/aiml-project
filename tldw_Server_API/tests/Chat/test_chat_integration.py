@@ -3,6 +3,7 @@ Integration test for chat endpoint using real test database.
 No mocking - uses actual components.
 """
 import pytest
+pytestmark = pytest.mark.integration
 import tempfile
 import os
 from fastapi import status
