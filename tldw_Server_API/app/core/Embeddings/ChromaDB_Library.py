@@ -392,8 +392,8 @@ class ChromaDBManager:
             f"Contextualization: {create_contextualized} with LLM '{effective_llm_model_for_context if create_contextualized else 'N/A'}'."
         )
         try:
-            # Chunking
-            chunks = chunk_for_embedding(content, file_name, chunk_options)
+            # Chunking (pass options as kwargs for compatibility)
+            chunks = chunk_for_embedding(content, file_name, **(chunk_options or {}))
             if not chunks:
                 logger.warning(
                     f"User '{self.user_id}': No chunks generated for media_id {media_id}, file {file_name}. Skipping storage.")
@@ -689,7 +689,13 @@ class ChromaDBManager:
                     if "distances" in effective_include_fields and dists is not None and len(dists) > 0 and len(dists[0]) > 0:
                         item["distance"] = dists[0][i]
                     if "embeddings" in effective_include_fields and embs is not None and len(embs) > 0 and len(embs[0]) > 0:
-                        item["embedding"] = embs[0][i]
+                        emb_val = embs[0][i]
+                        try:
+                            # Normalize numpy arrays to plain lists for JSON-serializable output
+                            emb_val = emb_val.tolist() if hasattr(emb_val, "tolist") else emb_val
+                        except Exception:
+                            pass
+                        item["embedding"] = emb_val
                     if "uris" in effective_include_fields and uris is not None and len(uris) > 0 and len(uris[0]) > 0:
                         item["uri"] = uris[0][i]
                     if "data" in effective_include_fields and data_field is not None and len(data_field) > 0 and len(data_field[0]) > 0:

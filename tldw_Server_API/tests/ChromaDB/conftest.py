@@ -41,9 +41,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 # Import the modules we're testing
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    HuggingFaceEmbedder,
-    ONNXEmbedder,
-    create_embeddings_batch
+    create_embeddings_batch,
 )
 from tldw_Server_API.app.core.Embeddings.job_manager import EmbeddingJobManager
 from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerOrchestrator
@@ -82,12 +80,10 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "legacy_skip: Skip tests targeting legacy behaviors")
 
 def pytest_collection_modifyitems(config, items):
-    """Skip heavy/legacy tests while enabling unit tests that map to current API."""
-    skip_marker = pytest.mark.skip(reason="ChromaDB integration/property suite not yet aligned")
+    """Skip only tests explicitly marked as requiring external models."""
     for item in items:
-        nid = item.nodeid
-        if "/integration/" in nid or "/property/" in nid:
-            item.add_marker(skip_marker)
+        if item.get_closest_marker("requires_model"):
+            item.add_marker(pytest.mark.skip(reason="Requires external model; disabled by default"))
 
 # =====================================================================
 # Database Fixtures using MediaDatabase
@@ -208,17 +204,20 @@ def chromadb_manager(mock_chroma_client, temp_media_db):
         yield manager
 
 @pytest.fixture
-def real_chromadb_manager(chroma_client, temp_media_db):
+def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
     """Create a ChromaDBManager instance with real ChromaDB for integration tests."""
-    with patch.object(ChromaDBManager, '_initialize_client') as mock_init:
-        mock_init.return_value = chroma_client
-        manager = ChromaDBManager(
-            user_id="test_user",
-            user_embedding_config={"provider": "huggingface", "model": "sentence-transformers/all-MiniLM-L6-v2"}
-        )
-        manager.client = chroma_client
-        manager.db_path = temp_media_db
-        yield manager
+    manager = ChromaDBManager(
+        user_id="test_user",
+        user_embedding_config={
+            "USER_DB_BASE_DIR": temp_chroma_path,
+            "embedding_config": {"default_model_id": "unused", "models": {}},
+            "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
+        },
+    )
+    # Use the provided client to share the same persistent dir
+    manager.client = chroma_client
+    manager.db_path = temp_media_db
+    yield manager
 
 # =====================================================================
 # Embedding Fixtures
@@ -252,18 +251,60 @@ def mock_embedding_provider(mock_embeddings):
     mock_provider.max_batch_size = 100
     return mock_provider
 
-@pytest.fixture
-def huggingface_embedder():
-    """Create a HuggingFace embedder for testing."""
-    embedder = HuggingFaceEmbedder(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        device="cpu",
-        auto_unload_time=60
+def _hf_connectivity_ok() -> bool:
+    """Best-effort online check to Hugging Face Hub."""
+    try:
+        import requests  # Local import to avoid hard dependency if unused
+        resp = requests.head(
+            "https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2",
+            timeout=2.0,
+            allow_redirects=True,
+        )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def hf_or_deterministic_embeddings():
+    """
+    Provide an embedding function that uses a lightweight HF model if internet
+    is available; otherwise returns deterministic numeric embeddings.
+    Returns a tuple (embed_func, is_real_model: bool, dim: int).
+    """
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        get_embedding_config,
+        create_embeddings_batch as _create_batch,
     )
-    yield embedder
-    # Ensure model is unloaded
-    if hasattr(embedder, 'model') and embedder.model is not None:
-        embedder.unload_model()
+
+    hf_model_id = "sentence-transformers/all-MiniLM-L6-v2"
+    is_online = _hf_connectivity_ok()
+
+    if is_online:
+        try:
+            cfg = get_embedding_config()
+            probe = _create_batch(["probe"], user_app_config=cfg, model_id_override=hf_model_id)
+            if probe and isinstance(probe[0], list) and len(probe[0]) > 0:
+                dim = len(probe[0])
+
+                def _embed(texts: List[str]) -> List[List[float]]:
+                    return _create_batch(texts, user_app_config=cfg, model_id_override=hf_model_id)
+
+                return _embed, True, dim
+        except Exception:
+            pass  # Fall through to deterministic path
+
+    def _det_embed(texts: List[str], dim: int = 384) -> List[List[float]]:
+        vecs: List[List[float]] = []
+        for t in texts:
+            seed = hash(t) % 10_000
+            np.random.seed(seed)
+            v = np.random.randn(dim)
+            v = v / (np.linalg.norm(v) + 1e-12)
+            vecs.append(v.tolist())
+        return vecs
+
+    return (lambda texts: _det_embed(texts, 384)), False, 384
 
 # =====================================================================
 # Worker and Job Fixtures

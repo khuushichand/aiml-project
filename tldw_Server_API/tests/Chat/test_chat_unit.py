@@ -63,7 +63,8 @@ class TestChatUnit:
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
+            "save_to_db": True
             # No conversation_id - let endpoint create one
         }
         

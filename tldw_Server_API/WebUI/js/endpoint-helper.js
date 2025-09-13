@@ -292,7 +292,11 @@ class EndpointHelper {
      */
     buildJsonFromFields(endpointId) {
         const data = {};
-        const section = document.getElementById(`section_${endpointId}`);
+        // Support both patterns: "section_<id>" (preferred) and legacy "<id>"
+        let section = document.getElementById(`section_${endpointId}`);
+        if (!section) {
+            section = document.getElementById(endpointId);
+        }
         
         if (!section) return data;
 
@@ -323,7 +327,10 @@ class EndpointHelper {
      */
     buildFormData(endpointId) {
         const formData = new FormData();
-        const section = document.getElementById(`section_${endpointId}`);
+        let section = document.getElementById(`section_${endpointId}`);
+        if (!section) {
+            section = document.getElementById(endpointId);
+        }
         
         if (!section) return formData;
 
@@ -350,8 +357,10 @@ class EndpointHelper {
      */
     buildQueryParams(endpointId) {
         const params = {};
-        const section = document.getElementById(`section_${endpointId}`);
-        
+        let section = document.getElementById(`section_${endpointId}`);
+        if (!section) {
+            section = document.getElementById(endpointId);
+        }
         if (!section) return params;
 
         // Look for fields marked as query parameters

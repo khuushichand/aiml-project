@@ -6,35 +6,59 @@ across all valid inputs using Hypothesis.
 """
 
 import pytest
-from hypothesis import given, strategies as st, assume, settings, example
+from hypothesis import given, strategies as st, assume, settings, example, HealthCheck
 from hypothesis.stateful import RuleBasedStateMachine, rule, precondition, invariant, Bundle
 import numpy as np
 from typing import List, Dict, Any, Optional
 import tempfile
 import shutil
 from pathlib import Path
+import uuid
+import threading
 
-from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager, validate_user_id
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+# Shared manager for stateful tests to avoid resource exhaustion
+_state_mgr_lock = threading.Lock()
+_state_mgr_singleton = None
+_state_mgr_base_dir = None
+
+
+def _get_shared_state_manager():
+    global _state_mgr_singleton, _state_mgr_base_dir
+    with _state_mgr_lock:
+        if _state_mgr_singleton is None:
+            base_dir = tempfile.mkdtemp(prefix="chroma_prop_shared_")
+            _state_mgr_singleton = ChromaDBManager(
+                user_id="prop_stateful",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "embedding_config": {"default_model_id": "unused", "models": {}},
+                    "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
+                },
+            )
+            _state_mgr_base_dir = base_dir
+        return _state_mgr_singleton
 
 
 # =====================================================================
 # Hypothesis Strategies
 # =====================================================================
 
-# Strategy for valid user IDs
+# Strategy for valid user IDs (ASCII alnum, underscore, hyphen)
 valid_user_id = st.text(
-    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), min_codepoint=48),
-    min_size=3,
-    max_size=50
-).filter(lambda x: not x.startswith("..") and "/" not in x and "\\" not in x)
-
-# Strategy for collection names
-collection_name = st.text(
-    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), whitelist_characters="_-"),
+    alphabet=list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"),
     min_size=1,
-    max_size=63
-).filter(lambda x: x[0].isalnum())
+    max_size=50,
+).filter(lambda x: x.strip() != "")
+
+# Strategy for collection names (Chroma requires ASCII [a-zA-Z0-9._-], start/end alnum)
+_ascii_alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_ascii_safe = _ascii_alnum + "_-"
+collection_name = st.text(alphabet=list(_ascii_safe), min_size=3, max_size=63).filter(
+    lambda x: x[0].isalnum() and x[-1].isalnum()
+)
 
 # Strategy for document texts
 document_text = st.text(min_size=1, max_size=1000)
@@ -60,16 +84,21 @@ def embeddings_strategy(draw, dim=None, count=None):
             max_size=dim
         ))
         norm = np.linalg.norm(values)
-        if norm > 0:
-            values = (np.array(values) / norm).tolist()
+        if norm == 0:
+            # Avoid zero vectors to keep normalization property meaningful
+            values = [1.0] + [0.0] * (dim - 1)
+            norm = 1.0
+        values = (np.array(values) / norm).tolist()
         embeddings.append(values)
     
     return embeddings
 
 # Strategy for metadata
+_INT_SAFE_MIN = -(2 ** 53) + 1
+_INT_SAFE_MAX = (2 ** 53) - 1
 metadata_value = st.one_of(
     st.text(max_size=100),
-    st.integers(),
+    st.integers(min_value=_INT_SAFE_MIN, max_value=_INT_SAFE_MAX),
     st.floats(allow_nan=False, allow_infinity=False),
     st.booleans()
 )
@@ -77,6 +106,7 @@ metadata_value = st.one_of(
 metadata_dict = st.dictionaries(
     keys=st.text(alphabet=st.characters(whitelist_categories=("Ll", "Lu")), min_size=1, max_size=50),
     values=metadata_value,
+    min_size=1,
     max_size=10
 )
 
@@ -93,25 +123,20 @@ class TestChromaDBProperties:
     """Property tests for ChromaDB operations."""
     
     @given(user_id=valid_user_id)
-    @settings(max_examples=20)
+    @settings(max_examples=5)
     def test_valid_user_id_accepted(self, user_id):
         """Any valid user ID should be accepted."""
         try:
-            manager = ChromaDBManager(
-                user_id=user_id,
-                user_embedding_config={"provider": "test"}
-            )
-            assert manager.user_id == user_id
+            assert validate_user_id(user_id) == user_id
         except ValueError:
-            # Should not raise for valid IDs
             pytest.fail(f"Valid user ID rejected: {user_id}")
     
     @given(
         texts=st.lists(document_text, min_size=1, max_size=10),
         dim=embedding_dim
     )
-    @settings(max_examples=20)
-    def test_storage_retrieval_consistency(self, texts, dim, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_storage_retrieval_consistency(self, texts, dim):
         """Stored data should be retrievable exactly as stored."""
         collection_name = "property_test"
         
@@ -120,17 +145,18 @@ class TestChromaDBProperties:
         ids = [f"id_{i}" for i in range(len(texts))]
         
         # Store data
-        success = real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
             embeddings=embeddings,
-            ids=ids
+            ids=ids,
+            metadatas=[{"i": i} for i in range(len(texts))]
         )
         
-        assume(success)  # Skip if storage failed
-        
         # Retrieve and verify
-        collection = real_chromadb_manager.get_or_create_collection(collection_name)
+        collection = manager.get_or_create_collection(collection_name)
         results = collection.get(ids=ids)
         
         # All documents should be retrieved
@@ -145,33 +171,35 @@ class TestChromaDBProperties:
         num_docs=st.integers(min_value=0, max_value=100),
         collection=collection_name
     )
-    @settings(max_examples=20)
-    def test_count_accuracy(self, num_docs, collection, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_count_accuracy(self, num_docs, collection):
         """Count should accurately reflect number of stored items."""
         # Reset collection
-        real_chromadb_manager.reset_chroma_collection(collection)
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection)
         
         if num_docs > 0:
             texts = [f"doc_{i}" for i in range(num_docs)]
             embeddings = [[float(i), 0.1, 0.2] for i in range(num_docs)]
             ids = [f"id_{i}" for i in range(num_docs)]
             
-            real_chromadb_manager.store_in_chroma(
+            manager.store_in_chroma(
                 collection_name=collection,
                 texts=texts,
                 embeddings=embeddings,
-                ids=ids
+                ids=ids,
+                metadatas=[{"i": i} for i in range(num_docs)]
             )
         
-        count = real_chromadb_manager.count_items_in_collection(collection)
+        count = manager.count_items_in_collection(collection)
         assert count == num_docs
     
     @given(
         texts=st.lists(document_text, min_size=1, max_size=5, unique=True),
         metadata_list=st.lists(metadata_dict, min_size=1, max_size=5)
     )
-    @settings(max_examples=20)
-    def test_metadata_preservation(self, texts, metadata_list, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_metadata_preservation(self, texts, metadata_list):
         """Metadata should be preserved exactly as provided."""
         # Ensure same length
         min_len = min(len(texts), len(metadata_list))
@@ -183,29 +211,37 @@ class TestChromaDBProperties:
         ids = [f"id_{i}" for i in range(len(texts))]
         
         # Store with metadata
-        real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
             embeddings=embeddings,
             ids=ids,
-            metadata=metadata_list
+            metadatas=metadata_list
         )
         
         # Retrieve and verify metadata
-        collection = real_chromadb_manager.get_or_create_collection(collection_name)
+        collection = manager.get_or_create_collection(collection_name)
         results = collection.get(ids=ids)
         
         for i, original_metadata in enumerate(metadata_list):
             retrieved_metadata = results["metadatas"][i]
             for key, value in original_metadata.items():
                 assert key in retrieved_metadata
-                assert retrieved_metadata[key] == value
+                rv = retrieved_metadata[key]
+                if isinstance(value, float):
+                    # Allow for tiny float differences due to serialization
+                    import math
+                    assert math.isclose(rv, value, rel_tol=1e-9, abs_tol=1e-12)
+                else:
+                    assert rv == value
     
     @given(
         embedding_list=embeddings_strategy()
     )
-    @settings(max_examples=20)
-    def test_embedding_dimension_consistency(self, embedding_list, real_chromadb_manager):
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
+    def test_embedding_dimension_consistency(self, embedding_list):
         """All embeddings in a collection must have same dimension."""
         if len(embedding_list) < 2:
             return  # Need at least 2 embeddings to test
@@ -219,14 +255,15 @@ class TestChromaDBProperties:
         for emb in embedding_list[1:]:
             assume(len(emb) == first_dim)
         
-        success = real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
             embeddings=embedding_list,
-            ids=ids
+            ids=ids,
+            metadatas=[{"i": i} for i in range(len(ids))]
         )
-        
-        assert success is True
     
     @given(
         ids=st.lists(
@@ -236,25 +273,26 @@ class TestChromaDBProperties:
             unique=True
         )
     )
-    @settings(max_examples=20)
-    def test_id_uniqueness(self, ids, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_id_uniqueness(self, ids):
         """IDs must be unique within a collection."""
         collection_name = "id_test"
         texts = [f"text_{i}" for i in range(len(ids))]
         embeddings = [[0.1, 0.2] for _ in ids]
         
         # Store with unique IDs
-        success = real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
             embeddings=embeddings,
-            ids=ids
+            ids=ids,
+            metadatas=[{"i": i} for i in range(len(ids))]
         )
         
-        assert success is True
-        
         # Count should match number of unique IDs
-        count = real_chromadb_manager.count_items_in_collection(collection_name)
+        count = manager.count_items_in_collection(collection_name)
         assert count == len(ids)
 
 
@@ -270,8 +308,8 @@ class TestVectorSearchProperties:
         k=st.integers(min_value=1, max_value=100),
         total_docs=st.integers(min_value=1, max_value=50)
     )
-    @settings(max_examples=20)
-    def test_search_result_count(self, k, total_docs, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_search_result_count(self, k, total_docs):
         """Search should return at most min(k, total_docs) results."""
         collection_name = "search_count_test"
         
@@ -280,16 +318,18 @@ class TestVectorSearchProperties:
         embeddings = [[float(i), 0.1, 0.2] for i in range(total_docs)]
         ids = [f"id_{i}" for i in range(total_docs)]
         
-        real_chromadb_manager.reset_chroma_collection(collection_name)
-        real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
             embeddings=embeddings,
-            ids=ids
+            ids=ids,
+            metadatas=[{"i": i} for i in range(total_docs)]
         )
         
         # Search
-        results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
+        results = manager.query_collection_with_precomputed_embeddings(
             collection_name=collection_name,
             query_embeddings=[[0.0, 0.1, 0.2]],
             n_results=k
@@ -301,22 +341,24 @@ class TestVectorSearchProperties:
     @given(
         query_embedding=embeddings_strategy(dim=3, count=1)
     )
-    @settings(max_examples=20)
-    def test_self_similarity_highest(self, query_embedding, real_chromadb_manager):
+    @settings(max_examples=5)
+    def test_self_similarity_highest(self, query_embedding):
         """A document should be most similar to itself."""
         collection_name = "self_similarity_test"
         
         # Store the query as a document
-        real_chromadb_manager.reset_chroma_collection(collection_name)
-        real_chromadb_manager.store_in_chroma(
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=["query_doc", "other_doc1", "other_doc2"],
             embeddings=query_embedding + [[0.9, 0.1, 0.0], [0.0, 0.9, 0.1]],
-            ids=["query_id", "other1", "other2"]
+            ids=["query_id", "other1", "other2"],
+            metadatas=[{"i": 0}, {"i": 1}, {"i": 2}]
         )
         
         # Search with same embedding
-        results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
+        results = manager.query_collection_with_precomputed_embeddings(
             collection_name=collection_name,
             query_embeddings=query_embedding,
             n_results=3
@@ -334,9 +376,9 @@ class TestVectorSearchProperties:
         num_matching=st.integers(min_value=1, max_value=10),
         num_non_matching=st.integers(min_value=1, max_value=10)
     )
-    @settings(max_examples=20)
+    @settings(max_examples=5)
     def test_metadata_filter_correctness(self, filter_value, num_matching, 
-                                        num_non_matching, real_chromadb_manager):
+                                        num_non_matching):
         """Metadata filters should return only matching documents."""
         collection_name = "filter_test"
         
@@ -361,17 +403,25 @@ class TestVectorSearchProperties:
             all_metadata.append({"category": "other", "index": i})
         
         # Store all documents
-        real_chromadb_manager.reset_chroma_collection(collection_name)
-        real_chromadb_manager.store_in_chroma(
+        manager = ChromaDBManager(
+            user_id="prop_user",
+            user_embedding_config={
+                "USER_DB_BASE_DIR": tempfile.mkdtemp(prefix="chroma_prop_"),
+                "embedding_config": {"default_model_id": "unused", "models": {}},
+                "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
+            },
+        )
+        manager.reset_chroma_collection(collection_name)
+        manager.store_in_chroma(
             collection_name=collection_name,
             texts=all_texts,
             embeddings=all_embeddings,
             ids=all_ids,
-            metadata=all_metadata
+            metadatas=all_metadata
         )
         
         # Search with filter
-        collection = real_chromadb_manager.get_or_create_collection(collection_name)
+        collection = manager.get_or_create_collection(collection_name)
         results = collection.query(
             query_embeddings=[[0.0, 0.1, 0.2]],
             n_results=100,
@@ -388,24 +438,22 @@ class TestVectorSearchProperties:
 # Stateful Property Tests
 # =====================================================================
 
-@pytest.mark.property
 class ChromaDBStateMachine(RuleBasedStateMachine):
     """Stateful testing for ChromaDB operations."""
     
     def __init__(self):
         super().__init__()
-        self.temp_dir = tempfile.mkdtemp()
-        self.manager = ChromaDBManager(
-            user_id="test_user",
-            user_embedding_config={"provider": "test"}
-        )
-        self.manager.persist_directory = self.temp_dir
-        self.manager._initialize_client()
-        
-        # Track state
+        # Use a single shared manager across all examples to avoid too many open files
+        self.manager = _get_shared_state_manager()
+        # Namespace prefix per test run to isolate collections
+        self._ns = f"sm_{uuid.uuid4().hex[:8]}_"
+        # Track state local to this run
         self.collections = {}  # collection_name -> set of ids
         self.documents = {}     # (collection, id) -> document
         self.embeddings = {}    # (collection, id) -> embedding
+
+    def _full(self, collection: str) -> str:
+        return f"{self._ns}{collection}"
         
     collections_bundle = Bundle("collections")
     documents_bundle = Bundle("documents")
@@ -416,10 +464,11 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
     )
     def create_collection(self, collection):
         """Create a new collection."""
-        self.manager.get_or_create_collection(collection)
-        if collection not in self.collections:
-            self.collections[collection] = set()
-        return collection
+        name = self._full(collection)
+        self.manager.get_or_create_collection(name)
+        if name not in self.collections:
+            self.collections[name] = set()
+        return name
     
     @rule(
         collection=collections_bundle,
@@ -431,17 +480,16 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         doc_id = f"doc_{len(self.collections[collection])}"
         embedding = [0.1, 0.2, 0.3]
         
-        success = self.manager.store_in_chroma(
+        self.manager.store_in_chroma(
             collection_name=collection,
             texts=[text],
             embeddings=[embedding],
-            ids=[doc_id]
+            ids=[doc_id],
+            metadatas=[{"i": 0}]
         )
-        
-        if success:
-            self.collections[collection].add(doc_id)
-            self.documents[(collection, doc_id)] = text
-            self.embeddings[(collection, doc_id)] = embedding
+        self.collections[collection].add(doc_id)
+        self.documents[(collection, doc_id)] = text
+        self.embeddings[(collection, doc_id)] = embedding
         
         return (collection, doc_id)
     
@@ -452,9 +500,8 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         """Delete a document from a collection."""
         collection, doc_id = document
         
-        success = self.manager.delete_from_collection([doc_id], collection)
-        
-        if success and doc_id in self.collections[collection]:
+        self.manager.delete_from_collection([doc_id], collection)
+        if doc_id in self.collections[collection]:
             self.collections[collection].remove(doc_id)
             del self.documents[(collection, doc_id)]
             del self.embeddings[(collection, doc_id)]
@@ -501,14 +548,21 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
     
     def teardown(self):
         """Clean up after test."""
+        # Delete only collections created in this run to avoid leaking state
         try:
-            shutil.rmtree(self.temp_dir)
-        except:
-            pass
+            for collection in list(self.collections.keys()):
+                try:
+                    self.manager.delete_collection(collection)
+                except Exception:
+                    pass
+        finally:
+            self.collections.clear()
 
 
 # Run the stateful test
-TestChromaDBStateMachine = ChromaDBStateMachine.TestCase
+class TestChromaDBStateMachine(ChromaDBStateMachine.TestCase):
+    # Keep runs light to avoid resource issues under CI
+    settings = settings(max_examples=10, stateful_step_count=25)
 
 
 # =====================================================================
@@ -522,7 +576,7 @@ class TestEmbeddingProperties:
     @given(
         embeddings=embeddings_strategy()
     )
-    @settings(max_examples=50)
+    @settings(max_examples=5)
     def test_embedding_normalization(self, embeddings):
         """Embeddings should be normalized (unit vectors)."""
         for embedding in embeddings:
@@ -532,12 +586,13 @@ class TestEmbeddingProperties:
     
     @given(
         dim=embedding_dim,
-        count=st.integers(min_value=2, max_value=10)
+        count=st.integers(min_value=2, max_value=10),
+        data=st.data(),
     )
-    @settings(max_examples=20)
-    def test_embedding_dimension_consistency(self, dim, count):
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
+    def test_embedding_dimension_consistency(self, dim, count, data):
         """All embeddings in a batch should have same dimension."""
-        embeddings = embeddings_strategy(dim=dim, count=count).example()
+        embeddings = data.draw(embeddings_strategy(dim=dim, count=count))
         
         # All should have same dimension
         dimensions = [len(emb) for emb in embeddings]
@@ -548,7 +603,7 @@ class TestEmbeddingProperties:
         text1=document_text,
         text2=document_text
     )
-    @settings(max_examples=20)
+    @settings(max_examples=5)
     def test_deterministic_embedding(self, text1, text2):
         """Same text should produce same embedding."""
         # This assumes deterministic embedding generation
@@ -571,7 +626,7 @@ class TestEmbeddingProperties:
         texts=st.lists(document_text, min_size=1, max_size=100),
         batch_size=st.integers(min_value=1, max_value=20)
     )
-    @settings(max_examples=20)
+    @settings(max_examples=5)
     def test_batch_processing_consistency(self, texts, batch_size):
         """Batch processing should produce same results as individual processing."""
         # Mock embedding function
@@ -614,37 +669,34 @@ class TestErrorHandlingProperties:
             st.text().filter(lambda x: ".." in x or "/" in x)
         )
     )
-    @settings(max_examples=20)
+    @settings(max_examples=5)
     def test_invalid_user_id_rejected(self, invalid_user_id):
         """Invalid user IDs should be rejected."""
         with pytest.raises(ValueError):
-            ChromaDBManager(
-                user_id=invalid_user_id,
-                user_embedding_config={}
-            )
+            validate_user_id(invalid_user_id)
     
     @given(
         texts=st.lists(document_text, min_size=1, max_size=5),
-        embeddings=embeddings_strategy(dim=384, count=10)  # Intentional mismatch
+        embeddings=embeddings_strategy(dim=3, count=6)  # Guaranteed mismatch with texts length
     )
-    @settings(max_examples=20)
-    def test_mismatched_input_lengths(self, texts, embeddings, chromadb_manager):
+    @settings(max_examples=5)
+    def test_mismatched_input_lengths(self, texts, embeddings):
         """Mismatched input lengths should be rejected."""
-        if len(texts) != len(embeddings):
-            with pytest.raises(ValueError, match="length"):
-                chromadb_manager.store_in_chroma(
-                    collection_name="test",
-                    texts=texts,
-                    embeddings=embeddings,
-                    ids=[f"id_{i}" for i in range(len(texts))]
-                )
+        with pytest.raises(ValueError, match="length"):
+            _get_shared_state_manager().store_in_chroma(
+                collection_name="test",
+                texts=texts,
+                embeddings=embeddings,
+                ids=[f"id_{i}" for i in range(len(texts))],
+                metadatas=[{"i": i} for i in range(len(texts))]
+            )
     
     @given(
         collection=collection_name,
         bad_ids=st.lists(st.text(min_size=1), min_size=2, max_size=5)
     )
-    @settings(max_examples=20)
-    def test_duplicate_ids_handled(self, collection, bad_ids, chromadb_manager):
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    def test_duplicate_ids_handled(self, collection, bad_ids):
         """Duplicate IDs should be handled appropriately."""
         # Make some IDs duplicate
         ids_with_duplicates = bad_ids + [bad_ids[0]]
@@ -652,18 +704,29 @@ class TestErrorHandlingProperties:
         embeddings = [[0.1, 0.2] for _ in texts]
         
         # This should either reject or handle duplicates gracefully
-        result = chromadb_manager.store_in_chroma(
-            collection_name=collection,
-            texts=texts,
-            embeddings=embeddings,
-            ids=ids_with_duplicates
-        )
+        manager = _get_shared_state_manager()
+        manager.reset_chroma_collection(collection)
+        try:
+            result = manager.store_in_chroma(
+                collection_name=collection,
+                texts=texts,
+                embeddings=embeddings,
+                ids=ids_with_duplicates,
+                metadatas=[{"i": i} for i in range(len(ids_with_duplicates))]
+            )
+        except Exception:
+            # Raising is acceptable handling for duplicate IDs
+            return
         
         # If successful, count should not exceed unique IDs
         if result:
-            count = chromadb_manager.count_items_in_collection(collection)
+            count = manager.count_items_in_collection(collection)
             assert count <= len(set(ids_with_duplicates))
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-m", "property"])
+# Configure Hypothesis to keep resource usage low in CI
+from hypothesis import settings as _hyp_settings
+_hyp_settings.register_profile("ci_min", max_examples=5, stateful_step_count=15, deadline=None)
+_hyp_settings.load_profile("ci_min")

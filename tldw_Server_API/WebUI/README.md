@@ -96,6 +96,16 @@ This tool is designed for:
 - **Web Scraping**: Web content ingestion service
 - **Maintenance**: Database maintenance and batch operations
 
+### Chat Persistence (Ephemeral by default)
+
+- The Chat Completions tab includes a checkbox “Save to DB (persist conversation)”.
+- When unchecked (default), chats are ephemeral and not saved in the database.
+- When checked, the UI sends `save_to_db: true` and the server persists conversation/messages.
+- The default state of this checkbox is driven by the server configuration exposed via `/webui/config.json`:
+  - Environment: `CHAT_SAVE_DEFAULT=true`
+  - Config file: `[Chat-Module] chat_save_default = True`
+  - Otherwise, the fallback legacy default is `[Auto-Save] save_character_chats`.
+
 ### Recent Improvements
 
 **v1.2.0 - Auto-Configuration Update**

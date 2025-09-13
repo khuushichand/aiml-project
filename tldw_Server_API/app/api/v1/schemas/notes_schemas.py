@@ -1,7 +1,7 @@
 # app/api/v1/schemas/notes_schemas.py
 #
 # Imports
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Union
 from datetime import datetime
 # 3rd-party Libraries
 from pydantic import BaseModel, Field, ConfigDict
@@ -21,6 +21,36 @@ class NoteBase(BaseModel):
 class NoteCreate(NoteBase):
     id: Optional[str] = Field(None,
                               description="Optional client-provided UUID for the note. If None, will be auto-generated.")
+    keywords: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
+    )
+
+    # Normalize keywords input to a clean list of strings (if provided)
+    @property
+    def normalized_keywords(self) -> Optional[List[str]]:
+        value = getattr(self, 'keywords', None)
+        if value is None:
+            return None
+        if isinstance(value, str):
+            parts = [p.strip() for p in value.split(',')]
+        elif isinstance(value, list):
+            parts = [str(p).strip() for p in value]
+        else:
+            return None
+        # Remove empties and deduplicate while preserving order
+        seen = set()
+        result: List[str] = []
+        for p in parts:
+            if not p:
+                continue
+            # Dedup case-insensitive
+            key = p.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(p)
+        return result or None
 
 
 class NoteUpdate(BaseModel):

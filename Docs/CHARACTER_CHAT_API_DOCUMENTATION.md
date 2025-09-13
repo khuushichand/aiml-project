@@ -417,6 +417,7 @@ This endpoint supports:
 - Streaming responses
 - System prompts for character personality
 - Conversation history
+- Ephemeral or persistent operation (see `save_to_db` below)
 
 ### Workflow for Character Chat Completions
 
@@ -431,13 +432,28 @@ curl -X GET "http://localhost:8000/api/v1/chats/{chat_id}/messages?format_for_co
 curl -X POST "http://localhost:8000/api/v1/chat/completions" \
   -H "X-API-KEY: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{
+ -d '{
     "model": "gpt-3.5-turbo",
     "messages": [messages from step 1],
     "temperature": 0.7,
     "max_tokens": 500
   }'
 ```
+
+By default, chats are ephemeral (not saved). To persist conversation/messages automatically, add `"save_to_db": true` to the request body:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat/completions" \
+  -H "X-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [messages from step 1],
+    "save_to_db": true
+  }'
+```
+
+Server default for persistence can be configured via environment variable `CHAT_SAVE_DEFAULT=true` or in `Config_Files/config.txt` under `[Chat-Module]` with `chat_save_default = True`.
 
 3. **Save the AI response as a new message (optional):**
 ```bash

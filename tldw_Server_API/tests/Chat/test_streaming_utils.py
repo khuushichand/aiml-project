@@ -288,6 +288,33 @@ class TestSafeStreamGenerator:
         end_msgs = [m for m in messages if "stream_end" in m]
         assert len(end_msgs) == 1
         assert "success" in end_msgs[0]
+
+    @pytest.mark.asyncio
+    async def test_sync_stream_closed_on_cancel(self):
+        """Ensure underlying sync generator is explicitly closed on cancel."""
+        handler = StreamingResponseHandler("conv_close_sync", "gpt-4")
+
+        closed_flag = {"closed": False}
+
+        def provider_stream():
+            try:
+                yield "A"
+                yield "B"
+            finally:
+                closed_flag["closed"] = True
+
+        async def drive():
+            agen = handler.safe_stream_generator(provider_stream())
+            # Consume first yield (stream_start)
+            await agen.__anext__()
+            # Consume first chunk
+            await agen.__anext__()
+            # Cancel and close early
+            handler.cancel()
+            await agen.aclose()
+
+        await drive()
+        assert closed_flag["closed"] is True
     
     async def test_done_message_format(self):
         """Test OpenAI-compatible [DONE] message."""
@@ -497,6 +524,87 @@ class TestStreamingResponseHandlerIntegration:
         # Should have error in messages
         error_found = any("error" in m for m in messages)
         assert error_found is True
+
+
+@pytest.mark.asyncio
+class TestSSENormalization:
+    """Tests that upstream provider SSE frames are normalized to plain text chunks."""
+
+    async def test_openai_like_sse_is_normalized(self):
+        handler = StreamingResponseHandler("conv_sse", "gpt-4")
+
+        # Upstream emits OpenAI-style SSE frames (each with trailing blank line)
+        chunk1 = {"choices": [{"delta": {"content": "Hello"}}]}
+        chunk2 = {"choices": [{"delta": {"content": " world"}}]}
+
+        async def provider_stream():
+            yield f"data: {json.dumps(chunk1)}\n\n"
+            yield f"data: {json.dumps(chunk2)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        messages = []
+        async for message in handler.safe_stream_generator(provider_stream()):
+            messages.append(message)
+
+        # Extract only content chunks we emit to client
+        content_lines = [m for m in messages if m.startswith("data: ") and '"choices"' in m and '"delta"' in m and '"content"' in m]
+        parsed = []
+        for m in content_lines:
+            data = json.loads(m[6:m.index("\n")])
+            content = data["choices"][0]["delta"].get("content")
+            if content:
+                parsed.append(content)
+
+        assert parsed == ["Hello", " world"]
+        assert any("data: [DONE]" in m for m in messages)
+        assert "".join(handler.full_response) == "Hello world"
+
+    async def test_multiline_sse_chunk_with_event_and_multiple_data_lines(self):
+        handler = StreamingResponseHandler("conv_sse2", "gpt-4")
+
+        # Single upstream chunk that contains an event plus two data lines and a DONE
+        part_a = {"choices": [{"delta": {"content": "Part"}}]}
+        part_b = {"choices": [{"delta": {"content": " A"}}]}
+        multi = (
+            "event: chunk\n"
+            f"data: {json.dumps(part_a)}\n"
+            f"data: {json.dumps(part_b)}\n"
+            "data: [DONE]\n\n"
+        )
+
+        async def provider_stream():
+            yield multi
+
+        messages = []
+        async for message in handler.safe_stream_generator(provider_stream()):
+            messages.append(message)
+
+        content_lines = [m for m in messages if m.startswith("data: ") and '"choices"' in m and '"delta"' in m and '"content"' in m]
+        parsed = []
+        for m in content_lines:
+            data = json.loads(m[6:m.index("\n")])
+            content = data["choices"][0]["delta"].get("content")
+            if content:
+                parsed.append(content)
+
+        assert parsed == ["Part", " A"]
+        assert any("data: [DONE]" in m for m in messages)
+        assert "".join(handler.full_response) == "Part A"
+
+    async def test_upstream_error_is_forwarded(self):
+        handler = StreamingResponseHandler("conv_err", "gpt-4")
+
+        async def provider_stream():
+            yield "data: {\"error\": {\"message\": \"oops\", \"type\": \"provider\"}}\n\n"
+
+        messages = []
+        async for message in handler.safe_stream_generator(provider_stream()):
+            messages.append(message)
+
+        # We should have an error message surfaced to the client
+        error_msgs = [m for m in messages if m.startswith("data: ") and '"error"' in m]
+        assert len(error_msgs) >= 1
+        assert handler.error_occurred is True
 
 
 if __name__ == "__main__":

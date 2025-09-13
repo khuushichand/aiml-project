@@ -415,8 +415,7 @@ def chat_with_openai(
                                                               "type": "openai_stream_error"}})
                         yield f"data: {error_content}\n\n"
                     finally:
-                        # Ensure DONE is sent for the endpoint wrapper's logic
-                        yield "data: [DONE]\n\n"
+                        # Close the response; do not yield in finally
                         if response:
                             response.close()
 
@@ -618,7 +617,9 @@ def chat_with_anthropic(
                                     yield f"data: {json.dumps(sse_chunk)}\n\n"
                             except json.JSONDecodeError:
                                 logging.warning(f"Anthropic Stream: Could not decode JSON: {event_data_str}")
-                    yield "data: [DONE]\n\n"
+                except GeneratorExit:
+                    if response: response.close()
+                    raise
                 except requests.exceptions.ChunkedEncodingError as e: # ... error handling ...
                     logging.error(f"Anthropic: ChunkedEncodingError during stream: {e}", exc_info=True)
                     yield f"data: {json.dumps({'error': {'message': f'Stream connection error: {str(e)}', 'type': 'anthropic_stream_error'}})}\n\n"
@@ -626,7 +627,7 @@ def chat_with_anthropic(
                     logging.error(f"Anthropic: Error during stream iteration: {e}", exc_info=True)
                     yield f"data: {json.dumps({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'anthropic_stream_error'}})}\n\n"
                 finally:
-                    yield "data: [DONE]\n\n" # Crucial for client
+                    # Close the response; do not yield in finally
                     if response: response.close()
             return stream_generator()
         else:
@@ -1066,9 +1067,10 @@ def chat_with_deepseek(
                     try:
                         for line in response.iter_lines(decode_unicode=True):
                             if line and line.strip(): yield line + "\n\n"
-                    # ... (error handling for stream) ...
+                    except GeneratorExit:
+                        if response: response.close()
+                        raise
                     finally:
-                        yield "data: [DONE]\n\n"
                         if response: response.close()
 
                 return stream_generator()
@@ -1378,6 +1380,9 @@ def chat_with_groq(
                     try:
                         for line in response.iter_lines(decode_unicode=True):
                             if line and line.strip(): yield line + "\n\n"
+                    except GeneratorExit:
+                        if response: response.close()
+                        raise
                     except requests.exceptions.ChunkedEncodingError as e:  # ... error handling ...
                         logging.error(f"Groq: ChunkedEncodingError: {e}", exc_info=True)
                         yield f"data: {json.dumps({'error': {'message': f'Stream error: {str(e)}', 'type': 'groq_stream_error'}})}\n\n"
@@ -1385,7 +1390,6 @@ def chat_with_groq(
                         logging.error(f"Groq: Stream iteration error: {e}", exc_info=True)
                         yield f"data: {json.dumps({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'groq_stream_error'}})}\n\n"
                     finally:
-                        yield "data: [DONE]\n\n"
                         if response: response.close()
 
                 return stream_generator()
@@ -1702,9 +1706,10 @@ def chat_with_mistral(
                     try:
                         for line in response.iter_lines(decode_unicode=True):
                             if line and line.strip(): yield line + "\n\n"
-                    # ... (error handling for stream) ...
+                    except GeneratorExit:
+                        if response: response.close()
+                        raise
                     finally:
-                        yield "data: [DONE]\n\n"
                         if response: response.close()
 
                 return stream_generator()
@@ -1809,7 +1814,6 @@ def chat_with_openrouter(
                             if line and line.strip(): yield line + "\n\n"
                     # ... (error handling for stream) ...
                     finally:
-                        yield "data: [DONE]\n\n"
                         if response: response.close()
 
                 return stream_generator()
@@ -2036,6 +2040,10 @@ def chat_with_moonshot(
                             if line and line.strip():
                                 # Pass through Moonshot's SSE lines directly
                                 yield line if line.endswith("\n") else line + "\n"
+                    except GeneratorExit:
+                        if response:
+                            response.close()
+                        raise
                     except requests.exceptions.ChunkedEncodingError as e_chunk:
                         logging.error(f"Moonshot: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
                         error_content = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}",
@@ -2047,8 +2055,6 @@ def chat_with_moonshot(
                                                               "type": "moonshot_stream_error"}})
                         yield f"data: {error_content}\n\n"
                     finally:
-                        # Ensure DONE is sent
-                        yield "data: [DONE]\n\n"
                         if response:
                             response.close()
                 
@@ -2200,6 +2206,10 @@ def chat_with_zai(
                             if line and line.strip():
                                 # Pass through Z.AI's SSE lines directly
                                 yield line if line.endswith("\n") else line + "\n"
+                    except GeneratorExit:
+                        if response:
+                            response.close()
+                        raise
                     except requests.exceptions.ChunkedEncodingError as e_chunk:
                         logging.error(f"Z.AI: ChunkedEncodingError during stream: {e_chunk}", exc_info=True)
                         error_content = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}",
@@ -2211,8 +2221,6 @@ def chat_with_zai(
                                                               "type": "zai_stream_error"}})
                         yield f"data: {error_content}\n\n"
                     finally:
-                        # Ensure DONE is sent
-                        yield "data: [DONE]\n\n"
                         if response:
                             response.close()
                 

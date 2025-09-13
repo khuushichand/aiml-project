@@ -298,6 +298,10 @@ class ChatCompletionRequest(BaseModel):
     # --- Optional Character Chat Parameters ---
     character_id: Optional[str] = Field(None, description="Optional ID of the character to use for context.")
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
+    save_to_db: Optional[bool] = Field(
+        False,
+        description="[Extension] If true, persist conversation and messages to the database. Defaults to false (ephemeral)."
+    )
     model_config = ConfigDict(extra="allow")
     
     @field_validator('prompt_template_name')

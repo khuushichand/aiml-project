@@ -237,7 +237,8 @@ class TestChatEndpointIntegration:
                     {"role": "user", "content": "My name is Alice"}
                 ],
                 "model": "gpt-4",
-                "api_provider": "openai"  # Fixed field name
+                "api_provider": "openai",  # Fixed field name
+                "save_to_db": True
             },
             headers=auth_headers
         )
@@ -260,7 +261,8 @@ class TestChatEndpointIntegration:
                 ],
                 "model": "gpt-4",
                 "api_provider": "openai",  # Fixed field name
-                "conversation_id": conv_id
+                "conversation_id": conv_id,
+                "save_to_db": True
             },
             headers=auth_headers
         )
@@ -414,7 +416,8 @@ class TestChatEndpointIntegration:
                     {"role": "user", "content": "Test transaction"}
                 ],
                 "model": "gpt-4",
-                "api_provider": "openai"  # Fixed field name
+                "api_provider": "openai",  # Fixed field name
+                "save_to_db": True
                 # Removed use_transaction as it's not a valid API parameter
             },
             headers=auth_headers

@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple
 from loguru import logger
 
 #######################################################################################################################
@@ -31,6 +31,85 @@ HEARTBEAT_INTERVAL = int(_chat_config.get('streaming_heartbeat_interval_seconds'
 #######################################################################################################################
 #
 # Functions:
+
+def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+    """
+    Normalize provider-emitted SSE frames to plain text content.
+
+    Accepts a string that may be:
+      - a raw text fragment (returns it as text_content)
+      - an SSE line like "data: {...}" (extracts JSON and returns delta.content if present)
+      - an SSE DONE line "data: [DONE]" (signals completion via is_done=True)
+
+    Returns: (text_content, error_payload, is_done)
+      - text_content: extracted textual delta (or original text) or None
+      - error_payload: if upstream provided an error object, return it for direct emission
+      - is_done: True if upstream indicated [DONE]
+    """
+    if not chunk_str:
+        return None, None, False
+
+    # Normalize common invisible prefixes (BOM, zero-width spaces) and trim whitespace
+    s = chunk_str.lstrip("\ufeff\u200b\u200c\u200d\u2060").strip()
+
+    # Ignore comment/heartbeat/event-only lines from upstream
+    if s.startswith(":") or s.startswith("event:"):
+        return None, None, False
+
+    # If any 'data:' line exists, try to parse; some providers send 'event:' + 'data:' pairs or multiple frames
+    if s.startswith("data:") or ("\ndata:" in s or s.startswith("event:") or "data:" in s):
+        saw_done = False
+        first_error = None
+        # Process by lines to handle possible multi-line chunks
+        for line in s.splitlines():
+            ls = line.lstrip("\ufeff\u200b\u200c\u200d\u2060").strip()
+            if not ls:
+                continue
+            if ls.startswith(":") or ls.startswith("event:"):
+                # Skip comment or event name lines
+                continue
+            if not ls.startswith("data:"):
+                continue
+            payload_str = ls[len("data:"):].strip()
+            if payload_str == "[DONE]":
+                saw_done = True
+                continue
+            try:
+                data = json.loads(payload_str)
+            except Exception:
+                # Try next line if present
+                continue
+
+            if isinstance(data, dict) and "error" in data and first_error is None:
+                try:
+                    _ = json.dumps({"error": data.get("error")})
+                    first_error = {"error": data.get("error")}
+                except Exception:
+                    first_error = {"error": {"message": "Upstream error (unparseable)", "type": "stream_error"}}
+                continue
+
+            if isinstance(data, dict):
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    first = choices[0] or {}
+                    delta = first.get("delta") or {}
+                    content = delta.get("content")
+                    if content:
+                        return str(content), None, False
+                    # Fallback to message.content (non-stream case)
+                    message = first.get("message") or {}
+                    msg_content = message.get("content")
+                    if msg_content:
+                        return str(msg_content), None, False
+        # If no content found but DONE or error encountered, reflect that
+        if first_error is not None:
+            return None, first_error, False
+        if saw_done:
+            return None, None, True
+        return None, None, False
+
+    # Not an SSE frame; treat as plain text chunk
+    return chunk_str, None, False
 
 class StreamingResponseHandler:
     """
@@ -129,23 +208,44 @@ class StreamingResponseHandler:
                         break
                     
                     try:
-                        # Process chunk
-                        text_content = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
-                        if text_content:
-                            # Check response size limit
-                            chunk_size = len(text_content.encode('utf-8'))
-                            if self.response_size + chunk_size > self.max_response_size:
-                                logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
-                                yield f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n"
+                        # Normalize provider chunk (raw text or SSE frames) to one or more text deltas
+                        raw_str = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
+
+                        def prepare_outputs_for_line(line: str):
+                            """Return (outputs: list[str], should_stop: bool) for a single logical line."""
+                            outputs = []
+                            text_content, error_payload, is_done = _extract_text_from_upstream_sse(line)
+                            if is_done:
+                                return outputs, True
+                            if error_payload is not None:
+                                self.error_occurred = True
+                                outputs.append(f"data: {json.dumps(error_payload)}\n\n")
+                                return outputs, True
+                            if text_content:
+                                # Enforce size limit
+                                chunk_size = len(text_content.encode('utf-8'))
+                                if self.response_size + chunk_size > self.max_response_size:
+                                    logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
+                                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
+                                    return outputs, True
+                                self.full_response.append(text_content)
+                                self.response_size += chunk_size
+                                self.update_activity()
+                                outputs.append(f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n")
+                            return outputs, False
+
+                        # If the chunk contains multiple logical lines, process each; otherwise single
+                        lines = raw_str.splitlines() if ("\n" in raw_str or raw_str.count("data:") > 1) else [raw_str]
+                        for ls in lines:
+                            should_stop = False
+                            outputs, should_stop = prepare_outputs_for_line(ls)
+                            for out in outputs:
+                                yield out
+                            if should_stop:
                                 break
-                            
-                            self.full_response.append(text_content)
-                            self.response_size += chunk_size
-                            self.update_activity()
-                            
-                            # Send chunk to client
-                            yield f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n"
-                            
+                        if should_stop:
+                            break
+
                     except Exception as e:
                         logger.error(f"Error processing stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
@@ -174,11 +274,39 @@ class StreamingResponseHandler:
                         break
                     
                     try:
-                        text_content = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
-                        if text_content:
-                            self.full_response.append(text_content)
-                            self.update_activity()
-                            yield f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n"
+                        raw_str = chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else str(chunk)
+
+                        def prepare_outputs_for_line_sync(line: str):
+                            outputs = []
+                            text_content, error_payload, is_done = _extract_text_from_upstream_sse(line)
+                            if is_done:
+                                return outputs, True
+                            if error_payload is not None:
+                                self.error_occurred = True
+                                outputs.append(f"data: {json.dumps(error_payload)}\n\n")
+                                return outputs, True
+                            if text_content:
+                                chunk_size = len(text_content.encode('utf-8'))
+                                if self.response_size + chunk_size > self.max_response_size:
+                                    logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
+                                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
+                                    return outputs, True
+                                self.full_response.append(text_content)
+                                self.response_size += chunk_size
+                                self.update_activity()
+                                outputs.append(f"data: {json.dumps({'choices': [{'delta': {'content': text_content}}]})}\n\n")
+                            return outputs, False
+
+                        lines = raw_str.splitlines() if ("\n" in raw_str or raw_str.count("data:") > 1) else [raw_str]
+                        for ls in lines:
+                            should_stop = False
+                            outputs, should_stop = prepare_outputs_for_line_sync(ls)
+                            for out in outputs:
+                                yield out
+                            if should_stop:
+                                break
+                        if should_stop:
+                            break
                     except Exception as e:
                         logger.error(f"Error processing sync stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
@@ -204,7 +332,19 @@ class StreamingResponseHandler:
         finally:
             # Cleanup and final message
             try:
-                # If cancelled (e.g., client disconnect or generator close), do not yield or await
+                # Always attempt to close the upstream stream first
+                try:
+                    if hasattr(stream, "aclose") and callable(getattr(stream, "aclose")):
+                        # Async generator
+                        await stream.aclose()  # type: ignore[attr-defined]
+                    elif hasattr(stream, "close") and callable(getattr(stream, "close")):
+                        # Sync generator
+                        stream.close()  # type: ignore[attr-defined]
+                except Exception:
+                    # Best effort; ignore cleanup errors
+                    pass
+
+                # If cancelled (e.g., client disconnect or generator close), do not yield or await further
                 if self.is_cancelled:
                     return
 
@@ -287,10 +427,11 @@ async def create_streaming_response_with_timeout(
                     return_when=asyncio.FIRST_COMPLETED
                 )
 
+                should_exit = False
                 for task in done:
                     try:
                         result = task.result()
-                        if task == stream_task:
+                        if task is stream_task:
                             # Stream chunk
                             if result is not None:
                                 yield result
@@ -303,20 +444,28 @@ async def create_streaming_response_with_timeout(
                             # Schedule next heartbeat
                             heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
                     except StopAsyncIteration:
-                        # Stream ended
-                        handler.cancel()
-                        break
+                        # A generator ended naturally; exit the loop without flagging cancel
+                        should_exit = True
                     except asyncio.CancelledError:
-                        handler.cancel()
-                        break
+                        # Task was cancelled (likely due to shutdown); exit loop
+                        should_exit = True
                     except Exception as e:
                         logger.error(f"Error in streaming task: {e}")
                         handler.error_occurred = True
-                        break
+                        should_exit = True
 
-                # Cancel any pending tasks before continuing or exiting
-                for task in pending:
-                    task.cancel()
+                # Do not cancel pending tasks on normal loop progression; keep them running
+
+                if should_exit:
+                    # Also cancel the latest scheduled tasks in case we created replacements
+                    for t in (stream_task, heartbeat_task):
+                        if not t.done():
+                            t.cancel()
+                    try:
+                        await asyncio.gather(stream_task, heartbeat_task, return_exceptions=True)
+                    except Exception:
+                        pass
+                    break
         finally:
             # Ensure generators are properly closed; avoid yielding here
             try:

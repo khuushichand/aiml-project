@@ -62,14 +62,17 @@ class TestChromaDBManagerInit:
     
     def test_init_with_custom_base_path(self):
         """Test initialization with custom base path."""
-        import tempfile
+        import tempfile, os, pathlib
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient'):
             manager = ChromaDBManager(
                 user_id="test_user",
                 user_embedding_config={"USER_DB_BASE_DIR": base_dir}
             )
-            assert str(manager.user_chroma_path).startswith(base_dir)
+            # Normalize both to avoid /private path prefix differences on macOS
+            resolved_base = str(pathlib.Path(base_dir).resolve())
+            resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())
+            assert resolved_user_path.startswith(resolved_base)
 
 
 @pytest.mark.unit
@@ -460,10 +463,10 @@ class TestContentProcessing:
         
         args, kwargs = mock_chunk_for_embed.call_args
         assert args[0] == content
-        # Third positional arg is chunk_options dict
-        assert isinstance(args[2], dict)
-        assert args[2].get("chunk_size") == 500
-        assert args[2].get("overlap") == 50
+        assert args[1] == "file.txt"
+        # chunk options are passed via kwargs
+        assert kwargs.get("chunk_size") == 500
+        assert kwargs.get("overlap") == 50
     
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chunk_for_embedding')
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.create_embeddings_batch')

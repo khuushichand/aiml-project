@@ -101,6 +101,7 @@ class TestChatIntegrationIsolated:
             "model": "gpt-4",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
+            "save_to_db": True,
             "conversation_id": conv_id
         }
         
@@ -113,6 +114,7 @@ class TestChatIntegrationIsolated:
         
         # Second message in same conversation
         request_data["messages"] = [{"role": "user", "content": "How are you?"}]
+        request_data["save_to_db"] = True
         
         response = integration_test_client.post_with_auth(
             "/api/v1/chat/completions",

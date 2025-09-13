@@ -926,6 +926,33 @@ def test_create_chat_completion_with_tools_unit(
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
+def test_save_to_db_not_passed_to_chat_api_call(
+        mock_load_template, mock_chat_api_call,
+        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+):
+    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+    mock_chat_api_call.return_value = {"id": "chatcmpl-ok", "choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
+    app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
+
+    # Include save_to_db in request to ensure it's not forwarded to chat_api_call
+    body = default_chat_request_data.model_copy(update={"save_to_db": True}).model_dump()
+    response = client.post_with_csrf("/api/v1/chat/completions", json=body, headers={"Token": valid_auth_token})
+    assert response.status_code == status.HTTP_200_OK
+
+    mock_chat_api_call.assert_called_once()
+    called_kwargs = mock_chat_api_call.call_args.kwargs
+    assert "save_to_db" not in called_kwargs
+
+    app.dependency_overrides.pop(get_media_db_for_user, None)
+    app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+@patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")  # Mock this
 def test_create_chat_completion_character_not_found_uses_defaults(
         mock_load_template, mock_chat_api_call_shim,
@@ -998,5 +1025,4 @@ def test_create_chat_completion_template_file_not_found(
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
-
 

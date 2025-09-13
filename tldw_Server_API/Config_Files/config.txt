@@ -45,6 +45,18 @@ max_request_size_bytes = 1000000
 streaming_idle_timeout_seconds = 300
 streaming_heartbeat_interval_seconds = 30
 streaming_max_response_size_mb = 10
+# Persistence defaults
+# By default, chats are ephemeral and are not saved to the database unless
+# the request explicitly sets `save_to_db: true`.
+# You can change the server-wide default here or via environment variables.
+#
+# Option A (Chat-Module):
+#   chat_save_default = False   # Set to True to save new chats by default
+# Option B (Env var – takes precedence):
+#   CHAT_SAVE_DEFAULT=true
+# Fallback (if neither provided):
+#   [Auto-Save] save_character_chats is used as a legacy default
+chat_save_default = False
 # Transaction retry settings
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3

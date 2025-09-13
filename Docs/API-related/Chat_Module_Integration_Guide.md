@@ -3,6 +3,27 @@
 ## Overview
 This guide documents the integration points for the refactored chat module components and how they interact with planned future modules.
 
+### Chat Persistence (Ephemeral by default)
+- By default, `/api/v1/chat/completions` requests are ephemeral and do not write messages to the database.
+- To persist a chat, include `"save_to_db": true` in the request JSON. When set, the server creates/loads a conversation and stores messages and responses.
+- You can change the server-wide default (without modifying clients):
+  - Environment: `CHAT_SAVE_DEFAULT=true` (highest precedence)
+  - Config file: `tldw_Server_API/Config_Files/config.txt`
+    - Under `[Chat-Module]`: `chat_save_default = True`
+  - Fallback legacy default (if neither is set): `[Auto-Save] save_character_chats`
+
+Example persisted request:
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "model": "openai/gpt-4o-mini",
+    "messages": [{"role":"user","content":"Save this conversation."}],
+    "save_to_db": true
+  }'
+```
+
 ## Architecture Overview
 
 ```

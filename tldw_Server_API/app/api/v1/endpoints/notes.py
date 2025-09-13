@@ -197,6 +197,25 @@ async def create_note(
         if note_id is None:  # Should be caught by exceptions
             raise CharactersRAGDBError("Note creation failed to return an ID.")
 
+        # Handle optional keywords: create if needed and link to this note
+        try:
+            kw_list = note_in.normalized_keywords if hasattr(note_in, 'normalized_keywords') else None
+            if kw_list:
+                for kw in kw_list:
+                    try:
+                        # Find or create keyword (case-insensitive uniqueness enforced by DB schema)
+                        kw_row = db.get_keyword_by_text(kw)
+                        if not kw_row:
+                            kw_id = db.add_keyword(kw)
+                            kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                        if kw_row and kw_row.get('id') is not None:
+                            db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
+                    except Exception as kw_err:
+                        # Log but do not fail the note creation if a single keyword fails
+                        logger.warning(f"Keyword attach failed for '{kw}' on note {note_id}: {kw_err}")
+        except Exception as kw_outer_err:
+            logger.warning(f"Keyword processing encountered an issue for note {note_id}: {kw_outer_err}")
+
         created_note_data = db.get_note_by_id(note_id=note_id)
         if not created_note_data:
             logger.error(

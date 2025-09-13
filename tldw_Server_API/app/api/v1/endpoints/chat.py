@@ -153,11 +153,14 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
 )
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_placeholders
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
+import os
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
 # Constants & helpers
 # ---------------------------------------------------------------------------
+ # Backward-compatibility for tests that patch API_KEYS directly
+API_KEYS = get_api_keys()
 
 router = APIRouter()
 
@@ -177,6 +180,32 @@ MAX_MESSAGES_PER_REQUEST: int = int(_chat_config.get('max_messages_per_request',
 MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10))
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
+
+# Default persistence behavior for chats
+def _to_bool(val: str) -> bool:
+    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+# Priority: env > Chat-Module.chat_save_default/default_save_to_db > Auto-Save.save_character_chats > False
+_env_default_save = os.getenv("CHAT_SAVE_DEFAULT") or os.getenv("DEFAULT_CHAT_SAVE")
+if _env_default_save is not None:
+    DEFAULT_SAVE_TO_DB: bool = _to_bool(_env_default_save)
+else:
+    default_from_chat_section = None
+    if _chat_config:
+        default_from_chat_section = (
+            _chat_config.get('chat_save_default') or _chat_config.get('default_save_to_db')
+        )
+    if default_from_chat_section is not None:
+        DEFAULT_SAVE_TO_DB = _to_bool(default_from_chat_section)
+    else:
+        # Fallback to Auto-Save.save_character_chats if available
+        auto_save_default = None
+        if _config and _config.has_section('Auto-Save'):
+            try:
+                auto_save_default = _config.get('Auto-Save', 'save_character_chats', fallback=None)
+            except Exception:
+                auto_save_default = None
+        DEFAULT_SAVE_TO_DB = _to_bool(auto_save_default) if auto_save_default is not None else False
 
 # --- Helper Functions ---
 
@@ -646,26 +675,38 @@ async def create_chat_completion(
         #      logger.critical("Client ID missing on chat_db instance. This is a server configuration issue.")
         #      raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error: Client identification for DB operations failed.")
 
-        # Use helper function to get or create conversation
-        final_conversation_id, conversation_created_this_turn = await get_or_create_conversation(
-            chat_db,
-            final_conversation_id,
-            final_character_db_id,
-            character_card_for_context.get('name', 'Chat'),
-            client_id_from_db,
-            current_loop
-        )
+        # Determine persistence behavior
+        # If request specifies save_to_db, honor it; otherwise use server default
+        _requested = getattr(request_data, 'save_to_db', None)
+        should_persist: bool = bool(_requested) if (_requested is not None) else DEFAULT_SAVE_TO_DB
+
+        # Use helper function to get or create conversation only if persisting
+        if should_persist:
+            final_conversation_id, conversation_created_this_turn = await get_or_create_conversation(
+                chat_db,
+                final_conversation_id,
+                final_character_db_id,
+                character_card_for_context.get('name', 'Chat'),
+                client_id_from_db,
+                current_loop
+            )
+        else:
+            # Ephemeral conversation id (no DB writes)
+            if not final_conversation_id:
+                import uuid as _uuid
+                final_conversation_id = str(_uuid.uuid4())
+            conversation_created_this_turn = False
         
         # Track conversation creation/resumption
         if final_conversation_id:
             metrics.track_conversation(final_conversation_id, conversation_created_this_turn)
         
         if not final_conversation_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create or retrieve conversation.")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
         # --- History Loading ---
         historical_openai_messages: List[Dict[str, Any]] = []
-        if not conversation_created_this_turn and final_conversation_id:
+        if should_persist and (not conversation_created_this_turn) and final_conversation_id:
             # Limit history length (e.g., 20 messages = 10 turns)
             raw_hist = await current_loop.run_in_executor(None, chat_db.get_messages_for_conversation, final_conversation_id, 20, 0, "ASC")
             for db_msg in raw_hist:
@@ -708,7 +749,9 @@ async def create_chat_completion(
             if msg_model.role == "assistant" and character_card_for_context:
                 msg_for_db["name"] = character_card_for_context.get('name', "Assistant")
 
-            await _save_message_turn_to_db(chat_db, final_conversation_id, msg_for_db, use_transaction=True) # Use transaction for consistency
+            # Save user/assistant input only if persisting this chat
+            if should_persist:
+                await _save_message_turn_to_db(chat_db, final_conversation_id, msg_for_db, use_transaction=True)
 
             msg_for_llm = msg_dict.copy()
             if msg_model.role == "assistant" and character_card_for_context and character_card_for_context.get('name'):
@@ -792,7 +835,15 @@ async def create_chat_completion(
         # --- LLM Call ---
         call_params = request_data.model_dump(
             exclude_none=True,
-            exclude={"api_provider", "messages", "character_id", "conversation_id", "prompt_template_name", "stream"}
+            exclude={
+                "api_provider",
+                "messages",
+                "character_id",
+                "conversation_id",
+                "prompt_template_name",
+                "stream",
+                "save_to_db",  # internal flag; do not pass to chat_api_call
+            }
         )
 
         # Rename keys to match chat_api_call's signature for generic params
@@ -908,7 +959,7 @@ async def create_chat_completion(
             # Use the improved streaming handler with timeout and heartbeat
             async def save_callback(full_reply: str):
                 """Callback to save the assistant's reply after streaming completes."""
-                if full_reply and final_conversation_id:
+                if should_persist and full_reply and final_conversation_id:
                     # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
                     asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
                     asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
@@ -921,7 +972,7 @@ async def create_chat_completion(
                         use_transaction=True
                     )
                 else:
-                    logger.info(f"No assistant reply or conv_id to save for conv_id {final_conversation_id}.")
+                    logger.info(f"No persistent save (should_persist={should_persist}) or missing data for conv_id {final_conversation_id}.")
 
             # Create streaming response with timeout and heartbeat support
             # Wrap the generator with metrics tracking
@@ -1022,7 +1073,7 @@ async def create_chat_completion(
                 logger.error("LLM response is None - this indicates a serious issue with the LLM call")
                 raise ChatAPIError(provider=provider, message="LLM call returned None response", status_code=500)
 
-            if content_to_save:
+            if should_persist and content_to_save:
                 # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
                 asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
                 asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')

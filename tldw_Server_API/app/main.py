@@ -505,6 +505,7 @@ if WEBUI_DIR.exists():
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers
         from fastapi.responses import JSONResponse
+        from tldw_Server_API.app.core.config import load_comprehensive_config
         
         config = {
             "apiUrl": "",  # Empty means use same origin
@@ -529,6 +530,37 @@ if WEBUI_DIR.exists():
         except Exception as e:
             logger.warning(f"Failed to get LLM providers for config: {e}")
             config["llm_providers"] = {"providers": [], "default_provider": "openai", "total_configured": 0}
+
+        # Add chat defaults (e.g., default save_to_db)
+        try:
+            cfg = load_comprehensive_config()
+            chat_cfg = {}
+            if cfg and cfg.has_section('Chat-Module'):
+                chat_cfg = dict(cfg.items('Chat-Module'))
+
+            def _to_bool(val: str) -> bool:
+                return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+            import os as _os
+            env_default = _os.getenv('CHAT_SAVE_DEFAULT') or _os.getenv('DEFAULT_CHAT_SAVE')
+            default_save = None
+            if env_default is not None:
+                default_save = _to_bool(env_default)
+            elif chat_cfg.get('chat_save_default') or chat_cfg.get('default_save_to_db'):
+                default_save = _to_bool(chat_cfg.get('chat_save_default') or chat_cfg.get('default_save_to_db'))
+            elif cfg and cfg.has_section('Auto-Save'):
+                try:
+                    auto_val = cfg.get('Auto-Save', 'save_character_chats', fallback=None)
+                    if auto_val is not None:
+                        default_save = _to_bool(auto_val)
+                except Exception:
+                    default_save = None
+            if default_save is None:
+                default_save = False
+
+            config["chat"] = {"default_save_to_db": default_save}
+        except Exception as e:
+            logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
         
         return JSONResponse(content=config)
     

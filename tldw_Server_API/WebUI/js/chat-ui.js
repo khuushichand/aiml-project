@@ -428,6 +428,7 @@ class ChatUI {
             { key: 'temperature', type: 'float' },
             { key: 'max_tokens', type: 'int' },
             { key: 'stream', type: 'boolean' },
+            { key: 'save_to_db', type: 'boolean' },
             { key: 'top_p', type: 'float' },
             { key: 'frequency_penalty', type: 'float' },
             { key: 'presence_penalty', type: 'float' },
@@ -702,6 +703,19 @@ function initializeChatCompletionsTab() {
             element.placeholder = value;
         }
     });
+
+    // Set default for save_to_db based on server-provided config
+    try {
+        const saveEl = document.getElementById(`${prefix}_save_to_db`);
+        if (saveEl && window.apiClient && window.apiClient.loadedConfig) {
+            const def = window.apiClient.loadedConfig?.chat?.default_save_to_db;
+            if (typeof def === 'boolean') {
+                saveEl.checked = def;
+            }
+        }
+    } catch (e) {
+        console.debug('Could not set default save_to_db from config:', e?.message || e);
+    }
 }
 
 // Export for use in other modules

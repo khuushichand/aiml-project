@@ -172,6 +172,10 @@ def _chat_with_openai_compatible_local_server(
                     for line in response.iter_lines(decode_unicode=True):
                         if line and line.strip():
                             yield line + "\n\n" # Pass through raw SSE line
+                except GeneratorExit:
+                    if response:
+                        response.close()
+                    raise
                 except requests.exceptions.ChunkedEncodingError as e_chunked:
                     logging.error(f"{provider_name}: ChunkedEncodingError during stream: {e_chunked}", exc_info=False)
                     error_content = {"error": {"message": f"Stream connection error: {str(e_chunked)}", "type": "stream_error", "code": "chunked_encoding_error"}}
@@ -183,9 +187,6 @@ def _chat_with_openai_compatible_local_server(
                 finally:
                     if response:
                         response.close()
-                    # It's common for OpenAI streams to end with this
-                    # Yield it here to ensure the stream always terminates correctly for the client
-                    yield "data: [DONE]\n\n"
             return stream_generator()
         else:
             response = session.post(full_api_url, headers=headers, json=payload, timeout=timeout)
@@ -1233,6 +1234,4 @@ def save_summary_to_file(summary: str, file_path: str): # Type hinting
 #
 #
 #######################################################################################################################
-
-
 
