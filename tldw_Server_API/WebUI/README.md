@@ -106,6 +106,10 @@ This tool is designed for:
   - Config file: `[Chat-Module] chat_save_default = True`
   - Otherwise, the fallback legacy default is `[Auto-Save] save_character_chats`.
 
+### Related Documentation
+- Chat API: `Docs/API-related/Chat_API_Documentation.md`
+- Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
+
 ### Recent Improvements
 
 **v1.2.0 - Auto-Configuration Update**

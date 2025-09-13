@@ -46,6 +46,8 @@ All endpoints require JWT authentication via Bearer token:
 Authorization: Bearer <your-jwt-token>
 ```
 
+Note: Chatbooks use multi-user JWT auth even when the server supports single-user API key mode for other modules.
+
 ## API Endpoints
 
 ### 1. Create Chatbook Export
@@ -80,10 +82,11 @@ Authorization: Bearer <your-jwt-token>
 {
   "success": true,
   "message": "Chatbook created successfully",
-  "file_path": "/exports/cb_20240115_abc123.chatbook",
-  "download_url": "/api/v1/chatbooks/download/cb_export_20240115_abc123"
+  "download_url": "/api/v1/chatbooks/download/<id-or-token>"
 }
 ```
+
+Implementation note: In sync mode, the server returns a `download_url` without exposing internal file paths. For robust automation, prefer async mode and then poll job status to obtain the canonical download URL by `job_id`.
 
 **Response (Asynchronous)**:
 ```json
@@ -283,6 +286,24 @@ Authorization: Bearer <your-jwt-token>
 }
 ```
 
+### 12. Service Health
+
+Lightweight liveness check for the Chatbooks subsystem.
+
+**Endpoint**: `GET /api/v1/chatbooks/health`
+
+**Response**:
+```json
+{
+  "service": "chatbooks",
+  "status": "healthy|degraded|unhealthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "components": {
+    "storage_base": {"path": "/var/lib/tldw/user_data", "exists": true, "writable": true}
+  }
+}
+```
+
 ## Data Models
 
 ### ContentType Enum
@@ -366,15 +387,14 @@ Authorization: Bearer <your-jwt-token>
 
 ## Rate Limiting
 
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| Export | 5 | per minute |
-| Import | 5 | per minute |
-| Preview | 10 | per minute |
-| Download | 20 | per minute |
-| List Jobs | 30 | per minute |
+Per-user limits enforced at the endpoint level:
+- Export: 5/minute
+- Import: 5/minute
+- Preview: 10/minute
+- Download: 20/minute
 
-Limits are per user. Exceeded limits return HTTP 429 with retry-after header.
+List/status endpoints may be subject to global API rate limits but have no dedicated per-route limiter.
+Exceeded limits return HTTP 429.
 
 ## Code Examples
 

@@ -67,6 +67,7 @@ class NoteResponse(NoteBase):
     version: int = Field(..., description="Version number for optimistic locking")
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
+    keywords: Optional[List['KeywordResponse']] = Field(default=None, description="Keywords linked to this note")
 
     model_config = ConfigDict(from_attributes=True)  # Pydantic V2 (formerly orm_mode)
 
@@ -110,6 +111,23 @@ class NotesForKeywordResponse(BaseModel):
 # --- General API Response Schemas ---
 class DetailResponse(BaseModel):
     detail: str
+
+
+# --- Bulk Create Schemas ---
+class NoteBulkCreateRequest(BaseModel):
+    notes: List[NoteCreate] = Field(..., min_length=1, max_length=200, description="List of notes to create")
+
+
+class NoteBulkCreateItemResult(BaseModel):
+    success: bool
+    note: Optional[NoteResponse] = None
+    error: Optional[str] = None
+
+
+class NoteBulkCreateResponse(BaseModel):
+    results: List[NoteBulkCreateItemResult]
+    created_count: int = 0
+    failed_count: int = 0
 
 #
 # End of notes_schemas.py

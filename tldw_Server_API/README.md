@@ -51,6 +51,11 @@ Configure provider keys in `.env` or `tldw_Server_API/Config_Files/config.txt`.
 
 See `app/main.py` for router includes and full route namespaces.
 
+## Further API Docs
+
+- Chat API: `Docs/API-related/Chat_API_Documentation.md`
+- Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
+
 ## Adding a New Endpoint
 
 1. Implement handler(s) in `app/api/v1/endpoints/<feature>.py` and schemas in `app/api/v1/schemas/`.

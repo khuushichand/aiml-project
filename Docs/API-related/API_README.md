@@ -17,6 +17,18 @@ See [API Design](API_Design.md) for more details.
 
 ### Endpoints
 
+#### Chat
+
+- Chat API (OpenAI-compatible): `POST /api/v1/chat/completions`
+  - Streaming (SSE), persistence toggle, multi‑provider support
+  - See: [Chat API Documentation](Chat_API_Documentation.md)
+
+- Character Chat API: sessions and messages under `/api/v1/chats` and `/api/v1/messages`
+  - Create/list/update/delete chats, send/edit/delete/search messages
+  - Export chat history; fetch messages formatted for completions
+  - Use Chat API for LLM replies with `conversation_id`/`character_id`
+  - See: [Character Chat API Documentation](../CHARACTER_CHAT_API_DOCUMENTATION.md)
+
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`
 
 The RAG module provides advanced search and question-answering capabilities across your content. It achieves 100% test coverage and is production-ready.
@@ -57,5 +69,4 @@ The RAG module provides advanced search and question-answering capabilities acro
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
-
 

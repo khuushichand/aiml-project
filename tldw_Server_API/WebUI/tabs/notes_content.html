@@ -21,6 +21,12 @@
                 </div>
             </div>
         </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="notesList_include_keywords"> Include Keywords
+            </label>
+        </div>
         
         <button class="api-button" onclick="makeRequest('notesList', 'GET', '/api/v1/notes', 'query')">
             List Notes
@@ -43,6 +49,12 @@
         <div class="form-group">
             <label for="notesSearch_query">Search Query:</label>
             <input type="text" id="notesSearch_query" placeholder="Enter search terms...">
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="notesSearch_include_keywords"> Include Keywords
+            </label>
         </div>
         
         <button class="api-button" onclick="makeRequest('notesSearch', 'GET', '/api/v1/notes/search', 'query')">
@@ -79,6 +91,7 @@
         <div class="form-group">
             <label for="notesCreate_keywords">Keywords (comma-separated):</label>
             <input type="text" id="notesCreate_keywords" placeholder="tag1, tag2, tag3">
+            <small>Tip: This field accepts comma-separated keywords. To send a JSON list instead, use the API directly or Bulk Create below.</small>
         </div>
         
         <button class="api-button" onclick="makeRequest('notesCreate', 'POST', '/api/v1/notes', 'json')">
@@ -90,6 +103,34 @@
         
         <h3>Response:</h3>
         <pre id="notesCreate_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="notesBulkCreate">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/notes/bulk - Bulk Create Notes</span>
+        </h2>
+        <p>Create multiple notes in a single call. Supports keywords per note (comma-separated or list in raw JSON).</p>
+
+        <div class="form-group">
+            <label for="notesBulkCreate_payload">Bulk Payload (JSON):</label>
+            <textarea id="notesBulkCreate_payload" class="code-input" rows="12">{
+  "notes": [
+    { "title": "Note A", "content": "Alpha", "keywords": "tag1, tag2" },
+    { "title": "Note B", "content": "Bravo", "keywords": ["tag2", "Tag3"] }
+  ]
+}</textarea>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('notesBulkCreate', 'POST', '/api/v1/notes/bulk', 'json')">
+            Bulk Create Notes
+        </button>
+
+        <h3>cURL Command:</h3>
+        <pre id="notesBulkCreate_curl">---</pre>
+
+        <h3>Response:</h3>
+        <pre id="notesBulkCreate_response">---</pre>
     </div>
 
     <div class="endpoint-section" id="notesUpdate">

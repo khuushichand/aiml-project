@@ -4,7 +4,7 @@
 
 The Character Chat API provides comprehensive endpoints for managing character-based chat sessions, messages, and interactions. This API enables creating persistent conversations with AI characters, managing message history, and performing character-specific completions.
 
-**Implementation Status:** This API is partially implemented. Core CRUD operations for characters and chat sessions are functional. The chat completion endpoint currently returns mock responses while full LLM integration is pending.
+Implementation status: Character CRUD, chat sessions, messages, search, export, and rate limiting are implemented. Character-specific LLM responses are performed via the core Chat API (`POST /api/v1/chat/completions`) using conversation context from character chats.
 
 ## Table of Contents
 
@@ -22,13 +22,11 @@ The Character Chat API provides comprehensive endpoints for managing character-b
 
 ## Authentication
 
-All endpoints require authentication via API key in the header:
+Supported headers:
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
 
-```http
-X-API-KEY: your-api-key
-```
-
-**Note:** JWT Bearer token support exists but API keys are the primary authentication method.
+If authentication is required and missing/invalid, endpoints return `401`.
 
 ---
 
@@ -210,9 +208,8 @@ Get all chat sessions for the current user.
 
 **Query Parameters:**
 - `character_id` (int): Filter by character
-- `limit` (int, default: 20): Number of chats to return
+- `limit` (int, default: 50): Number of chats to return
 - `offset` (int, default: 0): Number of chats to skip
-- `active_only` (bool, default: true): Only show active chats
 
 **Response:** `200 OK`
 ```json
@@ -247,7 +244,7 @@ Update chat session metadata.
 
 Soft delete a chat session.
 
-**Endpoint:** `DELETE /api/v1/chats/{chat_id}?expected_version={version}`
+**Endpoint:** `DELETE /api/v1/chats/{chat_id}?expected_version={version}` (version optional)
 
 **Response:** `204 No Content`
 
@@ -350,6 +347,23 @@ With `format_for_completions=true&include_character_context=true`:
   ],
   "total": 2,
   "usage_instructions": "Use these messages with POST /api/v1/chat/completions"
+}
+```
+
+### Get Chat Context (compact)
+
+Return compact context for a chat, including character name and messages formatted for completions when available.
+
+**Endpoint:** `GET /api/v1/chats/{chat_id}/context`
+
+**Response:** `200 OK`
+```json
+{
+  "character_name": "Assistant",
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"}
+  ]
 }
 ```
 
@@ -467,6 +481,8 @@ curl -X POST "http://localhost:8000/api/v1/chats/{chat_id}/messages" \
 ```
 
 See the main [Chat API documentation](/api/v1/docs#/chat) for complete details on the chat completions endpoint.
+
+Also see: `Docs/API-related/Chat_API_Documentation.md` for a focused Chat API reference.
 
 ---
 
@@ -891,6 +907,13 @@ if "response" in response:
 else:
     print("Error getting completion:", response)
 ```
+
+---
+
+## Related Documentation
+
+- Core Chat API: `Docs/API-related/Chat_API_Documentation.md`
+- Chatbook features (dictionaries, documents, import/export): `Docs/API-related/Chatbook_Features_API_Documentation.md`
 
 ---
 

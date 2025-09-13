@@ -30,7 +30,8 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     NoteCreate, NoteUpdate, NoteResponse,
     KeywordCreate, KeywordResponse,
     NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse,
-    DetailResponse
+    DetailResponse,
+    NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -222,8 +223,11 @@ async def create_note(
                 f"Failed to retrieve note '{note_id}' immediately after creation for user (DB client_id: {db.client_id}).")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 detail="Note created but could not be retrieved.")
+        # Attach keywords inline
+        created_note_data = _attach_keywords_inline(db, created_note_data)
+
         logger.info(f"Note '{note_id}' created successfully for user (DB client_id: {db.client_id}).")
-        return created_note_data  # Pydantic will convert dict to NoteResponse
+        return created_note_data  # Pydantic will convert dict to NoteResponse (including keywords)
     except Exception as e:
         handle_db_errors(e, "note")
 
@@ -252,6 +256,12 @@ async def get_note(
 
     # If note_data is found, it's a dict from the DB. Pydantic will validate it on return.
     # No need for an explicit try-except for Pydantic here, FastAPI handles it.
+    # Attach keywords inline
+    try:
+        kw_rows = db.get_keywords_for_note(note_id=note_id)
+        note_data['keywords'] = kw_rows
+    except Exception as kw_fetch_err:
+        logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
     return note_data
 
 
@@ -264,11 +274,22 @@ async def get_note(
 async def list_notes(
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000, description="Number of notes to return"),
-        offset: int = Query(0, ge=0, description="Offset for pagination")
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note")
 ):
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) listing notes: limit={limit}, offset={offset}")
         notes_data = db.list_notes(limit=limit, offset=offset)
+        # Attach keywords inline for each note (optional for performance)
+        if include_keywords:
+            try:
+                for nd in notes_data:
+                    try:
+                        nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
+                    except Exception as kw_err:
+                        logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
+            except Exception as outer_err:
+                logger.warning(f"Attaching keywords for notes list failed: {outer_err}")
         return notes_data
     except Exception as e:
         handle_db_errors(e, "notes list")
@@ -308,6 +329,7 @@ async def update_note(
         if not updated_note_data:
             logger.error(f"Note '{note_id}' not found after successful update for user (DB client_id: {db.client_id}).")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
+        updated_note_data = _attach_keywords_inline(db, updated_note_data)
         logger.info(
             f"Note '{note_id}' updated successfully for user (DB client_id: {db.client_id}) to version {updated_note_data['version']}.")
         return updated_note_data
@@ -355,17 +377,82 @@ async def delete_note(
 async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
         query: str = Query(..., min_length=1, description="Search term for notes"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        limit: int = Query(10, ge=1, le=100, description="Number of results to return")
+        limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note")
 ):
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}")
         notes_data = db.search_notes(search_term=query, limit=limit)
+        # Attach keywords inline (optional)
+        if include_keywords:
+            try:
+                for nd in notes_data:
+                    try:
+                        nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
+                    except Exception as kw_err:
+                        logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
+            except Exception as outer_err:
+                logger.warning(f"Attaching keywords for notes search failed: {outer_err}")
         return notes_data
     except Exception as e:
         handle_db_errors(e, "notes search")
 
 
 # --- Keyword Endpoints (related to Notes) ---
+@router.post(
+    "/bulk",
+    response_model=NoteBulkCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Bulk create notes with optional keywords",
+    tags=["Notes"]
+)
+async def bulk_create_notes(
+        request: NoteBulkCreateRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    results: List[NoteBulkCreateItemResult] = []
+    created = 0
+    failed = 0
+
+    for item in request.notes:
+        try:
+            note_id = db.add_note(
+                title=item.title,
+                content=item.content,
+                note_id=item.id
+            )
+            if not note_id:
+                raise CharactersRAGDBError("Failed to create note (no ID returned)")
+
+            # Attach keywords if provided
+            try:
+                kw_list = item.normalized_keywords if hasattr(item, 'normalized_keywords') else None
+                if kw_list:
+                    for kw in kw_list:
+                        try:
+                            kw_row = db.get_keyword_by_text(kw)
+                            if not kw_row:
+                                kw_id = db.add_keyword(kw)
+                                kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                            if kw_row and kw_row.get('id') is not None:
+                                db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
+                        except Exception as kw_err:
+                            logger.warning(f"[Bulk] Keyword attach failed for '{kw}' on note {note_id}: {kw_err}")
+            except Exception as kw_outer_err:
+                logger.warning(f"[Bulk] Keyword processing issue for note {note_id}: {kw_outer_err}")
+
+            nd = db.get_note_by_id(note_id=note_id)
+            nd = _attach_keywords_inline(db, nd) if nd else None
+            results.append(NoteBulkCreateItemResult(success=True, note=nd))
+            created += 1
+        except Exception as e:
+            logger.warning(f"Bulk note create failed for title='{getattr(item, 'title', '')}': {e}")
+            results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
+            failed += 1
+
+    return NoteBulkCreateResponse(results=results, created_count=created, failed_count=failed)
+
+
 @router.post(
     "/keywords/",
     response_model=KeywordResponse,
@@ -617,3 +704,11 @@ async def get_notes_for_keyword_endpoint(
 #
 # --- End of Notes and Keywords Endpoints ---
 ########################################################################################################################
+# Utility to attach keywords to a note dict
+def _attach_keywords_inline(db: CharactersRAGDB, note_dict: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if note_dict and note_dict.get('id'):
+            note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
+    except Exception as e:
+        logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
+    return note_dict
