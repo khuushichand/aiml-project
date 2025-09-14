@@ -291,6 +291,32 @@ if request_data.options and request_data.options.template_name:
     # ... process with template
 ```
 
+### Using Proposition Chunking
+
+The chunking endpoint also supports propositional chunking (`method='propositions'`) with multiple engines and LLM prompt profiles.
+
+Example request body for `/api/v1/chunking/chunk`:
+
+```json
+{
+  "text_content": "Alice founded Acme Corp in 2020 and Bob joined in 2021.",
+  "options": {
+    "method": "propositions",
+    "max_size": 3,
+    "overlap": 1,
+    "proposition_engine": "auto",           
+    "proposition_aggressiveness": 2,         
+    "proposition_min_proposition_length": 15,
+    "proposition_prompt_profile": "claimify" 
+  }
+}
+```
+
+Notes:
+- `proposition_engine`: `heuristic` (default), `spacy`, `llm`, or `auto` (tries `spacy` then falls back).
+- `proposition_prompt_profile`: `generic`, `claimify`, `gemma_aps` (LLM engine only).
+- System-wide defaults can be set in `tldw_Server_API/Config_Files/config.txt` under `[Chunking]`.
+
 ## Testing
 
 ### Test Structure

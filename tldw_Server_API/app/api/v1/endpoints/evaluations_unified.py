@@ -27,6 +27,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     # tldw-specific schemas
     GEvalRequest, GEvalResponse,
     RAGEvaluationRequest, RAGEvaluationResponse,
+    PropositionEvaluationRequest, PropositionEvaluationResponse,
     ResponseQualityRequest, ResponseQualityResponse,
     BatchEvaluationRequest, BatchEvaluationResponse,
     CustomMetricRequest, CustomMetricResponse,
@@ -964,7 +965,7 @@ async def evaluate_response_quality(
             api_name=request.api_name,
             user_id=user_id
         )
-        
+
         # Convert metrics to proper EvaluationMetric structure
         metrics = {}
         for metric_name, metric_data in result["results"].get("metrics", {}).items():
@@ -983,7 +984,7 @@ async def evaluate_response_quality(
                     score=float(metric_data) if isinstance(metric_data, (int, float)) else 0.0,
                     explanation=f"{metric_name} score"
                 )
-        
+
         # Convert format_compliance to proper structure
         format_compliance = None
         if "format_compliance" in result["results"]:
@@ -994,7 +995,7 @@ async def evaluate_response_quality(
                 format_compliance = fc_value
             else:
                 format_compliance = None
-        
+
         return ResponseQualityResponse(
             metrics=metrics,
             overall_quality=result["results"].get("overall_quality", 0.0),
@@ -1002,12 +1003,55 @@ async def evaluate_response_quality(
             issues=result["results"].get("issues", []),
             improvements=result["results"].get("improvements", [])
         )
-        
+
     except Exception as e:
         logger.error(f"Response quality evaluation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Quality evaluation failed: {sanitize_error_message(e, 'quality evaluation')}"
+        )
+
+
+@router.post("/propositions", response_model=PropositionEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
+async def evaluate_propositions_endpoint(
+    request: PropositionEvaluationRequest,
+    user_id: str = Depends(verify_api_key)
+):
+    """
+    Evaluate proposition extraction quality.
+    Computes precision/recall/F1 with semantic or Jaccard matching and density metrics.
+    """
+    try:
+        result = await get_evaluation_service().evaluate_propositions(
+            extracted=request.extracted,
+            reference=request.reference,
+            method=request.method or 'semantic',
+            threshold=request.threshold or 0.7,
+            user_id=user_id
+        )
+
+        metrics = result["results"].get("metrics", {})
+        counts = result["results"].get("counts", {})
+
+        return PropositionEvaluationResponse(
+            precision=metrics.get("precision", 0.0),
+            recall=metrics.get("recall", 0.0),
+            f1=metrics.get("f1", 0.0),
+            matched=counts.get("matched", 0),
+            total_extracted=counts.get("total_extracted", 0),
+            total_reference=counts.get("total_reference", 0),
+            claim_density_per_100_tokens=metrics.get("claim_density_per_100_tokens", 0.0),
+            avg_prop_len_tokens=metrics.get("avg_prop_len_tokens", 0.0),
+            dedup_rate=metrics.get("dedup_rate", 0.0),
+            details=result["results"].get("details", {}),
+            metadata={"evaluation_id": result["evaluation_id"], "evaluation_time": result.get("evaluation_time")}
+        )
+    
+    except Exception as e:
+        logger.error(f"Proposition evaluation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Proposition evaluation failed: {sanitize_error_message(e, 'proposition evaluation')}"
         )
 
 

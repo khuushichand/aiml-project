@@ -97,6 +97,7 @@ class EvaluationType(str, Enum):
     GEVAL = "geval"
     RAG = "rag"
     RESPONSE_QUALITY = "response_quality"
+    PROPOSITION_EXTRACTION = "proposition_extraction"
     CUSTOM = "custom"
 
 
@@ -387,10 +388,34 @@ class RAGEvaluationRequest(BaseModel):
             return None
         return sanitize_html_text(v)
 
-    @field_validator('retrieved_contexts')
+
+# ============= Proposition Extraction Schemas =============
+
+class PropositionEvaluationRequest(BaseModel):
+    """Evaluate proposition extraction quality"""
+    extracted: List[str] = Field(..., min_items=1, description="Extracted propositions/claims")
+    reference: List[str] = Field(..., min_items=1, description="Reference propositions/claims")
+    method: Optional[Literal['semantic', 'jaccard']] = Field('semantic', description="Matching method")
+    threshold: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Match threshold")
+
+    @field_validator('extracted', 'reference')
     @classmethod
-    def sanitize_contexts(cls, v: List[str]) -> List[str]:
-        return [sanitize_html_text(ctx) for ctx in v if ctx]
+    def strip_items(cls, v: List[str]) -> List[str]:
+        return [sanitize_html_text(x) or '' for x in v]
+
+
+class PropositionEvaluationResponse(BaseModel):
+    precision: float = Field(..., ge=0.0, le=1.0)
+    recall: float = Field(..., ge=0.0, le=1.0)
+    f1: float = Field(..., ge=0.0, le=1.0)
+    matched: int
+    total_extracted: int
+    total_reference: int
+    claim_density_per_100_tokens: float
+    avg_prop_len_tokens: float
+    dedup_rate: float
+    details: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class RAGEvaluationResponse(BaseModel):

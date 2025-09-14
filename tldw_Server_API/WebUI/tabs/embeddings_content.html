@@ -94,4 +94,89 @@
         <h3>Response:</h3>
         <pre id="embeddingsMetrics_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="embeddingsModelsList">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/embeddings/models - List Embedding Models</span>
+        </h2>
+        <p>List available/known embedding models and which are allowed by policy.</p>
+        
+        <button class="api-button" onclick="makeRequest('embeddingsModelsList', 'GET', '/api/v1/embeddings/models', 'none')">
+            List Models
+        </button>
+        
+        <h3>Response:</h3>
+        <pre id="embeddingsModelsList_response">---</pre>
+        <div class="columns" style="margin-top:10px;">
+            <div class="column">
+                <h4>Allowed Providers</h4>
+                <pre id="embeddingsModelsList_allowedProviders">---</pre>
+            </div>
+            <div class="column">
+                <h4>Allowed Models</h4>
+                <pre id="embeddingsModelsList_allowedModels">---</pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="endpoint-section" id="embeddingsModelsAdmin">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/models/warmup - Warmup Model (Admin)</span>
+        </h2>
+        <p>Preload a model into the embeddings service (admin only).</p>
+        
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsModelsAdmin_model">Model ID <span class="required">*</span>:</label>
+                    <input type="text" id="embeddingsModelsAdmin_model" placeholder="sentence-transformers/all-MiniLM-L6-v2">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsModelsAdmin_provider">Provider (optional):</label>
+                    <input type="text" id="embeddingsModelsAdmin_provider" placeholder="huggingface">
+                </div>
+            </div>
+        </div>
+        
+        <button class="api-button" onclick="embeddingsAdminSubmit('embeddingsModelsAdmin','/api/v1/embeddings/models/warmup')">Warmup Model</button>
+        
+        <textarea id="embeddingsModelsAdmin_payload" class="code-input" style="display:none"></textarea>
+        
+        <h3>Response:</h3>
+        <pre id="embeddingsModelsAdmin_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="embeddingsModelsDownload">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/models/download - Download Model (Admin)</span>
+        </h2>
+        <p>Download/prepare a model (admin only). The API infers the provider if omitted.</p>
+        
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsModelsDownload_model">Model ID <span class="required">*</span>:</label>
+                    <input type="text" id="embeddingsModelsDownload_model" placeholder="sentence-transformers/all-MiniLM-L6-v2">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsModelsDownload_provider">Provider (optional):</label>
+                    <input type="text" id="embeddingsModelsDownload_provider" placeholder="huggingface">
+                </div>
+            </div>
+        </div>
+        
+        <button class="api-button" onclick="embeddingsAdminSubmit('embeddingsModelsDownload','/api/v1/embeddings/models/download')">Download Model</button>
+        
+        <textarea id="embeddingsModelsDownload_payload" class="code-input" style="display:none"></textarea>
+        
+        <h3>Response:</h3>
+        <pre id="embeddingsModelsDownload_response">---</pre>
+    </div>
 </div>

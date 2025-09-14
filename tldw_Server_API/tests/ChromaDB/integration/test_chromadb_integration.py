@@ -303,36 +303,39 @@ class TestChromaDBManagerIntegration:
 
 @pytest.mark.unit
 class TestEmbeddingGeneration:
-    """Test real embedding generation using configured HF batch API."""
+    """Embedding generation tests that prefer HF when online, else fallback."""
 
-    @pytest.mark.requires_model
-    def test_huggingface_embeddings_via_batch(self):
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-            get_embedding_config, create_embeddings_batch
-        )
+    def test_embeddings_via_fixture(self, hf_or_deterministic_embeddings):
+        embed, used_real_model, dim = hf_or_deterministic_embeddings
         texts = ["Hello world", "Testing embeddings", "ChromaDB integration"]
-        cfg = get_embedding_config()
-        model_id = "sentence-transformers/all-MiniLM-L6-v2"
-        embeddings = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)
+        embeddings = embed(texts)
         assert len(embeddings) == 3
-        assert len(embeddings[0]) in (256, 384, 768)  # common dims; all-MiniLM-L6-v2 is 384
+        if used_real_model:
+            # Strict assertions when HF model is used
+            assert dim == 384
+            assert len(embeddings[0]) == 384
+            # Different texts should yield different vectors
+            import numpy as _np
+            assert not _np.allclose(embeddings[0], embeddings[1])
+        else:
+            # Looser checks offline / deterministic fallback
+            assert len(embeddings[0]) > 0
         # Valid non-zero vectors
         for emb in embeddings:
             norm = np.linalg.norm(emb)
             assert norm > 0.1
 
-    @pytest.mark.requires_model
-    def test_huggingface_embeddings_are_deterministic(self):
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-            get_embedding_config, create_embeddings_batch
-        )
-        cfg = get_embedding_config()
-        model_id = "sentence-transformers/all-MiniLM-L6-v2"
+    def test_embeddings_are_deterministic(self, hf_or_deterministic_embeddings):
+        embed, used_real_model, dim = hf_or_deterministic_embeddings
         texts = ["Hello world"]
-        emb1 = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)[0]
-        emb2 = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)[0]
-        # Deterministic for the same model and text within small tolerance
-        np.testing.assert_allclose(emb1, emb2, rtol=1e-4, atol=1e-5)
+        emb1 = embed(texts)[0]
+        emb2 = embed(texts)[0]
+        # Deterministic for the same text and backend
+        if used_real_model:
+            np.testing.assert_allclose(emb1, emb2, rtol=1e-4, atol=1e-5)
+            assert dim == 384 and len(emb1) == 384
+        else:
+            np.testing.assert_allclose(emb1, emb2, rtol=1e-9, atol=1e-9)
 
 
 @pytest.mark.integration

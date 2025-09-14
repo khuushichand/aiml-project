@@ -11,6 +11,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request
 from loguru import logger
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import types
 
 # Dependencies
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -28,6 +32,9 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
     advanced_search,
     UnifiedSearchResult
 )
+from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
+from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MultiDatabaseRetriever, RetrievalConfig
+from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
@@ -79,7 +86,9 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         cache_hit=result.cache_hit,
         errors=result.errors,
         security_report=result.security_report,
-        total_time=result.total_time
+        total_time=result.total_time,
+        claims=getattr(result, 'claims', None),
+        factuality=getattr(result, 'factuality', None),
     )
 
 
@@ -129,6 +138,10 @@ async def get_capabilities(request: Request):
         "reranking": {
             "supported": True,
             "strategies": ["flashrank", "cross_encoder", "hybrid"],
+            "models": [
+                "flashrank", 
+                "cross-encoder/ms-marco-MiniLM-L-12-v2"
+            ]
         },
         "table_processing": {
             "supported": True,
@@ -156,6 +169,25 @@ async def get_capabilities(request: Request):
         }
     }
 
+    # Search modes and configuration ranges
+    search = {
+        "modes": ["hybrid", "semantic", "fulltext"],
+        "hybrid": {
+            "alpha_default": RAG_SERVICE_CONFIG.get("retriever", {}).get("hybrid_alpha", 0.5),
+            "alpha_range": [0.0, 1.0],
+            "normalize_scores": RAG_SERVICE_CONFIG.get("retriever", {}).get("hybrid_alpha", 0.5) is not None
+        },
+        "vector": {
+            "top_k_default": RAG_SERVICE_CONFIG.get("retriever", {}).get("vector_top_k", 10),
+            "top_k_max": 100
+        },
+        "fts": {
+            "top_k_default": RAG_SERVICE_CONFIG.get("retriever", {}).get("fts_top_k", 10),
+            "query_expansion": True,
+            "fuzzy_matching": True
+        }
+    }
+
     defaults = {
         "retriever": RAG_SERVICE_CONFIG.get("retriever", {}),
         "processor": RAG_SERVICE_CONFIG.get("processor", {}),
@@ -179,6 +211,7 @@ async def get_capabilities(request: Request):
         "pipeline": "unified",
         "version": "1.0.0",
         "features": features,
+        "search": search,
         "defaults": defaults,
         "limits": limits,
         "auth": auth
@@ -308,6 +341,15 @@ async def unified_search_endpoint(
             generation_model=request.generation_model,
             generation_prompt=request.generation_prompt,
             max_generation_tokens=request.max_generation_tokens,
+
+            # Claims & factuality
+            enable_claims=request.enable_claims,
+            claim_extractor=request.claim_extractor,
+            claim_verifier=request.claim_verifier,
+            claims_top_k=request.claims_top_k,
+            claims_conf_threshold=request.claims_conf_threshold,
+            claims_max=request.claims_max,
+            nli_model=request.nli_model,
             
             # Feedback
             collect_feedback=request.collect_feedback,
@@ -495,6 +537,94 @@ async def simple_search_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}"
         )
+
+
+@router.post(
+    "/search/stream",
+    summary="Unified RAG Streaming Search",
+    description="Stream generated answer chunks with optional incremental claim overlay events (NDJSON)",
+    dependencies=[Depends(check_rate_limit)]
+)
+async def unified_search_stream_endpoint(
+    request_raw: Request,
+    request: UnifiedRAGRequest,
+    current_user: User = Depends(get_request_user),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    if not request.enable_generation:
+        raise HTTPException(status_code=400, detail="enable_generation must be true for streaming.")
+
+    async def event_stream():
+        try:
+            # Prepare retrieval like the unified pipeline (simplified)
+            db_paths = {}
+            if media_db:
+                db_paths["media_db"] = media_db.db_path
+            if chacha_db:
+                db_paths["notes_db"] = chacha_db.db_path
+                db_paths["character_cards_db"] = chacha_db.db_path
+
+            docs = []
+            try:
+                if db_paths:
+                    try:
+                        retriever = MultiDatabaseRetriever(db_paths, user_id=current_user.username if current_user else "0")
+                    except TypeError:
+                        retriever = MultiDatabaseRetriever(db_paths)
+                    config = RetrievalConfig(
+                        max_results=request.top_k,
+                        min_score=request.min_score,
+                        use_fts=(request.search_mode in ["fts", "hybrid"]),
+                        use_vector=(request.search_mode in ["vector", "hybrid"]),
+                        include_metadata=True,
+                    )
+                    # Determine sources
+                    src_map = {"media_db": DataSource.MEDIA_DB, "notes": DataSource.NOTES, "characters": DataSource.CHARACTER_CARDS, "chats": DataSource.CHARACTER_CARDS}
+                    srcs = [src_map.get(s, DataSource.MEDIA_DB) for s in (request.sources or ["media_db"]) ]
+                    # Hybrid for media
+                    med = retriever.retrievers.get(DataSource.MEDIA_DB)
+                    if med and request.search_mode == "hybrid" and hasattr(med, 'retrieve_hybrid'):
+                        media_docs = await med.retrieve_hybrid(query=request.query, alpha=request.hybrid_alpha)
+                    else:
+                        media_docs = await retriever.retrieve(query=request.query, sources=srcs, config=config)
+                    docs = media_docs
+            except Exception:
+                docs = []
+
+            # Minimal context for generation
+            context = types.SimpleNamespace()
+            context.documents = docs
+            context.query = request.query
+            context.config = {"generation": {"provider": "openai", "streaming": True}}
+            context.metadata = {}
+
+            # Initialize streaming generator with claims overlay enabled per request
+            await generate_streaming_response(
+                context,
+                enable_claims=request.enable_claims,
+                claims_top_k=request.claims_top_k,
+                claims_max=request.claims_max,
+            )
+
+            last_overlay = None
+            async for chunk in context.stream_generator:
+                # Emit text chunks as NDJSON
+                yield json.dumps({"type": "delta", "text": chunk}) + "\n"
+                overlay = context.metadata.get("claims_overlay")
+                if overlay and overlay != last_overlay:
+                    yield json.dumps({"type": "claims_overlay", **overlay}) + "\n"
+                    last_overlay = overlay
+
+            # Final payload
+            final_overlay = context.metadata.get("claims_overlay")
+            if final_overlay:
+                yield json.dumps({"type": "final_claims", **final_overlay}) + "\n"
+
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @router.get(

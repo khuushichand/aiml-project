@@ -16,6 +16,7 @@ class ChunkingMethod(Enum):
     WORDS = "words"
     SENTENCES = "sentences"
     PARAGRAPHS = "paragraphs"
+    PROPOSITIONS = "propositions"
     TOKENS = "tokens"
     SEMANTIC = "semantic"
     JSON = "json"

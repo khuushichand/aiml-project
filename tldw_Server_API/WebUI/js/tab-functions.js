@@ -547,6 +547,10 @@ function submitWebScrapingIngestFriendly(previewOnly = false) {
 
         const performChunking = document.getElementById('friendlyIngest_perform_chunking').checked;
         const chunkMethod = document.getElementById('friendlyIngest_chunk_method').value || null;
+        const propEngine = document.getElementById('friendlyIngest_prop_engine')?.value || null;
+        const propProfile = document.getElementById('friendlyIngest_prop_profile')?.value || null;
+        const propAggr = parseInt(document.getElementById('friendlyIngest_prop_aggr')?.value || '1', 10);
+        const propMinLen = parseInt(document.getElementById('friendlyIngest_prop_minlen')?.value || '15', 10);
         const chunkSize = parseInt(document.getElementById('friendlyIngest_chunk_size').value || '500', 10);
         const chunkOverlap = parseInt(document.getElementById('friendlyIngest_chunk_overlap').value || '200', 10);
         const useAdaptiveChunking = document.getElementById('friendlyIngest_use_adaptive_chunking').checked;
@@ -622,6 +626,13 @@ function submitWebScrapingIngestFriendly(previewOnly = false) {
             chunk_language: chunkLanguage || undefined,
             chunk_size: isNaN(chunkSize) ? undefined : chunkSize,
             chunk_overlap: isNaN(chunkOverlap) ? undefined : chunkOverlap,
+            // Proposition-specific (only when method='propositions')
+            ...(chunkMethod === 'propositions' ? {
+                proposition_engine: propEngine || undefined,
+                proposition_prompt_profile: propProfile || undefined,
+                proposition_aggressiveness: isNaN(propAggr) ? undefined : propAggr,
+                proposition_min_proposition_length: isNaN(propMinLen) ? undefined : propMinLen
+            } : {}),
 
             use_cookies: useCookies,
             cookies: useCookies && cookiesText ? cookiesText : undefined,
@@ -630,6 +641,23 @@ function submitWebScrapingIngestFriendly(previewOnly = false) {
             overwrite_existing: overwriteExisting,
             custom_chapter_pattern: customChapterPattern || undefined
         };
+
+        // Toggle proposition controls based on method
+        const methodSelect = document.getElementById('friendlyIngest_chunk_method');
+        const togglePropControls = () => {
+            const isProps = (methodSelect.value === 'propositions');
+            document.getElementById('friendlyIngest_prop_engine_group').style.display = isProps ? '' : 'none';
+            document.getElementById('friendlyIngest_prop_profile_group').style.display = isProps ? '' : 'none';
+            document.getElementById('friendlyIngest_prop_aggr_group').style.display = isProps ? '' : 'none';
+            document.getElementById('friendlyIngest_prop_minlen_group').style.display = isProps ? '' : 'none';
+        };
+        // Ensure controls are in correct state
+        try { togglePropControls(); } catch(e) {}
+        // Register change listener once
+        if (!methodSelect._propToggleBound) {
+            methodSelect.addEventListener('change', togglePropControls);
+            methodSelect._propToggleBound = true;
+        }
 
         // Set hidden payload and send request
         const hidden = document.getElementById('friendlyIngest_payload');

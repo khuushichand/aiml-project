@@ -568,6 +568,10 @@ const TTS = {
                 body: formData
             });
             
+            if (response.status === 501) {
+                this.showStatus('Custom voice upload is not available for this provider or build.', 'warning');
+                return;
+            }
             if (!response.ok) {
                 throw new Error(`Upload failed: ${response.statusText}`);
             }
@@ -611,6 +615,12 @@ const TTS = {
                 headers: headers
             });
             
+            if (response.status === 501) {
+                this.customVoices = [];
+                this.displayVoiceList();
+                this.showStatus('Custom voice management is not available for this provider or build.', 'warning');
+                return;
+            }
             if (!response.ok) {
                 throw new Error('Failed to fetch voices');
             }
@@ -686,6 +696,10 @@ const TTS = {
                 })
             });
             
+            if (response.status === 501) {
+                this.showStatus('Voice preview is not available for this provider or build.', 'warning');
+                return;
+            }
             if (!response.ok) {
                 throw new Error('Preview failed');
             }
@@ -720,6 +734,10 @@ const TTS = {
                 headers: headers
             });
             
+            if (response.status === 501) {
+                this.showStatus('Deleting custom voices is not available for this provider or build.', 'warning');
+                return;
+            }
             if (!response.ok) {
                 throw new Error('Delete failed');
             }

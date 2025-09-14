@@ -94,6 +94,7 @@ from tldw_Server_API.app.core.Utils.Utils import (
     smart_download
 )
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
+from tldw_Server_API.app.core.config import load_and_log_configs
 #
 # Web Scraping
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
@@ -1642,6 +1643,27 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
         'contextual_llm_model': form_data.contextual_llm_model,
         'context_window_size': form_data.context_window_size
     }
+    # Inject proposition defaults from config when applicable
+    if final_chunk_method == 'propositions':
+        try:
+            cfg = load_and_log_configs()
+            c = cfg.get('chunking_config', {}) if isinstance(cfg, dict) else {}
+            if 'proposition_engine' in c:
+                chunk_options['proposition_engine'] = c.get('proposition_engine')
+            if 'proposition_prompt_profile' in c:
+                chunk_options['proposition_prompt_profile'] = c.get('proposition_prompt_profile')
+            if 'proposition_aggressiveness' in c:
+                try:
+                    chunk_options['proposition_aggressiveness'] = int(c.get('proposition_aggressiveness'))
+                except Exception:
+                    pass
+            if 'proposition_min_proposition_length' in c:
+                try:
+                    chunk_options['proposition_min_proposition_length'] = int(c.get('proposition_min_proposition_length'))
+                except Exception:
+                    pass
+        except Exception as _cfg_err:
+            logger.debug(f"Proposition config defaults not loaded: {_cfg_err}")
     logging.info(f"Chunking enabled with options: {chunk_options}")
     return chunk_options
 
@@ -3568,7 +3590,7 @@ def get_process_ebooks_form(
 
     # --- Fields from ChunkingOptions ---
     perform_chunking: bool = Form(True, description="Enable chunking (default: by chapter)"),
-    chunk_method: Optional[ChunkMethod] = Form('ebook_chapters', description="Chunking method ('semantic', 'tokens', 'paragraphs', 'sentences','words', 'ebook_chapters', 'json')"),
+    chunk_method: Optional[ChunkMethod] = Form('ebook_chapters', description="Chunking method ('semantic', 'tokens', 'paragraphs', 'sentences','words', 'ebook_chapters', 'json', 'propositions')"),
     chunk_language: Optional[str] = Form(None, description="Chunking language override (rarely needed for chapter)"),
     chunk_size: int = Form(1500, description="Target chunk size (used by non-chapter methods)"),
     chunk_overlap: int = Form(200, description="Chunk overlap size (used by non-chapter methods)"),

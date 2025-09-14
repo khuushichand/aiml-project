@@ -164,6 +164,9 @@ class RAGConfig:
     log_level: str = "INFO"
     log_performance_metrics: bool = True
     
+    # Claims/NLI defaults
+    nli_model: Optional[str] = None
+    
     def __post_init__(self):
         """Apply environment variable overrides after initialization."""
         self._apply_env_overrides()
@@ -238,14 +241,18 @@ class RAGConfig:
             "RAG_ENABLE_CACHE": ("cache", "enable_cache", lambda x: x.lower() == "true"),
             "RAG_DEFAULT_MODEL": ("generator", "default_model", str),
             "RAG_CHROMA_PERSIST_DIR": ("chroma", "persist_directory", str),
+            "RAG_NLI_MODEL": (None, "nli_model", str),
         }
         
         for env_var, (section, attr, converter) in env_mappings.items():
             value = os.environ.get(env_var)
             if value is not None:
                 try:
-                    section_obj = getattr(self, section)
-                    setattr(section_obj, attr, converter(value))
+                    if section:
+                        section_obj = getattr(self, section)
+                        setattr(section_obj, attr, converter(value))
+                    else:
+                        setattr(self, attr, converter(value))
                     logger.debug(f"Override from env: {env_var} -> {section}.{attr} = {value}")
                 except Exception as e:
                     logger.warning(f"Failed to apply env override {env_var}: {e}")

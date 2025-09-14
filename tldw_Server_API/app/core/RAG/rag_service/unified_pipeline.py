@@ -115,6 +115,12 @@ try:
 except ImportError:
     PerformanceMonitor = None
 
+# Claims extraction/verification
+try:
+    from .claims import ClaimsEngine
+except ImportError:
+    ClaimsEngine = None
+
 
 @dataclass
 class UnifiedSearchResult:
@@ -218,6 +224,15 @@ async def unified_rag_pipeline(
     highlight_query_terms: bool = False,
     track_cost: bool = False,
     debug_mode: bool = False,
+
+    # ========== CLAIMS & FACTUALITY ==========
+    enable_claims: bool = False,
+    claim_extractor: Literal["aps", "claimify", "auto"] = "auto",
+    claim_verifier: Literal["nli", "llm", "hybrid"] = "hybrid",
+    claims_top_k: int = 5,
+    claims_conf_threshold: float = 0.7,
+    claims_max: int = 25,
+    nli_model: Optional[str] = None,
     
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
@@ -285,6 +300,8 @@ async def unified_rag_pipeline(
         query=query,
         metadata={"original_query": query}
     )
+    claims_payload = None
+    factuality_payload = None
     # Merge inbound metadata if provided (API pattern)
     try:
         inbound_meta = kwargs.get("metadata")
@@ -713,7 +730,102 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Answer generation failed: {str(e)}")
                 logger.error(f"Generation error: {e}")
-        
+
+        # ========== CLAIMS & FACTUALITY ==========
+        if enable_claims and result.generated_answer:
+            try:
+                # Import shared analyze function for LLM calls
+                import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+
+                def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
+                             api_key: Optional[str] = None, system_message: Optional[str] = None,
+                             temp: Optional[float] = None, **kwargs):
+                    return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
+
+                if ClaimsEngine:
+                    engine = ClaimsEngine(_analyze)
+                    # Default NLI model from environment if not provided
+                    if not nli_model:
+                        import os
+                        nli_model = os.environ.get("RAG_NLI_MODEL") or os.environ.get("RAG_NLI_MODEL_PATH")
+                    # Build a per-claim retrieval that uses MultiDatabaseRetriever and hybrid search when available
+                    async def _retrieve_for_claim(c_text: str, top_k: int = 5):
+                        try:
+                            if MultiDatabaseRetriever and RetrievalConfig:
+                                db_paths = {}
+                                if media_db_path:
+                                    db_paths["media_db"] = media_db_path
+                                if notes_db_path:
+                                    db_paths["notes_db"] = notes_db_path
+                                if character_db_path:
+                                    db_paths["character_cards_db"] = character_db_path
+                                # Initialize multi retriever
+                                try:
+                                    mdr = MultiDatabaseRetriever(db_paths, user_id=user_id or "0", media_db=media_db)
+                                except TypeError:
+                                    mdr = MultiDatabaseRetriever(db_paths, user_id=user_id or "0")
+
+                                # Determine sources same as earlier
+                                claim_sources = sources or ["media_db"]
+                                source_map = {
+                                    "media_db": DataSource.MEDIA_DB,
+                                    "media": DataSource.MEDIA_DB,
+                                    "notes": DataSource.NOTES,
+                                    "characters": DataSource.CHARACTER_CARDS,
+                                    "chats": DataSource.CHARACTER_CARDS,
+                                }
+                                ds = [source_map.get(s, DataSource.MEDIA_DB) for s in claim_sources]
+
+                                # For media_db, attempt hybrid; for others, simple retrieve
+                                docs: List[Any] = []
+                                # Media hybrid
+                                med = mdr.retrievers.get(DataSource.MEDIA_DB)
+                                if med is not None:
+                                    rh = getattr(med, 'retrieve_hybrid', None)
+                                    if rh is not None and asyncio.iscoroutinefunction(rh) and search_mode == "hybrid":
+                                        media_docs = await rh(query=c_text, alpha=hybrid_alpha)
+                                    else:
+                                        media_docs = await med.retrieve(query=c_text)
+                                    docs.extend(media_docs)
+                                # Other sources
+                                for src in ds:
+                                    if src == DataSource.MEDIA_DB:
+                                        continue
+                                    retr = mdr.retrievers.get(src)
+                                    if retr is not None:
+                                        try:
+                                            more = await retr.retrieve(query=c_text)
+                                            docs.extend(more)
+                                        except Exception:
+                                            pass
+                                # Sort and cap
+                                docs = sorted(docs, key=lambda d: getattr(d, 'score', 0.0), reverse=True)
+                                return docs[:top_k]
+                        except Exception as e:
+                            logger.debug(f"Per-claim retrieval fallback to base docs due to error: {e}")
+                        return result.documents[:top_k] if result.documents else []
+
+                    claims_out = await engine.run(
+                        answer=result.generated_answer,
+                        query=query,
+                        documents=result.documents or [],
+                        claim_extractor=claim_extractor,
+                        claim_verifier=claim_verifier,
+                        claims_top_k=claims_top_k,
+                        claims_conf_threshold=claims_conf_threshold,
+                        claims_max=claims_max,
+                        retrieve_fn=_retrieve_for_claim,
+                        nli_model=nli_model,
+                    )
+                    claims_payload = claims_out.get("claims")
+                    factuality_payload = claims_out.get("summary")
+                    # Also store in metadata for debugging/analytics
+                    result.metadata["claims"] = claims_payload
+                    result.metadata["factuality"] = factuality_payload
+            except Exception as e:
+                result.errors.append(f"Claims analysis failed: {str(e)}")
+                logger.error(f"Claims analysis error: {e}")
+
         # ========== USER FEEDBACK ==========
         if collect_feedback:
             feedback_start = time.time()
@@ -913,6 +1025,8 @@ async def unified_rag_pipeline(
             errors=result.errors,
             security_report=result.security_report,
             total_time=result.total_time,
+            claims=claims_payload,
+            factuality=factuality_payload,
         )
     except Exception:
         # Fallback: return a minimal dict if Pydantic is not available
@@ -931,6 +1045,8 @@ async def unified_rag_pipeline(
             "errors": result.errors,
             "security_report": result.security_report,
             "total_time": result.total_time,
+            "claims": claims_payload,
+            "factuality": factuality_payload,
         }
 
 

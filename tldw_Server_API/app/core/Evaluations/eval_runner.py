@@ -21,6 +21,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
+from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 
 
@@ -250,6 +251,9 @@ class EvaluationRunner:
         
         elif eval_type == "fuzzy_match":
             return self._eval_fuzzy_match
+        
+        elif eval_type == "proposition_extraction":
+            return self._eval_propositions
         
         else:
             raise ValueError(f"Unknown evaluation type: {eval_type}")
@@ -547,6 +551,50 @@ class EvaluationRunner:
             
         except Exception as e:
             logger.error(f"Fuzzy match eval failed for {sample_id}: {e}")
+            return {"sample_id": sample_id, "error": str(e)}
+
+    async def _eval_propositions(
+        self,
+        sample: Dict[str, Any],
+        eval_spec: Dict[str, Any],
+        config: Dict[str, Any],
+        sample_id: str
+    ) -> Dict[str, Any]:
+        """Evaluate proposition extraction using precision/recall/F1 per sample."""
+        try:
+            extracted = sample.get("input", {}).get("extracted", []) or []
+            reference = sample.get("input", {}).get("reference", []) or []
+            method = eval_spec.get("method", "semantic")
+            threshold = float(eval_spec.get("threshold", 0.7))
+            f1_threshold = float(eval_spec.get("threshold_f1", threshold))
+
+            result = eval_propositions(extracted=extracted, reference=reference, method=method, threshold=threshold)
+
+            scores = {
+                "precision": result.precision,
+                "recall": result.recall,
+                "f1": result.f1,
+                "claim_density_per_100_tokens": result.claim_density_per_100_tokens,
+                "avg_prop_len_tokens": result.avg_prop_len_tokens,
+                "dedup_rate": result.dedup_rate,
+            }
+
+            passed = result.f1 >= f1_threshold
+            avg_score = result.f1
+
+            return {
+                "sample_id": sample_id,
+                "scores": scores,
+                "passed": passed,
+                "avg_score": avg_score,
+                "counts": {
+                    "matched": result.matched,
+                    "total_extracted": result.total_extracted,
+                    "total_reference": result.total_reference,
+                }
+            }
+        except Exception as e:
+            logger.error(f"Proposition eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
     
     # ============= Helper Methods =============

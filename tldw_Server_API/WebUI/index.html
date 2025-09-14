@@ -1006,6 +1006,15 @@
                     // Handle empty responses (e.g., 204 No Content)
                     responseArea.textContent = '(No content - operation successful)';
                 } else if (typeof response === 'object') {
+                    // Special handling: surface allowlist for embeddings models list
+                    if (endpointId === 'embeddingsModelsList') {
+                        try {
+                            const ap = document.getElementById('embeddingsModelsList_allowedProviders');
+                            const am = document.getElementById('embeddingsModelsList_allowedModels');
+                            if (ap) ap.textContent = JSON.stringify(response.allowed_providers ?? [], null, 2);
+                            if (am) am.textContent = JSON.stringify(response.allowed_models ?? [], null, 2);
+                        } catch(e) { console.warn('Failed to render allowed lists:', e); }
+                    }
                     const viewer = new JSONViewer(responseArea, response, {
                         expanded: 2,
                         theme: webUI.theme,
@@ -1038,6 +1047,56 @@
                 }
             } finally {
                 Loading.hide(responseArea.parentElement);
+            }
+        }
+
+        // Embeddings admin helper: pre-check allowed lists and then submit
+        async function embeddingsAdminSubmit(baseId, endpointPath) {
+            try {
+                const model = (document.getElementById(baseId + '_model')?.value || '').trim();
+                const providerInput = (document.getElementById(baseId + '_provider')?.value || '').trim();
+                if (!model) { alert('Enter a model ID'); return; }
+
+                // Fetch allowlist
+                let allowedProviders = null, allowedModels = null;
+                try {
+                    const lists = await apiClient.makeRequest('GET', '/api/v1/embeddings/models');
+                    allowedProviders = lists?.allowed_providers ?? null;
+                    allowedModels = lists?.allowed_models ?? null;
+                } catch (e) {
+                    console.warn('Could not fetch models list for pre-check:', e?.message || e);
+                }
+
+                // Guess provider if none given
+                const guessProvider = (m) => {
+                    if (providerInput) return providerInput.toLowerCase();
+                    if (m.includes('/')) return 'huggingface';
+                    const knownOpenAI = ['text-embedding-ada-002','text-embedding-3-small','text-embedding-3-large'];
+                    if (knownOpenAI.includes(m)) return 'openai';
+                    return 'huggingface';
+                };
+                const provider = guessProvider(model);
+
+                // Check allowlist if present
+                let proceed = true;
+                const matchesAllowedModel = (m, patterns) => {
+                    return patterns.some(p => (p.endsWith('*') ? m.startsWith(p.slice(0, -1)) : m === p));
+                };
+                if (Array.isArray(allowedProviders) && allowedProviders.length > 0 && !allowedProviders.includes(provider)) {
+                    proceed = confirm(`Provider "${provider}" may be disallowed by policy. Continue anyway?`);
+                }
+                if (proceed && Array.isArray(allowedModels) && allowedModels.length > 0 && !matchesAllowedModel(model, allowedModels)) {
+                    proceed = confirm(`Model "${model}" may be disallowed by policy. Continue anyway?`);
+                }
+                if (!proceed) return;
+
+                // Prepare payload and delegate to makeRequest
+                const payloadEl = document.getElementById(baseId + '_payload');
+                const body = providerInput ? { model, provider: providerInput } : { model };
+                if (payloadEl) payloadEl.value = JSON.stringify(body, null, 2);
+                await makeRequest(baseId, 'POST', endpointPath, 'json');
+            } catch (e) {
+                alert('Failed to submit: ' + (e?.message || e));
             }
         }
     </script>

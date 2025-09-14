@@ -666,7 +666,14 @@ class TestErrorHandlingProperties:
             st.just("../../etc/passwd"),
             st.just("/absolute/path"),
             st.just("user/../other"),
-            st.text().filter(lambda x: ".." in x or "/" in x)
+            # Construct invalid IDs without filtering to avoid health check failures
+            st.builds(lambda s: f"../{s or 'x'}", st.text()),
+            st.builds(lambda s: f"{s or 'x'}/..", st.text()),
+            st.builds(lambda s: f"/{s or 'x'}", st.text()),
+            st.builds(lambda s: f"{s or 'x'}\\{s or 'y'}", st.text()),
+            st.builds(lambda s: f"{s}\n", st.text()),
+            st.builds(lambda s: f"{s}\r", st.text()),
+            st.builds(lambda s: f"{s}\x00", st.text()),
         )
     )
     @settings(max_examples=5)

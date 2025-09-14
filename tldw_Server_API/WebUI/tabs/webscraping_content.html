@@ -117,7 +117,33 @@
                         <option value="paragraphs">paragraphs</option>
                         <option value="tokens">tokens</option>
                         <option value="semantic">semantic</option>
+                        <option value="propositions">propositions</option>
                     </select>
+                </div>
+                <div class="form-group" id="friendlyIngest_prop_engine_group" style="display:none;">
+                    <label for="friendlyIngest_prop_engine">Proposition Engine:</label>
+                    <select id="friendlyIngest_prop_engine">
+                        <option value="heuristic" selected>heuristic</option>
+                        <option value="spacy">spacy</option>
+                        <option value="llm">llm</option>
+                        <option value="auto">auto</option>
+                    </select>
+                </div>
+                <div class="form-group" id="friendlyIngest_prop_profile_group" style="display:none;">
+                    <label for="friendlyIngest_prop_profile">Prompt Profile:</label>
+                    <select id="friendlyIngest_prop_profile">
+                        <option value="generic" selected>generic</option>
+                        <option value="claimify">claimify</option>
+                        <option value="gemma_aps">gemma_aps</option>
+                    </select>
+                </div>
+                <div class="form-group" id="friendlyIngest_prop_aggr_group" style="display:none;">
+                    <label for="friendlyIngest_prop_aggr">Aggressiveness (0-2):</label>
+                    <input type="number" id="friendlyIngest_prop_aggr" value="1" min="0" max="2">
+                </div>
+                <div class="form-group" id="friendlyIngest_prop_minlen_group" style="display:none;">
+                    <label for="friendlyIngest_prop_minlen">Min Proposition Length:</label>
+                    <input type="number" id="friendlyIngest_prop_minlen" value="15" min="0">
                 </div>
                 <div class="form-group">
                     <label for="friendlyIngest_chunk_size">Chunk Size:</label>

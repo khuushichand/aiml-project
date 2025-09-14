@@ -152,6 +152,7 @@ class Chunker:
         from .strategies.json_xml import JSONChunkingStrategy, XMLChunkingStrategy
         from .strategies.paragraphs import ParagraphChunkingStrategy
         from .strategies.ebook_chapters import EbookChapterChunkingStrategy
+        from .strategies.propositions import PropositionChunkingStrategy
         
         # Core strategies
         self._strategies[ChunkingMethod.WORDS.value] = WordChunkingStrategy(
@@ -162,6 +163,11 @@ class Chunker:
         )
         self._strategies[ChunkingMethod.PARAGRAPHS.value] = ParagraphChunkingStrategy(
             language=self.config.language
+        )
+        self._strategies[ChunkingMethod.PROPOSITIONS.value] = PropositionChunkingStrategy(
+            language=self.config.language,
+            llm_call_func=self.llm_call_func,
+            llm_config=self.llm_config
         )
         self._strategies[ChunkingMethod.TOKENS.value] = TokenChunkingStrategy(
             language=self.config.language

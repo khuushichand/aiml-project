@@ -65,6 +65,9 @@ jieba
 langdetect
 nltk
 tiktoken
+# Optional for proposition engine (spaCy-based):
+# spacy
+# en-core-web-sm (model; install via: python -m spacy download en_core_web_sm)
 #
 # ETL/Document Parsing
 docling

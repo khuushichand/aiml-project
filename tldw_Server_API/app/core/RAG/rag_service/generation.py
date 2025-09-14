@@ -7,6 +7,7 @@ with support for multiple providers, streaming, and fallback strategies.
 """
 
 import asyncio
+import re
 import json
 import time
 from abc import ABC, abstractmethod
@@ -28,6 +29,10 @@ from ...LLM_Calls.LLM_API_Calls import (
 )
 
 from .types import Document
+try:
+    from .claims import ClaimsEngine
+except Exception:
+    ClaimsEngine = None
 
 
 class GenerationStrategy(Protocol):
@@ -547,7 +552,61 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
     generator = create_generator(config_dict)
     
     # Store generator in context for streaming
-    context.stream_generator = generator.generate_stream(context, context.query)
+    base_stream = generator.generate_stream(context, context.query)
+
+    # Optional: streaming claims overlay with slight buffer
+    enable_claims = bool(kwargs.get("enable_claims", False))
+    claims_top_k = int(kwargs.get("claims_top_k", 3))
+    claims_max = int(kwargs.get("claims_max", 10))
+    
+    if enable_claims and ClaimsEngine is not None:
+        try:
+            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+
+            def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
+                         api_key: Optional[str] = None, system_message: Optional[str] = None,
+                         temp: Optional[float] = None, **k):
+                # For streaming overlay, avoid heavy LLM calls; use heuristic path via empty analyze
+                return "{\"claims\": []}"
+
+            engine = ClaimsEngine(_analyze)
+
+            async def _wrapped_stream():
+                buffer = ""
+                last_emit = 0
+                sentence_re = re.compile(r"(?<=[\.!?])\s+")
+                async for chunk in base_stream:
+                    buffer += chunk
+                    # Yield original chunk immediately
+                    yield chunk
+                    # When buffer has at least two sentences, run lightweight claim extraction
+                    parts = sentence_re.split(buffer)
+                    if len(parts) >= 2 and len(buffer) - last_emit > 200:
+                        tail = " ".join(parts[-2:])
+                        try:
+                            claims_out = await engine.run(
+                                answer=tail,
+                                query=context.query,
+                                documents=getattr(context, 'documents', []) or [],
+                                claim_extractor="auto",
+                                claim_verifier="hybrid",
+                                claims_top_k=claims_top_k,
+                                claims_conf_threshold=0.75,
+                                claims_max=min(5, claims_max),
+                                retrieve_fn=None,
+                            )
+                            context.metadata["claims_overlay"] = claims_out
+                            last_emit = len(buffer)
+                        except Exception:
+                            pass
+                # done
+                return
+
+            context.stream_generator = _wrapped_stream()
+        except Exception:
+            context.stream_generator = base_stream
+    else:
+        context.stream_generator = base_stream
     context.metadata["streaming"] = True
     
     return context

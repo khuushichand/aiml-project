@@ -51,6 +51,50 @@ citations = result.citations  # Academic + chunk citations
 timings = result.timings
 feedback_id = result.feedback_id  # For analytics
 generated_answer = result.generated_answer
+
+## Claims & Factuality
+
+Enable per-claim extraction and verification, and get a factuality summary:
+
+```python
+result = await unified_rag_pipeline(
+    query="What is CRISPR?",
+    enable_generation=True,
+    enable_claims=True,
+    claim_extractor="auto",
+    claim_verifier="hybrid",
+    claims_top_k=5,
+    claims_conf_threshold=0.7,
+)
+
+print(result.claims)       # per-claim label, confidence, evidence
+print(result.factuality)   # supported/refuted/nei, precision, coverage
+```
+
+## Streaming (NDJSON)
+
+Stream the generated answer with incremental claim overlay events:
+
+```
+POST /api/v1/rag/search/stream
+{
+  "query": "What is CRISPR?",
+  "enable_generation": true,
+  "enable_claims": true
+}
+```
+
+Events:
+- `{ "type": "delta", "text": "..." }`
+- `{ "type": "claims_overlay", ... }`
+- `{ "type": "final_claims", ... }`
+
+## NLI Model Configuration
+
+The verifier prefers a local MNLI model and falls back to an LLM judge if unavailable.
+
+- Set environment variable `RAG_NLI_MODEL` or `RAG_NLI_MODEL_PATH` to a local model id or path (e.g., `roberta-large-mnli` or `/models/mnli`).
+- Or pass `nli_model` to `unified_rag_pipeline` for per-request override.
 ```
 
 ## Directory Structure

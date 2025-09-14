@@ -976,6 +976,12 @@ def load_and_log_configs():
         video_chunking_multi_level = config_parser_object.get('Chunking', 'video_chunking_multi_level', fallback='False')
         video_language = config_parser_object.get('Chunking', 'video_language', fallback='english')
         #
+        # Proposition Chunking Defaults
+        proposition_engine = config_parser_object.get('Chunking', 'proposition_engine', fallback='heuristic')
+        proposition_prompt_profile = config_parser_object.get('Chunking', 'proposition_prompt_profile', fallback='generic')
+        proposition_aggressiveness = config_parser_object.get('Chunking', 'proposition_aggressiveness', fallback='1')
+        proposition_min_proposition_length = config_parser_object.get('Chunking', 'proposition_min_proposition_length', fallback='15')
+        #
         chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
 
         # Retrieve Embedding model settings from the configuration file
@@ -1499,6 +1505,11 @@ def load_and_log_configs():
                 'video_adaptive_chunking': video_adaptive_chunking,
                 'video_chunking_multi_level': video_chunking_multi_level,
                 'video_language': video_language,
+                # Proposition-specific
+                'proposition_engine': proposition_engine,
+                'proposition_prompt_profile': proposition_prompt_profile,
+                'proposition_aggressiveness': proposition_aggressiveness,
+                'proposition_min_proposition_length': proposition_min_proposition_length,
             },
             'embedding_config': {
                 'embedding_provider': embedding_provider,

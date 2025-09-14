@@ -55,7 +55,7 @@ class ChunkingOptionsRequest(BaseModel):
     
     # Core Chunking Method & Basic Parameters
     method: Optional[str] = Field(default_chunk_options_from_lib.get('method'),
-                                  description="Chunking method (e.g., 'words', 'sentences', 'json', 'semantic', 'xml', 'ebook_chapters', 'rolling_summarize').")
+                                  description="Chunking method (e.g., 'words', 'sentences', 'propositions', 'json', 'semantic', 'xml', 'ebook_chapters', 'rolling_summarize').")
     max_size: Optional[int] = Field(default_chunk_options_from_lib.get('max_size'), gt=0,
                                    description="Max size of chunks. Must be > 0 if set.")
     overlap: Optional[int] = Field(default_chunk_options_from_lib.get('overlap'), ge=0,
@@ -85,6 +85,16 @@ class ChunkingOptionsRequest(BaseModel):
     summarization_detail: Optional[float] = Field(default_chunk_options_from_lib.get('summarization_detail'), ge=0.0, le=1.0,
                                                 description="Detail level for 'rolling_summarize' (0.0-1.0).")
 
+    # Proposition-specific options (used when method='propositions')
+    proposition_engine: Optional[str] = Field(default_chunk_options_from_lib.get('proposition_engine', 'heuristic'),
+                                              description="Engine for propositions: 'heuristic' | 'spacy' | 'llm' | 'auto'.")
+    proposition_aggressiveness: Optional[int] = Field(default_chunk_options_from_lib.get('proposition_aggressiveness', 1), ge=0, le=2,
+                                                      description="Aggressiveness for heuristic splitting: 0..2.")
+    proposition_min_proposition_length: Optional[int] = Field(default_chunk_options_from_lib.get('proposition_min_proposition_length', 15), ge=0,
+                                                              description="Min chars before merging short propositions.")
+    proposition_prompt_profile: Optional[str] = Field(default_chunk_options_from_lib.get('proposition_prompt_profile', 'generic'),
+                                                      description="Prompt profile for LLM engine: 'generic' | 'claimify' | 'gemma_aps'.")
+
     # Nested model for LLM parameters (client suggestions for non-provider/model aspects)
     llm_options_for_internal_steps: Optional[LLMOptionsForChunkerInternalSteps] = Field(None,
                                                                          description="Advanced: Client suggestions for LLM configurations (e.g., temperature, step-specific prompts/tokens) if the selected chunking method uses an LLM internally. Provider and Model are server-determined for these steps.")
@@ -109,7 +119,7 @@ class ChunkingOptionsRequest(BaseModel):
         max_size, overlap = values.max_size, values.overlap
         current_method = values.method or default_chunk_options_from_lib.get('method')
         if max_size is not None and overlap is not None:
-            if current_method in ['words', 'sentences', 'tokens', 'paragraphs', 'json_list']:
+            if current_method in ['words', 'sentences', 'tokens', 'paragraphs', 'propositions', 'json_list']:
                 if overlap >= max_size:
                     raise ValueError(f"Overlap ({overlap}) must be less than max_size ({max_size}) for method '{current_method}'.")
         return values

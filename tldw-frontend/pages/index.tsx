@@ -63,6 +63,9 @@ export default function Home() {
             <p className="mt-2 text-sm text-gray-600">
               Chat with your content using advanced AI models with RAG for accurate, contextual responses.
             </p>
+            <p className="mt-3 text-xs text-gray-500">
+              Streaming tip: when viewing streamed answers, toggle <span className="font-medium">Show Claim Overlay</span> to annotate statements in real time (Supported / Refuted / Not Enough Info).
+            </p>
           </div>
           
           <div className="rounded-lg bg-white p-6 shadow">

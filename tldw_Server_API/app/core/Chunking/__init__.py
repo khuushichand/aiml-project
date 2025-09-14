@@ -42,8 +42,34 @@ DEFAULT_CHUNK_OPTIONS = {
     'semantic_overlap_sentences': 2,
     'json_chunkable_data_key': 'data',
     'summarization_detail': 0.5,
-    'tokenizer_name_or_path': 'gpt2'
+    'tokenizer_name_or_path': 'gpt2',
+    # Proposition-specific defaults
+    'proposition_engine': 'heuristic',  # 'heuristic' | 'spacy' | 'llm' | 'auto'
+    'proposition_aggressiveness': 1,
+    'proposition_min_proposition_length': 15,
+    'proposition_prompt_profile': 'generic',  # 'generic' | 'claimify' | 'gemma_aps'
 }
+
+# Override defaults from system config if available (system-level toggles)
+try:
+    from tldw_Server_API.app.core.config import load_and_log_configs
+    _cfg = load_and_log_configs()
+    if isinstance(_cfg, dict):
+        _c = _cfg.get('chunking_config', {}) or {}
+        if isinstance(_c, dict):
+            DEFAULT_CHUNK_OPTIONS['proposition_engine'] = _c.get('proposition_engine', DEFAULT_CHUNK_OPTIONS['proposition_engine'])
+            DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'] = _c.get('proposition_prompt_profile', DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'])
+            try:
+                DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness'] = int(_c.get('proposition_aggressiveness', DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness']))
+            except Exception:
+                pass
+            try:
+                DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length'] = int(_c.get('proposition_min_proposition_length', DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length']))
+            except Exception:
+                pass
+except Exception:
+    # Config not available; keep in-module defaults
+    pass
 
 # For backward compatibility with existing code
 # These will be implemented as we port more functionality

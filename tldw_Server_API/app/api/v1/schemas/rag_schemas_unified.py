@@ -203,6 +203,49 @@ class UnifiedRAGRequest(BaseModel):
         description="Include adjacent chunks from same document",
         example=False
     )
+
+    # ========== CLAIMS & FACTUALITY ==========
+    enable_claims: bool = Field(
+        default=False,
+        description="Extract and verify factual claims from the generated answer",
+        example=False,
+    )
+    claim_extractor: Literal["aps", "claimify", "auto"] = Field(
+        default="auto",
+        description="Claim extraction strategy",
+        example="auto",
+    )
+    claim_verifier: Literal["nli", "llm", "hybrid"] = Field(
+        default="hybrid",
+        description="Claim verification strategy",
+        example="hybrid",
+    )
+    claims_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Top-K evidence items per claim",
+        example=5,
+    )
+    claims_conf_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Confidence threshold for supported/refuted labels",
+        example=0.7,
+    )
+    claims_max: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description="Maximum number of claims to extract",
+        example=25,
+    )
+    nli_model: Optional[str] = Field(
+        default=None,
+        description="Local HuggingFace model id or path for MNLI (e.g., roberta-large-mnli or /models/mnli)",
+        example="roberta-large-mnli",
+    )
     
     # ========== RERANKING ==========
     enable_reranking: bool = Field(
@@ -540,6 +583,16 @@ class UnifiedRAGResponse(BaseModel):
     total_time: float = Field(
         default=0.0,
         description="Total execution time"
+    )
+
+    # ========== CLAIMS & FACTUALITY ==========
+    claims: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Per-claim verification results with evidence",
+    )
+    factuality: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
     
     class Config:

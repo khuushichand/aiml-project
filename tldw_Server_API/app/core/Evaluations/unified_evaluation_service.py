@@ -45,6 +45,7 @@ class EvaluationType(str, Enum):
     GEVAL = "geval"
     RAG = "rag"
     RESPONSE_QUALITY = "response_quality"
+    PROPOSITION_EXTRACTION = "proposition_extraction"
     CUSTOM = "custom"
 
 
@@ -653,6 +654,65 @@ class UnifiedEvaluationService:
             
         except Exception as e:
             logger.error(f"Response quality evaluation failed: {e}")
+            raise
+
+    async def evaluate_propositions(
+        self,
+        extracted: List[str],
+        reference: List[str],
+        method: str = "semantic",
+        threshold: float = 0.7,
+        user_id: str = "system"
+    ) -> Dict[str, Any]:
+        """Evaluate proposition extraction against a reference set."""
+        try:
+            from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_props
+            start = time.time()
+            result = eval_props(extracted=extracted, reference=reference, method=method, threshold=threshold)
+            evaluation_time = time.time() - start
+
+            # Structure results as a dict
+            results = {
+                "metrics": {
+                    "precision": result.precision,
+                    "recall": result.recall,
+                    "f1": result.f1,
+                    "claim_density_per_100_tokens": result.claim_density_per_100_tokens,
+                    "avg_prop_len_tokens": result.avg_prop_len_tokens,
+                    "dedup_rate": result.dedup_rate,
+                },
+                "counts": {
+                    "matched": result.matched,
+                    "total_extracted": result.total_extracted,
+                    "total_reference": result.total_reference,
+                },
+                "details": result.details,
+            }
+
+            # Store result
+            eval_id = await self._store_evaluation_result(
+                evaluation_type="proposition_extraction",
+                input_data={
+                    "method": method,
+                    "threshold": threshold,
+                    "extracted_size": len(extracted),
+                    "reference_size": len(reference),
+                },
+                results=results,
+                metadata={
+                    "user_id": user_id,
+                    "evaluation_time": evaluation_time
+                }
+            )
+
+            return {
+                "evaluation_id": eval_id,
+                "results": results,
+                "evaluation_time": evaluation_time
+            }
+
+        except Exception as e:
+            logger.error(f"Proposition evaluation failed: {e}")
             raise
     
     # ============= Dataset Management =============
