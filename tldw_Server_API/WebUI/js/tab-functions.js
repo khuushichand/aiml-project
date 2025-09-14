@@ -92,6 +92,19 @@ function updateTTSProviderOptions() {
                 { value: 'female_2', text: 'Female Voice 2' }
             ]
         },
+        kokoro: {
+            models: [
+                { value: 'kokoro', text: 'Kokoro ONNX' }
+            ],
+            voices: [
+                { value: 'af_bella', text: 'Bella (US female)' },
+                { value: 'af_sky', text: 'Sky (US female)' },
+                { value: 'am_adam', text: 'Adam (US male)' },
+                { value: 'am_michael', text: 'Michael (US male)' },
+                { value: 'bf_emma', text: 'Emma (UK female)' },
+                { value: 'bm_george', text: 'George (UK male)' }
+            ]
+        },
         vibevoice: {
             models: [
                 { value: '1.5B', text: 'VibeVoice 1.5B (90 min generation)' },
@@ -195,6 +208,59 @@ function checkTTSProviderStatus() {
     }, 1000);
 }
 
+async function loadProviderVoices() {
+    try {
+        const provider = document.getElementById('audioTTS_provider')?.value || '';
+        const voiceSelect = document.getElementById('audioTTS_voice');
+        const voiceList = document.getElementById('audioTTS_voiceList');
+        if (!provider || !voiceSelect) return;
+
+        // Show loading state
+        if (voiceList) {
+            voiceList.style.display = 'block';
+            voiceList.innerHTML = '<span class="loading-spinner"></span> Loading voices...';
+        }
+
+        const res = await apiClient.get('/api/v1/audio/voices', { provider });
+        const voices = res?.[provider] || [];
+
+        // Update dropdown
+        if (Array.isArray(voices) && voices.length) {
+            voiceSelect.innerHTML = '';
+            voices.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v.id || v.name || '';
+                opt.textContent = v.name ? `${v.name}` : (v.id || 'voice');
+                voiceSelect.appendChild(opt);
+            });
+        }
+
+        // Render list
+        if (voiceList) {
+            if (!Array.isArray(voices) || !voices.length) {
+                voiceList.innerHTML = '<span class="text-muted">No voices reported by provider.</span>';
+            } else {
+                const items = voices.map(v => {
+                    const meta = [v.language, v.gender].filter(Boolean).join(' · ');
+                    return `<div class="voice-item" style="padding:4px 0; border-bottom: 1px dashed var(--color-border);">
+                        <strong>${v.name || v.id}</strong>
+                        <div class="text-muted" style="font-size: 0.85em;">${meta || ''}</div>
+                        <div style="font-size: 0.85em;">${v.description || ''}</div>
+                    </div>`;
+                }).join('');
+                voiceList.innerHTML = items;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to load voices', err);
+        const voiceList = document.getElementById('audioTTS_voiceList');
+        if (voiceList) {
+            voiceList.style.display = 'block';
+            voiceList.innerHTML = `<span class="error">Error loading voices: ${err?.message || err}</span>`;
+        }
+    }
+}
+
 function clearVoiceReference() {
     const voiceRefInfo = document.getElementById('voiceRefInfo');
     const voiceRefInput = document.getElementById('audioTTS_voiceReference');
@@ -246,6 +312,336 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, 500);
 });
+
+// ============================================================================
+// Web Scraping Friendly Ingest
+// ============================================================================
+
+function initializeWebScrapingIngestTab() {
+    try {
+        // Populate model dropdowns (if not already)
+        if (typeof window.populateModelDropdowns === 'function') {
+            window.populateModelDropdowns();
+        }
+
+        // Method-driven UI toggles
+        const methodSelect = document.getElementById('friendlyIngest_scrape_method');
+        if (methodSelect) {
+            methodSelect.addEventListener('change', updateFriendlyScrapeMethodUI);
+            updateFriendlyScrapeMethodUI();
+        }
+
+        // Cookies validation when toggled/edited
+        const useCookies = document.getElementById('friendlyIngest_use_cookies');
+        const cookiesInput = document.getElementById('friendlyIngest_cookies');
+        if (useCookies) {
+            useCookies.addEventListener('change', validateFriendlyCookies);
+            useCookies.addEventListener('change', updateFriendlyIngestValidationState);
+        }
+        if (cookiesInput) {
+            cookiesInput.addEventListener('blur', validateFriendlyCookies);
+            cookiesInput.addEventListener('input', () => {
+                // Clear status while typing
+                const status = document.getElementById('friendlyIngest_cookies_status');
+                if (status) {
+                    status.textContent = '';
+                }
+            });
+            cookiesInput.addEventListener('input', updateFriendlyIngestValidationState);
+        }
+        validateFriendlyCookies();
+
+        // Basic inputs listeners for validation
+        const urlsEl = document.getElementById('friendlyIngest_urls');
+        const methodEl = document.getElementById('friendlyIngest_scrape_method');
+        const urlLevelEl = document.getElementById('friendlyIngest_url_level');
+        const maxPagesEl = document.getElementById('friendlyIngest_max_pages');
+        const maxDepthEl = document.getElementById('friendlyIngest_max_depth');
+
+        [urlsEl, methodEl, urlLevelEl, maxPagesEl, maxDepthEl].forEach(el => {
+            if (el) {
+                el.addEventListener('input', updateFriendlyIngestValidationState);
+                el.addEventListener('change', updateFriendlyIngestValidationState);
+            }
+        });
+
+        // Initial validation state
+        updateFriendlyIngestValidationState();
+    } catch (e) {
+        console.warn('Failed to initialize Web Scraping Ingest tab:', e.message);
+    }
+}
+
+function updateFriendlyScrapeMethodUI() {
+    const method = document.getElementById('friendlyIngest_scrape_method')?.value || 'individual';
+    const show = (id, visible) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? 'block' : 'none';
+    };
+
+    // url_level: needs url_level only
+    show('group_friendlyIngest_url_level', method === 'url_level');
+    // sitemap: needs max_pages
+    show('group_friendlyIngest_max_pages', method === 'recursive_scraping' || method === 'sitemap');
+    // recursive_scraping: needs both max_pages and max_depth
+    show('group_friendlyIngest_max_depth', method === 'recursive_scraping');
+}
+
+function validateFriendlyCookies() {
+    const use = document.getElementById('friendlyIngest_use_cookies')?.checked;
+    const input = document.getElementById('friendlyIngest_cookies');
+    const status = document.getElementById('friendlyIngest_cookies_status');
+    const group = document.getElementById('group_friendlyIngest_cookies');
+
+    if (!input || !status || !group) return;
+
+    // Enable/disable textarea based on checkbox
+    input.disabled = !use;
+    if (!use) {
+        status.textContent = '';
+        return;
+    }
+
+    const text = input.value.trim();
+    if (text === '') {
+        status.textContent = 'Provide valid JSON when using cookies.';
+        status.style.color = 'var(--color-text-muted)';
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(text);
+        const ok = Array.isArray(parsed) || typeof parsed === 'object';
+        if (!ok) throw new Error('Cookies must be an object or an array of objects');
+
+        // Pretty print normalized JSON back into the field
+        input.value = JSON.stringify(parsed, null, 2);
+        status.textContent = 'Cookies JSON valid';
+        status.style.color = 'var(--color-success, #2e7d32)';
+    } catch (e) {
+        status.textContent = 'Invalid JSON: ' + e.message;
+        status.style.color = 'var(--color-error, #c62828)';
+    }
+}
+
+function updateFriendlyIngestValidationState() {
+    const submitBtn = document.getElementById('friendlyIngest_submit');
+    const hintEl = document.getElementById('friendlyIngest_validation_hint');
+    const summaryEl = document.getElementById('friendlyIngest_validation_summary');
+    if (!submitBtn) return;
+
+    let isValid = true;
+    const errors = [];
+    // Reset field highlights
+    const resetInvalid = (id) => { const el = document.getElementById(id); if (el) el.classList.remove('input-invalid'); };
+    const markInvalid = (id) => { const el = document.getElementById(id); if (el) el.classList.add('input-invalid'); };
+    ['friendlyIngest_urls','friendlyIngest_url_level','friendlyIngest_max_pages','friendlyIngest_max_depth','friendlyIngest_cookies']
+        .forEach(resetInvalid);
+
+    const urls = (document.getElementById('friendlyIngest_urls')?.value || '')
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    if (urls.length === 0) {
+        isValid = false;
+        errors.push('Enter at least one URL.');
+        markInvalid('friendlyIngest_urls');
+    }
+
+    const method = document.getElementById('friendlyIngest_scrape_method')?.value || 'individual';
+    const urlLevel = parseInt(document.getElementById('friendlyIngest_url_level')?.value || '0', 10);
+    const maxPages = parseInt(document.getElementById('friendlyIngest_max_pages')?.value || '0', 10);
+    const maxDepth = parseInt(document.getElementById('friendlyIngest_max_depth')?.value || '0', 10);
+
+    if (method === 'url_level' && (!urlLevel || urlLevel < 1)) {
+        isValid = false;
+        errors.push('Set URL Level to 1 or higher for url_level method.');
+        markInvalid('friendlyIngest_url_level');
+    }
+    if (method === 'recursive_scraping' && (!maxPages || maxPages < 1 || !maxDepth || maxDepth < 1)) {
+        isValid = false;
+        errors.push('Set Max Pages and Max Depth (>= 1) for recursive_scraping.');
+        if (!maxPages || maxPages < 1) markInvalid('friendlyIngest_max_pages');
+        if (!maxDepth || maxDepth < 1) markInvalid('friendlyIngest_max_depth');
+    }
+    if (method === 'sitemap' && (!maxPages || maxPages < 1)) {
+        isValid = false;
+        errors.push('Set Max Pages (>= 1) for sitemap method.');
+        markInvalid('friendlyIngest_max_pages');
+    }
+
+    const useCookies = document.getElementById('friendlyIngest_use_cookies')?.checked;
+    const cookiesText = document.getElementById('friendlyIngest_cookies')?.value || '';
+    if (useCookies) {
+        try {
+            if (cookiesText.trim() === '') {
+                isValid = false;
+                errors.push('Provide Cookies JSON when "Use Cookies" is enabled.');
+                markInvalid('friendlyIngest_cookies');
+            } else {
+                const parsed = JSON.parse(cookiesText);
+                if (!(Array.isArray(parsed) || typeof parsed === 'object')) {
+                    isValid = false;
+                    errors.push('Cookies JSON must be an object or an array of objects.');
+                    markInvalid('friendlyIngest_cookies');
+                }
+            }
+        } catch (e) {
+            isValid = false;
+            errors.push('Cookies JSON is invalid: ' + e.message);
+            markInvalid('friendlyIngest_cookies');
+        }
+    }
+
+    submitBtn.disabled = !isValid;
+
+    if (hintEl) {
+        if (isValid) {
+            hintEl.textContent = '';
+        } else {
+            // Render as list for clarity
+            const list = errors.map(e => `<li>${e}</li>`).join('');
+            hintEl.innerHTML = `<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+        }
+    }
+
+    if (summaryEl) {
+        if (isValid) {
+            summaryEl.classList.remove('visible');
+            summaryEl.innerHTML = '';
+        } else {
+            const prefix = '<strong>Please fix the following:</strong>';
+            const list = errors.map(e => `<li>${e}</li>`).join('');
+            summaryEl.innerHTML = `${prefix}<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+            summaryEl.classList.add('visible');
+        }
+    }
+}
+
+function submitWebScrapingIngestFriendly(previewOnly = false) {
+    try {
+        // Collect values
+        const urlsText = document.getElementById('friendlyIngest_urls').value || '';
+        const titlesText = document.getElementById('friendlyIngest_titles').value || '';
+        const authorsText = document.getElementById('friendlyIngest_authors').value || '';
+        const keywordsText = document.getElementById('friendlyIngest_keywords').value || '';
+
+        const scrapeMethod = document.getElementById('friendlyIngest_scrape_method').value;
+        const urlLevel = parseInt(document.getElementById('friendlyIngest_url_level').value || '2', 10);
+        const maxPages = parseInt(document.getElementById('friendlyIngest_max_pages').value || '10', 10);
+        const maxDepth = parseInt(document.getElementById('friendlyIngest_max_depth').value || '3', 10);
+
+        const performAnalysis = document.getElementById('friendlyIngest_perform_analysis').checked;
+        const customPrompt = document.getElementById('friendlyIngest_custom_prompt').value || null;
+        const systemPrompt = document.getElementById('friendlyIngest_system_prompt').value || null;
+        const apiName = document.getElementById('friendlyIngest_api_name').value || null;
+
+        const performTranslation = document.getElementById('friendlyIngest_perform_translation').checked;
+        const translationLanguage = document.getElementById('friendlyIngest_translation_language').value || 'en';
+
+        const performChunking = document.getElementById('friendlyIngest_perform_chunking').checked;
+        const chunkMethod = document.getElementById('friendlyIngest_chunk_method').value || null;
+        const chunkSize = parseInt(document.getElementById('friendlyIngest_chunk_size').value || '500', 10);
+        const chunkOverlap = parseInt(document.getElementById('friendlyIngest_chunk_overlap').value || '200', 10);
+        const useAdaptiveChunking = document.getElementById('friendlyIngest_use_adaptive_chunking').checked;
+        const useMultiLevelChunking = document.getElementById('friendlyIngest_use_multi_level_chunking').checked;
+        const chunkLanguage = document.getElementById('friendlyIngest_chunk_language').value || null;
+
+        const useCookies = document.getElementById('friendlyIngest_use_cookies').checked;
+        const cookiesText = document.getElementById('friendlyIngest_cookies').value || '';
+        const timestampOption = document.getElementById('friendlyIngest_timestamp_option').checked;
+        const overwriteExisting = document.getElementById('friendlyIngest_overwrite_existing').checked;
+        const performRolling = document.getElementById('friendlyIngest_perform_rolling_summarization').checked;
+        const performConfabCheck = document.getElementById('friendlyIngest_perform_confabulation_check_of_analysis').checked;
+        const customChapterPattern = document.getElementById('friendlyIngest_custom_chapter_pattern').value || null;
+
+        // Transform inputs
+        // Ensure validation state is up to date; if invalid, show inline hints and stop
+        updateFriendlyIngestValidationState();
+
+        const urls = urlsText.split('\n').map(s => s.trim()).filter(Boolean);
+        const method = scrapeMethod;
+        const buttonDisabled = document.getElementById('friendlyIngest_submit')?.disabled;
+        if (buttonDisabled) {
+            // Inline hints are already shown by validation state
+            return;
+        }
+
+        const titles = titlesText ? titlesText.split('\n').map(s => s.trim()).filter(Boolean) : [];
+        const authors = authorsText ? authorsText.split('\n').map(s => s.trim()).filter(Boolean) : [];
+        const keywords = keywordsText ? keywordsText.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+        // Additional method-specific validation
+        // Method-specific checks are covered by validation state
+
+        // Validate cookies JSON if provided
+        if (useCookies && cookiesText) {
+            try {
+                const parsed = JSON.parse(cookiesText);
+                document.getElementById('friendlyIngest_cookies').value = JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                validateFriendlyCookies();
+                updateFriendlyIngestValidationState();
+                return;
+            }
+        }
+
+        // Build payload according to IngestWebContentRequest
+        const payload = {
+            urls,
+            titles: titles.length ? titles : undefined,
+            authors: authors.length ? authors : undefined,
+            keywords: keywords.length ? keywords : undefined,
+
+            scrape_method: scrapeMethod,
+            url_level: isNaN(urlLevel) ? undefined : urlLevel,
+            max_pages: isNaN(maxPages) ? undefined : maxPages,
+            max_depth: isNaN(maxDepth) ? undefined : maxDepth,
+
+            perform_analysis: performAnalysis,
+            custom_prompt: customPrompt || undefined,
+            system_prompt: systemPrompt || undefined,
+            api_name: apiName || undefined,
+
+            perform_translation: performTranslation,
+            translation_language: translationLanguage || 'en',
+
+            perform_rolling_summarization: performRolling,
+            perform_confabulation_check_of_analysis: performConfabCheck,
+
+            perform_chunking: performChunking,
+            chunk_method: chunkMethod || undefined,
+            use_adaptive_chunking: useAdaptiveChunking,
+            use_multi_level_chunking: useMultiLevelChunking,
+            chunk_language: chunkLanguage || undefined,
+            chunk_size: isNaN(chunkSize) ? undefined : chunkSize,
+            chunk_overlap: isNaN(chunkOverlap) ? undefined : chunkOverlap,
+
+            use_cookies: useCookies,
+            cookies: useCookies && cookiesText ? cookiesText : undefined,
+
+            timestamp_option: timestampOption,
+            overwrite_existing: overwriteExisting,
+            custom_chapter_pattern: customChapterPattern || undefined
+        };
+
+        // Set hidden payload and send request
+        const hidden = document.getElementById('friendlyIngest_payload');
+        hidden.value = JSON.stringify(payload, null, 2);
+
+        if (previewOnly) {
+            // Just show cURL
+            endpointHelper.showCurl('friendlyIngest', 'POST', '/api/v1/media/ingest-web-content', 'json');
+            const curl = document.getElementById('friendlyIngest_curl');
+            if (curl) curl.style.display = 'block';
+            return;
+        }
+
+        // Use generic makeRequest to show curl and handle long-running UI
+        makeRequest('friendlyIngest', 'POST', '/api/v1/media/ingest-web-content', 'json');
+    } catch (e) {
+        console.error('Failed to build ingest payload:', e);
+        Toast.error('Failed to build ingest payload: ' + e.message);
+    }
+}
 
 // ============================================================================
 // Chat Tab Functions

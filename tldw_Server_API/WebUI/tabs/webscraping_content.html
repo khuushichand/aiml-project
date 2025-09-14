@@ -1,3 +1,318 @@
+<!-- Web Scraping Ingest Tab -->
+<div id="tabWebScrapingIngest" class="tab-content" role="tabpanel">
+    <div class="endpoint-section" id="section_friendlyIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/media/ingest-web-content</span>
+        </h2>
+        <p>Friendly form — no JSON required. Fields map to IngestWebContentRequest.</p>
+        <div id="friendlyIngest_validation_summary" class="validation-summary" aria-live="polite"></div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Sources</h3>
+                <div class="form-group">
+                    <label for="friendlyIngest_urls">URLs (one per line) <span class="required">*</span>:</label>
+                    <textarea id="friendlyIngest_urls" rows="5" placeholder="https://example.com/article1&#10;https://example.com/article2"></textarea>
+                    <small>Required. At least one URL.</small>
+                    <small id="friendlyIngest_urls_hint" class="field-hint"></small>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_titles">Custom Titles (one per line, optional):</label>
+                    <textarea id="friendlyIngest_titles" rows="3" placeholder="Custom Title 1&#10;Custom Title 2"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_authors">Authors (one per line, optional):</label>
+                    <textarea id="friendlyIngest_authors" rows="3" placeholder="Author 1&#10;Author 2"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_keywords">Keywords (comma-separated):</label>
+                    <input type="text" id="friendlyIngest_keywords" placeholder="web,scraping,example">
+                </div>
+            </div>
+            <div class="column">
+                <h3>Scraping Method</h3>
+                <div class="form-group">
+                    <label for="friendlyIngest_scrape_method">Method:
+                        <span title="Methods:\n- individual: Scrapes each URL independently.\n- sitemap: Treats the first URL as a sitemap; uses Max Pages.\n- url_level: Scrapes pages under the base URL up to the given path level; requires URL Level.\n- recursive_scraping: Crawls links up to Max Depth and Max Pages.">
+                            ⓘ
+                        </span>
+                    </label>
+                    <select id="friendlyIngest_scrape_method">
+                        <option value="individual" selected>individual (each URL)</option>
+                        <option value="sitemap">sitemap (first URL is sitemap)</option>
+                        <option value="url_level">url_level (collect by path depth)</option>
+                        <option value="recursive_scraping">recursive_scraping (crawl links)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="group_friendlyIngest_url_level">
+                    <label for="friendlyIngest_url_level">URL Level (for url_level):</label>
+                    <input type="number" id="friendlyIngest_url_level" min="1" value="2">
+                    <small id="friendlyIngest_url_level_hint" class="field-hint"></small>
+                </div>
+                <div class="form-group" id="group_friendlyIngest_max_pages">
+                    <label for="friendlyIngest_max_pages">Max Pages (for recursive/sitemap):</label>
+                    <input type="number" id="friendlyIngest_max_pages" min="1" value="10">
+                    <small id="friendlyIngest_max_pages_hint" class="field-hint"></small>
+                </div>
+                <div class="form-group" id="group_friendlyIngest_max_depth">
+                    <label for="friendlyIngest_max_depth">Max Depth (for recursive):</label>
+                    <input type="number" id="friendlyIngest_max_depth" min="1" value="3">
+                    <small id="friendlyIngest_max_depth_hint" class="field-hint"></small>
+                </div>
+            </div>
+            <div class="column">
+                <h3>Analysis & Model</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_perform_analysis" checked>
+                        Perform Analysis
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_custom_prompt">Custom Prompt:</label>
+                    <textarea id="friendlyIngest_custom_prompt" rows="3" placeholder="Summarize with bullet points."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_system_prompt">System Prompt:</label>
+                    <textarea id="friendlyIngest_system_prompt" rows="3" placeholder="You are an accurate summarizer."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_api_name">Model:</label>
+                    <select id="friendlyIngest_api_name" class="llm-model-select">
+                        <option value="">Use default</option>
+                    </select>
+                    <small>Populated from configured providers.</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Translation</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_perform_translation">
+                        Perform Translation
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_translation_language">Language:</label>
+                    <input type="text" id="friendlyIngest_translation_language" value="en" placeholder="en">
+                </div>
+            </div>
+            <div class="column">
+                <h3>Chunking</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_perform_chunking" checked>
+                        Perform Chunking
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_chunk_method">Method:</label>
+                    <select id="friendlyIngest_chunk_method">
+                        <option value="words" selected>words</option>
+                        <option value="sentences">sentences</option>
+                        <option value="paragraphs">paragraphs</option>
+                        <option value="tokens">tokens</option>
+                        <option value="semantic">semantic</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_chunk_size">Chunk Size:</label>
+                    <input type="number" id="friendlyIngest_chunk_size" value="500" min="50">
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_chunk_overlap">Overlap:</label>
+                    <input type="number" id="friendlyIngest_chunk_overlap" value="200" min="0">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_use_adaptive_chunking">
+                        Use Adaptive Chunking
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_use_multi_level_chunking">
+                        Use Multi-Level Chunking
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_chunk_language">Chunk Language:</label>
+                    <input type="text" id="friendlyIngest_chunk_language" placeholder="en">
+                </div>
+            </div>
+            <div class="column">
+                <h3>Other Options</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_use_cookies">
+                        Use Cookies
+                    </label>
+                </div>
+                <div class="form-group" id="group_friendlyIngest_cookies">
+                    <label for="friendlyIngest_cookies">Cookies JSON (if using cookies):</label>
+                    <textarea id="friendlyIngest_cookies" rows="4" placeholder='{"name":"mycookie","value":"abc","domain":".example.com"}'></textarea>
+                    <small id="friendlyIngest_cookies_status" class="field-hint"></small>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_timestamp_option" checked>
+                        Add Timestamp
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_overwrite_existing">
+                        Overwrite Existing
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_perform_rolling_summarization">
+                        Rolling Summarization
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="friendlyIngest_perform_confabulation_check_of_analysis">
+                        Confabulation Check
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="friendlyIngest_custom_chapter_pattern">Custom Chapter Regex (optional):</label>
+                    <input type="text" id="friendlyIngest_custom_chapter_pattern" placeholder="^(Chapter|Section) \\d+">
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <button class="api-button" id="friendlyIngest_submit" onclick="submitWebScrapingIngestFriendly(false)">Build & Submit</button>
+            <button class="btn btn-secondary" onclick="submitWebScrapingIngestFriendly(true)">Show cURL</button>
+        </div>
+        <div id="friendlyIngest_validation_hint" aria-live="polite" style="color: var(--color-error, #c62828);"></div>
+        <textarea id="friendlyIngest_payload" style="display:none;"></textarea>
+        <pre id="friendlyIngest_curl" style="display:none;"></pre>
+        <pre id="friendlyIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="webScrapingIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/media/ingest-web-content</span>
+        </h2>
+        <p>Raw JSON builder (for reference). Identical to the form above.</p>
+
+        <div class="form-group">
+            <label for="webScrapingIngest_payload">Payload (IngestWebContentRequest JSON):</label>
+            <textarea id="webScrapingIngest_payload" style="min-height: 360px;">{
+  "urls": [
+    "https://example.com/article1",
+    "https://example.com/article2"
+  ],
+  "titles": [
+    "Custom Title 1",
+    "Custom Title 2"
+  ],
+  "authors": [
+    "Author 1",
+    "Author 2"
+  ],
+  "keywords": [
+    "web",
+    "scraping",
+    "example"
+  ],
+  "scrape_method": "individual",           
+  "url_level": 2,                           
+  "max_pages": 10,                          
+  "max_depth": 3,                           
+
+  "perform_analysis": true,
+  "custom_prompt": "Summarize with bullet points.",
+  "system_prompt": "You are an accurate summarizer.",
+  "api_name": null,                         
+
+  "perform_translation": false,
+  "translation_language": "en",
+
+  "perform_rolling_summarization": false,
+  "perform_confabulation_check_of_analysis": false,
+
+  "perform_chunking": true,
+  "chunk_method": "words",                 
+  "use_adaptive_chunking": false,
+  "use_multi_level_chunking": false,
+  "chunk_language": "en",
+  "chunk_size": 500,
+  "chunk_overlap": 200,
+
+  "use_cookies": false,
+  "cookies": null,                          
+
+  "timestamp_option": true,
+  "overwrite_existing": false,
+  "custom_chapter_pattern": null
+}</textarea>
+            <small>
+                Notes:
+                - scrape_method: one of "individual", "sitemap", "url_level", "recursive_scraping".
+                - When using "url_level" provide url_level; when "recursive_scraping" provide max_pages and max_depth.
+                - API keys are managed server-side; do not include api_key here.
+            </small>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('webScrapingIngest', 'POST', '/api/v1/media/ingest-web-content', 'json')">
+            Submit
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="webScrapingIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="webScrapingIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="webScrapingProcessLegacy">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/media/process-web-scraping</span>
+        </h2>
+        <p>Legacy-compatible web scraping endpoint that delegates to the enhanced service under the hood. Accepts multi-line URL input and supports persist/ephemeral modes.</p>
+
+        <div class="form-group">
+            <label for="webScrapingProcessLegacy_payload">Payload (WebScrapingRequest JSON):</label>
+            <textarea id="webScrapingProcessLegacy_payload" style="min-height: 280px;">{
+  "scrape_method": "Individual URLs",        
+  "url_input": "https://example.com/one\nhttps://example.com/two",
+  "url_level": null,                          
+  "max_pages": 10,
+  "max_depth": 3,
+  "summarize_checkbox": true,
+  "custom_prompt": "Please summarize",
+  "api_name": null,
+  "keywords": "web,scraping,example",
+  "custom_titles": "Title 1\nTitle 2",
+  "system_prompt": null,
+  "temperature": 0.7,
+  "custom_cookies": [],
+  "mode": "persist"                          
+}</textarea>
+            <small>
+                scrape_method: one of "Individual URLs", "Sitemap", "URL Level", "Recursive Scraping". For "URL Level" provide url_level.
+            </small>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('webScrapingProcessLegacy', 'POST', '/api/v1/media/process-web-scraping', 'json')">
+            Submit
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="webScrapingProcessLegacy_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="webScrapingProcessLegacy_response">---</pre>
+    </div>
+</div>
+
 <!-- Web Scraping Management Tab -->
 <div id="tabWebScrapingStatus" class="tab-content" role="tabpanel">
     <div class="endpoint-section">
@@ -80,22 +395,10 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/web-scraping/service/initialize</span>
         </h2>
-        <p>Initialize the web scraping service</p>
+        <p>Initialize the web scraping service.</p>
+        <small>No request body required. Uses server configuration.</small>
         
-        <div class="form-group">
-            <label for="webScrapingInit_headless">
-                <input type="checkbox" id="webScrapingInit_headless" checked>
-                Run in Headless Mode
-            </label>
-        </div>
-        
-        <div class="form-group">
-            <label for="webScrapingInit_max_workers">Max Workers:</label>
-            <input type="number" id="webScrapingInit_max_workers" value="5" min="1" max="20">
-            <small>Maximum concurrent scraping workers</small>
-        </div>
-        
-        <button class="api-button" onclick="handleWebScrapingInit()">
+        <button class="api-button" onclick="makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'none')">
             Initialize Service
         </button>
         
@@ -107,17 +410,10 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/web-scraping/service/shutdown</span>
         </h2>
-        <p>Shutdown the web scraping service</p>
+        <p>Shutdown the web scraping service.</p>
+        <small>No request body required. Shuts down gracefully.</small>
         
-        <div class="form-group">
-            <label for="webScrapingShutdown_force">
-                <input type="checkbox" id="webScrapingShutdown_force">
-                Force Shutdown
-            </label>
-            <small>Force shutdown even if jobs are running</small>
-        </div>
-        
-        <button class="api-button btn-danger" onclick="if(confirm('Shutdown web scraping service?')) handleWebScrapingShutdown()">
+        <button class="api-button btn-danger" onclick="if(confirm('Shutdown web scraping service?')) makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'none')">
             Shutdown Service
         </button>
         
@@ -201,42 +497,12 @@
 </div>
 
 <script>
-// Helper for web scraping initialization
+// No-op helpers retained for backward compatibility; requests now send no body
 function handleWebScrapingInit() {
-    const payload = {
-        headless: document.getElementById('webScrapingInit_headless').checked,
-        max_workers: parseInt(document.getElementById('webScrapingInit_max_workers').value || 5)
-    };
-    
-    // Store payload for makeRequest
-    const hiddenPayload = document.createElement('textarea');
-    hiddenPayload.id = 'webScrapingInit_payload';
-    hiddenPayload.style.display = 'none';
-    hiddenPayload.value = JSON.stringify(payload);
-    document.body.appendChild(hiddenPayload);
-    
-    makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'json');
-    
-    // Clean up
-    document.body.removeChild(hiddenPayload);
+    makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'none');
 }
 
-// Helper for web scraping shutdown
 function handleWebScrapingShutdown() {
-    const payload = {
-        force: document.getElementById('webScrapingShutdown_force').checked
-    };
-    
-    // Store payload for makeRequest
-    const hiddenPayload = document.createElement('textarea');
-    hiddenPayload.id = 'webScrapingShutdown_payload';
-    hiddenPayload.style.display = 'none';
-    hiddenPayload.value = JSON.stringify(payload);
-    document.body.appendChild(hiddenPayload);
-    
-    makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'json');
-    
-    // Clean up
-    document.body.removeChild(hiddenPayload);
+    makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'none');
 }
 </script>

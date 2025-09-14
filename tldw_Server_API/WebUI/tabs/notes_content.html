@@ -67,6 +67,29 @@
         <h3>Response:</h3>
         <pre id="notesSearch_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="notesGet">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/notes/{note_id} - Get Note</span>
+        </h2>
+        <p>View a specific note by ID. Keywords are included automatically.</p>
+
+        <div class="form-group">
+            <label for="notesGet_note_id">Note ID <span class="required">*</span>:</label>
+            <input type="number" id="notesGet_note_id" placeholder="1" min="1">
+        </div>
+
+        <button class="api-button" onclick="makeRequest('notesGet', 'GET', '/api/v1/notes/{note_id}', 'none')">
+            Get Note
+        </button>
+
+        <h3>cURL Command:</h3>
+        <pre id="notesGet_curl">---</pre>
+
+        <h3>Response:</h3>
+        <pre id="notesGet_response">---</pre>
+    </div>
 </div>
 
 <!-- Notes Manage Tab -->

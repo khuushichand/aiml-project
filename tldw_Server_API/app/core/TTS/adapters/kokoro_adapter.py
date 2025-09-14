@@ -137,6 +137,7 @@ class KokoroAdapter(TTSAdapter):
         self.model_pt = None
         self.tokenizer = None
         self.audio_normalizer = None
+        self._dynamic_voices: List[VoiceInfo] = []
     
     async def initialize(self) -> bool:
         """Initialize the Kokoro adapter"""
@@ -150,6 +151,12 @@ class KokoroAdapter(TTSAdapter):
             else:
                 success = await self._initialize_pytorch()
             
+            # Load dynamic voices if available
+            try:
+                self._load_dynamic_voices()
+            except Exception as ve:
+                logger.warning(f"{self.provider_name}: Failed to load dynamic voices.json: {ve}")
+
             if success:
                 logger.info(f"{self.provider_name}: Initialized successfully (Backend: {'ONNX' if self.use_onnx else 'PyTorch'}, Device: {self.device})")
                 self._status = ProviderStatus.AVAILABLE
@@ -216,15 +223,54 @@ class KokoroAdapter(TTSAdapter):
     
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
-        logger.warning(f"{self.provider_name}: PyTorch backend not yet implemented")
-        return False
+        try:
+            import torch
+            # Check model file
+            if not os.path.exists(self.model_path):
+                raise TTSModelNotFoundError(
+                    f"Kokoro PyTorch model not found at {self.model_path}",
+                    provider=self.provider_name,
+                    details={"model_path": self.model_path}
+                )
+
+            # Load model (TorchScript preferred)
+            try:
+                self.model_pt = torch.jit.load(self.model_path, map_location=self.device)
+            except Exception:
+                # Fallback to torch.load for non-JIT checkpoints
+                self.model_pt = torch.load(self.model_path, map_location=self.device)
+
+            # Put model in eval mode
+            try:
+                self.model_pt.eval()
+            except Exception:
+                pass
+
+            logger.info(f"{self.provider_name}: PyTorch model loaded successfully on {self.device}")
+            return True
+        except ImportError as e:
+            raise TTSModelLoadError(
+                "PyTorch is required for Kokoro PyTorch backend",
+                provider=self.provider_name,
+                details={"error": str(e), "suggestion": "pip install torch"}
+            )
+        except (TTSModelNotFoundError,):
+            raise
+        except Exception as e:
+            logger.error(f"{self.provider_name}: PyTorch initialization error: {e}")
+            raise TTSModelLoadError(
+                "Failed to initialize PyTorch model",
+                provider=self.provider_name,
+                details={"error": str(e), "model_path": self.model_path}
+            )
     
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Kokoro TTS capabilities"""
+        all_voices = list(self.VOICES.values()) + self._dynamic_voices
         return TTSCapabilities(
             provider_name="Kokoro",
             supported_languages={"en-us", "en-gb", "en"},
-            supported_voices=list(self.VOICES.values()),
+            supported_voices=all_voices,
             supported_formats={
                 AudioFormat.MP3,
                 AudioFormat.WAV,
@@ -312,8 +358,12 @@ class KokoroAdapter(TTSAdapter):
         request: TTSRequest
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from Kokoro"""
-        if not self.kokoro_instance:
-            raise ValueError("Kokoro not initialized")
+        if self.use_onnx:
+            if not self.kokoro_instance:
+                raise ValueError("Kokoro ONNX not initialized")
+        else:
+            if self.model_pt is None:
+                raise ValueError("Kokoro PyTorch model not initialized")
         
         # Import StreamingAudioWriter for format conversion
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
@@ -327,13 +377,27 @@ class KokoroAdapter(TTSAdapter):
         
         try:
             chunk_count = 0
-            # Stream audio chunks from Kokoro
-            async for samples_chunk, sr_chunk in self.kokoro_instance.create_stream(
-                text,
-                voice=voice,
-                speed=request.speed,
-                lang=lang
-            ):
+            # Stream audio chunks
+            if self.use_onnx:
+                stream_iter = self.kokoro_instance.create_stream(
+                    text,
+                    voice=voice,
+                    speed=request.speed,
+                    lang=lang
+                )
+            else:
+                # Placeholder streaming for PyTorch backend.
+                # In a full implementation, this should call the PyTorch model's inference stream/generate method.
+                async def _pt_stream():
+                    raise TTSGenerationError(
+                        "Kokoro PyTorch generation not implemented",
+                        provider=self.provider_name,
+                        details={"hint": "Use ONNX backend or install kokoro PyTorch implementation"}
+                    )
+                    yield None
+                stream_iter = _pt_stream()
+
+            async for samples_chunk, sr_chunk in stream_iter:
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     chunk_count += 1
                     
@@ -395,6 +459,45 @@ class KokoroAdapter(TTSAdapter):
             voice = self.map_voice(voice)
         
         return voice
+
+    def _load_dynamic_voices(self) -> None:
+        """Load voices from voices.json and merge with static voices.
+
+        Expected JSON structure (array of entries):
+        [{"id": "af_bella", "name": "Bella", "gender": "female", "language": "en-us", "description": "..."}, ...]
+        """
+        path = self.voices_json
+        if not path or not os.path.exists(path):
+            return
+        import json
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        dyn: List[VoiceInfo] = []
+        if isinstance(data, dict) and "voices" in data:
+            entries = data["voices"]
+        else:
+            entries = data
+        if not isinstance(entries, list):
+            return
+        # Existing ids to avoid duplicates
+        existing_ids = set(self.VOICES.keys()) | {v.id for v in self._dynamic_voices}
+        for entry in entries:
+            try:
+                vid = str(entry.get("id") or entry.get("voice_id") or "").strip()
+                if not vid or vid in existing_ids:
+                    continue
+                vinfo = VoiceInfo(
+                    id=vid,
+                    name=str(entry.get("name") or vid),
+                    gender=entry.get("gender"),
+                    language=str(entry.get("language") or "en"),
+                    description=entry.get("description")
+                )
+                dyn.append(vinfo)
+                existing_ids.add(vid)
+            except Exception:
+                continue
+        self._dynamic_voices = dyn
     
     def _get_language_from_voice(self, voice: str) -> str:
         """Get language code from voice ID"""

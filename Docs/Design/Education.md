@@ -25,7 +25,7 @@ https://gist.github.com/brumar/5888324c296a8730c55e8ee24cca9043
 https://mochi.cards/
 https://shaeda.io/
 https://incontextlearning.com/
-
+https://www.supermemo.com/en/blog/twenty-rules-of-formulating-knowledge
 
 https://andymatuschak.org/hmwl/
 

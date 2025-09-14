@@ -139,7 +139,7 @@ response = requests.post(
     "http://localhost:8000/api/v1/audio/speech",
     headers={"Authorization": "Bearer your-token"},
     json={
-        "model": "tts-1",
+        "model": "tts-1",  # or an ElevenLabs model like "eleven_multilingual_v2" / "eleven_turbo_v2"
         "input": "Hello, world!",
         "voice": "alloy",
         "response_format": "mp3"
@@ -180,7 +180,7 @@ async with httpx.AsyncClient() as client:
     response = await client.post(
         "http://localhost:8000/api/v1/audio/speech",
         json={
-            "model": "kokoro",
+            "model": "kokoro",  # ElevenLabs also supports streaming
             "input": "Streaming audio test.",
             "voice": "af_bella",
             "stream": True
@@ -192,6 +192,32 @@ async with httpx.AsyncClient() as client:
         async for chunk in response.aiter_bytes():
             f.write(chunk)
 ```
+
+### List Voices
+
+List voices from all available providers, or filter by provider.
+
+```bash
+# All providers
+curl -s http://localhost:8000/api/v1/audio/voices | jq
+
+# ElevenLabs only
+curl -s "http://localhost:8000/api/v1/audio/voices?provider=elevenlabs" | jq
+```
+
+Example response (filtered):
+```json
+{
+  "elevenlabs": [
+    { "id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel", "gender": "female", "language": "en", "description": "American female voice" },
+    { "id": "29vD33N1CtxCmqQRPOHJ", "name": "Drew",   "gender": "male",   "language": "en", "description": "American male voice" }
+  ]
+}
+```
+
+Notes
+- ElevenLabs voices include your account’s user voices (cached on adapter init) plus defaults.
+- Other providers expose their known/static voices where applicable.
 
 ### Transcription (Speech-to-Text)
 

@@ -122,33 +122,20 @@ function displayConfigOverview(data) {
     overviewDiv.innerHTML = html;
 }
 
-// Get and display quickstart guide
-async function getQuickstartGuide() {
+// Get and display quickstart guide (opens in new tab to support redirects/external sites)
+function getQuickstartGuide() {
     const responseDiv = document.getElementById('configQuickstart_response');
-    
     try {
-        responseDiv.innerHTML = '<p>Loading quickstart guide...</p>';
-        
-        const response = await apiClient.get('/api/v1/config/quickstart');
-        
-        // If response is HTML, display it in an iframe or directly
-        if (typeof response === 'string' && response.includes('<!DOCTYPE html>')) {
-            // Create an iframe to display the HTML
-            const iframe = document.createElement('iframe');
-            iframe.style.width = '100%';
-            iframe.style.height = '600px';
-            iframe.style.border = '1px solid #ddd';
-            iframe.srcdoc = response;
-            
-            responseDiv.innerHTML = '';
-            responseDiv.appendChild(iframe);
-        } else {
-            // If it's JSON or other format, display as text
-            responseDiv.innerHTML = `<pre>${JSON.stringify(response, null, 2)}</pre>`;
-        }
+        const url = '/api/v1/config/quickstart';
+        window.open(url, '_blank');
+        responseDiv.innerHTML = `
+            <div>
+                Quickstart opened in a new tab. 
+                <a href="${url}" target="_blank" rel="noopener">Open again</a>
+            </div>`;
     } catch (error) {
-        responseDiv.innerHTML = `<div class="error">Error loading quickstart guide: ${error.message}</div>`;
-        console.error('Error loading quickstart guide:', error);
+        responseDiv.innerHTML = `<div class="error">Error opening quickstart: ${error.message}</div>`;
+        console.error('Error opening quickstart guide:', error);
     }
 }
 

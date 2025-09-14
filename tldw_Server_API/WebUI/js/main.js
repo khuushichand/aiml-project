@@ -170,6 +170,9 @@ class WebUI {
         if (contentId === 'tabChatCompletions' && typeof initializeChatCompletionsTab === 'function') {
             initializeChatCompletionsTab();
         }
+        if (contentId === 'tabWebScrapingIngest' && typeof initializeWebScrapingIngestTab === 'function') {
+            initializeWebScrapingIngestTab();
+        }
         
         if (contentId === 'tabEvalsOpenAI' || contentId === 'tabEvalsGEval') {
             if (typeof initializeEvaluationsTab === 'function') {
@@ -182,7 +185,8 @@ class WebUI {
         const tabsWithModelSelection = [
             'tabChatCompletions', 'tabCharacterChat', 'tabConversations',
             'tabMediaIngestion', 'tabMediaProcessingNoDB', 
-            'tabEvalsOpenAI', 'tabEvalsGEval'
+            'tabEvalsOpenAI', 'tabEvalsGEval',
+            'tabWebScrapingIngest'
         ];
         
         if (tabsWithModelSelection.includes(contentId)) {

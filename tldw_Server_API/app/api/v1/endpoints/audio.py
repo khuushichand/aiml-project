@@ -592,6 +592,33 @@ async def list_tts_providers(
         )
 
 
+@router.get("/voices", summary="List available TTS voices")
+async def list_tts_voices(
+    provider: Optional[str] = Query(None, description="Optional provider filter, e.g., 'elevenlabs' or 'openai'"),
+    tts_service: TTSServiceV2 = Depends(get_tts_service)
+):
+    """
+    List available voices from TTS providers.
+
+    - If `provider` is specified, returns voices only for that provider.
+    - Otherwise returns a mapping of provider name to voice lists.
+    
+    For ElevenLabs, this uses the adapter's cached user voices (plus defaults)
+    loaded during adapter initialization.
+    """
+    try:
+        all_voices = await tts_service.list_voices()
+        if provider:
+            key = provider.lower()
+            if key in all_voices:
+                return {key: all_voices[key]}
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"Provider '{provider}' not found or unavailable")
+        return all_voices
+    except Exception as e:
+        logger.error(f"Error listing TTS voices: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list voices: {str(e)}")
+
 @router.post("/reset-metrics")
 async def reset_tts_metrics(
     provider: Optional[str] = None,

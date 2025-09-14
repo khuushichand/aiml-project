@@ -755,6 +755,38 @@ pre:hover .copy-button {
 }
 
 /* ===========================
+   Validation Helpers
+   =========================== */
+.input-invalid {
+    border-color: var(--color-error) !important;
+    box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.12);
+}
+
+.validation-summary {
+    margin: 8px 0 12px 0;
+    padding: 8px 10px;
+    background: rgba(220, 53, 69, 0.06);
+    border-left: 3px solid var(--color-error);
+    color: var(--color-error);
+    border-radius: var(--radius-sm);
+    display: none;
+}
+
+.validation-summary.visible {
+    display: block;
+}
+
+.field-hint {
+    display: block;
+    margin-top: 4px;
+    color: var(--color-text-muted);
+}
+
+.field-hint.error {
+    color: var(--color-error);
+}
+
+/* ===========================
    Chat UI Specific
    =========================== */
 .message-entry {

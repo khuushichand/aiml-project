@@ -16,7 +16,7 @@ This document provides comprehensive API documentation for the Chatbook features
 The Chat Dictionary API provides pattern-based text replacement functionality for conversations, supporting both literal and regex patterns with probability-based application.
 
 ### Base URL
-`/api/v1/dictionaries`
+`/api/v1/chat/dictionaries`
 
 ### Authentication
 All endpoints require a valid JWT token in the Authorization header:
@@ -27,7 +27,7 @@ Authorization: Bearer <token>
 ### Endpoints
 
 #### 1. Create Dictionary
-**POST** `/api/v1/dictionaries/create`
+**POST** `/api/v1/chat/dictionaries/create`
 
 Creates a new chat dictionary for the authenticated user.
 
@@ -50,7 +50,7 @@ Creates a new chat dictionary for the authenticated user.
 ```
 
 #### 2. List Dictionaries
-**GET** `/api/v1/dictionaries/list`
+**GET** `/api/v1/chat/dictionaries/list`
 
 Lists all dictionaries for the authenticated user.
 
@@ -75,7 +75,7 @@ Lists all dictionaries for the authenticated user.
 ```
 
 #### 3. Get Dictionary
-**GET** `/api/v1/dictionaries/{dictionary_id}`
+**GET** `/api/v1/chat/dictionaries/{dictionary_id}`
 
 Retrieves a specific dictionary with all its entries.
 
@@ -101,7 +101,7 @@ Retrieves a specific dictionary with all its entries.
 ```
 
 #### 4. Add Entry
-**POST** `/api/v1/dictionaries/{dictionary_id}/entries`
+**POST** `/api/v1/chat/dictionaries/{dictionary_id}/entries`
 
 Adds a new entry to a dictionary.
 
@@ -126,7 +126,7 @@ Adds a new entry to a dictionary.
 ```
 
 #### 5. Update Entry
-**PUT** `/api/v1/dictionaries/entries/{entry_id}`
+**PUT** `/api/v1/chat/dictionaries/entries/{entry_id}`
 
 Updates an existing dictionary entry.
 
@@ -140,12 +140,12 @@ Updates an existing dictionary entry.
 ```
 
 #### 6. Delete Entry
-**DELETE** `/api/v1/dictionaries/entries/{entry_id}`
+**DELETE** `/api/v1/chat/dictionaries/entries/{entry_id}`
 
 Deletes a dictionary entry.
 
 #### 7. Process Text
-**POST** `/api/v1/dictionaries/process`
+**POST** `/api/v1/chat/dictionaries/process`
 
 Processes text through active dictionaries.
 
@@ -169,7 +169,7 @@ Processes text through active dictionaries.
 ```
 
 #### 8. Bulk Add Entries
-**POST** `/api/v1/dictionaries/{dictionary_id}/entries/bulk`
+**POST** `/api/v1/chat/dictionaries/{dictionary_id}/entries/bulk`
 
 Adds multiple entries at once.
 
@@ -184,7 +184,7 @@ Adds multiple entries at once.
 ```
 
 #### 9. Import Dictionary
-**POST** `/api/v1/dictionaries/import`
+**POST** `/api/v1/chat/dictionaries/import`
 
 Imports a dictionary from markdown format.
 
@@ -192,12 +192,12 @@ Imports a dictionary from markdown format.
 - `file`: Markdown file containing dictionary data
 
 #### 10. Export Dictionary
-**GET** `/api/v1/dictionaries/{dictionary_id}/export`
+**GET** `/api/v1/chat/dictionaries/{dictionary_id}/export`
 
 Exports a dictionary to markdown format.
 
 #### 11. Clone Dictionary
-**POST** `/api/v1/dictionaries/{dictionary_id}/clone`
+**POST** `/api/v1/chat/dictionaries/{dictionary_id}/clone`
 
 Creates a copy of an existing dictionary.
 
@@ -209,17 +209,17 @@ Creates a copy of an existing dictionary.
 ```
 
 #### 12. Toggle Active Status
-**PUT** `/api/v1/dictionaries/{dictionary_id}/toggle`
+**PUT** `/api/v1/chat/dictionaries/{dictionary_id}/toggle`
 
 Toggles a dictionary's active status.
 
 #### 13. Delete Dictionary
-**DELETE** `/api/v1/dictionaries/{dictionary_id}`
+**DELETE** `/api/v1/chat/dictionaries/{dictionary_id}`
 
 Deletes a dictionary and all its entries.
 
 #### 14. Search Entries
-**GET** `/api/v1/dictionaries/entries/search`
+**GET** `/api/v1/chat/dictionaries/entries/search`
 
 Searches for entries across all dictionaries.
 
@@ -227,7 +227,7 @@ Searches for entries across all dictionaries.
 - `query` (string): Search term
 
 #### 15. Get Statistics
-**GET** `/api/v1/dictionaries/statistics`
+**GET** `/api/v1/chat/dictionaries/statistics`
 
 Gets dictionary usage statistics.
 
@@ -635,7 +635,7 @@ Exports selected content to a chatbook archive.
 ```
 
 #### 2. Preview Export
-**POST** `/api/v1/chatbooks/export/preview`
+**POST** `/api/v1/chatbooks/preview`
 
 Previews what would be exported without creating the archive.
 
@@ -783,30 +783,12 @@ Cancels a pending export job.
 Cancels a pending import job.
 
 #### 12. Clean Old Exports
-**DELETE** `/api/v1/chatbooks/export/clean`
+**POST** `/api/v1/chatbooks/cleanup`
 
-Removes old export files.
-
-**Query Parameters:**
-- `days_old` (integer): Delete exports older than this many days (default: 30)
+Removes expired export files.
 
 #### 13. Get Statistics
-**GET** `/api/v1/chatbooks/statistics`
-
-Gets import/export statistics.
-
-**Response:**
-```json
-{
-  "total_exports": 50,
-  "export_success_rate": 0.96,
-  "total_imports": 30,
-  "import_success_rate": 0.93,
-  "total_items_exported": 1500,
-  "total_items_imported": 900,
-  "storage_used": "256.5 MB"
-}
-```
+> Statistics endpoint is planned but not implemented in the current version.
 
 ---
 
@@ -908,7 +890,7 @@ class ChatbookAPI:
     
     def create_dictionary(self, name, description):
         response = requests.post(
-            f"{self.base_url}/api/v1/dictionaries/create",
+            f"{self.base_url}/api/v1/chat/dictionaries/create",
             json={"name": name, "description": description},
             headers=self.headers
         )
@@ -916,7 +898,7 @@ class ChatbookAPI:
     
     def process_text(self, text, token_budget=1000):
         response = requests.post(
-            f"{self.base_url}/api/v1/dictionaries/process",
+            f"{self.base_url}/api/v1/chat/dictionaries/process",
             json={"text": text, "token_budget": token_budget},
             headers=self.headers
         )

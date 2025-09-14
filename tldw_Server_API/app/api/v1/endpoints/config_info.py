@@ -5,6 +5,7 @@ Only exposes non-sensitive configuration suitable for documentation.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Dict, List, Optional
 import configparser
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from loguru import logger
 
 router = APIRouter()
@@ -211,143 +213,60 @@ console.log('Created evaluation:', data.id);"""
 
 
 @router.get("/config/quickstart")
-async def get_quickstart_html():
+async def get_quickstart_redirect():
     """
-    Get an HTML quickstart page with auto-populated configuration.
+    Redirect to a Quickstart URL defined in config.txt or environment.
+
+    Precedence:
+    1) Environment variable QUICKSTART_URL
+    2) Config [WebUI] quickstart_url
+    3) Config [Docs] quickstart_url
+    4) Default: /webui/
     
-    Returns an HTML page that can be opened directly in a browser with
-    interactive examples using the current configuration.
+    Behavior:
+    - If the target starts with http(s)://, redirect there.
+    - If the target starts with '/', redirect to that path (same origin).
+    - Otherwise, treat as WebUI-relative file and redirect to /webui/<target>.
     """
-    from fastapi.responses import HTMLResponse
-    
-    config = load_safe_config()
-    api_key = config.get("api_key_for_docs", "default-secret-key-for-single-user")
-    
-    # Build base URL
-    host = config.get("server", {}).get("host", "127.0.0.1")
-    port = config.get("server", {}).get("port", 8000)
-    if host == "0.0.0.0":
-        host = "localhost"
-    base_url = f"http://{host}:{port}"
-    
-    providers = config.get("configured_llm_providers", [])
-    providers_str = ", ".join(providers) if providers else "No LLM providers configured"
-    
-    html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>tldw_server API Quick Start</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
-        .config-box {{ background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-        .code-block {{ background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-        .copy-btn {{ margin-left: 10px; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }}
-        .test-btn {{ padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }}
-        .result {{ margin-top: 15px; padding: 15px; border-radius: 5px; }}
-        .success {{ background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }}
-        .error {{ background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }}
-        code {{ background: #e9ecef; padding: 2px 5px; border-radius: 3px; font-family: monospace; }}
-    </style>
-</head>
-<body>
-    <h1>🚀 tldw_server Evaluation API - Quick Start</h1>
-    
-    <div class="config-box">
-        <h2>Your Configuration</h2>
-        <p><strong>API Key:</strong> <code id="api-key">{api_key}</code> <button class="copy-btn" onclick="copyText('api-key')">Copy</button></p>
-        <p><strong>Base URL:</strong> <code id="base-url">{base_url}</code> <button class="copy-btn" onclick="copyText('base-url')">Copy</button></p>
-        <p><strong>Auth Mode:</strong> {config.get("auth_mode", "single_user")}</p>
-        <p><strong>Configured LLM Providers:</strong> {providers_str}</p>
-    </div>
-    
-    <div class="config-box">
-        <h2>Test Your Configuration</h2>
-        <p>Click the button below to test creating an evaluation with your current configuration:</p>
-        <button class="test-btn" onclick="testAPI()">Test API Connection</button>
-        <div id="result"></div>
-    </div>
-    
-    <div class="config-box">
-        <h2>Example Code</h2>
-        <h3>Python</h3>
-        <div class="code-block">
-            <pre>{generate_python_example(api_key, base_url)}</pre>
-        </div>
-        
-        <h3>cURL</h3>
-        <div class="code-block">
-            <pre>{generate_curl_example(api_key, base_url)}</pre>
-        </div>
-    </div>
-    
-    <script>
-        function copyText(elementId) {{
-            const text = document.getElementById(elementId).textContent;
-            navigator.clipboard.writeText(text);
-            event.target.textContent = 'Copied!';
-            setTimeout(() => {{ event.target.textContent = 'Copy'; }}, 2000);
-        }}
-        
-        async function testAPI() {{
-            const resultDiv = document.getElementById('result');
-            resultDiv.innerHTML = '<p>Testing...</p>';
-            
-            try {{
-                // First test health endpoint
-                const healthResponse = await fetch('{base_url}/health');
-                
-                if (!healthResponse.ok) {{
-                    throw new Error('Server is not responding');
-                }}
-                
-                // Then test evaluation creation
-                const evalData = {{
-                    name: 'test_eval_' + Date.now(),
-                    eval_type: 'exact_match',
-                    eval_spec: {{ threshold: 1.0 }},
-                    dataset: [
-                        {{ input: {{ output: 'test' }}, expected: {{ output: 'test' }} }}
-                    ]
-                }};
-                
-                const response = await fetch('{base_url}/api/v1/evals', {{
-                    method: 'POST',
-                    headers: {{
-                        'Authorization': 'Bearer {api_key}',
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify(evalData)
-                }});
-                
-                const data = await response.json();
-                
-                if (response.ok) {{
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `
-                        <strong>✅ Success!</strong><br>
-                        Created evaluation with ID: <code>${{data.id}}</code><br>
-                        The API is working correctly with your configuration.
-                    `;
-                }} else {{
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `
-                        <strong>❌ API Error</strong><br>
-                        Status: ${{response.status}}<br>
-                        Message: ${{JSON.stringify(data, null, 2)}}
-                    `;
-                }}
-            }} catch (error) {{
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `
-                    <strong>❌ Connection Error</strong><br>
-                    ${{error.message}}<br><br>
-                    Make sure the server is running:<br>
-                    <code>python -m uvicorn tldw_Server_API.app.main:app --reload</code>
-                `;
-            }}
-        }}
-    </script>
-</body>
-</html>"""
-    
-    return HTMLResponse(content=html_content)
+    try:
+        # 1) Environment override
+        url = os.getenv("QUICKSTART_URL")
+
+        # 2/3) Config file
+        if not url:
+            try:
+                cfg = load_comprehensive_config()
+                if cfg.has_section('WebUI') and cfg.has_option('WebUI', 'quickstart_url'):
+                    url = cfg.get('WebUI', 'quickstart_url').strip()
+                elif cfg.has_section('Docs') and cfg.has_option('Docs', 'quickstart_url'):
+                    url = cfg.get('Docs', 'quickstart_url').strip()
+            except Exception as e:
+                logger.warning(f"Quickstart redirect: could not read config, using default. Error: {e}")
+
+        # 4) Default
+        if not url:
+            url = "/webui/"
+
+        # Normalize
+        if url.startswith("http://") or url.startswith("https://"):
+            target = url
+        elif url.startswith("/"):
+            target = url
+        else:
+            # Treat as WebUI-relative file
+            target = f"/webui/{url}"
+
+        logger.info(f"Redirecting /api/v1/config/quickstart to: {target}")
+        return RedirectResponse(url=target, status_code=307)
+    except Exception as e:
+        logger.error(f"Quickstart redirect failed: {e}")
+        # Fallback to a minimal built-in HTML page with a link to /webui/
+        fallback_html = """
+        <!DOCTYPE html>
+        <html><head><meta charset='utf-8'><title>Quickstart</title></head>
+        <body>
+          <p>Quickstart is not configured. Continue to the WebUI:</p>
+          <a href="/webui/">Open WebUI</a>
+        </body></nhtml>
+        """
+        return HTMLResponse(content=fallback_html, status_code=200)

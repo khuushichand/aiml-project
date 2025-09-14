@@ -78,6 +78,29 @@
         <pre id="promptsSearch_response">---</pre>
     </div>
 
+    <div class="endpoint-section" id="promptsGet">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/prompts/{prompt_identifier} - Get Prompt</span>
+        </h2>
+        <p>Get a specific prompt by ID, UUID, or Name.</p>
+        
+        <div class="form-group">
+            <label for="promptsGet_prompt_identifier">Prompt Identifier (ID/UUID/Name) <span class="required">*</span>:</label>
+            <input type="text" id="promptsGet_prompt_identifier" placeholder="1 or uuid or prompt-name">
+        </div>
+        
+        <button class="api-button" onclick="makeRequest('promptsGet', 'GET', '/api/v1/prompts/{prompt_identifier}', 'none')">
+            Get Prompt
+        </button>
+        
+        <h3>cURL Command:</h3>
+        <pre id="promptsGet_curl">---</pre>
+        
+        <h3>Response:</h3>
+        <pre id="promptsGet_response">---</pre>
+    </div>
+
     <div class="endpoint-section" id="promptsExport">
         <h2>
             <span class="endpoint-method get">GET</span>
@@ -160,28 +183,6 @@
         <pre id="promptsCreate_response">---</pre>
     </div>
 
-    <div class="endpoint-section" id="promptsGet">
-        <h2>
-            <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/prompts/{prompt_identifier} - Get Prompt</span>
-        </h2>
-        <p>Get a specific prompt by ID, UUID, or Name.</p>
-        
-        <div class="form-group">
-            <label for="promptsGet_prompt_identifier">Prompt Identifier (ID/UUID/Name) <span class="required">*</span>:</label>
-            <input type="text" id="promptsGet_prompt_identifier" placeholder="1 or uuid or prompt-name">
-        </div>
-        
-        <button class="api-button" onclick="makeRequest('promptsGet', 'GET', '/api/v1/prompts/{prompt_identifier}', 'none')">
-            Get Prompt
-        </button>
-        
-        <h3>cURL Command:</h3>
-        <pre id="promptsGet_curl">---</pre>
-        
-        <h3>Response:</h3>
-        <pre id="promptsGet_response">---</pre>
-    </div>
 
     <div class="endpoint-section" id="promptsUpdate">
         <h2>

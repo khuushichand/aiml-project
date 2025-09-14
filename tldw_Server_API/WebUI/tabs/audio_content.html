@@ -76,14 +76,21 @@
                 <!-- Voice Selection (dynamic based on provider) -->
                 <div class="form-group">
                     <label for="audioTTS_voice">Voice:</label>
-                    <select id="audioTTS_voice">
-                        <option value="alloy">Alloy</option>
-                        <option value="echo">Echo</option>
-                        <option value="fable">Fable</option>
-                        <option value="onyx">Onyx</option>
-                        <option value="nova">Nova</option>
-                        <option value="shimmer">Shimmer</option>
-                    </select>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="audioTTS_voice" style="flex:1;">
+                            <option value="alloy">Alloy</option>
+                            <option value="echo">Echo</option>
+                            <option value="fable">Fable</option>
+                            <option value="onyx">Onyx</option>
+                            <option value="nova">Nova</option>
+                            <option value="shimmer">Shimmer</option>
+                        </select>
+                        <button class="btn-small" type="button" onclick="loadProviderVoices()" title="Load voices from provider">
+                            <i class="icon-download"></i> Load Voices
+                        </button>
+                    </div>
+                    <small class="text-muted">Click "Load Voices" to fetch voices from the selected provider (e.g., ElevenLabs).</small>
+                    <div id="audioTTS_voiceList" class="mt-1" style="max-height:140px; overflow:auto; border:1px solid var(--color-border); border-radius:6px; padding:6px; display:none;"></div>
                 </div>
             </div>
             

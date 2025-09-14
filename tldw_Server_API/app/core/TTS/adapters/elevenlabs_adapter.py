@@ -247,8 +247,8 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             supported_voices=all_voices,
             supported_formats={
                 AudioFormat.MP3,
-                AudioFormat.PCM,
-                AudioFormat.ULAW
+                AudioFormat.WAV,
+                AudioFormat.OPUS
             },
             max_text_length=5000,  # ElevenLabs character limit
             supports_streaming=True,
@@ -303,13 +303,13 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                         request=request
                     ),
                     format=request.format,
-                    sample_rate=44100,
+                    sample_rate=self._infer_sample_rate(request.format),
                     channels=1,
                     voice_used=request.voice or "rachel",
                     provider=self.provider_name
                 )
             else:
-                # Generate complete audio
+                # Generate complete audio (use non-stream endpoint for efficiency)
                 audio_data = await self._generate_complete_elevenlabs(
                     text=request.text,
                     voice_id=voice_id,
@@ -319,7 +319,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 return TTSResponse(
                     audio_data=audio_data,
                     format=request.format,
-                    sample_rate=44100,
+                    sample_rate=self._infer_sample_rate(request.format),
                     channels=1,
                     voice_used=request.voice or "rachel",
                     provider=self.provider_name
@@ -367,7 +367,10 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         
         try:
             async with self.client.stream("POST", url, headers=headers, json=payload) as response:
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    self._raise_mapped_http_error(e)
                 
                 chunk_count = 0
                 async for chunk in response.aiter_bytes(chunk_size=1024):
@@ -382,7 +385,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 
         except httpx.HTTPStatusError as e:
             logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
-            raise
+            self._raise_mapped_http_error(e)
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
@@ -394,17 +397,41 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         model_id: str,
         request: TTSRequest
     ) -> bytes:
-        """Generate complete audio from ElevenLabs"""
-        # Collect all streamed chunks
-        all_audio = b""
-        async for chunk in self._stream_audio_elevenlabs(text, voice_id, model_id, request):
-            all_audio += chunk
-        return all_audio
+        """Generate complete audio from ElevenLabs (non-stream endpoint)."""
+        url = f"{self.base_url}/text-to-speech/{voice_id}"
+        headers = {
+            "xi-api-key": self.api_key,
+            "Accept": self._get_accept_header(request.format)
+        }
+        voice_settings = {
+            "stability": request.extra_params.get("stability", self.stability),
+            "similarity_boost": request.extra_params.get("similarity_boost", self.similarity_boost),
+            "style": request.extra_params.get("style", self.style),
+            "use_speaker_boost": request.extra_params.get("speaker_boost", self.use_speaker_boost)
+        }
+        payload = {
+            "text": text,
+            "model_id": model_id,
+            "voice_settings": voice_settings
+        }
+        try:
+            response = await self.client.post(url, headers=headers, json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                self._raise_mapped_http_error(e)
+            return response.content or b""
+        except httpx.HTTPStatusError as e:
+            logger.error(f"{self.provider_name} HTTP error (non-stream): {e.response.status_code} - {e.response.text}")
+            self._raise_mapped_http_error(e)
+        except Exception as e:
+            logger.error(f"{self.provider_name} non-stream error: {e}")
+            raise
     
     def _get_voice_id(self, voice_name: str) -> str:
         """Get ElevenLabs voice ID from voice name"""
-        # Check if it's already a voice ID (21 characters)
-        if len(voice_name) == 20 and voice_name.isalnum():
+        # Check if it's already a voice ID (alphanumeric, typically >=20 chars)
+        if voice_name and voice_name.isalnum() and len(voice_name) >= 20:
             return voice_name
         
         # Check default voices
@@ -439,10 +466,35 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         """Get Accept header for requested format"""
         format_map = {
             AudioFormat.MP3: "audio/mpeg",
-            AudioFormat.PCM: "audio/pcm",
-            AudioFormat.ULAW: "audio/ulaw"
+            AudioFormat.WAV: "audio/wav",
+            AudioFormat.OPUS: "audio/opus",
         }
         return format_map.get(format, "audio/mpeg")
+
+    def _infer_sample_rate(self, format: AudioFormat) -> int:
+        """Best-effort sample rate heuristic by format."""
+        if format == AudioFormat.OPUS:
+            return 48000
+        # Default to 44100 for mp3/wav
+        return 44100
+
+    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
+        """Map HTTP errors to TTS exceptions for consistent handling upstream."""
+        status = e.response.status_code if e.response is not None else None
+        try:
+            text = e.response.text if e.response is not None else None
+        except Exception:
+            text = None
+        if status in (401, 403):
+            raise TTSAuthenticationError(f"{self.provider_name} authentication failed", provider=self.provider_name, details={"status": status, "body": text})
+        if status == 429:
+            raise TTSRateLimitError(f"{self.provider_name} rate limit exceeded", provider=self.provider_name, details={"status": status})
+        if status in (408, 504):
+            raise TTSTimeoutError(f"{self.provider_name} timeout", provider=self.provider_name, details={"status": status})
+        if status and 500 <= status < 600:
+            raise TTSProviderError(f"{self.provider_name} upstream error", provider=self.provider_name, details={"status": status})
+        # Generic mapping for other 4xx
+        raise TTSProviderError(f"{self.provider_name} request failed ({status})", provider=self.provider_name, details={"status": status, "body": text})
     
     async def _cleanup_resources(self):
         """Clean up ElevenLabs adapter resources"""

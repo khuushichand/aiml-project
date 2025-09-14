@@ -110,6 +110,10 @@ This tool is designed for:
 - Chat API: `Docs/API-related/Chat_API_Documentation.md`
 - Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
 
+### Audio Endpoints
+- `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
+- `GET  /api/v1/audio/voices` — List available TTS voices (supports `?provider=elevenlabs`)
+
 ### Recent Improvements
 
 **v1.2.0 - Auto-Configuration Update**

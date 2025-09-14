@@ -68,7 +68,7 @@ providers:
     enable_watermark: true  # Perth watermarker for authenticity
     target_latency_ms: 200  # Sub-200ms target
     
-  # ElevenLabs Configuration (TODO: Implement adapter)
+  # ElevenLabs Configuration (adapter implemented)
   elevenlabs:
     enabled: false
     api_key: ${ELEVENLABS_API_KEY}
