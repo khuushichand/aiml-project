@@ -564,6 +564,42 @@ class TestTemplateProcessing:
             assert isinstance(result, list)
             assert len(result) == 2  # After filtering out "Short."
 
+    def test_process_template_db_style_schema(self):
+        """TemplateProcessor should accept DB-style operation/config schema via stages."""
+        processor = TemplateProcessor()
+
+        # Build stages using DB-style operation/config entries
+        stages = [
+            TemplateStage(
+                name="preprocess",
+                operations=[{"operation": "normalize_whitespace", "config": {"max_line_breaks": 1}}],
+                enabled=True,
+            ),
+            TemplateStage(
+                name="chunk",
+                operations=[{"method": "words", "config": {"max_size": 3, "overlap": 0}}],
+                enabled=True,
+            ),
+            TemplateStage(
+                name="postprocess",
+                operations=[{"operation": "filter_empty", "config": {"min_length": 1}}],
+                enabled=True,
+            ),
+        ]
+
+        tmpl = ChunkingTemplate(
+            name="db_style",
+            description="DB style schema",
+            base_method="words",
+            stages=stages,
+            default_options={}
+        )
+
+        text = "One   two three\n\n\nFour five six seven"
+        result = processor.process_template(text, tmpl)
+        assert isinstance(result, list)
+        assert len(result) >= 2
+
 
 # Integration Tests
 class TestIntegration:
@@ -613,6 +649,37 @@ class TestIntegration:
             assert "chunks" in data
             assert len(data["chunks"]) == 4
             assert "metadata" in data
+
+    def test_apply_template_endpoint_real_processor(self, test_client, auth_headers, temp_db):
+        """Apply template without mocking, ensure end-to-end DB schema mapping works."""
+        db, _ = temp_db
+
+        # Create a simple words-based template that should work with real processor
+        db.create_chunking_template(
+            name="apply_real",
+            template_json=json.dumps({
+                "preprocessing": [
+                    {"operation": "normalize_whitespace", "config": {"max_line_breaks": 1}}
+                ],
+                "chunking": {"method": "words", "config": {"max_size": 4, "overlap": 0}},
+                "postprocessing": [
+                    {"operation": "filter_empty", "config": {"min_length": 1}}
+                ]
+            }),
+            description="Real processor apply test",
+        )
+
+        req = {
+            "text": "Alpha   beta gamma\n\nDelta epsilon zeta eta theta",
+            "template_name": "apply_real",
+        }
+
+        resp = test_client.post("/api/v1/chunking/templates/apply", json=req, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["template_name"] == "apply_real"
+        assert isinstance(body["chunks"], list)
+        assert len(body["chunks"]) >= 2
     
     def test_template_in_chunking_endpoint(self):
         """Test using templates in the main chunking endpoint."""

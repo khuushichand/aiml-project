@@ -39,11 +39,15 @@ class ChunkingTemplate:
 class TemplateProcessor:
     """Processes text through template-defined chunking pipelines."""
     
-    def __init__(self):
-        """Initialize the template processor."""
+    def __init__(self, chunker: Optional[Chunker] = None):
+        """Initialize the template processor.
+
+        Args:
+            chunker: Optional preconfigured Chunker instance (e.g., with LLM hooks)
+        """
         self._operations: Dict[str, Callable] = {}
         self._register_builtin_operations()
-        self._chunker = None
+        self._chunker = chunker
         
         logger.debug("TemplateProcessor initialized")
     
@@ -123,17 +127,24 @@ class TemplateProcessor:
                              data: Dict[str, Any],
                              stage: TemplateStage,
                              options: Dict[str, Any]) -> Dict[str, Any]:
-        """Run preprocessing operations on text."""
+        """Run preprocessing operations on text.
+
+        Supports both {"type", "params"} and {"operation", "config"} schemas.
+        """
         text = data["text"]
-        
+
         for operation in stage.operations:
-            op_name = operation.get("type")
-            op_options = {**options, **operation.get("params", {})}
-            
+            # Support both schemas
+            op_name = operation.get("type") or operation.get("operation")
+            raw_params = operation.get("params")
+            if raw_params is None:
+                raw_params = operation.get("config")
+            op_options = {**options, **(raw_params or {})}
+
             if op_name in self._operations:
                 logger.debug(f"Running preprocessing: {op_name}")
                 result = self._operations[op_name](text, op_options)
-                
+
                 # Handle different return types
                 if isinstance(result, str):
                     text = result
@@ -142,7 +153,7 @@ class TemplateProcessor:
                     data["metadata"].update(result.get("metadata", {}))
             else:
                 logger.warning(f"Unknown operation: {op_name}")
-        
+
         data["text"] = text
         return data
     
@@ -151,15 +162,31 @@ class TemplateProcessor:
                         stage: TemplateStage,
                         options: Dict[str, Any],
                         base_method: str) -> Dict[str, Any]:
-        """Run chunking operation."""
+        """Run chunking operation.
+
+        Supports both {"method", "params"} and {"method", "config"} schemas.
+        """
         text = data["text"]
-        
+
         # Get chunking parameters
         chunk_ops = stage.operations[0] if stage.operations else {}
         method = chunk_ops.get("method", base_method)
-        max_size = chunk_ops.get("max_size", options.get("max_size", 400))
-        overlap = chunk_ops.get("overlap", options.get("overlap", 50))
-        
+
+        # Options can be top-level or nested under "config"
+        nested_cfg = chunk_ops.get("config", {}) or {}
+        # max_size and overlap may be provided in either place; prefer explicit top-level first
+        max_size = chunk_ops.get("max_size", nested_cfg.get("max_size", options.get("max_size", 400)))
+        overlap = chunk_ops.get("overlap", nested_cfg.get("overlap", options.get("overlap", 50)))
+
+        # Additional params may be under "params" or "config"
+        extra_params = chunk_ops.get("params")
+        if extra_params is None:
+            extra_params = nested_cfg
+        # Avoid passing duplicates for standard args
+        for k in ("max_size", "overlap", "method", "language"):
+            if isinstance(extra_params, dict) and k in extra_params:
+                extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
+
         # Perform chunking
         chunker = self._get_chunker()
         chunks = chunker.chunk_text(
@@ -167,9 +194,9 @@ class TemplateProcessor:
             method=method,
             max_size=max_size,
             overlap=overlap,
-            **chunk_ops.get("params", {})
+            **(extra_params or {})
         )
-        
+
         data["chunks"] = chunks
         return data
     
@@ -177,19 +204,26 @@ class TemplateProcessor:
                               data: Dict[str, Any],
                               stage: TemplateStage,
                               options: Dict[str, Any]) -> Dict[str, Any]:
-        """Run postprocessing operations on chunks."""
+        """Run postprocessing operations on chunks.
+
+        Supports both {"type", "params"} and {"operation", "config"} schemas.
+        """
         chunks = data.get("chunks", [])
-        
+
         for operation in stage.operations:
-            op_name = operation.get("type")
-            op_options = {**options, **operation.get("params", {})}
-            
+            # Support both schemas
+            op_name = operation.get("type") or operation.get("operation")
+            raw_params = operation.get("params")
+            if raw_params is None:
+                raw_params = operation.get("config")
+            op_options = {**options, **(raw_params or {})}
+
             if op_name in self._operations:
                 logger.debug(f"Running postprocessing: {op_name}")
                 chunks = self._operations[op_name](chunks, op_options)
             else:
                 logger.warning(f"Unknown operation: {op_name}")
-        
+
         data["chunks"] = chunks
         return data
     
@@ -453,28 +487,61 @@ class TemplateManager:
         return None
     
     def load_template(self, path: Path) -> ChunkingTemplate:
-        """Load a template from file."""
+        """Load a template from file.
+
+        Supports both the stage-based schema and the simpler
+        {preprocessing, chunking, postprocessing} schema used in the DB.
+        """
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
-        # Convert to template object
-        stages = []
-        for stage_data in data.get("stages", []):
+
+        stages: List[TemplateStage] = []
+
+        if "stages" in data:
+            # Stage-based schema
+            for stage_data in data.get("stages", []):
+                stages.append(TemplateStage(
+                    name=stage_data["name"],
+                    operations=stage_data.get("operations", []),
+                    enabled=stage_data.get("enabled", True)
+                ))
+            base_method = data.get("base_method", "words")
+            default_options = data.get("default_options", {})
+        else:
+            # DB/file schema with preprocessing/chunking/postprocessing
+            if 'preprocessing' in data:
+                stages.append(TemplateStage(
+                    name='preprocess',
+                    operations=data.get('preprocessing', []),
+                    enabled=True
+                ))
+
+            chunk_op = data.get('chunking', {})
             stages.append(TemplateStage(
-                name=stage_data["name"],
-                operations=stage_data.get("operations", []),
-                enabled=stage_data.get("enabled", True)
+                name='chunk',
+                operations=[chunk_op],
+                enabled=True
             ))
-        
+
+            if 'postprocessing' in data:
+                stages.append(TemplateStage(
+                    name='postprocess',
+                    operations=data.get('postprocessing', []),
+                    enabled=True
+                ))
+
+            base_method = chunk_op.get('method', 'words')
+            default_options = chunk_op.get('config', {}) or {}
+
         template = ChunkingTemplate(
-            name=data["name"],
+            name=data.get("name", path.stem),
             description=data.get("description", ""),
-            base_method=data.get("base_method", "words"),
+            base_method=base_method,
             stages=stages,
-            default_options=data.get("default_options", {}),
-            metadata=data.get("metadata", {})
+            default_options=default_options,
+            metadata=data.get("metadata", {"tags": data.get("tags", [])})
         )
-        
+
         # Cache it
         self._cache[template.name] = template
         return template

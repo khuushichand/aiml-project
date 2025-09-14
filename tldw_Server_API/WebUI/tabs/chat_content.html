@@ -304,8 +304,40 @@
                 </div>
 
                 <div class="card" style="padding:12px; margin-top:12px;">
-                    <strong>Entries</strong>
-                    <div id="entriesList" style="margin:8px 0; max-height:240px; overflow:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px; background:var(--color-surface-alt);"></div>
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <strong>Entries</strong>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <input type="text" id="entriesFilter" placeholder="Filter entries by pattern..." style="width:220px;">
+                            <select id="entriesTypeFilter">
+                                <option value="">All types</option>
+                                <option value="literal">literal</option>
+                                <option value="regex">regex</option>
+                            </select>
+                            <select id="entriesGroupFilter">
+                                <option value="">All groups</option>
+                            </select>
+                            <label style="display:flex; gap:6px; align-items:center;">
+                                <input type="checkbox" id="entriesGroupBy"> Group by group
+                            </label>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+                        <label style="display:flex; gap:6px; align-items:center;">
+                            <input type="checkbox" id="entriesSelectAll"> Select all
+                        </label>
+                        <select id="bulkAction">
+                            <option value="">Bulk action...</option>
+                            <option value="activate">Activate</option>
+                            <option value="deactivate">Deactivate</option>
+                            <option value="delete">Delete</option>
+                            <option value="group">Set Group</option>
+                            <option value="rename_group">Rename Group</option>
+                            <option value="clear_group">Clear Group</option>
+                        </select>
+                        <input type="text" id="bulkGroupName" placeholder="Group name" style="display:none;"/>
+                        <button class="api-button" id="bulkApplyBtn">Apply</button>
+                    </div>
+                    <div id="entriesList" style="margin:8px 0; max-height:280px; overflow:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px; background:var(--color-surface-alt);"></div>
 
                     <details style="margin-top:8px;">
                         <summary><strong>Add Entry</strong></summary>
@@ -393,12 +425,76 @@
                     </details>
                     <details style="margin-top:8px;">
                         <summary>Export to Markdown</summary>
-                        <div>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                             <button class="api-button" id="expRunBtn">Export</button>
+                            <button class="btn" id="expDownloadMdBtn">Download Markdown</button>
+                            <button class="btn" id="expCopyMdBtn">Copy</button>
                         </div>
                         <div class="form-group" style="margin-top:8px;">
                             <label>Exported Content</label>
                             <textarea id="exp_content" rows="6" readonly></textarea>
+                        </div>
+                    </details>
+                    <details style="margin-top:8px;">
+                        <summary>JSON Import / Export</summary>
+                        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                            <div style="flex:1; min-width:280px;">
+                                <strong>Export JSON</strong>
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                    <button class="api-button" id="expJsonBtn">Export JSON</button>
+                                    <button class="btn" id="expJsonDownloadBtn">Download JSON</button>
+                                    <button class="btn" id="expJsonCopyBtn">Copy</button>
+                                </div>
+                                <div class="form-group" style="margin-top:8px;">
+                                    <label>JSON</label>
+                                    <textarea id="exp_json_content" rows="6" readonly></textarea>
+                                </div>
+                            </div>
+                            <div style="flex:1; min-width:280px;">
+                                <strong>Import JSON</strong>
+                                <div class="form-group">
+                                    <label for="imp_json_content">JSON (Drag & Drop file to load)</label>
+                                    <textarea id="imp_json_content" rows="6" placeholder='{"name":"My Dict","entries":[{"pattern":"AI","replacement":"Artificial Intelligence","type":"literal"}]}'></textarea>
+                                </div>
+                                <label><input type="checkbox" id="imp_json_activate" checked> Activate after import</label>
+                                <div>
+                                    <button class="api-button" id="impJsonBtn">Import JSON</button>
+                                    <span id="imp_json_status" class="muted" style="margin-left:8px;"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                    <details style="margin-top:8px;">
+                        <summary>CSV Import / Export</summary>
+                        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                            <div style="flex:1; min-width:280px;">
+                                <strong>Export CSV</strong>
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                    <button class="api-button" id="expCsvBtn">Export CSV</button>
+                                    <button class="btn" id="expCsvDownloadBtn">Download CSV</button>
+                                    <button class="btn" id="expCsvCopyBtn">Copy</button>
+                                </div>
+                                <div class="form-group" style="margin-top:8px;">
+                                    <label>CSV</label>
+                                    <textarea id="exp_csv_content" rows="6" readonly placeholder="pattern,replacement,type,probability,enabled,case_sensitive,group,max_replacements\n..."></textarea>
+                                </div>
+                            </div>
+                            <div style="flex:1; min-width:280px;">
+                                <strong>Import CSV</strong>
+                                <div class="form-group">
+                                    <label for="imp_csv_name">Dictionary Name</label>
+                                    <input type="text" id="imp_csv_name" placeholder="Imported CSV Dictionary">
+                                </div>
+                                <div class="form-group">
+                                    <label for="imp_csv_content">CSV (Drag & Drop file to load)</label>
+                                    <textarea id="imp_csv_content" rows="6" placeholder="pattern,replacement,type,probability,enabled,case_sensitive,group,max_replacements\nAI,Artificial Intelligence,literal,1.0,true,true,,0"></textarea>
+                                </div>
+                                <label><input type="checkbox" id="imp_csv_activate" checked> Activate after import</label>
+                                <div>
+                                    <button class="api-button" id="impCsvBtn">Import CSV</button>
+                                    <span id="imp_csv_status" class="muted" style="margin-left:8px;"></span>
+                                </div>
+                            </div>
                         </div>
                     </details>
                 </div>

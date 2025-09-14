@@ -1278,6 +1278,8 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ImportDictionaryRequest,
     ImportDictionaryResponse,
     ExportDictionaryResponse,
+    ImportDictionaryJSONRequest,
+    ExportDictionaryJSONResponse,
     DictionaryListResponse,
     EntryListResponse,
     DictionaryStatistics,
@@ -1802,6 +1804,54 @@ async def export_dictionary(
         raise
     except Exception as e:
         logger.error(f"Error exporting dictionary: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/dictionaries/{dictionary_id}/export/json", response_model=ExportDictionaryJSONResponse,
+            summary="Export dictionary to JSON", tags=["Chat Dictionaries"])
+async def export_dictionary_json(
+    dictionary_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+) -> ExportDictionaryJSONResponse:
+    try:
+        service = ChatDictionaryService(db)
+        data = service.export_to_json(dictionary_id)
+        return ExportDictionaryJSONResponse(**data)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting dictionary JSON: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/dictionaries/import/json", response_model=ImportDictionaryResponse,
+             status_code=status.HTTP_201_CREATED, summary="Import dictionary from JSON",
+             tags=["Chat Dictionaries"])
+async def import_dictionary_json(
+    import_request: ImportDictionaryJSONRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+) -> ImportDictionaryResponse:
+    try:
+        service = ChatDictionaryService(db)
+        dict_id = service.import_from_json(import_request.data)
+        entries = service.get_entries(dictionary_id=dict_id, active_only=False)
+        if import_request.activate:
+            service.update_dictionary(dict_id, is_active=True)
+        name = import_request.data.get('name') or service.get_dictionary(dict_id).get('name', 'Imported')
+        return ImportDictionaryResponse(
+            dictionary_id=dict_id,
+            name=name,
+            entries_imported=len(entries),
+            groups_created=list({e.get('group') for e in entries if e.get('group')})
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing dictionary JSON: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

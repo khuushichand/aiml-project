@@ -1,0 +1,2 @@
+{"id":"example1","pdf_path":"data/pdfs/example1.pdf","ground_truth_text":"Hello world page 1. Page 2 text here.","ground_truth_pages":["Hello world page 1.","Page 2 text here."]}
+{"id":"example2","pdf_path":"data/pdfs/example2.pdf","ground_truth_text":"First page content. Second page content.","ground_truth_pages":["First page content.","Second page content."]}

@@ -68,6 +68,10 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
         Number of templates successfully seeded
     """
     try:
+        # Backward compat: allow passing MediaDatabase as first positional arg
+        if isinstance(db_path, MediaDatabase) and db is None:
+            db = db_path
+            db_path = None
         # Use provided database instance or create one
         if db is None:
             # For backward compatibility and startup initialization
@@ -121,6 +125,10 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
         Number of templates updated
     """
     try:
+        # Backward compat: allow passing MediaDatabase as first positional arg
+        if isinstance(db_path, MediaDatabase) and db is None:
+            db = db_path
+            db_path = None
         # Use provided database instance or create one
         if db is None:
             if db_path is None:

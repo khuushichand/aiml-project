@@ -58,12 +58,13 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         try:
             import nltk
             self._nltk_available = True
-            # Try to ensure punkt is downloaded
+            # Verify punkt presence but do not auto-download; fall back later if missing
             try:
                 nltk.data.find('tokenizers/punkt')
             except LookupError:
-                logger.info("Downloading NLTK punkt tokenizer...")
-                nltk.download('punkt', quiet=True)
+                logger.info(
+                    "NLTK punkt tokenizer not found; will use simple fallback sentence splitting."
+                )
         except ImportError:
             self._nltk_available = False
             logger.warning(

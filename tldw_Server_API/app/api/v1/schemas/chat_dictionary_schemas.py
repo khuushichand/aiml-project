@@ -143,6 +143,17 @@ class ExportDictionaryResponse(BaseModel):
     entry_count: int = Field(..., description="Number of entries exported")
     group_count: int = Field(..., description="Number of groups in the dictionary")
 
+class ImportDictionaryJSONRequest(BaseModel):
+    """Request schema for importing a dictionary from JSON."""
+    data: Dict[str, Any] = Field(..., description="Dictionary JSON data with 'name' and 'entries'")
+    activate: bool = Field(True, description="Whether to activate the dictionary after import")
+
+class ExportDictionaryJSONResponse(BaseModel):
+    """Response schema for JSON export of a dictionary."""
+    name: str = Field(..., description="Dictionary name")
+    description: Optional[str] = Field(None, description="Dictionary description")
+    entries: List[Dict[str, Any]] = Field(..., description="Entries with pattern, replacement, type, probability, etc.")
+
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""

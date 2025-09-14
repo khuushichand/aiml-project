@@ -10,6 +10,7 @@ import time
 import re
 import signal
 import threading
+import socket
 from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
 
@@ -109,6 +110,23 @@ class TestXXEProtection:
 class TestReDoSProtection:
     """Test protection against Regular Expression Denial of Service (ReDoS) attacks."""
     
+    def _internet_available(self, timeout: float = 0.5) -> bool:
+        """Return True if outbound network appears available.
+
+        Uses short TCP connection attempts to well-known public DNS IPs.
+        Keeps timeouts tiny to avoid slowing collection when offline.
+        """
+        try:
+            for host in ("1.1.1.1", "8.8.8.8", "9.9.9.9"):
+                try:
+                    with socket.create_connection((host, 53), timeout=timeout):
+                        return True
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        return False
+
     @contextmanager
     def timeout_context(self, seconds):
         """Context manager for timeout with better cross-platform support."""
@@ -214,6 +232,8 @@ class TestReDoSProtection:
     
     def test_safe_patterns_work(self):
         """Test that safe regex patterns work correctly."""
+        if not self._internet_available():
+            pytest.skip("Skipping: internet unavailable (prevents NLTK download during Chunker init)")
         chunker = Chunker()
         
         # Safe patterns that should work

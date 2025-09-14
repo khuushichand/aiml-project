@@ -1,4 +1,4 @@
-# test_world_book_manager.py
+# test_world_book_manager.py  (renamed to avoid basename conflicts)
 # Description: Unit tests for the WorldBookService
 #
 """

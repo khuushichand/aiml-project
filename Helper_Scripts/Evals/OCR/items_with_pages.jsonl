@@ -1,0 +1,2 @@
+{"id":"doc1","extracted_text":"Hello world page 1.\n\n---\n\nPage 2 text here.","ground_truth_text":"Hello world page 1. Page 2 text here.","ground_truth_pages":["Hello world page 1.","Page 2 text here."]}
+{"id":"doc2","extracted_text":"First page content.\nSecond page content.","ground_truth_text":"First page content. Second page content.","ground_truth_pages":["First page content.","Second page content."]}

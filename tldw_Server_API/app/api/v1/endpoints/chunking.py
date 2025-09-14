@@ -120,6 +120,103 @@ async def process_text_for_chunking_json(
                 effective_options.update(request_options_dict)
                 
                 logger.debug(f"Template-based effective options: {effective_options}")
+
+                # Build Template object (DB schema -> stages)
+                stages = []
+                if 'preprocessing' in template_config:
+                    stages.append(TemplateStage(
+                        name='preprocess',
+                        operations=template_config['preprocessing'],
+                        enabled=True
+                    ))
+                stages.append(TemplateStage(
+                    name='chunk',
+                    operations=[template_config['chunking']],
+                    enabled=True
+                ))
+                if 'postprocessing' in template_config:
+                    stages.append(TemplateStage(
+                        name='postprocess',
+                        operations=template_config['postprocessing'],
+                        enabled=True
+                    ))
+
+                template_obj = ChunkingTemplate(
+                    name=template_data['name'],
+                    description=template_data['description'] or "",
+                    base_method=template_config['chunking']['method'],
+                    stages=stages,
+                    default_options=template_config['chunking'].get('config', {}),
+                    metadata={'tags': template_data['tags']}
+                )
+
+                # If template uses LLM-heavy methods, prepare a configured Chunker
+                configured_chunker = None
+                current_chunking_method_tmp = effective_options.get('method')
+                if current_chunking_method_tmp == 'rolling_summarize':
+                    # Reuse the same provider/model selection logic from below
+                    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
+                    from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+                    server_configs = load_server_configs()
+                    if not server_configs:
+                        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                            detail="Server configuration error, cannot perform LLM-dependent chunking.")
+                    requested_llm_options = effective_options.get('llm_options_for_internal_steps', {}) or {}
+                    default_summarization_provider = server_configs.get('llm_api_settings', {}).get('default_api', 'openai')
+                    summarization_provider = requested_llm_options.get('provider') or default_summarization_provider
+                    provider_specific_config_key = f"{summarization_provider}_api"
+                    api_details_from_server_config = server_configs.get(provider_specific_config_key, {})
+                    final_model_for_step = api_details_from_server_config.get('model_for_summarization') or api_details_from_server_config.get('model')
+                    if not api_details_from_server_config.get('api_key') or not final_model_for_step:
+                        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                            detail=f"Configuration error: Missing API key or model for {summarization_provider}.")
+                    client_suggested_system_prompt = requested_llm_options.get('system_prompt_for_step')
+                    method_default_system_prompt = effective_options.get('summarize_system_prompt')
+                    final_system_prompt_for_step = client_suggested_system_prompt or method_default_system_prompt
+                    final_max_tokens_for_step = requested_llm_options.get('max_tokens_per_step') or int(api_details_from_server_config.get('max_tokens_for_summarization_step', 1024))
+                    llm_api_config_to_use_tmp = {
+                        "api_name": summarization_provider,
+                        "model": final_model_for_step,
+                        "api_key": api_details_from_server_config.get('api_key'),
+                        "temp": requested_llm_options.get('temperature'),
+                        "system_message": final_system_prompt_for_step,
+                        "max_tokens": final_max_tokens_for_step,
+                    }
+                    configured_chunker = Chunker(llm_call_func=general_llm_analyzer, llm_config=llm_api_config_to_use_tmp)
+
+                # Process via TemplateProcessor (with optional configured chunker)
+                processor = TemplateProcessor(chunker=configured_chunker)
+                chunks = processor.process_template(
+                    text=request_data.text_content,
+                    template=template_obj,
+                    **{k: v for k, v in effective_options.items() if k not in {"method"}}
+                )
+
+                # Build minimal metadata for response
+                total = len(chunks)
+                chunked_responses = []
+                for idx, chunk in enumerate(chunks):
+                    meta = {
+                        "chunk_index": idx,
+                        "total_chunks": total,
+                        "chunk_method": template_obj.base_method,
+                        "max_size": effective_options.get('max_size'),
+                        "overlap": effective_options.get('overlap'),
+                        "language": effective_options.get('language'),
+                        "relative_position": 0.0 if total <= 1 else idx/(total-1),
+                        "template_applied": template_obj.name,
+                        "template_version": template_data.get('version', 1),
+                    }
+                    chunked_responses.append(ChunkedContentResponse(text=chunk, metadata=meta))
+
+                # Applied options include template_name for clarity
+                applied_opts = dict(effective_options)
+                applied_opts['template_name'] = request_data.options.template_name
+                return ChunkingResponse(
+                    chunks=chunked_responses,
+                    original_file_name=request_data.file_name,
+                    applied_options=ChunkingOptionsRequest(**applied_opts)
+                )
             else:
                 logger.warning(f"Template '{request_data.options.template_name}' not found, falling back to regular options")
         except Exception as e:

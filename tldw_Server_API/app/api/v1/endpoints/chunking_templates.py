@@ -158,18 +158,20 @@ async def create_template(
             user_id=template_data.user_id
         )
         
+        # Fetch full record to ensure datetime fields are present and correct
+        stored = db.get_chunking_template(name=created['name'])
         return ChunkingTemplateResponse(
-            id=created['id'],
-            uuid=created['uuid'],
-            name=created['name'],
-            description=created['description'],
-            template_json=created['template_json'],
-            is_builtin=created['is_builtin'],
-            tags=created['tags'],
-            created_at=created.get('created_at', ''),
-            updated_at=created.get('updated_at', ''),
-            version=created['version'],
-            user_id=created['user_id']
+            id=stored['id'],
+            uuid=stored['uuid'],
+            name=stored['name'],
+            description=stored['description'],
+            template_json=stored['template_json'],
+            is_builtin=stored['is_builtin'],
+            tags=stored['tags'],
+            created_at=stored['created_at'],
+            updated_at=stored['updated_at'],
+            version=stored['version'],
+            user_id=stored['user_id']
         )
         
     except Exception as e:
@@ -421,15 +423,16 @@ async def validate_template(
                     message='Chunking method is required'
                 ))
             else:
-                # Validate chunking method exists
-                valid_methods = [
-                    'words', 'sentences', 'paragraphs', 'tokens',
-                    'semantic', 'regex', 'markdown', 'code', 'custom'
-                ]
-                if chunking['method'] not in valid_methods:
-                    warnings.append(
-                        f"Unknown chunking method '{chunking['method']}'. Valid methods: {', '.join(valid_methods)}"
-                    )
+                # Validate chunking method against actual available methods
+                try:
+                    available_methods = Chunker().get_available_methods()
+                except Exception:
+                    available_methods = ['words', 'sentences', 'paragraphs', 'tokens', 'semantic', 'json', 'xml', 'ebook_chapters', 'rolling_summarize', 'structure_aware', 'propositions']
+                if chunking['method'] not in available_methods:
+                    errors.append(TemplateValidationError(
+                        field='chunking.method',
+                        message=f"Unknown chunking method '{chunking['method']}'. Valid methods: {', '.join(sorted(available_methods))}"
+                    ))
         
         # Validate preprocessing operations
         if 'preprocessing' in template_config:

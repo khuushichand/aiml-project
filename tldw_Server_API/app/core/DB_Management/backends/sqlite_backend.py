@@ -418,7 +418,8 @@ class SQLiteBackend(DatabaseBackend):
     def escape_identifier(self, identifier: str) -> str:
         """Escape a SQLite identifier."""
         # SQLite uses double quotes for identifiers
-        return f'"{identifier.replace('"', '""')}"'
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
     
     def get_last_insert_id(self, connection: Optional[sqlite3.Connection] = None) -> Optional[int]:
         """Get the last inserted row ID."""

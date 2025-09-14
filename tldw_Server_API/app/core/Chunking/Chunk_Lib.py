@@ -119,17 +119,26 @@ class TransformationRecord:
 #
 
 def ensure_nltk_data():
+    """Best-effort check for NLTK punkt.
+
+    Avoids raising at import time in environments where NLTK data is missing
+    or corrupted (e.g., BadZipFile). Falls back gracefully; downstream calls
+    already handle missing punkt by catching exceptions and using simple
+    splitting strategies.
+    """
     try:
         nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        logging.info("NLTK 'punkt' tokenizer not found. Downloading...")
+        return True
+    except Exception as e:  # Catch broader issues like BadZipFile
+        logging.warning(f"NLTK 'punkt' not available or invalid ({e}). Attempting download...")
         try:
-            nltk.download('punkt')
-            logging.info("'punkt' downloaded successfully.")
-        except Exception as e:
-            logging.error(f"Failed to download 'punkt': {e}")
-            # Depending on how critical this is, you might raise an error or just warn
-            # For now, we'll let it proceed, and sent_tokenize will fail later if needed.
+            nltk.download('punkt', quiet=True)
+            nltk.data.find('tokenizers/punkt')
+            logging.info("'punkt' downloaded or verified successfully.")
+            return True
+        except Exception as e2:
+            logging.warning(f"'punkt' unavailable after attempt: {e2}. Proceeding with fallbacks.")
+            return False
 ensure_nltk_data()
 
 # Load configuration (used for default options)

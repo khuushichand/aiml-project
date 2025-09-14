@@ -1,4 +1,4 @@
-# test_chat_dictionary.py
+# test_chat_dictionary.py  (renamed to avoid basename conflicts)
 # Description: Unit tests for the ChatDictionaryService
 #
 """

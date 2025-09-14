@@ -4,13 +4,16 @@ eBook chapter-based chunking strategy.
 Splits text into chunks based on chapter markers.
 """
 
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Tuple
 import re
 import sys
 import threading
 import time
 from contextlib import contextmanager
 from loguru import logger
+import multiprocessing as mp
+import os
+from queue import Queue
 
 from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 from ..exceptions import InvalidInputError, ProcessingError
@@ -35,6 +38,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
     # Regex complexity limits for security
     MAX_REGEX_LENGTH = 500  # Maximum length of custom regex pattern
     REGEX_TIMEOUT = 2  # Seconds before regex timeout
+    MAX_CHAPTER_MARKERS = 10000  # Hard cap on detected markers
     DANGEROUS_PATTERNS = [
         r'\(\*',  # Possessive quantifiers
         r'\(\?R\)',  # Recursive patterns
@@ -60,6 +64,16 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             language: Language code for text processing
         """
         super().__init__(language)
+        # Policy toggles via environment
+        self._force_simple_only = os.getenv("CHUNKING_REGEX_SIMPLE_ONLY", "").lower() in ("1", "true", "yes")
+        self._disable_mp = os.getenv("CHUNKING_DISABLE_MP", "").lower() in ("1", "true", "yes")
+        # Allow overriding timeout via env
+        try:
+            env_timeout = float(os.getenv("CHUNKING_REGEX_TIMEOUT", ""))
+            if env_timeout > 0:
+                self.REGEX_TIMEOUT = env_timeout
+        except Exception:
+            pass
         logger.debug(f"EbookChapterChunkingStrategy initialized for language: {language}")
     
     @contextmanager
@@ -117,6 +131,145 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 return result_container['value']
         
         yield RegexTimeout(seconds)
+
+    @staticmethod
+    def _is_simple_safe_pattern(pattern: str) -> bool:
+        """Allow only a restricted subset of regex constructs considered safe.
+
+        Allowed:
+        - Literals (letters, digits, spaces)
+        - Anchors ^ and $
+        - Character classes like [A-Z], [IVX]
+        - Escapes: \d, \w
+        - Quantifier + following a literal, escape (\d/\w), or a character class
+
+        Disallowed: grouping (), alternation |, wildcard ., ?, *, nested classes, backrefs.
+        """
+        # Quick rejects
+        for bad in ("(", ")", "|", ".", "?", "*"):
+            if bad in pattern:
+                return False
+        # Validate escapes and '+' placement
+        i = 0
+        n = len(pattern)
+        while i < n:
+            ch = pattern[i]
+            if ch == "\\":
+                if i + 1 >= n:
+                    return False
+                nxt = pattern[i + 1]
+                if nxt not in ("d", "w"):
+                    return False
+                i += 2
+                continue
+            if ch == "[":
+                j = pattern.find("]", i + 1)
+                if j == -1:
+                    return False
+                # rudimentary check: disallow nested '[' inside
+                if "[" in pattern[i + 1:j]:
+                    return False
+                i = j + 1
+                continue
+            # Anchors and common literals allowed
+            if ch in "^$ " or ch.isalnum():
+                i += 1
+                continue
+            if ch == "+":
+                if i == 0:
+                    return False
+                prev = pattern[i - 1]
+                # plus must follow a charclass close ']' or alnum or 'd'/'w' from an escape
+                if prev == "]" or prev.isalnum():
+                    i += 1
+                    continue
+                # handle case of plus after escape like '\\d+'
+                if i >= 2 and pattern[i - 2] == "\\" and pattern[i - 1] in ("d", "w"):
+                    i += 1
+                    continue
+                return False
+            # any other symbol is disallowed
+            return False
+        return True
+
+    @staticmethod
+    def _finditer_worker(pattern: str, text: str, flags: int, out_queue: "mp.Queue") -> None:
+        """Worker process to run regex finditer safely and return spans.
+
+        Sends a list of (start, end, group0) tuples via the queue.
+        """
+        try:
+            compiled = re.compile(pattern, flags)
+            results: List[Tuple[int, int, str]] = []
+            for m in compiled.finditer(text):
+                # Limit group length to avoid huge IPC payloads
+                g = m.group(0)
+                if len(g) > 1024:
+                    g = g[:1024]
+                results.append((m.start(), m.end(), g))
+            out_queue.put(("ok", results))
+        except Exception as e:
+            out_queue.put(("err", str(e)))
+
+    def _safe_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+        """Run regex finditer in a separate process with a deadline.
+
+        Returns list of (start, end, group0) tuples or raises ProcessingError on timeout/error.
+        """
+        # First, try process-based isolation with a strict deadline, unless disabled.
+        try:
+            if getattr(self, "_disable_mp", False):
+                raise RuntimeError("mp disabled by policy")
+            ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
+            q: mp.Queue = ctx.Queue()
+            p = ctx.Process(target=self._finditer_worker, args=(pattern, text, flags, q))
+            p.daemon = True
+            p.start()
+            p.join(timeout_s)
+            if p.is_alive():
+                try:
+                    p.terminate()
+                finally:
+                    p.join(1)
+                raise ProcessingError("Regex operation timed out - possible ReDoS attack (process)")
+
+            if not q.empty():
+                status, payload = q.get_nowait()
+                if status == "ok":
+                    return payload  # type: ignore[return-value]
+                raise ProcessingError(f"Regex execution failed: {payload}")
+            # No result from worker
+            raise ProcessingError("Regex execution failed without result (process)")
+        except Exception as _:
+            # Fall back to a daemon-thread approach with a hard deadline.
+            done_q: Queue = Queue(maxsize=1)
+
+            def _runner():
+                try:
+                    compiled = re.compile(pattern, flags)
+                    results: List[Tuple[int, int, str]] = []
+                    for m in compiled.finditer(text):
+                        g = m.group(0)
+                        if len(g) > 1024:
+                            g = g[:1024]
+                        results.append((m.start(), m.end(), g))
+                    done_q.put(("ok", results))
+                except Exception as e:  # pragma: no cover - defensive
+                    done_q.put(("err", str(e)))
+
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+            t.join(timeout_s)
+            if t.is_alive():
+                # Abandon the work; enforce hard limit by failing fast.
+                raise ProcessingError("Regex operation timed out - possible ReDoS attack (thread)")
+            try:
+                status, payload = done_q.get_nowait()
+            except Exception:
+                raise ProcessingError("Regex execution failed without result (thread)")
+            if status == "ok":
+                return payload  # type: ignore[return-value]
+            raise ProcessingError(f"Regex execution failed: {payload}")
     
     def _validate_regex_pattern(self, pattern: str) -> bool:
         """
@@ -144,6 +297,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 raise InvalidInputError(
                     f"Regex pattern contains potentially dangerous construct: {dangerous}"
                 )
+
+        # Enforce simple-only mode if configured
+        if getattr(self, "_force_simple_only", False) and not self._is_simple_safe_pattern(pattern):
+            raise InvalidInputError("Only simple regex patterns are allowed by policy")
         
         # Test pattern compilation
         try:
@@ -193,14 +350,26 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 )
                 logger.debug(f"Using {self.language} chapter pattern")
             
-            # Find all chapter markers 
-            # Note: Pattern safety is ensured by _validate_regex_pattern above
-            # which rejects dangerous patterns before they can be compiled
-            chapter_markers = list(re.finditer(chapter_pattern, text, re.MULTILINE))
-            
+            # Find all chapter markers; prefer direct search for simple safe patterns
+            try:
+                if self._is_simple_safe_pattern(chapter_pattern):
+                    chapter_markers = list(re.finditer(chapter_pattern, text, re.MULTILINE))
+                else:
+                    spans = self._safe_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
+                    # Reconstruct minimal marker info from spans (we need only starts)
+                    chapter_markers = spans
+            except Exception as e:
+                logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split")
+                return self._split_by_size(text, max_size, overlap)
+
             if not chapter_markers:
                 logger.info("No chapter markers found, treating entire text as single chapter")
                 # No chapters found, split by size if needed
+                return self._split_by_size(text, max_size, overlap)
+
+            # Hard cap number of markers to prevent pathological cases
+            if isinstance(chapter_markers, list) and len(chapter_markers) > self.MAX_CHAPTER_MARKERS:
+                logger.warning("Too many chapter markers detected; applying size-based split to avoid overload")
                 return self._split_by_size(text, max_size, overlap)
             
             logger.debug(f"Found {len(chapter_markers)} chapter markers")
@@ -210,9 +379,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             # Process each chapter
             for i, marker in enumerate(chapter_markers):
                 # Determine chapter boundaries
-                chapter_start = marker.start()
+                chapter_start = marker[0] if isinstance(marker, tuple) else marker.start()  # support both formats
                 if i < len(chapter_markers) - 1:
-                    chapter_end = chapter_markers[i + 1].start()
+                    next_start = chapter_markers[i + 1][0] if isinstance(chapter_markers[i + 1], tuple) else chapter_markers[i + 1].start()
+                    chapter_end = next_start
                 else:
                     chapter_end = len(text)
                 
@@ -296,9 +466,37 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     self.CHAPTER_PATTERNS['default']
                 )
             
-            # Find all chapter markers
-            # Note: Pattern safety is ensured by _validate_regex_pattern above
-            chapter_markers = list(re.finditer(chapter_pattern, text, re.MULTILINE))
+            # Find all chapter markers; prefer direct search for simple safe patterns
+            try:
+                if self._is_simple_safe_pattern(chapter_pattern):
+                    chapter_markers = list(re.finditer(chapter_pattern, text, re.MULTILINE))
+                else:
+                    spans = self._safe_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
+                    chapter_markers = spans
+            except Exception as e:
+                logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split (metadata)")
+                # Return a single chunk with basic metadata if detection fails
+                words = text.split()
+                chunks = []
+                i = 0
+                chunk_index = 0
+                while i < len(words):
+                    end_idx = min(i + max_size, len(words))
+                    chunk_words = words[i:end_idx]
+                    chunk_text = ' '.join(chunk_words)
+                    metadata = ChunkMetadata(
+                        index=chunk_index,
+                        start_char=0,
+                        end_char=len(chunk_text),
+                        word_count=len(chunk_words),
+                        language=self.language,
+                        method='ebook_chapters',
+                        options={'fallback': 'size_split'}
+                    )
+                    chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
+                    chunk_index += 1
+                    i += max_size - overlap if overlap > 0 else max_size
+                return chunks
             
             chunks = []
             chunk_index = 0
@@ -330,14 +528,15 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             
             # Process each chapter
             for i, marker in enumerate(chapter_markers):
-                chapter_start = marker.start()
+                chapter_start = marker[0] if isinstance(marker, tuple) else marker.start()
                 if i < len(chapter_markers) - 1:
-                    chapter_end = chapter_markers[i + 1].start()
+                    next_start = chapter_markers[i + 1][0] if isinstance(chapter_markers[i + 1], tuple) else chapter_markers[i + 1].start()
+                    chapter_end = next_start
                 else:
                     chapter_end = len(text)
-                
+
                 chapter_text = text[chapter_start:chapter_end].strip()
-                chapter_title = marker.group().strip()
+                chapter_title = (marker[2] if isinstance(marker, tuple) else marker.group()).strip()
                 word_count = len(chapter_text.split())
                 
                 # Check if chapter needs to be split

@@ -281,15 +281,11 @@ class AsyncChunker:
         if not hasattr(self, '_template_manager'):
             self._template_manager = TemplateManager()
         
-        # Process in executor
+        # Process in executor (ensure keyword options are passed correctly)
+        import functools
         loop = asyncio.get_event_loop()
-        chunks = await loop.run_in_executor(
-            self._executor,
-            self._template_manager.process,
-            text,
-            template_name,
-            options
-        )
+        func = functools.partial(self._template_manager.process, text, template_name, **options)
+        chunks = await loop.run_in_executor(self._executor, func)
         return chunks
     
     async def close(self):

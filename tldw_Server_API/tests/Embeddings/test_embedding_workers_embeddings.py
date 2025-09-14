@@ -1,4 +1,4 @@
-# test_embedding_workers.py
+# test_embedding_workers.py  (renamed to avoid basename conflicts)
 """
 Unit tests for embedding worker components.
 
