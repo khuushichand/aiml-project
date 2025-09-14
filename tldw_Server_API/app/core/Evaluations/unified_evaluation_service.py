@@ -46,6 +46,10 @@ class EvaluationType(str, Enum):
     RAG = "rag"
     RESPONSE_QUALITY = "response_quality"
     PROPOSITION_EXTRACTION = "proposition_extraction"
+    QA3 = "qa3"
+    OCR = "ocr"
+    LABEL_CHOICE = "label_choice"
+    NLI_FACTCHECK = "nli_factcheck"
     CUSTOM = "custom"
 
 
@@ -73,6 +77,7 @@ class UnifiedEvaluationService:
         # Initialize evaluation engines (lazy loading)
         self._rag_evaluator = None
         self._quality_evaluator = None
+        self._ocr_evaluator = None
         
         # Initialize circuit breaker for resilience
         from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreakerConfig
@@ -103,6 +108,13 @@ class UnifiedEvaluationService:
         if self._quality_evaluator is None:
             self._quality_evaluator = ResponseQualityEvaluator()
         return self._quality_evaluator
+
+    def get_ocr_evaluator(self):
+        """Get or create OCR evaluator instance"""
+        if self._ocr_evaluator is None:
+            from tldw_Server_API.app.core.Evaluations.ocr_evaluator import OCREvaluator
+            self._ocr_evaluator = OCREvaluator()
+        return self._ocr_evaluator
     
     # ============= Evaluation Management =============
     
@@ -655,6 +667,188 @@ class UnifiedEvaluationService:
         except Exception as e:
             logger.error(f"Response quality evaluation failed: {e}")
             raise
+
+    async def evaluate_ocr(
+        self,
+        items: List[Dict[str, Any]],
+        ocr_options: Optional[Dict[str, Any]] = None,
+        metrics: Optional[List[str]] = None,
+        thresholds: Optional[Dict[str, float]] = None,
+        user_id: str = "system",
+    ) -> Dict[str, Any]:
+        """Evaluate OCR effectiveness for provided documents.
+
+        Each item supports keys: id, pdf_path|pdf_bytes|extracted_text, ground_truth_text
+        """
+        try:
+            start_time = time.time()
+
+            results = await self.get_ocr_evaluator().evaluate(
+                items=items,
+                metrics=metrics,
+                ocr_options=ocr_options,
+                thresholds=thresholds,
+            )
+
+            evaluation_time = time.time() - start_time
+
+            eval_id = await self._store_evaluation_result(
+                evaluation_type="ocr",
+                input_data={
+                    "count": len(items),
+                    "metrics": metrics or ["cer", "wer", "coverage", "page_coverage"],
+                    "thresholds": thresholds or {},
+                },
+                results=results,
+                metadata={
+                    "evaluation_time": evaluation_time,
+                    "user_id": user_id,
+                },
+            )
+
+            return {
+                "evaluation_id": eval_id,
+                "results": results,
+                "evaluation_time": evaluation_time,
+            }
+        except Exception as e:
+            logger.error(f"OCR evaluation failed: {e}")
+            raise
+
+    async def evaluate_qa3(
+        self,
+        items: List[Dict[str, Any]],
+        allowed_labels: Optional[List[str]] = None,
+        label_mapping: Optional[Dict[str, str]] = None,
+        generate_predictions: bool = False,
+        api_name: str = "openai",
+        temperature: float = 0.0,
+        max_tokens: int = 3,
+        user_id: str = "system"
+    ) -> Dict[str, Any]:
+        """Evaluate tri-label QA accuracy and PRF per label.
+
+        If generate_predictions is True, uses LLM to produce predictions.
+        Otherwise expects 'prediction' on each item.
+        """
+        allowed = [l.upper() for l in (allowed_labels or ["SUPPORTED","REFUTED","NEI"])]
+
+        def norm_label(x: Optional[str]) -> Optional[str]:
+            if x is None:
+                return None
+            s = str(x).strip()
+            if label_mapping and s in label_mapping:
+                s = label_mapping[s]
+            s = s.upper()
+            # normalize common variants
+            aliases = {
+                "TRUE": "SUPPORTED",
+                "FALSE": "REFUTED",
+                "NOT_ENTAILED": "NEI",
+                "NOT_ENTAILMENT": "NEI",
+            }
+            s = aliases.get(s, s)
+            return s
+
+        def parse_prediction(text: str) -> Optional[str]:
+            t = (text or "").upper()
+            for lab in allowed:
+                if lab in t:
+                    return lab
+            # try exact tokenization
+            for lab in allowed:
+                if t.strip() == lab:
+                    return lab
+            return None
+
+        # Prompt builder
+        def build_prompt(q: str, allowed_str: str, ctx: Optional[str]) -> str:
+            p = (
+                "You are a strict grader. Read the question and answer with exactly one token from the set.\n"
+                f"Allowed labels: {allowed_str}. Respond with only one of these labels.\n\n"
+            )
+            if ctx:
+                p += f"Context (optional):\n{ctx}\n\n"
+            p += f"Question:\n{q}\n\nAnswer (one token):"
+            return p
+
+        # LLM call helper
+        import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+        def call_llm(prompt: str) -> str:
+            try:
+                # use analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, streaming=False, recursive_summarization=False, chunked_summarization=False)
+                result = sgl.analyze(api_name, prompt, None, None, "You output one token only.", temperature, False, False, False, None)
+                if isinstance(result, tuple) and result:
+                    return str(result[0])
+                return str(result)
+            except Exception as e:
+                logger.error(f"LLM call failed in QA3: {e}")
+                return ""
+
+        # Compute predictions
+        results = []
+        for it in items:
+            q = it.get("question", "")
+            gold = norm_label(it.get("label"))
+            pred = norm_label(it.get("prediction"))
+            if generate_predictions or not pred:
+                prompt = build_prompt(q, ", ".join(allowed), it.get("context"))
+                raw = call_llm(prompt)
+                parsed = parse_prediction(raw) or "NEI"
+                pred = parsed
+                results.append({"id": it.get("id"), "question": q, "gold": gold, "pred": pred, "raw": raw})
+            else:
+                results.append({"id": it.get("id"), "question": q, "gold": gold, "pred": pred})
+
+        # Metrics
+        cm: Dict[str, Dict[str, int]] = {g: {p: 0 for p in allowed} for g in allowed}
+        total = 0
+        correct = 0
+        for r in results:
+            g = r.get("gold") or "NEI"
+            p = r.get("pred") or "NEI"
+            if g not in cm:
+                cm[g] = {lab: 0 for lab in allowed}
+            if p not in cm[g]:
+                for lab in cm:
+                    cm[lab][p] = cm[lab].get(p, 0)
+            cm[g][p] = cm[g].get(p, 0) + 1
+            total += 1
+            if g == p:
+                correct += 1
+
+        accuracy = (correct / total) if total else 0.0
+        per_label = {}
+        macro_f1 = 0.0
+        for lab in allowed:
+            tp = cm.get(lab, {}).get(lab, 0)
+            fp = sum(cm[g].get(lab, 0) for g in cm if g != lab)
+            fn = sum(cm[lab].get(p, 0) for p in cm[lab] if p != lab) if lab in cm else 0
+            prec = tp / (tp + fp) if (tp + fp) else 0.0
+            rec = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+            per_label[lab] = {"precision": prec, "recall": rec, "f1": f1, "support": sum(cm.get(lab, {}).values())}
+            macro_f1 += f1
+        macro_f1 = macro_f1 / len(allowed) if allowed else 0.0
+
+        # Pack results
+        payload = {
+            "accuracy": accuracy,
+            "macro_f1": macro_f1,
+            "per_label": per_label,
+            "confusion_matrix": cm,
+            "results": results,
+        }
+
+        # Store
+        eval_id = await self._store_evaluation_result(
+            evaluation_type="qa3",
+            input_data={"count": len(items), "generate": generate_predictions, "allowed_labels": allowed},
+            results=payload,
+            metadata={"user_id": user_id}
+        )
+
+        return {"evaluation_id": eval_id, "results": payload}
 
     async def evaluate_propositions(
         self,

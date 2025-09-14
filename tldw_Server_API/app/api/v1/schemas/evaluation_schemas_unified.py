@@ -98,6 +98,9 @@ class EvaluationType(str, Enum):
     RAG = "rag"
     RESPONSE_QUALITY = "response_quality"
     PROPOSITION_EXTRACTION = "proposition_extraction"
+    OCR = "ocr"
+    LABEL_CHOICE = "label_choice"  # Multi-class single-label selection
+    NLI_FACTCHECK = "nli_factcheck"  # Claim verification via NLI-style labels
     CUSTOM = "custom"
 
 
@@ -156,6 +159,32 @@ class EvaluationSpec(BaseModel):
     custom_prompts: Optional[Dict[str, str]] = Field(
         default=None,
         description="Custom evaluation prompts"
+    )
+
+    # Optional fields for classification/label-choice and NLI fact-checking
+    allowed_labels: Optional[List[str]] = Field(
+        default=None,
+        description="Allowed label set for label_choice/NLI evaluations"
+    )
+    label_mapping: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Mapping of synonyms/aliases to canonical labels"
+    )
+    structured_output: Optional[bool] = Field(
+        default=False,
+        description="If true, instruct model to return strict JSON"
+    )
+    generate_predictions: Optional[bool] = Field(
+        default=True,
+        description="If true, call model to generate predictions; otherwise expect predictions in samples"
+    )
+    prompt_template: Optional[str] = Field(
+        default=None,
+        description="Override default prompt for label_choice/NLI"
+    )
+    nli_model: Optional[str] = Field(
+        default=None,
+        description="Optional NLI model identifier/provider name"
     )
 
 
@@ -302,6 +331,32 @@ class DatasetResponse(BaseModel):
     
     class Config:
         allow_population_by_field_name = True
+
+
+# ============= OCR Evaluation Schemas =============
+
+class OCREvaluationItem(BaseModel):
+    id: str = Field(..., description="Document identifier")
+    extracted_text: Optional[str] = Field(None, description="OCR-extracted text (if already computed)")
+    ground_truth_text: str = Field(..., description="Ground-truth text for comparison")
+    ground_truth_pages: Optional[List[str]] = Field(default=None, description="Per-page ground-truth texts (aligned to PDF pages)")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class OCREvaluationRequest(BaseModel):
+    items: List[OCREvaluationItem]
+    metrics: Optional[List[Literal["cer", "wer", "coverage", "page_coverage"]]] = Field(
+        default_factory=lambda: ["cer", "wer", "coverage", "page_coverage"],
+        description="Metrics to compute"
+    )
+    ocr_options: Optional[Dict[str, Any]] = Field(default=None, description="OCR configuration options")
+    thresholds: Optional[Dict[str, float]] = Field(default=None, description="Pass/fail thresholds: max_cer, max_wer, min_coverage, min_page_coverage")
+
+
+class OCREvaluationResponse(BaseModel):
+    evaluation_id: str
+    results: Dict[str, Any]
+    evaluation_time: float
 
 
 # ============= List Responses =============
@@ -451,6 +506,48 @@ class ResponseQualityResponse(BaseModel):
     format_compliance: Optional[Dict[str, bool]] = None
     issues: Optional[List[str]] = None
     improvements: Optional[List[str]] = None
+
+# ============= QA3 (Tri-Label) Evaluation Schemas =============
+
+class QA3Item(BaseModel):
+    id: Optional[str] = None
+    question: str = Field(..., min_length=1)
+    label: Optional[str] = Field(None, description="Gold label (e.g., SUPPORTED, REFUTED, NEI)")
+    prediction: Optional[str] = Field(None, description="Optional precomputed prediction; if provided and generation disabled, used for scoring")
+    context: Optional[str] = Field(None, description="Optional context to include in the prompt")
+
+    @field_validator('question', 'context')
+    @classmethod
+    def sanitize_text_fields(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return sanitize_html_text(v)
+
+
+class QA3Request(BaseModel):
+    items: List[QA3Item] = Field(..., min_items=1)
+    allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"]) 
+    label_mapping: Optional[Dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
+    generate_predictions: Optional[bool] = Field(False, description="If true, call LLM to predict; else expect item.prediction and score-only")
+    api_name: Optional[str] = Field("openai")
+    temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0)
+    max_tokens: Optional[int] = Field(3, ge=1, le=16)
+
+
+class QA3PerLabel(BaseModel):
+    precision: float
+    recall: float
+    f1: float
+    support: int
+
+
+class QA3Response(BaseModel):
+    accuracy: float
+    macro_f1: float
+    per_label: Dict[str, QA3PerLabel]
+    confusion_matrix: Dict[str, Dict[str, int]]
+    results: List[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class BatchEvaluationRequest(BaseModel):

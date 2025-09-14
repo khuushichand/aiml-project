@@ -242,6 +242,87 @@
     </div>
 </div>
 
+<!-- OCR Evaluation Tab -->
+<div id="tabEvalsOCR" class="tab-content">
+  <div class="endpoint-section" id="ocrEval">
+    <h2>
+      <span class="endpoint-method post">POST</span>
+      <span class="endpoint-path">/api/v1/evaluations/ocr - OCR Text Evaluation</span>
+    </h2>
+    <p>Evaluate OCR effectiveness by comparing extracted text to ground-truth.</p>
+
+    <div class="form-group">
+      <label for="ocrEval_payload">OCR Evaluation Request (JSON):</label>
+      <textarea id="ocrEval_payload" class="code-input" rows="14">{
+  "items": [
+    { "id": "doc1", "extracted_text": "Hello world", "ground_truth_text": "Hello world" }
+  ],
+  "metrics": ["cer", "wer", "coverage", "page_coverage"],
+  "thresholds": { "max_cer": 0.1, "max_wer": 0.2 }
+}</textarea>
+    </div>
+
+    <button class="api-button" onclick="makeRequest('ocrEval', 'POST', '/api/v1/evaluations/ocr', 'json')">Run OCR Text Eval</button>
+
+    <h3>cURL Command:</h3>
+    <pre id="ocrEval_curl">---</pre>
+
+    <h3>Response:</h3>
+    <pre id="ocrEval_response">---</pre>
+  </div>
+
+  <div class="endpoint-section" id="ocrEvalPdf">
+    <h2>
+      <span class="endpoint-method post">POST</span>
+      <span class="endpoint-path">/api/v1/evaluations/ocr-pdf - OCR PDF Evaluation</span>
+    </h2>
+    <p>Upload PDFs, run OCR, and compare to provided ground-truths.</p>
+
+    <div class="form-row">
+      <div class="column">
+        <div class="form-group">
+          <label for="ocrEvalPdf_files">PDF Files:</label>
+          <input type="file" id="ocrEvalPdf_files" multiple accept=".pdf">
+          <small>You can upload multiple PDFs</small>
+        </div>
+
+        <div class="form-group">
+          <label for="ocrEvalPdf_ground_truths_json">Ground Truths (JSON Array):</label>
+          <textarea id="ocrEvalPdf_ground_truths_json" rows="4" placeholder='["GT for file1","GT for file2"]'></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="ocrEvalPdf_thresholds_json">Thresholds (JSON):</label>
+          <textarea id="ocrEvalPdf_thresholds_json" rows="3" placeholder='{"max_cer":0.15,"min_coverage":0.7}'></textarea>
+        </div>
+      </div>
+      <div class="column">
+        <h4>OCR Options</h4>
+        <div class="form-group"><label><input type="checkbox" id="ocrEvalPdf_enable_ocr" checked> Enable OCR</label></div>
+        <div class="form-group"><label for="ocrEvalPdf_ocr_backend">OCR Backend:</label><input type="text" id="ocrEvalPdf_ocr_backend" placeholder="tesseract or auto"></div>
+        <div class="form-group"><label for="ocrEvalPdf_ocr_lang">OCR Lang:</label><input type="text" id="ocrEvalPdf_ocr_lang" value="eng"></div>
+        <div class="form-group"><label for="ocrEvalPdf_ocr_dpi">OCR DPI:</label><input type="number" id="ocrEvalPdf_ocr_dpi" value="300" min="72" max="600"></div>
+        <div class="form-group"><label for="ocrEvalPdf_ocr_mode">OCR Mode:</label><input type="text" id="ocrEvalPdf_ocr_mode" value="fallback" placeholder="fallback or always"></div>
+        <div class="form-group"><label for="ocrEvalPdf_ocr_min_page_text_chars">Min Page Text Chars:</label><input type="number" id="ocrEvalPdf_ocr_min_page_text_chars" value="40" min="0"></div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="ocrEvalPdf_ground_truths_pages_json">Per-Page Ground Truths (JSON Array of Arrays):</label>
+      <textarea id="ocrEvalPdf_ground_truths_pages_json" rows="4" placeholder='[["p1 text","p2 text"], ["p1 text","p2 text"]]'></textarea>
+      <small>Optional: provides page-level ground truth for per-page CER/WER scoring</small>
+    </div>
+
+    <button class="api-button" onclick="makeRequest('ocrEvalPdf', 'POST', '/api/v1/evaluations/ocr-pdf', 'form')">Run OCR PDF Eval</button>
+
+    <h3>cURL Command:</h3>
+    <pre id="ocrEvalPdf_curl">---</pre>
+
+    <h3>Response:</h3>
+    <pre id="ocrEvalPdf_response">---</pre>
+  </div>
+</div>
+
 <!-- Evaluation Management Tab -->
 <div id="tabEvalsManagement" class="tab-content">
     <div class="endpoint-section" id="evalsList">

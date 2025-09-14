@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
 
 
 class EvaluationRunner:
@@ -254,6 +255,12 @@ class EvaluationRunner:
         
         elif eval_type == "proposition_extraction":
             return self._eval_propositions
+
+        elif eval_type == "label_choice":
+            return self._eval_label_choice
+
+        elif eval_type == "nli_factcheck":
+            return self._eval_nli_factcheck
         
         else:
             raise ValueError(f"Unknown evaluation type: {eval_type}")
@@ -595,6 +602,391 @@ class EvaluationRunner:
             }
         except Exception as e:
             logger.error(f"Proposition eval failed for {sample_id}: {e}")
+            return {"sample_id": sample_id, "error": str(e)}
+
+    async def _eval_label_choice(
+        self,
+        sample: Dict[str, Any],
+        eval_spec: Dict[str, Any],
+        config: Dict[str, Any],
+        sample_id: str
+    ) -> Dict[str, Any]:
+        """Evaluate single-label classification over a fixed set of allowed labels.
+
+        Expected sample structure:
+          sample = {
+            "input": {
+              "question"|"prompt": str,
+              "context": Optional[str],
+              "allowed_labels"|"choices": Optional[List[str]],
+              "prediction": Optional[str]  # if generate_predictions is False
+            },
+            "expected": {"label": str} or a plain string label
+          }
+
+        eval_spec may include: allowed_labels, label_mapping, structured_output, generate_predictions,
+        api_name, temperature, prompt_template.
+        """
+        try:
+            # Resolve fields
+            inp = sample.get("input", {}) or {}
+            expected_field = sample.get("expected")
+            if isinstance(expected_field, dict):
+                gold = expected_field.get("label") or expected_field.get("answer") or expected_field.get("expected")
+            else:
+                gold = expected_field
+
+            question = inp.get("question") or inp.get("prompt") or ""
+            context = inp.get("context") or None
+
+            # Allowed labels
+            allowed = (
+                inp.get("allowed_labels")
+                or inp.get("choices")
+                or eval_spec.get("allowed_labels")
+                or []
+            )
+            allowed = [str(x).strip() for x in allowed if x is not None]
+            if not allowed:
+                raise ValueError("label_choice requires 'allowed_labels' (in sample or eval_spec)")
+
+            # Normalization
+            mapping = eval_spec.get("label_mapping") or {}
+            canon = {k.strip().upper(): v.strip().upper() for k, v in mapping.items()} if mapping else {}
+            allowed_up = [a.upper() for a in allowed]
+
+            def norm_label(x: Optional[str]) -> Optional[str]:
+                if x is None:
+                    return None
+                s = str(x).strip()
+                up = s.upper()
+                if up in canon:
+                    up = canon[up]
+                # If the canonical is not in allowed, leave as-is; otherwise ensure allowed variant
+                return up
+
+            # Try to get prediction without generation if provided
+            pred = inp.get("prediction")
+
+            # Generate prediction if needed
+            if pred is None and eval_spec.get("generate_predictions", True):
+                api_name = (eval_spec.get("evaluator_model") or eval_spec.get("api_name") or "openai").lower()
+                temperature = float(eval_spec.get("temperature", 0.0))
+                structured = bool(eval_spec.get("structured_output", False))
+                allowed_str = ", ".join(allowed)
+
+                # Build messages and system prompt
+                if eval_spec.get("prompt_template"):
+                    user_prompt = eval_spec["prompt_template"].format(
+                        question=question,
+                        context=context or "",
+                        allowed_labels=allowed_str
+                    )
+                    system_prompt = None
+                else:
+                    if structured:
+                        system_prompt = "You return strict JSON only with no commentary."
+                        user_prompt = (
+                            f"Allowed labels: [{allowed_str}]\n"
+                            + (f"Context:\n{context}\n\n" if context else "")
+                            + f"Question:\n{question}\n\n"
+                            + "Respond with exactly: {\"label\": \"<one of the allowed labels>\"}"
+                        )
+                    else:
+                        system_prompt = "You must reply with exactly one label token, nothing else."
+                        user_prompt = (
+                            f"Allowed labels: {allowed_str}. Respond with only one of these labels.\n\n"
+                            + (f"Context (optional):\n{context}\n\n" if context else "")
+                            + f"Question:\n{question}\n\nAnswer (one token):"
+                        )
+
+                messages = [{"role": "user", "content": user_prompt}]
+                response_format = {"type": "json_object"} if structured else None
+
+                try:
+                    resp = chat_api_call(
+                        api_endpoint=api_name,
+                        messages_payload=messages,
+                        temp=temperature,
+                        system_message=system_prompt,
+                        response_format=response_format,
+                        max_tokens=16
+                    )
+                except Exception as ce:
+                    logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
+                    resp = ""
+
+                # Extract text content from provider response
+                def _extract_content(r: Any) -> str:
+                    if isinstance(r, str):
+                        return r
+                    if isinstance(r, dict):
+                        try:
+                            choices = r.get("choices")
+                            if choices:
+                                msg = choices[0].get("message", {})
+                                content = msg.get("content")
+                                if isinstance(content, list):
+                                    return "".join(
+                                        part.get("text", "") if isinstance(part, dict) else str(part)
+                                        for part in content
+                                    )
+                                return content if isinstance(content, str) else str(content)
+                            if "text" in r:
+                                return str(r["text"])  # some providers
+                        except Exception:
+                            pass
+                    return str(r)
+
+                pred = _extract_content(resp)
+
+            # Parse prediction
+            parsed: Optional[str] = None
+            if isinstance(pred, (dict, list)):
+                if isinstance(pred, dict):
+                    parsed = pred.get("label")
+            else:
+                txt = str(pred).strip()
+                if eval_spec.get("structured_output", False):
+                    import json as _json
+                    try:
+                        obj = _json.loads(txt)
+                        if isinstance(obj, dict) and "label" in obj:
+                            parsed = obj["label"]
+                    except Exception:
+                        parsed = None
+                if parsed is None:
+                    up = txt.upper()
+                    for lab in allowed_up:
+                        if lab in up or up.strip() == lab:
+                            parsed = lab
+                            break
+
+            pred_norm = norm_label(parsed) if parsed is not None else None
+            gold_norm = norm_label(gold)
+
+            if pred_norm is None:
+                # Unable to parse; count as incorrect
+                return {
+                    "sample_id": sample_id,
+                    "scores": {"accuracy": 0.0},
+                    "passed": False,
+                    "avg_score": 0.0,
+                    "details": {
+                        "prediction_raw": pred,
+                        "prediction": None,
+                        "gold": gold_norm,
+                        "allowed_labels": allowed,
+                    }
+                }
+
+            correct = (gold_norm is not None) and (pred_norm == gold_norm)
+            return {
+                "sample_id": sample_id,
+                "scores": {"accuracy": 1.0 if correct else 0.0},
+                "passed": bool(correct),
+                "avg_score": 1.0 if correct else 0.0,
+                "details": {
+                    "prediction": pred_norm,
+                    "gold": gold_norm,
+                    "allowed_labels": allowed,
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"label_choice eval failed for {sample_id}: {e}")
+            return {"sample_id": sample_id, "error": str(e)}
+
+    async def _eval_nli_factcheck(
+        self,
+        sample: Dict[str, Any],
+        eval_spec: Dict[str, Any],
+        config: Dict[str, Any],
+        sample_id: str
+    ) -> Dict[str, Any]:
+        """Evaluate factual claims by NLI-style labeling (SUPPORTED/REFUTED/NEI or ENTAILMENT/CONTRADICTION/NEUTRAL).
+
+        Expected sample structure:
+          sample = {
+            "input": {
+              "claim"|"hypothesis": str,
+              "evidence"|"premise"|"context": Union[str, List[str]],
+              "prediction": Optional[str]
+            },
+            "expected": {"label": str} or a plain string label
+          }
+
+        eval_spec: allowed_labels (default to tri-label), label_mapping, structured_output, generate_predictions,
+        api_name/temperature/prompt_template optionally supported.
+        """
+        try:
+            inp = sample.get("input", {}) or {}
+            expected_field = sample.get("expected")
+            if isinstance(expected_field, dict):
+                gold = expected_field.get("label") or expected_field.get("answer") or expected_field.get("expected")
+            else:
+                gold = expected_field
+
+            claim = inp.get("claim") or inp.get("hypothesis") or ""
+            ev = inp.get("evidence") or inp.get("premise") or inp.get("context") or ""
+            if isinstance(ev, list):
+                evidence = "\n".join([str(x) for x in ev])
+            else:
+                evidence = str(ev)
+
+            # Default allowed labels if not provided
+            default_allowed = ["SUPPORTED", "REFUTED", "NEI"]
+            allowed = (
+                inp.get("allowed_labels")
+                or eval_spec.get("allowed_labels")
+                or default_allowed
+            )
+            allowed = [str(x).strip() for x in allowed if x is not None]
+            allowed_up = [a.upper() for a in allowed]
+
+            # Normalization map including common aliases
+            base_alias = {
+                "TRUE": "SUPPORTED",
+                "ENTAILMENT": "SUPPORTED",
+                "FALSE": "REFUTED",
+                "CONTRADICTION": "REFUTED",
+                "NEUTRAL": "NEI",
+                "NOT_ENTAILED": "NEI",
+                "NOT_ENTAILMENT": "NEI",
+            }
+            mapping = eval_spec.get("label_mapping") or {}
+            canon = {**{k.upper(): v.upper() for k, v in base_alias.items()}, **{k.upper(): v.upper() for k, v in mapping.items()}}
+
+            def norm_label(x: Optional[str]) -> Optional[str]:
+                if x is None:
+                    return None
+                s = str(x).strip().upper()
+                s = canon.get(s, s)
+                return s
+
+            pred = inp.get("prediction")
+
+            if pred is None and eval_spec.get("generate_predictions", True):
+                api_name = (eval_spec.get("evaluator_model") or eval_spec.get("api_name") or "openai").lower()
+                temperature = float(eval_spec.get("temperature", 0.0))
+                structured = bool(eval_spec.get("structured_output", False))
+
+                allowed_str = ", ".join(allowed)
+                if eval_spec.get("prompt_template"):
+                    user_prompt = eval_spec["prompt_template"].format(
+                        claim=claim,
+                        evidence=evidence,
+                        allowed_labels=allowed_str
+                    )
+                    system_prompt = None
+                else:
+                    if structured:
+                        system_prompt = "You return strict JSON only with no commentary."
+                        user_prompt = (
+                            f"Allowed labels: [{allowed_str}]\n"
+                            f"Evidence:\n{evidence}\n\nClaim:\n{claim}\n\n"
+                            "Respond with exactly: {\"label\": \"<one of the allowed labels>\"}"
+                        )
+                    else:
+                        system_prompt = "You must reply with exactly one label token, nothing else."
+                        user_prompt = (
+                            f"Allowed labels: {allowed_str}. Respond with only one of these labels.\n\n"
+                            f"Evidence:\n{evidence}\n\nClaim:\n{claim}\n\nAnswer (one token):"
+                        )
+
+                messages = [{"role": "user", "content": user_prompt}]
+                response_format = {"type": "json_object"} if structured else None
+
+                try:
+                    resp = chat_api_call(
+                        api_endpoint=api_name,
+                        messages_payload=messages,
+                        temp=temperature,
+                        system_message=system_prompt,
+                        response_format=response_format,
+                        max_tokens=16
+                    )
+                except Exception as ce:
+                    logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")
+                    resp = ""
+
+                def _extract_content(r: Any) -> str:
+                    if isinstance(r, str):
+                        return r
+                    if isinstance(r, dict):
+                        try:
+                            choices = r.get("choices")
+                            if choices:
+                                msg = choices[0].get("message", {})
+                                content = msg.get("content")
+                                if isinstance(content, list):
+                                    return "".join(
+                                        part.get("text", "") if isinstance(part, dict) else str(part)
+                                        for part in content
+                                    )
+                                return content if isinstance(content, str) else str(content)
+                            if "text" in r:
+                                return str(r["text"])  # other providers
+                        except Exception:
+                            pass
+                    return str(r)
+
+                pred = _extract_content(resp)
+
+            # Parse
+            parsed: Optional[str] = None
+            if isinstance(pred, (dict, list)):
+                if isinstance(pred, dict):
+                    parsed = pred.get("label")
+            else:
+                txt = str(pred).strip()
+                if eval_spec.get("structured_output", False):
+                    import json as _json
+                    try:
+                        obj = _json.loads(txt)
+                        if isinstance(obj, dict) and "label" in obj:
+                            parsed = obj["label"]
+                    except Exception:
+                        parsed = None
+                if parsed is None:
+                    up = txt.upper()
+                    for lab in allowed_up:
+                        if lab in up or up.strip() == lab:
+                            parsed = lab
+                            break
+
+            pred_norm = norm_label(parsed) if parsed is not None else None
+            gold_norm = norm_label(gold)
+
+            if pred_norm is None:
+                return {
+                    "sample_id": sample_id,
+                    "scores": {"accuracy": 0.0},
+                    "passed": False,
+                    "avg_score": 0.0,
+                    "details": {
+                        "prediction_raw": pred,
+                        "prediction": None,
+                        "gold": gold_norm,
+                        "allowed_labels": allowed,
+                    }
+                }
+
+            correct = (gold_norm is not None) and (pred_norm == gold_norm)
+            return {
+                "sample_id": sample_id,
+                "scores": {"accuracy": 1.0 if correct else 0.0},
+                "passed": bool(correct),
+                "avg_score": 1.0 if correct else 0.0,
+                "details": {
+                    "prediction": pred_norm,
+                    "gold": gold_norm,
+                    "allowed_labels": allowed,
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"nli_factcheck eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
     
     # ============= Helper Methods =============

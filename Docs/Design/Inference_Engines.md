@@ -50,6 +50,7 @@ https://docs.vllm.ai/en/latest/examples/offline_inference/save_sharded_state.htm
 https://github.com/LMCache/LMCache
 https://damek.github.io/random/basic-facts-about-gpus/
 https://bentoml.com/llm/
+https://cvw.cac.cornell.edu/gpu-architecture
 https://allenai.org/blog/flexolmo
     https://github.com/allenai/FlexOlmo
     https://www.datocms-assets.com/64837/1752084947-flexolmo-5.pdf

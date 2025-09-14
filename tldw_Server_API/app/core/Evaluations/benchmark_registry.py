@@ -107,6 +107,34 @@ class BenchmarkRegistry:
                 "topics": ["history", "science", "technology", "art", "geography"]
             }
         ))
+
+        # SimpleQA Verified (local dataset support)
+        try:
+            repo_root = Path(__file__).resolve().parents[4]
+            local_dir = repo_root / "Helper_Scripts" / "Evals" / "SimpleQA_verified"
+            dataset_source = str(local_dir)
+            self.register(BenchmarkConfig(
+                name="simpleqa_verified",
+                description="SimpleQA Verified - curated factuality set (local)",
+                evaluation_type="simpleqa",
+                dataset_source=dataset_source,
+                dataset_format="jsonl",  # loader will auto-detect file inside dir
+                field_mappings={
+                    "question": "question",
+                    "answer": "answer",
+                    "topic": "topic"
+                },
+                evaluation_params={
+                    "grading_model": "openai",
+                    "strict_grading": True,
+                },
+                metadata={
+                    "source": "local_repo",
+                    "path": dataset_source
+                }
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to register simpleqa_verified: {e}")
         
         # MMLU Pro
         self.register(BenchmarkConfig(

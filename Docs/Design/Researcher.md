@@ -146,6 +146,8 @@ https://arxiv.org/pdf/2507.16075
 https://github.com/codelion/optillm/tree/main/optillm/plugins/deep_research
 https://github.com/murtaza-nasir/maestro
 https://eprint.iacr.org/
+https://arxiv.org/abs/2508.14880
+
 https://docs.gptr.dev/docs/gpt-researcher/multi_agents/langgraph
 https://pub.towardsai.net/learn-anything-with-ai-and-the-feynman-technique-00a33f6a02bc
 https://github.com/dzhng/deep-research

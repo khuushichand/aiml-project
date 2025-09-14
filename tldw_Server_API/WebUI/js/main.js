@@ -182,6 +182,10 @@ class WebUI {
                 initializeEvaluationsTab();
             }
         }
+
+        if (contentId === 'tabDictionaries' && typeof initializeDictionariesTab === 'function') {
+            initializeDictionariesTab();
+        }
         
         // Initialize model dropdowns for tabs that have LLM selection
         // This includes chat, media processing, and evaluation tabs

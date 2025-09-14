@@ -253,6 +253,160 @@
     </div>
 </div>
 
+<!-- Chat Dictionaries Tab -->
+<div id="tabDictionaries" class="tab-content">
+    <div class="endpoint-section">
+        <h2>Chat Dictionaries</h2>
+        <p>Create and manage text replacement dictionaries. Supports literal and regex patterns, probabilities, and groups.</p>
+
+        <div class="grid-2" style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items:start;">
+            <!-- Left: Dictionaries List & Create -->
+            <div>
+                <div class="card" style="padding:12px;">
+                    <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
+                        <strong>Dictionaries</strong>
+                        <div style="display:flex; gap:8px;">
+                            <button class="api-button" id="dictsRefreshBtn">Refresh</button>
+                        </div>
+                    </div>
+                    <div id="dictsList" style="margin-top:8px;"></div>
+                </div>
+
+                <div class="card" style="padding:12px; margin-top:12px;">
+                    <strong>Create Dictionary</strong>
+                    <div class="form-group">
+                        <label for="dictCreate_name">Name</label>
+                        <input type="text" id="dictCreate_name" placeholder="My Dictionary">
+                    </div>
+                    <div class="form-group">
+                        <label for="dictCreate_description">Description</label>
+                        <input type="text" id="dictCreate_description" placeholder="Optional description">
+                    </div>
+                    <button class="api-button" id="dictCreateBtn">Create</button>
+                    <div id="dictCreate_status" class="muted" style="margin-top:6px;"></div>
+                </div>
+            </div>
+
+            <!-- Right: Selected Dictionary Details -->
+            <div>
+                <div class="card" style="padding:12px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <div>
+                            <strong>Selected Dictionary:</strong>
+                            <span id="selectedDictName" class="muted">None</span>
+                        </div>
+                        <div>
+                            <button class="api-button" id="dictToggleActiveBtn" disabled>Toggle Active</button>
+                            <button class="btn btn-danger" id="dictDeleteBtn" disabled>Delete</button>
+                        </div>
+                    </div>
+                    <div id="selectedDictMeta" class="muted" style="margin-top:6px;"></div>
+                </div>
+
+                <div class="card" style="padding:12px; margin-top:12px;">
+                    <strong>Entries</strong>
+                    <div id="entriesList" style="margin:8px 0; max-height:240px; overflow:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px; background:var(--color-surface-alt);"></div>
+
+                    <details style="margin-top:8px;">
+                        <summary><strong>Add Entry</strong></summary>
+                        <div class="form-group">
+                            <label for="entry_pattern">Pattern</label>
+                            <input type="text" id="entry_pattern" placeholder="e.g., AI or \\b(\\d+)F\\b">
+                        </div>
+                        <div class="form-group">
+                            <label for="entry_replacement">Replacement</label>
+                            <input type="text" id="entry_replacement" placeholder="Replacement text">
+                        </div>
+                        <div class="form-group" style="display:flex; gap:8px;">
+                            <div style="flex:1;">
+                                <label for="entry_type">Type</label>
+                                <select id="entry_type">
+                                    <option value="literal">literal</option>
+                                    <option value="regex">regex</option>
+                                </select>
+                            </div>
+                            <div style="flex:1;">
+                                <label for="entry_probability">Probability (0.0-1.0)</label>
+                                <input type="number" step="0.05" min="0" max="1" id="entry_probability" value="1.0">
+                            </div>
+                        </div>
+                        <div class="form-group" style="display:flex; gap:8px;">
+                            <div style="flex:1;">
+                                <label for="entry_group">Group (optional)</label>
+                                <input type="text" id="entry_group" placeholder="group name">
+                            </div>
+                            <div style="flex:1;">
+                                <label for="entry_max_replacements">Max Replacements (0 = unlimited)</label>
+                                <input type="number" min="0" id="entry_max_replacements" value="0">
+                            </div>
+                        </div>
+                        <div class="form-group" style="display:flex; gap:16px;">
+                            <label><input type="checkbox" id="entry_enabled" checked> Enabled</label>
+                            <label><input type="checkbox" id="entry_case_sensitive" checked> Case Sensitive (literal)</label>
+                        </div>
+                        <button class="api-button" id="entryAddBtn">Add Entry</button>
+                        <div id="entryAdd_status" class="muted" style="margin-top:6px;"></div>
+                    </details>
+                </div>
+
+                <div class="card" style="padding:12px; margin-top:12px;">
+                    <strong>Process Sample Text</strong>
+                    <div class="form-group">
+                        <label for="proc_text">Text</label>
+                        <textarea id="proc_text" rows="3" placeholder="Enter text to process..."></textarea>
+                    </div>
+                    <div class="form-group" style="display:flex; gap:8px;">
+                        <div style="flex:1;">
+                            <label for="proc_max_tokens">Max Tokens (optional)</label>
+                            <input type="number" id="proc_max_tokens" placeholder="e.g., 100">
+                        </div>
+                        <div style="flex:1;">
+                            <label for="proc_group">Group (optional)</label>
+                            <input type="text" id="proc_group" placeholder="group name">
+                        </div>
+                    </div>
+                    <button class="api-button" id="procRunBtn">Process</button>
+                    <div class="form-group">
+                        <label>Processed Output</label>
+                        <pre id="proc_output" style="min-height:60px; overflow:auto; white-space:pre-wrap;"></pre>
+                        <small id="proc_stats" class="muted"></small>
+                    </div>
+                </div>
+
+                <div class="card" style="padding:12px; margin-top:12px;">
+                    <strong>Import / Export</strong>
+                    <details>
+                        <summary>Import from Markdown</summary>
+                        <div class="form-group">
+                            <label for="imp_name">Dictionary Name</label>
+                            <input type="text" id="imp_name" placeholder="Imported Dictionary">
+                        </div>
+                        <div class="form-group">
+                            <label for="imp_content">Markdown Content</label>
+                            <textarea id="imp_content" rows="6" placeholder="# My Dict\n\n## Entry: AI\n- **Type**: literal\n- **Replacement**: Artificial Intelligence\n- **Enabled**: true"></textarea>
+                        </div>
+                        <label><input type="checkbox" id="imp_activate" checked> Activate after import</label>
+                        <div>
+                            <button class="api-button" id="impRunBtn">Import</button>
+                            <span id="imp_status" class="muted" style="margin-left:8px;"></span>
+                        </div>
+                    </details>
+                    <details style="margin-top:8px;">
+                        <summary>Export to Markdown</summary>
+                        <div>
+                            <button class="api-button" id="expRunBtn">Export</button>
+                        </div>
+                        <div class="form-group" style="margin-top:8px;">
+                            <label>Exported Content</label>
+                            <textarea id="exp_content" rows="6" readonly></textarea>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Character Management Tab -->
 <div id="tabCharacterManagement" class="tab-content">
     <div class="endpoint-section" id="importCharacter">

@@ -195,6 +195,7 @@ class APIClient {
             '/api/v1/media/process-ebooks': 300000,    // 5 minutes
             '/api/v1/media/process-documents': 300000, // 5 minutes
             '/api/v1/media/process-pdfs': 300000,      // 5 minutes
+            '/api/v1/evaluations/ocr-pdf': 300000,      // 5 minutes
             '/api/v1/media/add': 600000,               // 10 minutes
             '/api/v1/media/ingest-web-content': 300000,// 5 minutes
             '/api/v1/media/mediawiki/ingest-dump': 600000, // 10 minutes

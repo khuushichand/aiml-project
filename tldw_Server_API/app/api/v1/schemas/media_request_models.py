@@ -102,6 +102,9 @@ ChunkMethod = Literal['semantic', 'tokens', 'paragraphs', 'sentences','words', '
 # Define allowed PDF parsing engines
 PdfEngine = Literal['pymupdf4llm', 'pymupdf', 'docling'] # Add others if supported
 
+# OCR options
+OcrMode = Literal['always', 'fallback']
+
 class ChunkingOptions(BaseModel):
     """Pydantic model for chunking specific options"""
     perform_chunking: bool = Field(True, description="Enable chunk-based processing of the media content")
@@ -194,6 +197,12 @@ class AudioVideoOptions(BaseModel):
 class PdfOptions(BaseModel):
     """Pydantic model for PDF specific options"""
     pdf_parsing_engine: Optional[PdfEngine] = Field("pymupdf4llm", description="PDF parsing engine to use")
+    enable_ocr: bool = Field(False, description="Enable OCR for scanned/low-text PDFs")
+    ocr_backend: Optional[str] = Field(None, description="OCR backend name (e.g., 'tesseract' or 'auto')")
+    ocr_lang: Optional[str] = Field("eng", description="OCR language (ISO 639-2 Tesseract codes, e.g., 'eng')")
+    ocr_dpi: int = Field(300, ge=72, le=600, description="DPI for page rendering before OCR (72-600)")
+    ocr_mode: Optional[OcrMode] = Field("fallback", description="'always' to force OCR, 'fallback' when no text")
+    ocr_min_page_text_chars: int = Field(40, ge=0, description="Threshold to treat a page as 'no text' for OCR fallback")
 
 class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     """

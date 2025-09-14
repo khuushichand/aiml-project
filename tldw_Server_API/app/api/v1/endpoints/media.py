@@ -113,6 +113,7 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     AddMediaForm,
     ChunkMethod,
     PdfEngine,
+    OcrMode,
     ProcessVideosForm,
     ProcessAudiosForm,
     SearchRequest,
@@ -4425,6 +4426,12 @@ def get_process_pdfs_form(
 
     # --- Fields from PdfOptions ---
     pdf_parsing_engine: Optional[PdfEngine] = Form("pymupdf4llm", description="PDF parsing engine"),
+    enable_ocr: bool = Form(False, description="Enable OCR for scanned/low-text PDFs"),
+    ocr_backend: Optional[str] = Form(None, description="OCR backend (e.g., 'tesseract' or 'auto')"),
+    ocr_lang: Optional[str] = Form("eng", description="OCR language (Tesseract codes, e.g., 'eng')"),
+    ocr_dpi: int = Form(300, description="OCR render DPI (72-600)"),
+    ocr_mode: Optional[OcrMode] = Form("fallback", description="OCR mode: 'always' or 'fallback'"),
+    ocr_min_page_text_chars: int = Form(40, description="Threshold to consider page empty for fallback"),
     custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
 
     # --- Fields from ChunkingOptions ---
@@ -4480,6 +4487,12 @@ def get_process_pdfs_form(
             summarize_recursively=summarize_recursively,
             perform_rolling_summarization=perform_rolling_summarization,
             pdf_parsing_engine=pdf_parsing_engine,
+            enable_ocr=enable_ocr,
+            ocr_backend=ocr_backend,
+            ocr_lang=ocr_lang,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
             custom_chapter_pattern=custom_chapter_pattern,
             perform_chunking=perform_chunking,
             chunk_method=chunk_method,
@@ -4550,6 +4563,13 @@ async def _single_pdf_worker(
             "chunk_method":  chunk_opts["method"]      if form.perform_analysis else None,
             "max_chunk_size": chunk_opts["max_size"]   if form.perform_analysis else None,
             "chunk_overlap":  chunk_opts["overlap"]    if form.perform_analysis else None,
+            # OCR options
+            "enable_ocr": getattr(form, "enable_ocr", False),
+            "ocr_backend": getattr(form, "ocr_backend", None),
+            "ocr_lang": getattr(form, "ocr_lang", "eng"),
+            "ocr_dpi": getattr(form, "ocr_dpi", 300),
+            "ocr_mode": getattr(form, "ocr_mode", "fallback"),
+            "ocr_min_page_text_chars": getattr(form, "ocr_min_page_text_chars", 40),
         }
 
         # process_pdf_task is async

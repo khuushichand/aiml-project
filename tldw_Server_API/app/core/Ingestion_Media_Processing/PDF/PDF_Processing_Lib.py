@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
 #
 # Constants
 # Get configuration values or use defaults
@@ -207,6 +208,13 @@ def process_pdf(
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None,
     summarize_recursively: bool = False,
+    # OCR options
+    enable_ocr: bool = False,
+    ocr_backend: Optional[str] = None,
+    ocr_lang: Optional[str] = "eng",
+    ocr_dpi: int = 300,
+    ocr_mode: Optional[str] = "fallback",
+    ocr_min_page_text_chars: int = 40,
     # write_to_temp_file: bool = False # This param seems unused/obsolete now
 ) -> dict[str, Any] | None:
     """
@@ -350,6 +358,56 @@ def process_pdf(
                  # Handle cases where parsing succeeded but returned nothing (e.g., empty PDF)
                  logging.warning(f"Text extraction using {result['parser_used']} for {filename} yielded no content.")
                  result["warnings"].append(f"Text extraction yielded no content ({result['parser_used']}).")
+
+            # --- Optional OCR step (always/fallback) ---
+            try:
+                content_text_len = len((content or "").strip())
+                should_ocr = False
+                if enable_ocr:
+                    mode = (ocr_mode or "fallback").lower()
+                    if mode == "always":
+                        should_ocr = True
+                    elif content_text_len < max(ocr_min_page_text_chars, 1):
+                        should_ocr = True
+
+                if should_ocr:
+                    backend = _get_ocr_backend(ocr_backend if ocr_backend not in (None, "auto") else None)
+                    if backend is None:
+                        logging.warning("OCR requested but no available OCR backend found.")
+                        result["warnings"] = (result.get("warnings") or []) + [
+                            "OCR requested but no backend available"
+                        ]
+                    else:
+                        ocr_text, page_count, ocr_pages = _ocr_pdf_pages(
+                            pdf_path=path_for_processing,
+                            lang=ocr_lang or "eng",
+                            dpi=ocr_dpi,
+                            backend=backend,
+                            per_page_min_text=ocr_min_page_text_chars,
+                            per_page_check=True,
+                        )
+                        result.setdefault("analysis_details", {})
+                        result["analysis_details"]["ocr"] = {
+                            "backend": getattr(backend, "name", type(backend).__name__),
+                            "mode": (ocr_mode or "fallback").lower(),
+                            "dpi": ocr_dpi,
+                            "lang": ocr_lang or "eng",
+                            "total_pages": page_count,
+                            "ocr_pages": ocr_pages,
+                        }
+
+                        if ocr_text and ocr_text.strip():
+                            if (ocr_mode or "fallback").lower() == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
+                                result["content"] = ocr_text
+                                result["parser_used"] = f"{result['parser_used']}+ocr"
+                            else:
+                                result["content"] = (content or "") + "\n\n" + ocr_text
+                                result["parser_used"] = f"{result['parser_used']}+ocr-appended"
+                        else:
+                            result["warnings"] = (result.get("warnings") or []) + ["OCR produced no text"]
+            except Exception as _ocr_err:
+                logging.error(f"OCR error for {filename}: {_ocr_err}", exc_info=True)
+                result["warnings"] = (result.get("warnings") or []) + [f"OCR error: {_ocr_err}"]
 
         except (RuntimeError, pymupdf.FileDataError, pymupdf.EmptyFileError) as parse_lib_err:
              # --- CATCH PDF library errors during parsing specifically ---
@@ -792,7 +850,14 @@ async def process_pdf_task(
     api_key: Optional[str] = None,
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None,
-    summarize_recursively: bool = False
+    summarize_recursively: bool = False,
+    # OCR options
+    enable_ocr: bool = False,
+    ocr_backend: Optional[str] = None,
+    ocr_lang: Optional[str] = "eng",
+    ocr_dpi: int = 300,
+    ocr_mode: Optional[str] = "fallback",
+    ocr_min_page_text_chars: int = 40,
 ) -> Dict[str, Any]:
     """
     Async wrapper task to process a single PDF (provided as bytes)
@@ -829,6 +894,12 @@ async def process_pdf_task(
             custom_prompt=custom_prompt,
             system_prompt=system_prompt,
             summarize_recursively=summarize_recursively,
+            enable_ocr=enable_ocr,
+            ocr_backend=ocr_backend,
+            ocr_lang=ocr_lang,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
             # No need to pass write_to_temp_file
         )
 
@@ -854,3 +925,46 @@ async def process_pdf_task(
 #
 # End of PDF_Ingestion_Lib.py
 #######################################################################################################################
+
+
+def _ocr_pdf_pages(
+    pdf_path: str,
+    lang: str,
+    dpi: int,
+    backend,
+    per_page_min_text: int = 40,
+    per_page_check: bool = True,
+) -> tuple[str, int, int]:
+    """
+    Render PDF pages to images and run OCR.
+
+    Returns: (markdown_text, total_pages, ocr_pages_count)
+    """
+    text_parts: List[str] = []
+    ocr_pages = 0
+    with pymupdf.open(pdf_path) as doc:
+        page_count = len(doc)
+        scale = max(dpi, 72) / 72.0
+        for i, page in enumerate(doc, start=1):
+            # Skip OCR for pages that already have enough text (if enabled)
+            do_ocr = True
+            if per_page_check:
+                try:
+                    pre_text = page.get_text("text") or ""
+                    if len(pre_text.strip()) >= max(per_page_min_text, 1):
+                        text_parts.append(f"## Page {i}\n\n{pre_text.strip()}\n\n---\n")
+                        do_ocr = False
+                except Exception:
+                    # If pre-extraction fails, fall back to OCR
+                    do_ocr = True
+
+            if do_ocr:
+                mat = pymupdf.Matrix(scale, scale)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img_bytes = pix.tobytes("png")
+                page_text = backend.ocr_image(img_bytes, lang=lang) or ""
+                if page_text.strip():
+                    ocr_pages += 1
+                text_parts.append(f"## Page {i}\n\n{page_text.strip()}\n\n---\n")
+
+    return ("".join(text_parts).strip(), page_count, ocr_pages)

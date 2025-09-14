@@ -52,6 +52,95 @@ tldw-evals run simple_bench --limit 10
 | **WordBench** | Token Analysis | Next-token prediction analysis |
 | **Custom QA** | Question-Answer | Your own evaluation sets |
 
+### Unified Evaluation Types (API)
+
+The unified evaluation API supports multiple evaluation modes beyond benchmarks. Newly added types include:
+
+- label_choice: Multi-class single-label selection where the model must return one label from an allowed set. Structured JSON output is supported by setting `eval_spec.structured_output=true` (returns `{ "label": "..." }`).
+- nli_factcheck: Factual claims checking using NLI-style labels (e.g., SUPPORTED, REFUTED, NEI). Also supports structured JSON output with the same mechanism.
+
+#### OCR (Text Extraction Quality)
+
+Evaluate OCR effectiveness for designated documents by comparing OCR-extracted text to ground-truth.
+
+- Endpoint: `POST /api/v1/evaluations/ocr`
+- Request shape:
+```json
+{
+  "items": [
+    { "id": "doc1", "extracted_text": "...", "ground_truth_text": "..." }
+  ],
+  "metrics": ["cer", "wer", "coverage", "page_coverage"],
+  "ocr_options": { "ocr_backend": "tesseract", "ocr_mode": "fallback" }
+}
+```
+
+Metrics returned:
+- `cer`: Character Error Rate
+- `wer`: Word Error Rate
+- `coverage`: |extracted| / |ground truth|
+- `page_coverage`: fraction of pages with sufficient OCR text (if available)
+
+Notes:
+- For end-to-end OCR on PDFs, use the PDF processing API to extract text, then feed the result here alongside the ground truth.
+
+#### SimpleQA Verified (Local Dataset)
+
+Support added for a curated SimpleQA Verified dataset stored in the repo at `Helper_Scripts/Evals/SimpleQA_verified/`.
+
+- Registry key: `simpleqa_verified`
+- Loader auto-detects `.jsonl` or `.json` within that directory (prefers files with `verified` in the name)
+- Usage via CLI or programmatic APIs that reference benchmarks:
+
+```bash
+tldw-evals run simpleqa_verified --limit 100
+```
+
+Or via the registry programmatically:
+
+```python
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
+
+reg = get_registry()
+evaluator = reg.create_evaluator("simpleqa_verified")
+data = reg.load_dataset("simpleqa_verified", limit=100)
+# ... run evaluation using your model and evaluator
+```
+
+Sample dataset items:
+
+```json
+// label_choice
+{
+  "input": {
+    "question": "What color is the sky at noon?",
+    "context": "Assume clear weather.",
+    "allowed_labels": ["BLUE", "RED", "GREEN"]
+  },
+  "expected": { "label": "BLUE" }
+}
+```
+
+```json
+// nli_factcheck
+{
+  "input": {
+    "claim": "The Eiffel Tower is in Berlin.",
+    "evidence": "The Eiffel Tower is a landmark in Paris, France.",
+    "allowed_labels": ["SUPPORTED", "REFUTED", "NEI"]
+  },
+  "expected": { "label": "REFUTED" }
+}
+```
+
+Key `eval_spec` fields:
+
+- `allowed_labels`: canonical labels
+- `label_mapping`: map aliases to canonical labels (e.g., {"ENTAILMENT":"SUPPORTED"})
+- `structured_output`: if true, the model is prompted to return strict JSON `{ "label": "..." }`
+- `generate_predictions`: if false, expects `input.prediction` instead of calling an LLM
+- `prompt_template`: optional override with format variables depending on type
+
 ### Supported LLM Providers
 - OpenAI
 - Anthropic

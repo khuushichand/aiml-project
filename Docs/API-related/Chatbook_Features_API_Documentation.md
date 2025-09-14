@@ -105,14 +105,21 @@ Retrieves a specific dictionary with all its entries.
 
 Adds a new entry to a dictionary.
 
+Notes:
+- `probability` is expressed as a float between 0.0 and 1.0 (e.g., 0.5 for 50%).
+- `type` is either `literal` or `regex` (regex also supports `/pattern/flags` style via `pattern`).
+- `max_replacements` of 0 means “unlimited”.
+
 **Request Body:**
 ```json
 {
-  "key_pattern": "phone",
+  "pattern": "phone",
   "replacement": "sending stone",
-  "is_regex": false,
-  "probability": 100,
-  "max_replacements": 1
+  "type": "literal",
+  "probability": 1.0,
+  "max_replacements": 0,
+  "enabled": true,
+  "case_sensitive": true
 }
 ```
 
@@ -128,14 +135,19 @@ Adds a new entry to a dictionary.
 #### 5. Update Entry
 **PUT** `/api/v1/chat/dictionaries/entries/{entry_id}`
 
-Updates an existing dictionary entry.
+Updates an existing dictionary entry (all fields optional):
 
 **Request Body:**
 ```json
 {
-  "key_pattern": "telephone",
+  "pattern": "telephone",
   "replacement": "communication crystal",
-  "probability": 90
+  "probability": 0.9,
+  "type": "literal",
+  "enabled": true,
+  "case_sensitive": true,
+  "group": "tech",
+  "max_replacements": 0
 }
 ```
 
@@ -154,7 +166,8 @@ Processes text through active dictionaries.
 {
   "text": "I'll call you on my phone from the car",
   "token_budget": 1000,
-  "dictionary_ids": [1]  // Optional, uses all active if not specified
+  "dictionary_id": 1,
+  "max_iterations": 5
 }
 ```
 
@@ -162,9 +175,11 @@ Processes text through active dictionaries.
 ```json
 {
   "processed_text": "I'll call you on my sending stone from the carriage",
-  "replacements_made": 2,
-  "dictionaries_used": ["Fantasy Terms"],
-  "token_budget_exceeded": false
+  "replacements": 2,
+  "iterations": 1,
+  "entries_used": [3, 5],
+  "token_budget_exceeded": false,
+  "processing_time_ms": 2.4
 }
 ```
 
@@ -188,13 +203,19 @@ Adds multiple entries at once.
 
 Imports a dictionary from markdown format.
 
-**Request Body (multipart/form-data):**
-- `file`: Markdown file containing dictionary data
+**Request Body (JSON):**
+```json
+{
+  "name": "Fantasy Terms",
+  "content": "# Fantasy Terms\n\n## Entry: AI\n- **Type**: literal\n- **Replacement**: Artificial Intelligence\n- **Enabled**: true\n",
+  "activate": true
+}
+```
 
 #### 10. Export Dictionary
 **GET** `/api/v1/chat/dictionaries/{dictionary_id}/export`
 
-Exports a dictionary to markdown format.
+Exports a dictionary to markdown format. Response contains markdown in `content`.
 
 #### 11. Clone Dictionary
 **POST** `/api/v1/chat/dictionaries/{dictionary_id}/clone`

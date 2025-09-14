@@ -18,6 +18,7 @@ from tldw_Server_API.cli.utils.output import (
     print_error, print_success, print_info, print_evaluation_results,
     print_json, print_table, print_progress_bar, format_timestamp
 )
+from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
 
 
 @click.group()
@@ -315,6 +316,274 @@ def custom_eval(ctx, metric_name, text, prompt, provider, model, api_key, save, 
         sys.exit(1)
 
 
+@eval_group.command('label-choice')
+@click.argument('question', required=True)
+@click.option('--labels', '-l', multiple=True, required=True, help='Allowed labels (repeatable)')
+@click.option('--context', default='', help='Optional context')
+@click.option('--expected', default=None, help='Expected label for scoring')
+@click.option('--provider', default='openai', help='LLM provider to use')
+@click.option('--model', help='Specific model to use')
+@click.option('--api-key', help='API key (overrides config)')
+@click.option('--json-mode/--no-json-mode', default=True, help='Use native provider JSON mode when supported')
+@click.option('--mapping', default=None, help='JSON string mapping aliases to canonical labels')
+@click.option('--format', 'output_format', type=click.Choice(['table', 'json']), default='table', help='Output format')
+@click.pass_context
+def label_choice(ctx, question, labels, context, expected, provider, model, api_key, json_mode, mapping, output_format):
+    """
+    Run label-choice evaluation (single sample).
+    
+    The model must return exactly one of the allowed labels.
+    """
+    cli_context = ctx.obj['cli_context']
+    try:
+        cli_context.load_config()
+
+        mapping_dict = None
+        if mapping:
+            try:
+                import json as _json
+                mapping_dict = _json.loads(mapping)
+            except Exception as e:
+                raise click.ClickException(f"Invalid mapping JSON: {e}")
+
+        allowed = [str(l).strip() for l in labels]
+        allowed_up = [l.upper() for l in allowed]
+
+        system_prompt = "You return strict JSON only." if json_mode else "You must reply with exactly one label token."
+        user_prompt = (
+            f"Allowed labels: [{', '.join(allowed)}]\n"
+            + (f"Context:\n{context}\n\n" if context else "")
+            + f"Question:\n{question}\n\n"
+            + ("Respond with exactly: {\"label\": \"<one of the allowed labels>\"}" if json_mode else "Answer (one token):")
+        )
+
+        messages = [{"role": "user", "content": user_prompt}]
+
+        resp = chat_api_call(
+            api_endpoint=(provider or 'openai').lower(),
+            messages_payload=messages,
+            system_message=system_prompt,
+            response_format={"type": "json_object"} if json_mode else None,
+            temp=0.0,
+            max_tokens=16,
+            model=model
+        )
+
+        def _extract_content(r):
+            if isinstance(r, str):
+                return r
+            if isinstance(r, dict):
+                ch = r.get('choices')
+                if ch:
+                    msg = ch[0].get('message', {})
+                    content = msg.get('content')
+                    if isinstance(content, list):
+                        return ''.join(part.get('text', '') if isinstance(part, dict) else str(part) for part in content)
+                    return content if isinstance(content, str) else str(content)
+                if 'text' in r:
+                    return str(r['text'])
+            return str(r)
+
+        raw = _extract_content(resp)
+        parsed = None
+        if json_mode:
+            import json as _json
+            try:
+                obj = _json.loads(raw)
+                if isinstance(obj, dict):
+                    parsed = obj.get('label')
+            except Exception:
+                parsed = None
+        if parsed is None:
+            up = str(raw).strip().upper()
+            for lab in allowed_up:
+                if lab in up or up.strip() == lab:
+                    parsed = lab
+                    break
+
+        def norm_label(x: Optional[str]) -> Optional[str]:
+            if x is None:
+                return None
+            s = str(x).strip().upper()
+            if mapping_dict and s in {k.upper(): v for k, v in mapping_dict.items()}:
+                s = {k.upper(): v.upper() for k, v in mapping_dict.items()}[s]
+            return s
+
+        pred_norm = norm_label(parsed)
+        gold_norm = norm_label(expected) if expected else None
+        accuracy = 1.0 if (gold_norm is not None and pred_norm == gold_norm) else 0.0 if gold_norm is not None else None
+
+        result = {
+            'evaluation_type': 'label_choice',
+            'provider': provider,
+            'model': model,
+            'allowed_labels': allowed,
+            'prediction': pred_norm,
+            'expected': gold_norm,
+            'accuracy': accuracy,
+            'raw': raw
+        }
+
+        if output_format == 'json':
+            print_json(result, 'Label Choice Result')
+        else:
+            rows = [
+                {'Field': 'Prediction', 'Value': pred_norm},
+                {'Field': 'Expected', 'Value': gold_norm},
+                {'Field': 'Accuracy', 'Value': accuracy if accuracy is not None else 'N/A'},
+            ]
+            print_table(rows, 'Label Choice Result')
+            if not cli_context.quiet:
+                print_info(f"Allowed: {', '.join(allowed)}")
+
+        print_success('Label-choice evaluation completed')
+
+    except Exception as e:
+        logger.exception('Label-choice evaluation failed')
+        print_error(f"Label-choice evaluation failed: {e}")
+        sys.exit(1)
+
+
+@eval_group.command('nli-factcheck')
+@click.argument('claim', required=True)
+@click.argument('evidence', required=True)
+@click.option('--labels', '-l', multiple=True, help='Allowed labels (repeatable); default SUPPORTED, REFUTED, NEI')
+@click.option('--expected', default=None, help='Expected label for scoring')
+@click.option('--provider', default='openai', help='LLM provider to use')
+@click.option('--model', help='Specific model to use')
+@click.option('--api-key', help='API key (overrides config)')
+@click.option('--json-mode/--no-json-mode', default=True, help='Use native provider JSON mode when supported')
+@click.option('--mapping', default=None, help='JSON string mapping aliases to canonical labels')
+@click.option('--format', 'output_format', type=click.Choice(['table', 'json']), default='table', help='Output format')
+@click.pass_context
+def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_key, json_mode, mapping, output_format):
+    """
+    Run NLI-style factuality check (single sample).
+    
+    Labels typically: SUPPORTED, REFUTED, NEI.
+    """
+    cli_context = ctx.obj['cli_context']
+    try:
+        cli_context.load_config()
+
+        mapping_dict = None
+        if mapping:
+            try:
+                import json as _json
+                mapping_dict = _json.loads(mapping)
+            except Exception as e:
+                raise click.ClickException(f"Invalid mapping JSON: {e}")
+
+        allowed = [str(l).strip() for l in labels] if labels else ["SUPPORTED", "REFUTED", "NEI"]
+        allowed_up = [l.upper() for l in allowed]
+
+        system_prompt = "You return strict JSON only." if json_mode else "You must reply with exactly one label token."
+        user_prompt = (
+            f"Allowed labels: [{', '.join(allowed)}]\n"
+            f"Evidence:\n{_load_text_content(evidence)}\n\nClaim:\n{_load_text_content(claim)}\n\n"
+            + ("Respond with exactly: {\"label\": \"<one of the allowed labels>\"}" if json_mode else "Answer (one token):")
+        )
+
+        messages = [{"role": "user", "content": user_prompt}]
+
+        resp = chat_api_call(
+            api_endpoint=(provider or 'openai').lower(),
+            messages_payload=messages,
+            system_message=system_prompt,
+            response_format={"type": "json_object"} if json_mode else None,
+            temp=0.0,
+            max_tokens=16,
+            model=model
+        )
+
+        def _extract_content(r):
+            if isinstance(r, str):
+                return r
+            if isinstance(r, dict):
+                ch = r.get('choices')
+                if ch:
+                    msg = ch[0].get('message', {})
+                    content = msg.get('content')
+                    if isinstance(content, list):
+                        return ''.join(part.get('text', '') if isinstance(part, dict) else str(part) for part in content)
+                    return content if isinstance(content, str) else str(content)
+                if 'text' in r:
+                    return str(r['text'])
+            return str(r)
+
+        raw = _extract_content(resp)
+        parsed = None
+        if json_mode:
+            import json as _json
+            try:
+                obj = _json.loads(raw)
+                if isinstance(obj, dict):
+                    parsed = obj.get('label')
+            except Exception:
+                parsed = None
+        if parsed is None:
+            up = str(raw).strip().upper()
+            for lab in allowed_up:
+                if lab in up or up.strip() == lab:
+                    parsed = lab
+                    break
+
+        # Alias normalization
+        base_alias = {
+            "TRUE": "SUPPORTED",
+            "ENTAILMENT": "SUPPORTED",
+            "FALSE": "REFUTED",
+            "CONTRADICTION": "REFUTED",
+            "NEUTRAL": "NEI",
+            "NOT_ENTAILED": "NEI",
+            "NOT_ENTAILMENT": "NEI",
+        }
+
+        def norm_label(x: Optional[str]) -> Optional[str]:
+            if x is None:
+                return None
+            s = str(x).strip().upper()
+            if s in base_alias:
+                s = base_alias[s]
+            if mapping_dict and s in {k.upper(): v for k, v in mapping_dict.items()}:
+                s = {k.upper(): v.upper() for k, v in mapping_dict.items()}[s]
+            return s
+
+        pred_norm = norm_label(parsed)
+        gold_norm = norm_label(expected) if expected else None
+        accuracy = 1.0 if (gold_norm is not None and pred_norm == gold_norm) else 0.0 if gold_norm is not None else None
+
+        result = {
+            'evaluation_type': 'nli_factcheck',
+            'provider': provider,
+            'model': model,
+            'allowed_labels': allowed,
+            'prediction': pred_norm,
+            'expected': gold_norm,
+            'accuracy': accuracy,
+            'raw': raw
+        }
+
+        if output_format == 'json':
+            print_json(result, 'NLI Fact-Check Result')
+        else:
+            rows = [
+                {'Field': 'Prediction', 'Value': pred_norm},
+                {'Field': 'Expected', 'Value': gold_norm},
+                {'Field': 'Accuracy', 'Value': accuracy if accuracy is not None else 'N/A'},
+            ]
+            print_table(rows, 'NLI Fact-Check Result')
+            if not cli_context.quiet:
+                print_info(f"Allowed: {', '.join(allowed)}")
+
+        print_success('NLI fact-check evaluation completed')
+
+    except Exception as e:
+        logger.exception('NLI fact-check evaluation failed')
+        print_error(f"NLI fact-check evaluation failed: {e}")
+        sys.exit(1)
+
+
 def _load_text_content(input_str: str) -> str:
     """Load text content from string or file."""
     if input_str.startswith('file://'):
@@ -540,6 +809,24 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
     return results
 
 
+def _load_items_file(path: Path) -> List[Dict[str, Any]]:
+    """Load items for OCR evaluation from JSON or JSONL file."""
+    try:
+        content = path.read_text(encoding='utf-8')
+        try:
+            data = json.loads(content)
+            return data if isinstance(data, list) else [data]
+        except json.JSONDecodeError:
+            items = []
+            for line in content.strip().split('\n'):
+                if not line.strip():
+                    continue
+                items.append(json.loads(line))
+            return items
+    except Exception as e:
+        raise click.ClickException(f"Failed to load items file {path}: {e}")
+
+
 def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
                           default_model: str, default_api_key: str, config: Dict[str, Any]) -> Dict[str, Any]:
     """Run a single evaluation from specification."""
@@ -627,3 +914,114 @@ def _get_api_key_from_config(config: Dict[str, Any], provider: str) -> Optional[
         return os.getenv(key_name)
     
     return None
+@eval_group.command('ocr')
+@click.option('--items-file', type=click.Path(exists=True, readable=True, path_type=Path), help='JSON/JSONL with items: {id, extracted_text|pdf_path, ground_truth_text}')
+@click.option('--pdf', 'pdfs', multiple=True, type=click.Path(exists=True, readable=True, path_type=Path), help='PDF file(s) to OCR')
+@click.option('--ground-truths-file', type=click.Path(exists=True, readable=True, path_type=Path), help='JSON array of ground-truth texts (aligned to --pdf order)')
+@click.option('--ground-truths-pages-file', type=click.Path(exists=True, readable=True, path_type=Path), help='JSON array of arrays of ground-truth page texts (aligned to --pdf order)')
+@click.option('--metrics', multiple=True, type=click.Choice(['cer','wer','coverage','page_coverage']), help='Metrics to compute (repeatable)')
+@click.option('--max-cer', type=float, default=None, help='Threshold: maximum CER')
+@click.option('--max-wer', type=float, default=None, help='Threshold: maximum WER')
+@click.option('--min-coverage', type=float, default=None, help='Threshold: minimum coverage')
+@click.option('--min-page-coverage', type=float, default=None, help='Threshold: minimum page coverage')
+@click.option('--ocr-backend', type=str, default=None, help='OCR backend (e.g., tesseract)')
+@click.option('--ocr-lang', type=str, default='eng', help='OCR language')
+@click.option('--ocr-dpi', type=int, default=300, help='OCR DPI for rendering (72-600)')
+@click.option('--ocr-mode', type=click.Choice(['fallback','always']), default='fallback', help='OCR mode')
+@click.option('--ocr-min-page-text-chars', type=int, default=40, help='Threshold per page to skip OCR when text present')
+@click.option('--format', 'output_format', type=click.Choice(['table', 'json']), default='json', help='Output format')
+@click.pass_context
+def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file, metrics, max_cer, max_wer, min_coverage, min_page_coverage,
+             ocr_backend, ocr_lang, ocr_dpi, ocr_mode, ocr_min_page_text_chars, output_format):
+    """
+    Run OCR evaluation on extracted text or PDF files.
+
+    Examples:
+      tldw-evals eval ocr --items-file items.jsonl
+      tldw-evals eval ocr --pdf a.pdf --pdf b.pdf --ground-truths-file gts.json
+    """
+    cli_context = ctx.obj['cli_context']
+    try:
+        cli_context.load_config()
+
+        items: List[Dict[str, Any]] = []
+        if items_file:
+            items = _load_items_file(items_file)
+        elif pdfs:
+            gts = []
+            if ground_truths_file:
+                try:
+                    gts = json.loads(Path(ground_truths_file).read_text(encoding='utf-8'))
+                    if not isinstance(gts, list):
+                        raise click.ClickException('ground-truths-file must be a JSON array of strings')
+                except Exception as e:
+                    raise click.ClickException(f'Failed to read ground-truths-file: {e}')
+            gt_pages_all = None
+            if ground_truths_pages_file:
+                try:
+                    gt_pages_all = json.loads(Path(ground_truths_pages_file).read_text(encoding='utf-8'))
+                    if not isinstance(gt_pages_all, list):
+                        gt_pages_all = None
+                except Exception as e:
+                    raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}')
+
+            for idx, p in enumerate(pdfs):
+                b = Path(p).read_bytes()
+                gt = gts[idx] if idx < len(gts) else None
+                item = { 'id': Path(p).name, 'pdf_bytes': b, 'ground_truth_text': gt }
+                if gt_pages_all and idx < len(gt_pages_all) and isinstance(gt_pages_all[idx], list):
+                    item['ground_truth_pages'] = gt_pages_all[idx]
+                items.append(item)
+        else:
+            raise click.ClickException('Provide either --items-file or --pdf inputs')
+
+        thresholds = {}
+        if max_cer is not None: thresholds['max_cer'] = max_cer
+        if max_wer is not None: thresholds['max_wer'] = max_wer
+        if min_coverage is not None: thresholds['min_coverage'] = min_coverage
+        if min_page_coverage is not None: thresholds['min_page_coverage'] = min_page_coverage
+        if not thresholds: thresholds = None
+
+        ocr_options = {
+            'enable_ocr': True,
+            'ocr_backend': ocr_backend,
+            'ocr_lang': ocr_lang,
+            'ocr_dpi': ocr_dpi,
+            'ocr_mode': ocr_mode,
+            'ocr_min_page_text_chars': ocr_min_page_text_chars,
+        }
+
+        # Run via unified service
+        from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
+        service = UnifiedEvaluationService()
+        result = asyncio.run(service.evaluate_ocr(
+            items=items,
+            metrics=list(metrics) if metrics else None,
+            thresholds=thresholds,
+            ocr_options=ocr_options,
+            user_id='cli'
+        ))
+
+        if output_format == 'json':
+            print_json(result, 'OCR Evaluation Results')
+        else:
+            # Minimal table: summary only
+            summary = result.get('results', {}).get('summary') or result.get('summary') or {}
+            rows = [
+                ['Count', summary.get('count')],
+                ['Avg CER', summary.get('avg_cer')],
+                ['Avg WER', summary.get('avg_wer')],
+                ['Avg Coverage', summary.get('avg_coverage')],
+                ['Avg Page Coverage', summary.get('avg_page_coverage')],
+                ['Pass Rate', summary.get('pass_rate')],
+            ]
+            print_table(['Metric','Value'], rows, title='OCR Evaluation Summary')
+
+        print_success('OCR evaluation completed successfully')
+    except click.ClickException as e:
+        print_error(str(e))
+        sys.exit(2)
+    except Exception as e:
+        logger.exception('OCR evaluation failed')
+        print_error(f'OCR evaluation failed: {e}')
+        sys.exit(1)

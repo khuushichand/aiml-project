@@ -1265,6 +1265,7 @@ async def create_chat_completion(
 # Chat Dictionary Endpoints
 # ---------------------------------------------------------------------------
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
+    TimedEffects,
     ChatDictionaryCreate,
     ChatDictionaryUpdate,
     ChatDictionaryResponse,
@@ -1485,30 +1486,35 @@ async def add_dictionary_entry(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
         
         timed_effects_dict = entry.timed_effects.model_dump() if entry.timed_effects else None
-        
+
         entry_id = service.add_entry(
             dictionary_id,
-            entry.key,
-            entry.content,
-            entry.probability,
-            entry.group,
-            timed_effects_dict,
-            entry.max_replacements
+            pattern=entry.pattern,
+            replacement=entry.replacement,
+            probability=entry.probability,
+            group=entry.group,
+            timed_effects=timed_effects_dict,
+            max_replacements=entry.max_replacements,
+            type=entry.type,
+            enabled=entry.enabled,
+            case_sensitive=entry.case_sensitive,
         )
-        
-        # Create response
+
+        # Build response by combining request values and computed type
         return DictionaryEntryResponse(
             id=entry_id,
             dictionary_id=dictionary_id,
-            key=entry.key,
-            content=entry.content,
+            pattern=entry.pattern,
+            replacement=entry.replacement,
             probability=entry.probability,
             group=entry.group,
             timed_effects=entry.timed_effects,
             max_replacements=entry.max_replacements,
-            is_regex=entry.key.startswith("/") and "/" in entry.key[1:],
+            type=entry.type,
+            enabled=entry.enabled,
+            case_sensitive=entry.case_sensitive,
             created_at=datetime.now(),
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
         )
         
     except InputError as e:
@@ -1536,21 +1542,34 @@ async def list_dictionary_entries(
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
         
-        entries = service.get_entries(dictionary_id=dictionary_id, group=group)
-        
-        entry_responses = [DictionaryEntryResponse(
-            id=e.entry_id,
-            dictionary_id=dictionary_id,
-            key=e.raw_key,
-            content=e.content,
-            probability=e.probability,
-            group=e.group,
-            timed_effects=e.timed_effects,
-            max_replacements=e.max_replacements,
-            is_regex=e.is_regex,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        ) for e in entries]
+        entries = service.get_entries(dictionary_id=dictionary_id, group=group, active_only=False)
+
+        entry_responses = []
+        for e in entries:
+            te = e.get("timed_effects")
+            if isinstance(te, str):
+                try:
+                    import json as _json
+                    te = TimedEffects(**(_json.loads(te) if te else {}))
+                except Exception:
+                    te = None
+            entry_responses.append(
+                DictionaryEntryResponse(
+                    id=e.get("id"),
+                    dictionary_id=dictionary_id,
+                    pattern=e.get("pattern"),
+                    replacement=e.get("replacement"),
+                    probability=float(e.get("probability", 1.0)),
+                    group=e.get("group"),
+                    timed_effects=te,
+                    max_replacements=int(e.get("max_replacements", 0) or 0),
+                    type=e.get("type", "literal"),
+                    enabled=bool(e.get("enabled", 1)),
+                    case_sensitive=bool(e.get("case_sensitive", 1)),
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+            )
         
         return EntryListResponse(
             entries=entry_responses,
@@ -1578,15 +1597,18 @@ async def update_dictionary_entry(
         service = ChatDictionaryService(db)
         
         timed_effects_dict = update.timed_effects.model_dump() if update.timed_effects else None
-        
+
         success = service.update_entry(
             entry_id,
-            key=update.key,
-            content=update.content,
+            pattern=update.pattern,
+            replacement=update.replacement,
             probability=update.probability,
             group=update.group,
             timed_effects=timed_effects_dict,
-            max_replacements=update.max_replacements
+            max_replacements=update.max_replacements,
+            type=update.type,
+            enabled=update.enabled,
+            case_sensitive=update.case_sensitive,
         )
         
         if not success:
@@ -1594,18 +1616,18 @@ async def update_dictionary_entry(
         
         # Fetch updated entry (simplified for now)
         # In production, we'd fetch from DB
-        is_regex = update.key.startswith("/") and "/" in update.key[1:] if update.key else False
-        
         return DictionaryEntryResponse(
             id=entry_id,
             dictionary_id=1,  # Would fetch from DB
-            key=update.key or "updated",
-            content=update.content or "updated",
-            probability=update.probability or 100,
+            pattern=update.pattern or "updated",
+            replacement=update.replacement or "updated",
+            probability=update.probability or 1.0,
             group=update.group,
             timed_effects=update.timed_effects,
-            max_replacements=update.max_replacements or 1,
-            is_regex=is_regex,
+            max_replacements=update.max_replacements or 0,
+            type=update.type or "literal",
+            enabled=update.enabled if update.enabled is not None else True,
+            case_sensitive=update.case_sensitive if update.case_sensitive is not None else True,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -1667,8 +1689,9 @@ async def process_text_with_dictionaries(
                 dictionary_id=request.dictionary_id,
                 group=request.group,
                 max_iterations=request.max_iterations,
-                token_budget=request.token_budget
-            )
+            token_budget=request.token_budget,
+            return_stats=True,
+        )
             
             # Check if token budget was exceeded
             token_budget_exceeded = any(
@@ -1681,12 +1704,12 @@ async def process_text_with_dictionaries(
         
         return ProcessTextResponse(
             original_text=request.text,
-            processed_text=processed_text,
+            processed_text=processed_text if isinstance(processed_text, str) else processed_text.get("processed_text", request.text),
             replacements=stats.get("replacements", 0),
             iterations=stats.get("iterations", 0),
             entries_used=stats.get("entries_used", []),
             token_budget_exceeded=stats.get("token_budget_exceeded", False),
-            processing_time_ms=processing_time_ms
+            processing_time_ms=processing_time_ms,
         )
         
     except Exception as e:
@@ -1718,34 +1741,23 @@ async def import_dictionary(
     try:
         service = ChatDictionaryService(db)
         
-        # Write content to temporary file
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
-            tmp.write(import_request.content)
-            tmp_path = tmp.name
-        
-        try:
-            dict_id = service.import_from_markdown(tmp_path, import_request.name)
-            
-            # Get statistics
-            entries = service.get_entries(dictionary_id=dict_id)
-            groups = list(set(e.group for e in entries if e.group))
-            
-            # Activate if requested
-            if import_request.activate:
-                service.update_dictionary(dict_id, is_active=True)
-            
-            return ImportDictionaryResponse(
-                dictionary_id=dict_id,
-                name=import_request.name,
-                entries_imported=len(entries),
-                groups_created=groups
-            )
-            
-        finally:
-            # Clean up temp file
-            import os
-            os.unlink(tmp_path)
+        # Import directly from markdown content
+        dict_id = service.import_from_markdown(import_request.content, import_request.name)
+
+        # Get statistics
+        entries = service.get_entries(dictionary_id=dict_id, active_only=False)
+        groups = list({e.get("group") for e in entries if e.get("group")})
+
+        # Activate if requested
+        if import_request.activate:
+            service.update_dictionary(dict_id, is_active=True)
+
+        return ImportDictionaryResponse(
+            dictionary_id=dict_id,
+            name=import_request.name,
+            entries_imported=len(entries),
+            groups_created=groups,
+        )
             
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1771,33 +1783,18 @@ async def export_dictionary(
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
         
-        # Export to temporary file
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
-            tmp_path = tmp.name
-        
-        try:
-            service.export_to_markdown(dictionary_id, tmp_path)
-            
-            # Read content
-            with open(tmp_path, 'r') as f:
-                content = f.read()
-            
-            # Get statistics
-            entries = service.get_entries(dictionary_id=dictionary_id)
-            groups = list(set(e.group for e in entries if e.group))
-            
-            return ExportDictionaryResponse(
-                name=dict_data['name'],
-                content=content,
-                entry_count=len(entries),
-                group_count=len(groups)
-            )
-            
-        finally:
-            # Clean up temp file
-            import os
-            os.unlink(tmp_path)
+        # Export to markdown string directly
+        content = service.export_to_markdown(dictionary_id)
+
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+        groups = list({e.get("group") for e in entries if e.get("group")})
+
+        return ExportDictionaryResponse(
+            name=dict_data['name'],
+            content=content if isinstance(content, str) else str(content),
+            entry_count=len(entries),
+            group_count=len(groups),
+        )
             
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1822,24 +1819,25 @@ async def get_dictionary_statistics(
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
         
-        entries = service.get_entries(dictionary_id=dictionary_id)
-        
-        # Calculate statistics
-        regex_count = sum(1 for e in entries if e.is_regex)
-        literal_count = len(entries) - regex_count
-        groups = list(set(e.group for e in entries if e.group))
-        avg_probability = sum(e.probability for e in entries) / len(entries) if entries else 0
-        
+        # Use service statistics and enrich with groups and average probability
+        stats = service.get_statistics(dictionary_id)
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+        regex_count = int(stats.get("regex_entries", 0))
+        total_entries = int(stats.get("total_entries", len(entries)))
+        literal_count = int(stats.get("literal_entries", total_entries - regex_count))
+        groups = list({e.get("group") for e in entries if e.get("group")})
+        avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
+
         return DictionaryStatistics(
             dictionary_id=dictionary_id,
             name=dict_data['name'],
-            total_entries=len(entries),
+            total_entries=total_entries,
             regex_entries=regex_count,
             literal_entries=literal_count,
             groups=groups,
             average_probability=avg_probability,
-            total_usage_count=None,  # Would track in production
-            last_used=None  # Would track in production
+            total_usage_count=service.get_usage_statistics(dictionary_id).get("times_used"),
+            last_used=None,
         )
         
     except HTTPException:

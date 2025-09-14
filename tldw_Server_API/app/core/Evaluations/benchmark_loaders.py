@@ -306,9 +306,21 @@ class BenchmarkDatasetLoader:
             else:
                 return DatasetLoader.load_json(source)
         else:
-            # Load from local file
+            # Load from local path (file or directory)
             from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQADataset
-            return SimpleQADataset.load_from_file(source)
+            p = Path(source)
+            if p.is_dir():
+                # Prefer a *_verified.jsonl or first jsonl/json
+                candidates = list(p.glob("*.jsonl")) + list(p.glob("*.json"))
+                if not candidates:
+                    logger.error(f"No dataset files found in directory: {source}")
+                    return []
+                # Heuristic: pick file with 'verified' in name first
+                candidates.sort(key=lambda x: ("verified" not in x.name.lower(), x.name))
+                source_file = str(candidates[0])
+                return SimpleQADataset.load_from_file(source_file)
+            else:
+                return SimpleQADataset.load_from_file(source)
 
 
 def load_benchmark_dataset(benchmark_name: str, 

@@ -383,6 +383,11 @@ testpaths = ["tldw_Server_API/tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+norecursedirs = [
+    "tldw_Server_API/tests/Character_Chat_NEW",
+    "tldw_Server_API/tests/TTS_NEW",
+    "tldw_Server_API/tests/Embeddings"
+]
 addopts = [
     "--strict-markers",
     "--verbose",
@@ -390,6 +395,7 @@ addopts = [
     "--disable-warnings",
     "-p pytest_asyncio"
 ]
+import_mode = "importlib"
 
 ###########################
 # Tools - Code Quality

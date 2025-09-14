@@ -85,6 +85,10 @@ This tool is designed for:
 - **Prompts**: Prompt library management
 - **Notes**: Note-taking and knowledge management
 - **Evaluations**: Model evaluation tools
+  - OCR Evaluations:
+    - `POST /api/v1/evaluations/ocr` accepts JSON with items `{ id, extracted_text, ground_truth_text }`, optional `metrics`, `ocr_options`, and `thresholds` (max_cer, max_wer, min_coverage, min_page_coverage)
+    - `POST /api/v1/evaluations/ocr-pdf` accepts PDF uploads (`files`) and optional `ground_truths`, with OCR settings and `thresholds_json`
+    - Results include averages and per-document metrics; per-page metrics appear when page-level ground truths are provided
 - **Embeddings**: Vector embedding generation
 - **Research**: ArXiv and Semantic Scholar integration
 - **Audio**: Text-to-speech functionality

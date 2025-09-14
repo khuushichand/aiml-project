@@ -11,7 +11,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -1177,6 +1177,14 @@ async def batch_evaluate(
                         api_name=eval_request.get("api_name", "openai"),
                         user_id=user_id
                     )
+                elif eval_type == "ocr":
+                    task = service.evaluate_ocr(
+                        items=eval_request.get("items", []),
+                        metrics=eval_request.get("metrics"),
+                        ocr_options=eval_request.get("ocr_options"),
+                        thresholds=eval_request.get("thresholds"),
+                        user_id=user_id,
+                    )
                 else:
                     # Unknown type, create failed result
                     results.append({
@@ -1242,6 +1250,14 @@ async def batch_evaluate(
                             api_name=eval_request.get("api_name", "openai"),
                             user_id=user_id
                         )
+                    elif eval_type == "ocr":
+                        result = await service.evaluate_ocr(
+                            items=eval_request.get("items", []),
+                            metrics=eval_request.get("metrics"),
+                            ocr_options=eval_request.get("ocr_options"),
+                            thresholds=eval_request.get("thresholds"),
+                            user_id=user_id,
+                        )
                     else:
                         results.append({
                             "evaluation_id": None,
@@ -1285,6 +1301,128 @@ async def batch_evaluate(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch evaluation failed: {sanitize_error_message(e, 'batch evaluation')}"
+        )
+
+
+# ============= OCR Evaluation Endpoint =============
+
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    OCREvaluationRequest,
+    OCREvaluationResponse,
+)
+
+
+@router.post("/ocr", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
+async def evaluate_ocr_endpoint(
+    request: OCREvaluationRequest,
+    user_id: str = Depends(verify_api_key)
+):
+    """Evaluate OCR effectiveness on provided items (text-to-text comparison).
+
+    Note: This endpoint currently expects pre-extracted text per item.
+    PDF-based OCR execution can be added in future if needed.
+    """
+    try:
+        service = get_evaluation_service()
+        result = await service.evaluate_ocr(
+            items=[i.model_dump() for i in request.items],
+            metrics=request.metrics,
+            ocr_options=request.ocr_options,
+            thresholds=request.thresholds,
+            user_id=user_id,
+        )
+        return OCREvaluationResponse(**result)
+    except Exception as e:
+        logger.error(f"OCR evaluation endpoint failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OCR evaluation failed: {sanitize_error_message(e, 'ocr evaluation')}"
+        )
+
+
+@router.post("/ocr-pdf", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
+async def evaluate_ocr_pdf_endpoint(
+    files: List[UploadFile] = File(..., description="PDF files to OCR and evaluate"),
+    ground_truths: Optional[List[str]] = Form(None, description="Ground-truth text per file (order aligned)"),
+    ground_truths_json: Optional[str] = Form(None, description="JSON array of ground-truth texts aligned to files"),
+    metrics: Optional[List[str]] = Form(None, description="Metrics to compute (cer, wer, coverage, page_coverage)"),
+    ground_truths_pages_json: Optional[str] = Form(None, description="JSON array of per-file page arrays of ground truth text (e.g., [[...],[...]])"),
+    thresholds_json: Optional[str] = Form(None, description="JSON dict of thresholds (max_cer, max_wer, min_coverage, min_page_coverage)"),
+    enable_ocr: bool = Form(True, description="Enable OCR"),
+    ocr_backend: Optional[str] = Form(None, description="OCR backend (e.g., 'tesseract' or 'auto')"),
+    ocr_lang: str = Form("eng", description="OCR language"),
+    ocr_dpi: int = Form(300, description="Render DPI (72-600)"),
+    ocr_mode: str = Form("fallback", description="OCR mode: 'always' or 'fallback'"),
+    ocr_min_page_text_chars: int = Form(40, description="Threshold for per-page OCR fallback"),
+    user_id: str = Depends(verify_api_key),
+):
+    """Evaluate OCR by running OCR on uploaded PDFs and comparing to provided ground-truths."""
+    try:
+        if ground_truths is not None and len(ground_truths) not in (0, len(files)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ground_truths count must match files length or be omitted")
+
+        items: List[Dict[str, Any]] = []
+        gt_list = ground_truths or []
+        if ground_truths_json:
+            try:
+                parsed = json.loads(ground_truths_json)
+                if isinstance(parsed, list):
+                    gt_list = parsed
+            except Exception:
+                pass
+
+        gt_pages_list = None
+        if ground_truths_pages_json:
+            try:
+                parsed_pages = json.loads(ground_truths_pages_json)
+                if isinstance(parsed_pages, list):
+                    gt_pages_list = parsed_pages
+            except Exception:
+                pass
+
+        for idx, f in enumerate(files):
+            content = await f.read()
+            gt = gt_list[idx] if idx < len(gt_list) else None
+            item = {
+                "id": f.filename or f"file_{idx}",
+                "pdf_bytes": content,
+                "ground_truth_text": gt,
+            }
+            if gt_pages_list and idx < len(gt_pages_list) and isinstance(gt_pages_list[idx], list):
+                item["ground_truth_pages"] = gt_pages_list[idx]
+            items.append(item)
+
+        ocr_options = {
+            "enable_ocr": enable_ocr,
+            "ocr_backend": ocr_backend,
+            "ocr_lang": ocr_lang,
+            "ocr_dpi": int(ocr_dpi),
+            "ocr_mode": ocr_mode,
+            "ocr_min_page_text_chars": int(ocr_min_page_text_chars),
+        }
+
+        service = get_evaluation_service()
+        thresholds = None
+        if thresholds_json:
+            try:
+                thresholds = json.loads(thresholds_json)
+            except Exception:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid thresholds_json")
+        result = await service.evaluate_ocr(
+            items=items,
+            metrics=metrics,
+            ocr_options=ocr_options,
+            thresholds=thresholds,
+            user_id=user_id,
+        )
+        return OCREvaluationResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"OCR PDF evaluation endpoint failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OCR PDF evaluation failed: {sanitize_error_message(e, 'ocr pdf evaluation')}"
         )
 
 

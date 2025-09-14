@@ -22,34 +22,41 @@ class TimedEffects(BaseModel):
 
 class DictionaryEntryBase(BaseModel):
     """Base schema for dictionary entries."""
-    key: str = Field(..., min_length=1, description="Pattern to match (can be regex with /pattern/flags format)")
-    content: str = Field(..., description="Replacement text")
-    probability: int = Field(100, ge=0, le=100, description="Chance of replacement (0-100)")
+    pattern: str = Field(..., min_length=1, description="Pattern to match (literal or regex)")
+    replacement: str = Field(..., description="Replacement text")
+    probability: float = Field(1.0, ge=0.0, le=1.0, description="Chance of replacement (0.0-1.0)")
     group: Optional[str] = Field(None, description="Optional group name for organization")
     timed_effects: Optional[TimedEffects] = Field(None, description="Timing effects configuration")
-    max_replacements: int = Field(1, ge=1, description="Maximum replacements per processing")
+    max_replacements: int = Field(0, ge=0, description="Maximum replacements per processing (0 = unlimited)")
 
 
 class DictionaryEntryCreate(DictionaryEntryBase):
     """Schema for creating a dictionary entry."""
-    pass
+    type: str = Field("literal", pattern="^(literal|regex)$", description="Entry type")
+    enabled: bool = Field(True, description="Whether the entry is enabled")
+    case_sensitive: bool = Field(True, description="Case-sensitive matching for literal patterns")
 
 
 class DictionaryEntryUpdate(BaseModel):
     """Schema for updating a dictionary entry."""
-    key: Optional[str] = Field(None, min_length=1, description="New pattern to match")
-    content: Optional[str] = Field(None, description="New replacement text")
-    probability: Optional[int] = Field(None, ge=0, le=100, description="New probability")
+    pattern: Optional[str] = Field(None, min_length=1, description="New pattern to match")
+    replacement: Optional[str] = Field(None, description="New replacement text")
+    probability: Optional[float] = Field(None, ge=0.0, le=1.0, description="New probability (0.0-1.0)")
     group: Optional[str] = Field(None, description="New group name")
     timed_effects: Optional[TimedEffects] = Field(None, description="New timing effects")
-    max_replacements: Optional[int] = Field(None, ge=1, description="New max replacements")
+    max_replacements: Optional[int] = Field(None, ge=0, description="New max replacements (0 = unlimited)")
+    type: Optional[str] = Field(None, pattern="^(literal|regex)$", description="Entry type")
+    enabled: Optional[bool] = Field(None, description="Whether the entry is enabled")
+    case_sensitive: Optional[bool] = Field(None, description="Case-sensitive matching for literal patterns")
 
 
 class DictionaryEntryResponse(DictionaryEntryBase):
     """Schema for dictionary entry response."""
     id: int = Field(..., description="Entry ID")
     dictionary_id: int = Field(..., description="Parent dictionary ID")
-    is_regex: bool = Field(..., description="Whether the key is a regex pattern")
+    type: str = Field(..., description="Entry type")
+    enabled: bool = Field(..., description="Whether the entry is enabled")
+    case_sensitive: bool = Field(..., description="Case-sensitive matching for literal patterns")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
