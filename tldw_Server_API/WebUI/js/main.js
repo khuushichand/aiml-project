@@ -173,6 +173,9 @@ class WebUI {
         if (contentId === 'tabWebScrapingIngest' && typeof initializeWebScrapingIngestTab === 'function') {
             initializeWebScrapingIngestTab();
         }
+        if (contentId === 'tabMultiItemAnalysis' && typeof initializeMultiItemAnalysisTab === 'function') {
+            initializeMultiItemAnalysisTab();
+        }
         
         if (contentId === 'tabEvalsOpenAI' || contentId === 'tabEvalsGEval') {
             if (typeof initializeEvaluationsTab === 'function') {
@@ -186,7 +189,7 @@ class WebUI {
             'tabChatCompletions', 'tabCharacterChat', 'tabConversations',
             'tabMediaIngestion', 'tabMediaProcessingNoDB', 
             'tabEvalsOpenAI', 'tabEvalsGEval',
-            'tabWebScrapingIngest'
+            'tabWebScrapingIngest', 'tabMultiItemAnalysis'
         ];
         
         if (tabsWithModelSelection.includes(contentId)) {

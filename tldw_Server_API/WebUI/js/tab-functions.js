@@ -399,13 +399,14 @@ function validateFriendlyCookies() {
     input.disabled = !use;
     if (!use) {
         status.textContent = '';
+        status.classList.remove('error');
         return;
     }
 
     const text = input.value.trim();
     if (text === '') {
         status.textContent = 'Provide valid JSON when using cookies.';
-        status.style.color = 'var(--color-text-muted)';
+        status.classList.add('error');
         return;
     }
 
@@ -417,10 +418,10 @@ function validateFriendlyCookies() {
         // Pretty print normalized JSON back into the field
         input.value = JSON.stringify(parsed, null, 2);
         status.textContent = 'Cookies JSON valid';
-        status.style.color = 'var(--color-success, #2e7d32)';
+        status.classList.remove('error');
     } catch (e) {
         status.textContent = 'Invalid JSON: ' + e.message;
-        status.style.color = 'var(--color-error, #c62828)';
+        status.classList.add('error');
     }
 }
 
@@ -432,11 +433,15 @@ function updateFriendlyIngestValidationState() {
 
     let isValid = true;
     const errors = [];
-    // Reset field highlights
+    // Reset field highlights and hints
     const resetInvalid = (id) => { const el = document.getElementById(id); if (el) el.classList.remove('input-invalid'); };
     const markInvalid = (id) => { const el = document.getElementById(id); if (el) el.classList.add('input-invalid'); };
     ['friendlyIngest_urls','friendlyIngest_url_level','friendlyIngest_max_pages','friendlyIngest_max_depth','friendlyIngest_cookies']
         .forEach(resetInvalid);
+    const clearHint = (id) => { const el = document.getElementById(id); if (el) { el.textContent = ''; el.classList.remove('error'); } };
+    const setHint = (id, msg) => { const el = document.getElementById(id); if (el) { el.textContent = msg; el.classList.add('error'); } };
+    ['friendlyIngest_urls_hint','friendlyIngest_url_level_hint','friendlyIngest_max_pages_hint','friendlyIngest_max_depth_hint']
+        .forEach(clearHint);
 
     const urls = (document.getElementById('friendlyIngest_urls')?.value || '')
         .split('\n').map(s => s.trim()).filter(Boolean);
@@ -444,6 +449,7 @@ function updateFriendlyIngestValidationState() {
         isValid = false;
         errors.push('Enter at least one URL.');
         markInvalid('friendlyIngest_urls');
+        setHint('friendlyIngest_urls_hint', 'Enter at least one valid URL, one per line.');
     }
 
     const method = document.getElementById('friendlyIngest_scrape_method')?.value || 'individual';
@@ -455,17 +461,19 @@ function updateFriendlyIngestValidationState() {
         isValid = false;
         errors.push('Set URL Level to 1 or higher for url_level method.');
         markInvalid('friendlyIngest_url_level');
+        setHint('friendlyIngest_url_level_hint', 'URL Level must be 1 or greater.');
     }
     if (method === 'recursive_scraping' && (!maxPages || maxPages < 1 || !maxDepth || maxDepth < 1)) {
         isValid = false;
         errors.push('Set Max Pages and Max Depth (>= 1) for recursive_scraping.');
-        if (!maxPages || maxPages < 1) markInvalid('friendlyIngest_max_pages');
-        if (!maxDepth || maxDepth < 1) markInvalid('friendlyIngest_max_depth');
+        if (!maxPages || maxPages < 1) { markInvalid('friendlyIngest_max_pages'); setHint('friendlyIngest_max_pages_hint', 'Max Pages must be 1 or greater.'); }
+        if (!maxDepth || maxDepth < 1) { markInvalid('friendlyIngest_max_depth'); setHint('friendlyIngest_max_depth_hint', 'Max Depth must be 1 or greater.'); }
     }
     if (method === 'sitemap' && (!maxPages || maxPages < 1)) {
         isValid = false;
         errors.push('Set Max Pages (>= 1) for sitemap method.');
         markInvalid('friendlyIngest_max_pages');
+        setHint('friendlyIngest_max_pages_hint', 'Max Pages must be 1 or greater.');
     }
 
     const useCookies = document.getElementById('friendlyIngest_use_cookies')?.checked;
@@ -644,6 +652,582 @@ function submitWebScrapingIngestFriendly(previewOnly = false) {
 }
 
 // ============================================================================
+// Multi-Item Analysis Tab
+// ============================================================================
+
+function initializeMultiItemAnalysisTab() {
+    try {
+        // Ensure model dropdowns are populated
+        if (typeof window.populateModelDropdowns === 'function') {
+            window.populateModelDropdowns();
+        }
+
+        // Basic initial render
+        const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+        renderMultiQueue(queue);
+        
+        // Scrape method field toggles
+        const methodSelect = document.getElementById('multi_scrape_method');
+        if (methodSelect) {
+            methodSelect.addEventListener('change', updateMultiScrapeMethodUI);
+            updateMultiScrapeMethodUI();
+        }
+        // Processing type toggles and file accept
+        const procType = document.getElementById('multi_processing_type');
+        if (procType) {
+            procType.addEventListener('change', updateProcessingTypeUI);
+            updateProcessingTypeUI();
+        }
+
+        // Start with Advanced collapsed
+        const advBody = document.getElementById('multi_advanced_options');
+        const advBtn = document.getElementById('multi_adv_toggle_btn');
+        if (advBody && advBtn) {
+            advBody.style.display = 'none';
+            advBtn.textContent = 'Show';
+        }
+    } catch (e) {
+        console.warn('Failed to initialize Multi-Item Analysis tab:', e.message);
+    }
+}
+
+function multiGetSettings() {
+    return {
+        model: document.getElementById('multi_model')?.value || '',
+        temperature: parseFloat(document.getElementById('multi_temperature')?.value || '0.7'),
+        systemPrompt: document.getElementById('multi_system_prompt')?.value || '',
+        analysisPrompt: document.getElementById('multi_custom_prompt')?.value || 'Summarize key points, takeaways, and action items.',
+        storeOption: document.getElementById('multi_store_option')?.value || 'none',
+        showMetadata: document.getElementById('multi_show_metadata')?.checked ?? true,
+    };
+}
+
+function updateMultiScrapeMethodUI() {
+    const method = document.getElementById('multi_scrape_method')?.value || 'Individual URLs';
+    const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? 'block' : 'none'; };
+    show('group_multi_url_level', method === 'URL Level');
+    show('group_multi_max_pages', method === 'Recursive Scraping' || method === 'Sitemap');
+    show('group_multi_max_depth', method === 'Recursive Scraping');
+}
+
+function updateProcessingTypeUI() {
+    const type = document.getElementById('multi_processing_type')?.value || 'web';
+    const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? 'block' : 'none'; };
+    const webMode = (type === 'web');
+    show('group_multi_scrape_method', webMode);
+    show('group_multi_url_level', webMode);
+    show('group_multi_max_pages', webMode);
+    show('group_multi_max_depth', webMode);
+    // Advanced groups
+    show('adv_videos', type === 'videos');
+    show('adv_audios', type === 'audios');
+    show('adv_documents', type === 'documents');
+    show('adv_pdfs', type === 'pdfs');
+    show('adv_ebooks', type === 'ebooks');
+    // Files group and accept
+    show('group_multi_files', type !== 'web');
+    const f = document.getElementById('multi_files');
+    const hint = document.getElementById('multi_files_hint');
+    if (f) {
+        let accept = '';
+        let hintText = '';
+        if (type === 'videos') { accept = 'video/*'; hintText = 'Accepts common video formats.'; }
+        else if (type === 'audios') { accept = 'audio/*'; hintText = 'Accepts common audio formats.'; }
+        else if (type === 'documents') { accept = '.txt,.md,.docx,.rtf,.html,.htm,.xml'; hintText = 'txt, md, docx, rtf, html, xml'; }
+        else if (type === 'pdfs') { accept = '.pdf'; hintText = 'PDF files only'; }
+        else if (type === 'ebooks') { accept = '.epub,.mobi,.azw3'; hintText = 'epub, mobi, azw3'; }
+        f.setAttribute('accept', accept);
+        if (hint) hint.textContent = `Accepted: ${hintText}`;
+    }
+}
+
+// Jump to Vector Stores tab (Embeddings → Vector Stores)
+function jumpToVectorStores() {
+    try {
+        const top = document.querySelector('.top-tab-button[data-toptab="embeddings"]');
+        if (top) top.click();
+        setTimeout(() => {
+            const sub = document.querySelector('#embeddings-subtabs .sub-tab-button[data-content-id="tabVectorStores"]');
+            if (sub) sub.click();
+        }, 100);
+    } catch (e) {
+        console.warn('Failed to switch to Vector Stores tab:', e);
+    }
+}
+
+function toggleMultiAdvancedOptions() {
+    const body = document.getElementById('multi_advanced_options');
+    const btn = document.getElementById('multi_adv_toggle_btn');
+    if (!body || !btn) return;
+    const isHidden = body.style.display === 'none' || body.style.display === '';
+    body.style.display = isHidden ? 'block' : 'none';
+    btn.textContent = isHidden ? 'Hide' : 'Show';
+}
+
+function renderMultiQueue(queue) {
+    const container = document.getElementById('multi_queue_container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!Array.isArray(queue) || queue.length === 0) {
+        container.innerHTML = '<div style="color: var(--color-text-muted);">Queue is empty.</div>';
+        return;
+    }
+
+    queue.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'endpoint-section';
+        const key = item.ephemeral ? item.id : item.media_id;
+        card.id = `multi_item_${key}`;
+
+        let metaHtml = '';
+        if (item.metadata && multiGetSettings().showMetadata) {
+            metaHtml = `<div class="json-viewer-content" style="margin-top:8px;">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</div>`;
+        }
+
+        card.innerHTML = `
+            <h3 style="margin-bottom:4px;">${escapeHtml(item.title || 'Untitled')} <small style="color: var(--color-text-muted);">(${item.ephemeral ? 'Ephemeral' : 'ID: ' + item.media_id})</small></h3>
+            <div style="margin-bottom:8px; color: var(--color-text-secondary);">${escapeHtml(item.source || '')}</div>
+            ${metaHtml}
+            <div class="form-group" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-primary" onclick="${item.ephemeral ? `multiAnalyzeEphemeral('${key}')` : `multiAnalyzeItem(${key})`}">Analyze</button>
+                <button class="btn" onclick="${item.ephemeral ? `multiSaveEphemeralAnalysis('${key}')` : `multiSaveItemAnalysis(${key})`}">Save Analysis</button>
+                <button class="btn btn-danger" onclick="${item.ephemeral ? `multiRemoveEphemeral('${key}')` : `multiRemoveFromQueue(${key})`}">Remove</button>
+            </div>
+            <h4>Analysis</h4>
+            <pre id="multi_analysis_${key}">(Not analyzed)</pre>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function multiPersistQueue(queue) {
+    Utils.saveToStorage('multi-analysis-queue', queue || []);
+}
+
+function multiClearQueue() {
+    multiPersistQueue([]);
+    renderMultiQueue([]);
+}
+
+function multiRemoveFromQueue(mediaId) {
+    const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+    const filtered = queue.filter(q => q.media_id !== mediaId);
+    multiPersistQueue(filtered);
+    renderMultiQueue(filtered);
+}
+
+async function multiSearchItems() {
+    const q = document.getElementById('multi_search_query')?.value || '';
+    const target = document.getElementById('multi_search_results');
+    try {
+        target.textContent = 'Searching...';
+        const payload = { query: q, fields: ["title", "content"], sort_by: 'relevance' };
+        const res = await apiClient.post('/api/v1/media/search', payload);
+        // Render results with checkboxes
+        let html = '';
+        if (res && res.results && res.results.length > 0) {
+            html += '<div>';
+            res.results.forEach(r => {
+                html += `
+                  <div style="display:flex; align-items:center; gap:8px; margin:4px 0;">
+                    <input type="checkbox" class="multi-search-select" data-media-id="${r.media_id}" data-title="${escapeAttr(r.title || '')}" data-source="${escapeAttr(r.source || '')}">
+                    <div>
+                      <div><strong>${escapeHtml(r.title || 'Untitled')}</strong> <small style="color:var(--color-text-muted)">(ID: ${r.media_id})</small></div>
+                      <div style="color:var(--color-text-secondary)">${escapeHtml((r.snippet || r.source || '').toString())}</div>
+                    </div>
+                  </div>`;
+            });
+            html += '</div>';
+        } else {
+            html = '(No results)';
+        }
+        target.innerHTML = html;
+    } catch (e) {
+        target.textContent = 'Search failed: ' + e.message;
+    }
+}
+
+function multiClearSearchResults() {
+    const target = document.getElementById('multi_search_results');
+    if (target) target.textContent = '(No results)';
+}
+
+function multiAddSelectedFromSearch() {
+    const checkboxes = document.querySelectorAll('.multi-search-select:checked');
+    if (checkboxes.length === 0) return;
+    const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+    checkboxes.forEach(cb => {
+        const mediaId = parseInt(cb.getAttribute('data-media-id'));
+        const title = cb.getAttribute('data-title') || '';
+        const source = cb.getAttribute('data-source') || '';
+        if (!queue.find(q => q.media_id === mediaId)) {
+            queue.push({ media_id: mediaId, title, source });
+        }
+    });
+    multiPersistQueue(queue);
+    renderMultiQueue(queue);
+}
+
+async function multiIngestUrlsToQueue() {
+    const urlsText = document.getElementById('multi_urls')?.value || '';
+    const method = document.getElementById('multi_scrape_method')?.value || 'Individual URLs';
+    const procType = document.getElementById('multi_processing_type')?.value || 'web';
+    const urlLevel = parseInt(document.getElementById('multi_url_level')?.value || '2', 10);
+    const maxPages = parseInt(document.getElementById('multi_max_pages')?.value || '10', 10);
+    const maxDepth = parseInt(document.getElementById('multi_max_depth')?.value || '3', 10);
+    const modeSel = document.getElementById('multi_process_mode');
+    const persist = modeSel ? (modeSel.value === 'persist') : false;
+    const status = document.getElementById('multi_ingest_status');
+
+    if (!urlsText.trim()) {
+        status.textContent = 'Provide at least one URL.';
+        return;
+    }
+
+    try {
+        status.textContent = 'Submitting ingestion request...';
+        let res;
+        if (procType === 'web') {
+            const payload = {
+                scrape_method: method,
+                url_input: urlsText,
+                url_level: method === 'URL Level' ? urlLevel : null,
+                max_pages: (method === 'Recursive Scraping' || method === 'Sitemap') ? maxPages : 10,
+                max_depth: method === 'Recursive Scraping' ? maxDepth : 3,
+                summarize_checkbox: false,
+                custom_prompt: null,
+                api_name: null,
+                keywords: '',
+                custom_titles: null,
+                system_prompt: null,
+                temperature: 0.7,
+                custom_cookies: null,
+                mode: persist ? 'persist' : 'ephemeral'
+            };
+            res = await apiClient.post('/api/v1/media/process-web-scraping', payload);
+        } else {
+            // Build FormData for other process-only endpoints
+            const fd = new FormData();
+            urlsText.split('\n').map(s=>s.trim()).filter(Boolean).forEach(u => fd.append('urls', u));
+            const doAnalysis = document.getElementById('multi_perform_analysis')?.checked ?? true;
+            fd.append('perform_analysis', doAnalysis ? 'true' : 'false');
+            const systemPrompt = document.getElementById('multi_system_prompt')?.value || '';
+            const customPrompt = document.getElementById('multi_custom_prompt')?.value || '';
+            if (systemPrompt) fd.append('system_prompt', systemPrompt);
+            if (customPrompt) fd.append('custom_prompt', customPrompt);
+            const modelValue = document.getElementById('multi_model')?.value || '';
+            const provider = modelValue ? modelValue.split('/')[0] : '';
+            if (provider) fd.append('api_name', provider);
+            // Files
+            const filesInput = document.getElementById('multi_files');
+            if (filesInput && filesInput.files && filesInput.files.length > 0) {
+                Array.from(filesInput.files).forEach(file => fd.append('files', file));
+            }
+            // Advanced per-type
+            if (procType === 'videos') {
+                const tm = document.getElementById('multi_vid_transcription_model')?.value || '';
+                if (tm) fd.append('transcription_model', tm);
+                fd.append('diarize', document.getElementById('multi_vid_diarize')?.checked ? 'true' : 'false');
+                fd.append('vad_use', document.getElementById('multi_vid_vad_use')?.checked ? 'true' : 'false');
+                fd.append('timestamp_option', document.getElementById('multi_vid_timestamp_option')?.checked ? 'true' : 'false');
+                fd.append('perform_confabulation_check_of_analysis', document.getElementById('multi_vid_confab_check')?.checked ? 'true' : 'false');
+                const st = document.getElementById('multi_vid_start_time')?.value || '';
+                const et = document.getElementById('multi_vid_end_time')?.value || '';
+                if (st) fd.append('start_time', st);
+                if (et) fd.append('end_time', et);
+                fd.append('perform_chunking', document.getElementById('multi_vid_perform_chunking')?.checked ? 'true' : 'false');
+                const cm = document.getElementById('multi_vid_chunk_method')?.value || '';
+                if (cm) fd.append('chunk_method', cm);
+                const cs = document.getElementById('multi_vid_chunk_size')?.value || '';
+                const co = document.getElementById('multi_vid_chunk_overlap')?.value || '';
+                if (cs) fd.append('chunk_size', cs);
+                if (co) fd.append('chunk_overlap', co);
+                const cl = document.getElementById('multi_vid_chunk_language')?.value || '';
+                if (cl) fd.append('chunk_language', cl);
+                fd.append('use_adaptive_chunking', document.getElementById('multi_vid_use_adaptive_chunking')?.checked ? 'true' : 'false');
+                fd.append('use_multi_level_chunking', document.getElementById('multi_vid_use_multi_level_chunking')?.checked ? 'true' : 'false');
+                fd.append('summarize_recursively', document.getElementById('multi_vid_summarize_recursively')?.checked ? 'true' : 'false');
+            } else if (procType === 'audios') {
+                const tm = document.getElementById('multi_aud_transcription_model')?.value || '';
+                if (tm) fd.append('transcription_model', tm);
+                fd.append('diarize', document.getElementById('multi_aud_diarize')?.checked ? 'true' : 'false');
+                fd.append('vad_use', document.getElementById('multi_aud_vad_use')?.checked ? 'true' : 'false');
+                fd.append('timestamp_option', document.getElementById('multi_aud_timestamp_option')?.checked ? 'true' : 'false');
+                fd.append('perform_chunking', document.getElementById('multi_aud_perform_chunking')?.checked ? 'true' : 'false');
+                const cm = document.getElementById('multi_aud_chunk_method')?.value || '';
+                if (cm) fd.append('chunk_method', cm);
+                const cs = document.getElementById('multi_aud_chunk_size')?.value || '';
+                const co = document.getElementById('multi_aud_chunk_overlap')?.value || '';
+                if (cs) fd.append('chunk_size', cs);
+                if (co) fd.append('chunk_overlap', co);
+                const cl = document.getElementById('multi_aud_chunk_language')?.value || '';
+                if (cl) fd.append('chunk_language', cl);
+                fd.append('use_adaptive_chunking', document.getElementById('multi_aud_use_adaptive_chunking')?.checked ? 'true' : 'false');
+                fd.append('use_multi_level_chunking', document.getElementById('multi_aud_use_multi_level_chunking')?.checked ? 'true' : 'false');
+                fd.append('summarize_recursively', document.getElementById('multi_aud_summarize_recursively')?.checked ? 'true' : 'false');
+            } else if (procType === 'documents') {
+                fd.append('use_cookies', document.getElementById('multi_doc_use_cookies')?.checked ? 'true' : 'false');
+                const ck = document.getElementById('multi_doc_cookies')?.value || '';
+                if (ck) fd.append('cookies', ck);
+                fd.append('perform_chunking', document.getElementById('multi_doc_perform_chunking')?.checked ? 'true' : 'false');
+                const cm = document.getElementById('multi_doc_chunk_method')?.value || '';
+                if (cm) fd.append('chunk_method', cm);
+                const cs = document.getElementById('multi_doc_chunk_size')?.value || '';
+                const co = document.getElementById('multi_doc_chunk_overlap')?.value || '';
+                if (cs) fd.append('chunk_size', cs);
+                if (co) fd.append('chunk_overlap', co);
+                const cl = document.getElementById('multi_doc_chunk_language')?.value || '';
+                if (cl) fd.append('chunk_language', cl);
+                const ccp = document.getElementById('multi_doc_custom_chapter_pattern')?.value || '';
+                if (ccp) fd.append('custom_chapter_pattern', ccp);
+            } else if (procType === 'pdfs') {
+                const engine = document.getElementById('multi_pdf_parsing_engine')?.value || '';
+                if (engine) fd.append('pdf_parsing_engine', engine);
+                const ccp = document.getElementById('multi_pdf_custom_chapter_pattern')?.value || '';
+                if (ccp) fd.append('custom_chapter_pattern', ccp);
+                fd.append('use_cookies', document.getElementById('multi_pdf_use_cookies')?.checked ? 'true' : 'false');
+                const ck = document.getElementById('multi_pdf_cookies')?.value || '';
+                if (ck) fd.append('cookies', ck);
+                fd.append('perform_chunking', document.getElementById('multi_pdf_perform_chunking')?.checked ? 'true' : 'false');
+                const cm = document.getElementById('multi_pdf_chunk_method')?.value || '';
+                if (cm) fd.append('chunk_method', cm);
+                const cs = document.getElementById('multi_pdf_chunk_size')?.value || '';
+                const co = document.getElementById('multi_pdf_chunk_overlap')?.value || '';
+                if (cs) fd.append('chunk_size', cs);
+                if (co) fd.append('chunk_overlap', co);
+                const cl = document.getElementById('multi_pdf_chunk_language')?.value || '';
+                if (cl) fd.append('chunk_language', cl);
+            } else if (procType === 'ebooks') {
+                fd.append('perform_chunking', document.getElementById('multi_ebook_perform_chunking')?.checked ? 'true' : 'false');
+                const cm = document.getElementById('multi_ebook_chunk_method')?.value || '';
+                if (cm) fd.append('chunk_method', cm);
+                const cs = document.getElementById('multi_ebook_chunk_size')?.value || '';
+                const co = document.getElementById('multi_ebook_chunk_overlap')?.value || '';
+                if (cs) fd.append('chunk_size', cs);
+                if (co) fd.append('chunk_overlap', co);
+                const ccp = document.getElementById('multi_ebook_custom_chapter_pattern')?.value || '';
+                if (ccp) fd.append('custom_chapter_pattern', ccp);
+            }
+
+            let endpoint = '';
+            if (procType === 'videos') endpoint = '/api/v1/media/process-videos';
+            else if (procType === 'audios') endpoint = '/api/v1/media/process-audios';
+            else if (procType === 'documents') endpoint = '/api/v1/media/process-documents';
+            else if (procType === 'pdfs') endpoint = '/api/v1/media/process-pdfs';
+            else if (procType === 'ebooks') endpoint = '/api/v1/media/process-ebooks';
+            else endpoint = '/api/v1/media/process-documents';
+
+            res = await apiClient.makeRequest('POST', endpoint, { body: fd });
+        }
+
+        if (procType === 'web' && persist && res && res.media_ids && res.media_ids.length > 0) {
+            const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+            // Fetch basic details for each media id
+            for (const id of res.media_ids) {
+                try {
+                    const detail = await apiClient.get(`/api/v1/media/${id}`);
+                    queue.push({ media_id: id, title: detail.title || 'Untitled', source: detail.source || '', metadata: { type: detail.media_type || '', author: detail.author || '' } });
+                } catch (e) {
+                    queue.push({ media_id: id, title: `Media ${id}`, source: '' });
+                }
+            }
+            multiPersistQueue(queue);
+            renderMultiQueue(queue);
+            status.textContent = `Ingested and added ${res.media_ids.length} item(s) to queue.`;
+        } else if (procType !== 'web' || !persist) {
+            // Add ephemeral results to queue
+            const results = (res && res.results) ? res.results : [];
+            if (!Array.isArray(results) || results.length === 0) {
+                status.textContent = 'No results returned.';
+                return;
+            }
+            const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+            results.forEach(r => {
+                const id = `e_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+                const title = r.title || r.input_ref || 'Untitled';
+                const source = r.processing_source || r.url || r.source || '';
+                const content = r.content || '';
+                const metadata = r.metadata || {};
+                queue.push({ id, ephemeral: true, title, source, content, metadata });
+            });
+            multiPersistQueue(queue);
+            renderMultiQueue(queue);
+            status.textContent = `Processed ${results.length} item(s) and added to queue.`;
+        } else {
+            status.textContent = 'No media IDs returned.';
+        }
+    } catch (e) {
+        status.textContent = 'Ingestion failed: ' + e.message;
+    }
+}
+
+async function multiAnalyzeItem(mediaId) {
+    const settings = multiGetSettings();
+    const outEl = document.getElementById(`multi_analysis_${mediaId}`);
+    const card = document.getElementById(`multi_item_${mediaId}`);
+    if (outEl) outEl.textContent = 'Analyzing...';
+    if (card && typeof Loading !== 'undefined') Loading.show(card, 'Analyzing...');
+    try {
+        // Get content of media
+        const detail = await apiClient.get(`/api/v1/media/${mediaId}`);
+        const title = detail.title || `Media ${mediaId}`;
+        const content = detail.content || '';
+        const modelValue = settings.model; // provider/model or empty
+
+        // Build messages
+        const messages = [];
+        if (settings.systemPrompt) {
+            messages.push({ role: 'system', content: settings.systemPrompt });
+        }
+        const promptText = `${settings.analysisPrompt}\n\nTitle: ${title}\n\nContent:\n${content}`;
+        messages.push({ role: 'user', content: promptText });
+
+        // Prepare payload for chat completions
+        const payload = {
+            model: modelValue ? modelValue.split('/').slice(1).join('/') : undefined,
+            messages,
+            temperature: isNaN(settings.temperature) ? 0.7 : settings.temperature
+        };
+        const provider = modelValue ? modelValue.split('/')[0] : '';
+        if (provider) payload.api_provider = provider;
+
+        const resp = await apiClient.post('/api/v1/chat/completions', payload);
+        let analysis = '';
+        if (resp && resp.choices && resp.choices[0] && resp.choices[0].message) {
+            analysis = resp.choices[0].message.content || '';
+        } else {
+            analysis = '(No response)';
+        }
+        if (outEl) outEl.textContent = analysis;
+    } catch (e) {
+        if (outEl) outEl.textContent = 'Analysis failed: ' + e.message;
+    }
+    finally {
+        if (card && typeof Loading !== 'undefined') Loading.hide(card);
+    }
+}
+
+async function multiSaveItemAnalysis(mediaId) {
+    const settings = multiGetSettings();
+    const outEl = document.getElementById(`multi_analysis_${mediaId}`);
+    if (!outEl) return;
+    const text = outEl.textContent || '';
+    if (!text || text === '(Not analyzed)' || text.startsWith('Analyzing')) {
+        Toast && Toast.warning ? Toast.warning('Nothing to save for this item') : console.warn('Nothing to save');
+        return;
+    }
+
+    try {
+        if (settings.storeOption === 'media') {
+            await apiClient.put(`/api/v1/media/${mediaId}`, { analysis: text });
+            Toast && Toast.success ? Toast.success('Saved to media') : console.log('Saved to media');
+        } else if (settings.storeOption === 'version') {
+            await apiClient.post(`/api/v1/media/${mediaId}/versions`, { content: null, prompt: multiGetSettings().analysisPrompt || '', analysis_content: text });
+            Toast && Toast.success ? Toast.success('Saved as new version') : console.log('Saved as new version');
+        } else {
+            Toast && Toast.info ? Toast.info('Store option is set to "Do not store"') : console.log('Not stored');
+        }
+    } catch (e) {
+        Toast && Toast.error ? Toast.error('Save failed: ' + e.message) : console.error('Save failed:', e);
+    }
+}
+
+async function multiAnalyzeAll() {
+    const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+    const bar = document.getElementById('multi_progress_bar');
+    const wrap = document.getElementById('multi_progress');
+    const txt = document.getElementById('multi_progress_text');
+    const cnt = document.getElementById('multi_progress_count');
+    if (wrap) wrap.style.display = 'block';
+    const total = queue.length;
+    let i = 0;
+    const update = () => {
+        if (bar) bar.style.width = `${total ? Math.round((i / total) * 100) : 0}%`;
+        if (cnt) cnt.textContent = `${i} / ${total}`;
+    };
+    if (txt) txt.textContent = 'Analyzing...';
+    update();
+    for (const item of queue) {
+        if (item.ephemeral) {
+            await multiAnalyzeEphemeral(item.id);
+        } else {
+            await multiAnalyzeItem(item.media_id);
+        }
+        i += 1;
+        update();
+    }
+    if (txt) txt.textContent = 'Completed';
+}
+
+async function multiAnalyzeEphemeral(id) {
+    const settings = multiGetSettings();
+    const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+    const item = queue.find(q => q.ephemeral && q.id === id);
+    const outEl = document.getElementById(`multi_analysis_${id}`);
+    const card = document.getElementById(`multi_item_${id}`);
+    if (!item || !outEl) return;
+    outEl.textContent = 'Analyzing...';
+    if (card && typeof Loading !== 'undefined') Loading.show(card, 'Analyzing...');
+    try {
+        const title = item.title || 'Untitled';
+        const content = item.content || '';
+        const modelValue = settings.model;
+        const messages = [];
+        if (settings.systemPrompt) messages.push({ role: 'system', content: settings.systemPrompt });
+        const promptText = `${settings.analysisPrompt}\n\nTitle: ${title}\n\nContent:\n${content}`;
+        messages.push({ role: 'user', content: promptText });
+        const payload = {
+            model: modelValue ? modelValue.split('/').slice(1).join('/') : undefined,
+            messages,
+            temperature: isNaN(settings.temperature) ? 0.7 : settings.temperature
+        };
+        const provider = modelValue ? modelValue.split('/')[0] : '';
+        if (provider) payload.api_provider = provider;
+        const resp = await apiClient.post('/api/v1/chat/completions', payload);
+        let analysis = '';
+        if (resp && resp.choices && resp.choices[0] && resp.choices[0].message) {
+            analysis = resp.choices[0].message.content || '';
+        } else {
+            analysis = '(No response)';
+        }
+        outEl.textContent = analysis;
+    } catch (e) {
+        outEl.textContent = 'Analysis failed: ' + e.message;
+    }
+    finally {
+        if (card && typeof Loading !== 'undefined') Loading.hide(card);
+    }
+}
+
+function multiRemoveEphemeral(id) {
+    const queue = Utils.getFromStorage('multi-analysis-queue') || [];
+    const filtered = queue.filter(q => !(q.ephemeral && q.id === id));
+    multiPersistQueue(filtered);
+    renderMultiQueue(filtered);
+}
+
+async function multiSaveEphemeralAnalysis(id) {
+    const settings = multiGetSettings();
+    const outEl = document.getElementById(`multi_analysis_${id}`);
+    if (!outEl) return;
+    if (settings.storeOption !== 'none') {
+        Toast && Toast.info ? Toast.info('Cannot save analysis for ephemeral items. Choose "Do not store" or persist content first.') : console.log('Ephemeral save disabled');
+        return;
+    }
+    Toast && Toast.success ? Toast.success('Analysis kept locally (not stored).') : console.log('Local only');
+}
+
+// Helpers for HTML escaping
+function escapeHtml(str) {
+    return (str || '').replace(/[&<>"']/g, function(m) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]);
+    });
+}
+function escapeAttr(str) {
+    return escapeHtml(str).replace(/\n/g, ' ');
+}
+
 // Chat Tab Functions
 // ============================================================================
 

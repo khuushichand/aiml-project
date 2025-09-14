@@ -50,9 +50,9 @@ class TestChatterboxAdapterMock:
         
         assert caps.provider_name == "Chatterbox"
         assert caps.supports_streaming is True
-        assert caps.supports_voice_cloning is False
+        assert caps.supports_voice_cloning is True
         assert caps.supports_emotion_control is True
-        assert caps.supports_speech_rate is True
+        assert caps.supports_speech_rate is False
         assert caps.max_text_length == 10000
         assert caps.sample_rate == 24000
         assert AudioFormat.WAV in caps.supported_formats

@@ -154,9 +154,103 @@ class MCPServer:
         logger.info("MCP Server shutdown complete")
     
     async def _register_default_modules(self):
-        """Register default modules (placeholder for migration)"""
-        # This will be implemented when migrating modules
-        logger.info("Default modules registration placeholder")
+        """Register default modules via config/env-driven loader"""
+        # Autoload modules from YAML config and/or MCP_MODULES env var
+        try:
+            import os
+            import importlib
+            # Lazy import yaml to avoid hard dependency during tests if not installed
+            try:
+                import yaml  # type: ignore
+            except Exception:
+                yaml = None  # type: ignore
+
+            modules_to_load = []
+
+            # 1) YAML configuration
+            cfg_path = os.getenv(
+                "MCP_MODULES_CONFIG",
+                "tldw_Server_API/Config_Files/mcp_modules.yaml",
+            )
+            if os.path.exists(cfg_path) and yaml is not None:
+                try:
+                    with open(cfg_path, "r") as f:
+                        data = yaml.safe_load(f) or {}
+                    modules_cfg = data.get("modules", [])
+                    if isinstance(modules_cfg, list):
+                        modules_to_load.extend(modules_cfg)
+                    logger.info(f"Loaded {len(modules_cfg)} MCP modules from {cfg_path}")
+                except Exception as e:
+                    logger.error(f"Failed to read MCP modules YAML {cfg_path}: {e}")
+            elif os.path.exists(cfg_path) and yaml is None:
+                logger.warning(
+                    f"MCP modules config found at {cfg_path} but PyYAML not installed; skipping"
+                )
+
+            # 2) Environment variable list (comma-separated)
+            # Example: MCP_MODULES="media=tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule"
+            env_spec = os.getenv("MCP_MODULES", "").strip()
+            if env_spec:
+                for item in [s for s in env_spec.split(",") if s.strip()]:
+                    try:
+                        mod_id, class_ref = item.split("=", 1)
+                        modules_to_load.append({
+                            "id": mod_id.strip(),
+                            "class": class_ref.strip(),
+                            "enabled": True,
+                        })
+                    except ValueError:
+                        logger.warning(f"Invalid MCP_MODULES item format: '{item}'")
+
+            # 3) Optional default: enable media module if flag is set and nothing else specified
+            if not modules_to_load and os.getenv("MCP_ENABLE_MEDIA_MODULE", "false").lower() in {"1", "true", "yes"}:
+                modules_to_load.append({
+                    "id": "media",
+                    "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule",
+                    "enabled": True,
+                    "name": "Media",
+                    "version": "1.0.0",
+                    "department": "media",
+                    "settings": {
+                        "db_path": "./Databases/Media_DB_v2.db",
+                        "cache_ttl": 300,
+                    },
+                })
+                logger.info("MCP_ENABLE_MEDIA_MODULE=true; queuing MediaModule for registration")
+
+            # Register all specified modules
+            from .modules.base import ModuleConfig  # Local import to avoid cycles
+            for m in modules_to_load:
+                if not m or not isinstance(m, dict):
+                    continue
+                if not m.get("enabled", True):
+                    logger.info(f"Skipping disabled module: {m.get('id')}")
+                    continue
+                try:
+                    module_id = m["id"]
+                    class_ref = m["class"]
+                    module_path, class_name = class_ref.split(":", 1)
+                    cls = getattr(importlib.import_module(module_path), class_name)
+
+                    mc = ModuleConfig(
+                        name=m.get("name", module_id),
+                        version=m.get("version", "1.0.0"),
+                        description=m.get("description", ""),
+                        department=m.get("department", "general"),
+                        enabled=True,
+                        timeout_seconds=m.get("timeout_seconds", self.config.module_timeout),
+                        max_retries=m.get("max_retries", self.config.module_max_retries),
+                        circuit_breaker_threshold=m.get("circuit_breaker_threshold", 5),
+                        circuit_breaker_timeout=m.get("circuit_breaker_timeout", 60),
+                        settings=m.get("settings", {}),
+                    )
+                    await self.module_registry.register_module(module_id, cls, mc)
+                    logger.info(f"Registered MCP module: {module_id} ({class_ref})")
+                except Exception as e:
+                    logger.error(f"Failed to register module {m}: {e}")
+
+        except Exception as e:
+            logger.error(f"Default modules registration failed: {e}")
     
     def _start_background_tasks(self):
         """Start background maintenance tasks"""

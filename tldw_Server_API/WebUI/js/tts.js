@@ -299,7 +299,8 @@ const TTS = {
         let request = {
             input: text,
             response_format: format,
-            stream: streaming
+            stream: streaming,
+            extra_params: {}
         };
         
         // Provider-specific settings
@@ -310,25 +311,25 @@ const TTS = {
                 request.voice = customVoice || document.getElementById('vibevoice-voice').value;
                 request.provider = 'vibevoice';
                 
-                // Add advanced generation parameters
-                request.cfg_scale = parseFloat(document.getElementById('vibevoice-cfg').value);
-                request.diffusion_steps = parseInt(document.getElementById('vibevoice-steps').value);
-                request.temperature = parseFloat(document.getElementById('vibevoice-temperature').value);
-                request.top_p = parseFloat(document.getElementById('vibevoice-topp').value);
-                request.attention_type = document.getElementById('vibevoice-attention').value;
+                // Add advanced generation parameters under extra_params
+                request.extra_params = {
+                    cfg_scale: parseFloat(document.getElementById('vibevoice-cfg').value),
+                    diffusion_steps: parseInt(document.getElementById('vibevoice-steps').value),
+                    temperature: parseFloat(document.getElementById('vibevoice-temperature').value),
+                    top_p: parseFloat(document.getElementById('vibevoice-topp').value),
+                    attention_type: document.getElementById('vibevoice-attention').value,
+                };
                 
                 // Add seed if provided
                 const seed = document.getElementById('vibevoice-seed').value;
                 if (seed) {
-                    request.seed = parseInt(seed);
+                    request.extra_params.seed = parseInt(seed);
                 }
                 
                 // Add features
-                request.extra_params = {
-                    background_music: document.getElementById('vibevoice-music').checked,
-                    enable_singing: document.getElementById('vibevoice-singing').checked,
-                    speaker_count: parseInt(document.getElementById('vibevoice-speakers').value)
-                };
+                request.extra_params.background_music = document.getElementById('vibevoice-music').checked;
+                request.extra_params.enable_singing = document.getElementById('vibevoice-singing').checked;
+                request.extra_params.speaker_count = parseInt(document.getElementById('vibevoice-speakers').value);
                 break;
                 
             case 'kokoro':
@@ -341,14 +342,16 @@ const TTS = {
             case 'higgs':
                 request.model = 'higgs';
                 request.voice = document.getElementById('higgs-voice').value;
-                request.language = document.getElementById('higgs-language').value;
+                request.lang_code = document.getElementById('higgs-language').value;
                 break;
                 
             case 'chatterbox':
                 request.model = 'chatterbox';
                 request.voice = document.getElementById('chatterbox-voice').value;
-                request.emotion = document.getElementById('chatterbox-emotion').value;
-                request.emotion_intensity = parseInt(document.getElementById('chatterbox-intensity').value);
+                request.extra_params = {
+                    emotion: document.getElementById('chatterbox-emotion').value,
+                    emotion_intensity: parseInt(document.getElementById('chatterbox-intensity').value)
+                };
                 break;
                 
             case 'openai':
@@ -360,8 +363,10 @@ const TTS = {
             case 'elevenlabs':
                 request.model = 'elevenlabs';
                 request.voice = document.getElementById('elevenlabs-voice').value;
-                request.stability = parseInt(document.getElementById('elevenlabs-stability').value) / 100;
-                request.clarity = parseInt(document.getElementById('elevenlabs-clarity').value) / 100;
+                request.extra_params = {
+                    stability: parseInt(document.getElementById('elevenlabs-stability').value) / 100,
+                    clarity: parseInt(document.getElementById('elevenlabs-clarity').value) / 100
+                };
                 break;
         }
         
@@ -390,24 +395,76 @@ const TTS = {
         }
     },
     
-    // Handle streaming response
+    // Handle streaming response with real-time playback (MSE where supported)
     async handleStreamingResponse(response) {
-        const reader = response.body.getReader();
-        const chunks = [];
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-        }
-        
-        // Combine chunks and create blob
-        const blob = new Blob(chunks, { type: 'audio/mpeg' });
-        const url = URL.createObjectURL(blob);
-        
-        // Update audio player
+        const format = document.getElementById('tts-format').value;
         const audioPlayer = document.getElementById('tts-audio-player');
-        if (audioPlayer) {
+
+        // Use MSE for MP3 when supported, fallback to buffering
+        const useMSE = 'MediaSource' in window && MediaSource.isTypeSupported('audio/mpeg');
+        if (useMSE && format === 'mp3') {
+            const mediaSource = new MediaSource();
+            const url = URL.createObjectURL(mediaSource);
+            if (this.currentAudioUrl) {
+                URL.revokeObjectURL(this.currentAudioUrl);
+            }
+            this.currentAudioUrl = url;
+            audioPlayer.src = url;
+            audioPlayer.play();
+
+            mediaSource.addEventListener('sourceopen', async () => {
+                const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                const reader = response.body.getReader();
+                const queue = [];
+                let appending = false;
+
+                const appendNext = () => {
+                    if (appending || queue.length === 0) return;
+                    appending = true;
+                    const chunk = queue.shift();
+                    try {
+                        sourceBuffer.appendBuffer(chunk);
+                    } catch (e) {
+                        appending = false;
+                        console.error('SourceBuffer append error:', e);
+                        // Fallback: end stream
+                        try { mediaSource.endOfStream(); } catch (_) {}
+                    }
+                };
+
+                sourceBuffer.addEventListener('updateend', () => {
+                    appending = false;
+                    appendNext();
+                });
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    queue.push(value.buffer);
+                    appendNext();
+                }
+                // End the stream when done (after buffer flush)
+                const endWhenFlushed = () => {
+                    if (!sourceBuffer.updating && queue.length === 0) {
+                        try { mediaSource.endOfStream(); } catch (_) {}
+                    } else {
+                        setTimeout(endWhenFlushed, 50);
+                    }
+                };
+                endWhenFlushed();
+            });
+        } else {
+            // Fallback: buffer then play
+            const reader = response.body.getReader();
+            const chunks = [];
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+            }
+            const mime = format === 'wav' ? 'audio/wav' : (format === 'opus' ? 'audio/opus' : (format === 'aac' ? 'audio/aac' : 'audio/mpeg'));
+            const blob = new Blob(chunks, { type: mime });
+            const url = URL.createObjectURL(blob);
             if (this.currentAudioUrl) {
                 URL.revokeObjectURL(this.currentAudioUrl);
             }
@@ -415,8 +472,7 @@ const TTS = {
             audioPlayer.src = url;
             audioPlayer.play();
         }
-        
-        // Enable download button
+
         document.getElementById('tts-download-btn').disabled = false;
     },
     

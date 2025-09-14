@@ -135,6 +135,8 @@ class KokoroAdapter(TTSAdapter):
         # Model instances
         self.kokoro_instance = None
         self.model_pt = None
+        self.kokoro_pt_model = None  # KModel when using PyTorch backend
+        self.kokoro_pt_pipelines = {}
         self.tokenizer = None
         self.audio_normalizer = None
         self._dynamic_voices: List[VoiceInfo] = []
@@ -225,44 +227,67 @@ class KokoroAdapter(TTSAdapter):
         """Initialize PyTorch backend"""
         try:
             import torch
-            # Check model file
-            if not os.path.exists(self.model_path):
-                raise TTSModelNotFoundError(
-                    f"Kokoro PyTorch model not found at {self.model_path}",
-                    provider=self.provider_name,
-                    details={"model_path": self.model_path}
-                )
-
-            # Load model (TorchScript preferred)
-            try:
-                self.model_pt = torch.jit.load(self.model_path, map_location=self.device)
-            except Exception:
-                # Fallback to torch.load for non-JIT checkpoints
-                self.model_pt = torch.load(self.model_path, map_location=self.device)
-
-            # Put model in eval mode
-            try:
-                self.model_pt.eval()
-            except Exception:
-                pass
-
-            logger.info(f"{self.provider_name}: PyTorch model loaded successfully on {self.device}")
-            return True
         except ImportError as e:
             raise TTSModelLoadError(
                 "PyTorch is required for Kokoro PyTorch backend",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install torch"}
             )
-        except (TTSModelNotFoundError,):
-            raise
-        except Exception as e:
-            logger.error(f"{self.provider_name}: PyTorch initialization error: {e}")
-            raise TTSModelLoadError(
-                "Failed to initialize PyTorch model",
+        # Check model file
+        if not os.path.exists(self.model_path):
+            raise TTSModelNotFoundError(
+                f"Kokoro PyTorch model not found at {self.model_path}",
                 provider=self.provider_name,
-                details={"error": str(e), "model_path": self.model_path}
+                details={"model_path": self.model_path}
             )
+        # Try native Kokoro PyTorch if available
+        try:
+            from kokoro import KModel  # type: ignore
+            # config.json expected alongside model
+            config_path = os.path.join(os.path.dirname(self.model_path), "config.json")
+            if not os.path.exists(config_path):
+                raise TTSModelLoadError(
+                    "Kokoro config.json not found for PyTorch backend",
+                    provider=self.provider_name,
+                    details={"config_path": config_path}
+                )
+            self.kokoro_pt_model = KModel(config=config_path, model=self.model_path).eval()
+            # Move to device
+            dev = str(self.device).lower()
+            if dev.startswith("cuda"):
+                try:
+                    self.kokoro_pt_model = self.kokoro_pt_model.cuda()
+                except Exception:
+                    pass
+            elif dev == "mps":
+                try:
+                    self.kokoro_pt_model = self.kokoro_pt_model.to(torch.device("mps"))
+                except Exception:
+                    logger.warning("MPS device not available; using CPU for Kokoro")
+                    self.kokoro_pt_model = self.kokoro_pt_model.cpu()
+            else:
+                self.kokoro_pt_model = self.kokoro_pt_model.cpu()
+            logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev}")
+            return True
+        except ImportError:
+            # Fallback: generic torch.load
+            try:
+                try:
+                    self.model_pt = torch.jit.load(self.model_path, map_location=self.device)
+                except Exception:
+                    self.model_pt = torch.load(self.model_path, map_location=self.device)
+                try:
+                    self.model_pt.eval()
+                except Exception:
+                    pass
+                logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
+                return True
+            except Exception as e:
+                raise TTSModelLoadError(
+                    "Failed to initialize PyTorch model",
+                    provider=self.provider_name,
+                    details={"error": str(e), "model_path": self.model_path}
+                )
     
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Kokoro TTS capabilities"""
@@ -362,7 +387,7 @@ class KokoroAdapter(TTSAdapter):
             if not self.kokoro_instance:
                 raise ValueError("Kokoro ONNX not initialized")
         else:
-            if self.model_pt is None:
+            if self.kokoro_pt_model is None and self.model_pt is None:
                 raise ValueError("Kokoro PyTorch model not initialized")
         
         # Import StreamingAudioWriter for format conversion
@@ -386,16 +411,47 @@ class KokoroAdapter(TTSAdapter):
                     lang=lang
                 )
             else:
-                # Placeholder streaming for PyTorch backend.
-                # In a full implementation, this should call the PyTorch model's inference stream/generate method.
-                async def _pt_stream():
+                # Use Kokoro PyTorch pipeline if available
+                try:
+                    from kokoro import KPipeline  # type: ignore
+                except ImportError:
+                    # Cannot proceed without kokoro pipeline
                     raise TTSGenerationError(
-                        "Kokoro PyTorch generation not implemented",
+                        "Kokoro PyTorch generation requires 'kokoro' package",
                         provider=self.provider_name,
-                        details={"hint": "Use ONNX backend or install kokoro PyTorch implementation"}
+                        details={"suggestion": "pip install kokoro-tts or Kokoro PyTorch package"}
                     )
-                    yield None
-                stream_iter = _pt_stream()
+                # Determine voice path if a voice file exists
+                voice_path = voice
+                try:
+                    # Attempt to resolve to a .pt file under configured voice_dir if voice looks like an id
+                    if self.voice_dir and isinstance(voice, str) and os.path.isdir(self.voice_dir):
+                        candidate = os.path.join(self.voice_dir, f"{voice}.pt")
+                        if os.path.exists(candidate):
+                            voice_path = candidate
+                except Exception:
+                    pass
+                # Pick pipeline by language code (first letter fallback)
+                lang_code = lang.split('-')[0][0] if '-' in lang else (lang[0] if lang else 'e')
+                key = lang_code
+                if key not in self.kokoro_pt_pipelines:
+                    self.kokoro_pt_pipelines[key] = KPipeline(
+                        lang_code=key,
+                        model=self.kokoro_pt_model,
+                        device=str(self.device)
+                    )
+                pipeline = self.kokoro_pt_pipelines[key]
+
+                # Define a sync generator wrapper to async iterate
+                def _sync_iter():
+                    for result in pipeline(text, voice=voice_path, speed=request.speed, model=self.kokoro_pt_model):
+                        yield result
+
+                async def _async_iter():
+                    for result in _sync_iter():
+                        yield result
+
+                stream_iter = _async_iter()
 
             async for samples_chunk, sr_chunk in stream_iter:
                 if samples_chunk is not None and len(samples_chunk) > 0:

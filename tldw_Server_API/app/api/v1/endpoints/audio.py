@@ -29,10 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
-from tldw_Server_API.app.core.Auth.auth_utils import (
-    extract_bearer_token,
-    validate_api_token
-)
+# Auth utils no longer used here; authentication is enforced via get_request_user dependency
 # from your_project.services.tts_service import TTSService, get_tts_service
 
 # For WebSocket streaming transcription
@@ -84,10 +81,10 @@ async def get_tts_service() -> TTSServiceV2:
 @router.post("/speech", summary="Generates audio from text input.")
 @limiter.limit("10/minute")  # Rate limit: 10 requests per minute per IP
 async def create_speech(
-    request_data: OpenAISpeechRequest, # FastAPI will parse JSON body into this
-    request: Request, # Required for rate limiter and to check for client disconnects
+    request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
+    request: Request,                   # Required for rate limiter and to check for client disconnects
     tts_service: TTSServiceV2 = Depends(get_tts_service),
-    authorization: Optional[str] = Header(None),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Generates audio from the input text.
@@ -96,27 +93,8 @@ async def create_speech(
     Rate limited to 10 requests per minute per IP address.
     """
     
-    # Authentication check
-    if is_authentication_required():
-        # Extract and validate token
-        token = extract_bearer_token(authorization)
-        if not token:
-            logger.warning("TTS request without authentication token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required. Please provide a valid Bearer token.",
-                headers={"WWW-Authenticate": f"{AUTH_BEARER_PREFIX}"},
-            )
-        
-        # Validate the token
-        expected_token = get_expected_api_token()
-        if not validate_api_token(token, expected_token):
-            logger.warning(f"TTS request with invalid token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication token.",
-                headers={"WWW-Authenticate": f"{AUTH_BEARER_PREFIX}"},
-            )
+    # Authentication is enforced by dependency injection via get_request_user
+    # current_user is available for audit/logging if needed
     
     # Input validation using the new validation system
     try:
@@ -290,7 +268,7 @@ async def create_transcription(
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities (comma-separated)"),
-    authorization: Optional[str] = Header(None),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Transcribes audio into the input language.
@@ -307,25 +285,7 @@ async def create_transcription(
     Rate limited to 20 requests per minute per IP address.
     """
     
-    # Authentication check
-    if is_authentication_required():
-        token = extract_bearer_token(authorization)
-        if not token:
-            logger.warning("Transcription request without authentication token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required. Please provide a valid Bearer token.",
-                headers={"WWW-Authenticate": f"{AUTH_BEARER_PREFIX}"},
-            )
-        
-        expected_token = get_expected_api_token()
-        if not validate_api_token(token, expected_token):
-            logger.warning(f"Transcription request with invalid token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication token.",
-                headers={"WWW-Authenticate": f"{AUTH_BEARER_PREFIX}"},
-            )
+    # Authentication is enforced by dependency injection via get_request_user
     
     # Validate file
     if not file:
@@ -387,6 +347,7 @@ async def create_transcription(
         # Add provider-specific parameters
         if provider == "faster-whisper":
             transcribe_params["whisper_model"] = "large-v3"  # Use best model by default
+            transcribed_text = transcribe_audio(**transcribe_params)
         elif provider == "parakeet" and config:
             variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
             # For Parakeet, we need to use the Nemo module directly
@@ -485,7 +446,7 @@ async def create_translation(
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
-    authorization: Optional[str] = Header(None),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Translates audio into English.
@@ -510,7 +471,7 @@ async def create_translation(
         response_format=response_format,
         temperature=temperature,
         timestamp_granularities="segment",
-        authorization=authorization
+        current_user=current_user,
     )
 
 
@@ -546,7 +507,7 @@ async def get_tts_health(
         
         health_status = "healthy" if available_providers > 0 else "unhealthy"
         
-        return {
+        health = {
             "status": health_status,
             "providers": {
                 "total": total_providers,
@@ -557,6 +518,25 @@ async def get_tts_health(
             "capabilities": capabilities,
             "timestamp": datetime.utcnow().isoformat()
         }
+
+        # Add Kokoro adapter details if available
+        try:
+            from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory, TTSProvider
+            factory = await get_tts_factory()
+            adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
+            if adapter:
+                backend = 'onnx' if getattr(adapter, 'use_onnx', True) else 'pytorch'
+                kokoro_info = {
+                    'backend': backend,
+                    'device': str(getattr(adapter, 'device', 'unknown')),
+                    'model_path': getattr(adapter, 'model_path', None),
+                    'voices_json': getattr(adapter, 'voices_json', None)
+                }
+                health['providers']['kokoro'] = kokoro_info
+        except Exception as e:
+            logger.debug(f"Kokoro health enrichment failed: {e}")
+
+        return health
     except Exception as e:
         logger.error(f"Error getting TTS health: {e}")
         return {
@@ -592,7 +572,7 @@ async def list_tts_providers(
         )
 
 
-@router.get("/voices", summary="List available TTS voices")
+@router.get("/voices/catalog", summary="List available TTS voices across providers")
 async def list_tts_voices(
     provider: Optional[str] = Query(None, description="Optional provider filter, e.g., 'elevenlabs' or 'openai'"),
     tts_service: TTSServiceV2 = Depends(get_tts_service)
@@ -1122,20 +1102,19 @@ async def preview_voice(
         if len(text) > 100:
             text = text[:100]
         
-        # Create TTS request with custom voice
+        # Create TTS request with custom voice and stream generator directly
         preview_request = OpenAISpeechRequest(
             model=voice.provider,
             input=text,
             voice=f"custom:{voice_id}",
-            response_format="mp3"
+            response_format="mp3",
+            stream=True
         )
-        
-        # Generate preview
-        response = await tts_service.generate_speech(preview_request)
-        
-        # Stream the audio
+
+        audio_stream = tts_service.generate_speech(preview_request, provider=None, fallback=True)
+
         return StreamingResponse(
-            response.audio_stream,
+            audio_stream,
             media_type="audio/mpeg",
             headers={
                 "Content-Disposition": f"inline; filename=preview_{voice_id}.mp3",

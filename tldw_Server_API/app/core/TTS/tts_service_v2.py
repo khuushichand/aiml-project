@@ -49,6 +49,7 @@ from .tts_exceptions import (
     is_retryable_error
 )
 from .tts_validation import validate_tts_request
+import base64
 from .tts_resource_manager import get_resource_manager
 #
 #######################################################################################################################
@@ -371,15 +372,28 @@ class TTSServiceV2:
             request.response_format.lower(),
             AudioFormat.MP3
         )
-        
+        # Optional language code mapping
+        language = getattr(request, 'lang_code', None)
+        # Optional voice reference decoding (base64)
+        voice_ref_bytes = None
+        if getattr(request, 'voice_reference', None):
+            try:
+                voice_ref_bytes = base64.b64decode(request.voice_reference)
+            except Exception:
+                voice_ref_bytes = None
+        # Provider-specific extras passthrough
+        extras = getattr(request, 'extra_params', None) or {}
+
         return TTSRequest(
             text=request.input,
             voice=request.voice,
             format=audio_format,
             speed=request.speed,
             stream=request.stream if hasattr(request, 'stream') else True,
+            language=language,
+            voice_reference=voice_ref_bytes,
             # Additional parameters can be added via extra_params
-            extra_params={}
+            extra_params=extras
         )
     
     async def _get_adapter(

@@ -270,13 +270,14 @@ async def lifespan(app: FastAPI):
     logger.info("App Startup: Initializing TTS service...")
     try:
         from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-        from tldw_Server_API.app.core.config import load_comprehensive_config
+        from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
         
-        # Load TTS configuration
-        tts_config = load_comprehensive_config()
+        # Load comprehensive config and extract TTS config dict
+        cfg_obj = load_comprehensive_config_with_tts()
+        tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
         
-        # Initialize the TTS service with configuration
-        tts_service = await get_tts_service_v2(config=tts_config)
+        # Initialize the TTS service with configuration (falls back to internal loader if None)
+        await get_tts_service_v2(config=tts_cfg_dict)
         logger.info("App Startup: TTS service initialized successfully")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize TTS service: {e}")
@@ -360,8 +361,8 @@ async def lifespan(app: FastAPI):
     
     # Shutdown TTS Service
     try:
-        from tldw_Server_API.app.core.TTS.tts_generation import close_tts_resources
-        await close_tts_resources()
+        from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2
+        await close_tts_service_v2()
         logger.info("App Shutdown: TTS service shutdown complete")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down TTS service: {e}")

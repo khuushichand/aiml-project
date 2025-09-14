@@ -24,8 +24,8 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 def check_chatterbox_installed():
     """Check if Chatterbox library and model are available"""
     try:
-        # Try to import chatterbox-tts
-        import chatterbox_tts
+        # Try to import upstream chatterbox package
+        import chatterbox  # noqa: F401
         
         # Check for model files
         model_paths = [

@@ -198,11 +198,11 @@ async with httpx.AsyncClient() as client:
 List voices from all available providers, or filter by provider.
 
 ```bash
-# All providers
-curl -s http://localhost:8000/api/v1/audio/voices | jq
+# All providers (catalog)
+curl -s http://localhost:8000/api/v1/audio/voices/catalog | jq
 
 # ElevenLabs only
-curl -s "http://localhost:8000/api/v1/audio/voices?provider=elevenlabs" | jq
+curl -s "http://localhost:8000/api/v1/audio/voices/catalog?provider=elevenlabs" | jq
 ```
 
 Example response (filtered):
@@ -218,6 +218,20 @@ Example response (filtered):
 Notes
 - ElevenLabs voices include your account’s user voices (cached on adapter init) plus defaults.
 - Other providers expose their known/static voices where applicable.
+
+### Bootstrap Kokoro Assets
+
+Use the helper script to download Kokoro ONNX model and voices.json to your configured paths.
+
+```bash
+python Helper_Scripts/download_kokoro_assets.py \
+  --onnx-url <KOKORO_ONNX_URL> \
+  --voices-url <VOICES_JSON_URL> \
+  --model-path tldw_Server_API/app/core/TTS/models/kokoro-v0_19.onnx \
+  --voices-json tldw_Server_API/app/core/TTS/models/voices.json
+```
+
+Update `tts_providers_config.yaml` to point to your downloaded files. For GPU support, set `providers.kokoro.use_onnx: false` and provide a `.pth` model path (PyTorch backend requires a compatible Kokoro PyTorch implementation).
 
 ### Transcription (Speech-to-Text)
 

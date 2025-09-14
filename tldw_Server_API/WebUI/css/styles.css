@@ -417,6 +417,14 @@ label {
     font-size: 0.9rem;
 }
 
+/* Keep checkbox label text on same line as the checkbox for ingestion forms */
+.form-group input[type="checkbox"] + label,
+.checkbox-inline label {
+    display: inline-flex;
+    align-items: center;
+    margin: 0 0 0 6px; /* left gap only */
+}
+
 input[type="text"],
 input[type="number"],
 input[type="password"],
@@ -1476,3 +1484,10 @@ pre:hover .copy-button {
     padding: 20px;
     font-style: italic;
 }
+/* Collapsible Sections */
+.collapsible-header h3 { display:inline-block; }
+.collapsible-body { margin-top: 8px; }
+
+/* Simple progress bar (already styled inline in HTML) */
+.progress-container { position: relative; }
+.progress-bar { transition: width 0.2s ease; }

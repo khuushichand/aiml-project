@@ -61,12 +61,12 @@ providers:
   # Chatterbox TTS Configuration
   chatterbox:
     enabled: false  # Disabled by default (requires installation)
-    model_path: "resemble-ai/chatterbox"
-    device: "cuda"  # Recommended: GPU
-    use_fp16: true
+    model_path: "resemble-ai/chatterbox"   # (unused in upstream >=0.1.4)
+    device: "cuda"  # Recommended: GPU (also supports mps/cpu)
+    use_multilingual: false  # Set true to enable 23-language model
     sample_rate: 24000
-    enable_watermark: true  # Perth watermarker for authenticity
-    target_latency_ms: 200  # Sub-200ms target
+    disable_watermark: true  # Ensure no watermark is applied
+    target_latency_ms: 200  # Progressive chunk size target
     
   # ElevenLabs Configuration (adapter implemented)
   elevenlabs:

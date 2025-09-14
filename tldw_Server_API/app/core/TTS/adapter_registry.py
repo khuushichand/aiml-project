@@ -11,12 +11,12 @@ from loguru import logger
 #
 # Local Imports
 from .adapters.base import TTSAdapter, TTSCapabilities, ProviderStatus, AudioFormat
-from .adapters.openai_adapter import OpenAIAdapter
+from .adapters.openai_adapter import OpenAITTSAdapter
 from .adapters.kokoro_adapter import KokoroAdapter
 from .adapters.higgs_adapter import HiggsAdapter
 from .adapters.dia_adapter import DiaAdapter
 from .adapters.chatterbox_adapter import ChatterboxAdapter
-from .adapters.elevenlabs_adapter import ElevenLabsAdapter
+from .adapters.elevenlabs_adapter import ElevenLabsTTSAdapter
 from .adapters.vibevoice_adapter import VibeVoiceAdapter
 from .tts_exceptions import (
     TTSProviderNotConfiguredError,
@@ -52,12 +52,12 @@ class TTSAdapterRegistry:
     
     # Default adapter mappings
     DEFAULT_ADAPTERS: Dict[TTSProvider, Type[TTSAdapter]] = {
-        TTSProvider.OPENAI: OpenAIAdapter,
+        TTSProvider.OPENAI: OpenAITTSAdapter,
         TTSProvider.KOKORO: KokoroAdapter,
         TTSProvider.HIGGS: HiggsAdapter,
         TTSProvider.DIA: DiaAdapter,
         TTSProvider.CHATTERBOX: ChatterboxAdapter,
-        TTSProvider.ELEVENLABS: ElevenLabsAdapter,
+        TTSProvider.ELEVENLABS: ElevenLabsTTSAdapter,
         TTSProvider.VIBEVOICE: VibeVoiceAdapter
     }
     
@@ -230,7 +230,85 @@ class TTSAdapterRegistry:
             
             if provider_cfg:
                 # Convert to dict for adapter consumption
-                return provider_cfg.dict()
+                cfg = provider_cfg.dict()
+                
+                # Duplicate generic keys into provider-prefixed aliases expected by adapters
+                p = provider.value
+                def alias(src: str, dst: str):
+                    if src in cfg and dst not in cfg and cfg[src] is not None:
+                        cfg[dst] = cfg[src]
+                
+                if p == 'openai':
+                    alias('api_key', 'openai_api_key')
+                    alias('base_url', 'openai_base_url')
+                    alias('model', 'openai_model')
+                elif p == 'kokoro':
+                    alias('use_onnx', 'kokoro_use_onnx')
+                    alias('model_path', 'kokoro_model_path')
+                    alias('voices_json', 'kokoro_voices_json')
+                    alias('voice_dir', 'kokoro_voice_dir')
+                    alias('device', 'kokoro_device')
+                elif p == 'higgs':
+                    alias('model_path', 'higgs_model_path')
+                    alias('tokenizer_path', 'higgs_tokenizer_path')
+                    alias('device', 'higgs_device')
+                    alias('use_fp16', 'higgs_use_fp16')
+                    alias('batch_size', 'higgs_batch_size')
+                elif p == 'dia':
+                    alias('model_path', 'dia_model_path')
+                    alias('device', 'dia_device')
+                    alias('use_safetensors', 'dia_use_safetensors')
+                    alias('use_bf16', 'dia_use_bf16')
+                    alias('sample_rate', 'dia_sample_rate')
+                    alias('auto_detect_speakers', 'dia_auto_detect_speakers')
+                    alias('max_speakers', 'dia_max_speakers')
+                elif p == 'chatterbox':
+                    alias('device', 'chatterbox_device')
+                    alias('use_multilingual', 'chatterbox_use_multilingual')
+                    alias('disable_watermark', 'chatterbox_disable_watermark')
+                    # model_path currently unused upstream; keep generic
+                elif p == 'elevenlabs':
+                    alias('api_key', 'elevenlabs_api_key')
+                    alias('base_url', 'elevenlabs_base_url')
+                    alias('model', 'elevenlabs_model')
+                    alias('stability', 'elevenlabs_stability')
+                    alias('similarity_boost', 'elevenlabs_similarity_boost')
+                    alias('style', 'elevenlabs_style')
+                    alias('speaker_boost', 'elevenlabs_speaker_boost')
+                elif p == 'vibevoice':
+                    alias('device', 'vibevoice_device')
+                    alias('sample_rate', 'vibevoice_sample_rate')
+                    alias('variant', 'vibevoice_variant')
+                    alias('model_path', 'vibevoice_model_path')
+                    alias('model_dir', 'vibevoice_model_dir')
+                    alias('cache_dir', 'vibevoice_cache_dir')
+                    alias('voices_dir', 'vibevoice_voices_dir')
+                    alias('background_music', 'vibevoice_background_music')
+                    alias('enable_singing', 'vibevoice_enable_singing')
+                    alias('use_quantization', 'vibevoice_use_quantization')
+                    alias('auto_cleanup', 'vibevoice_auto_cleanup')
+                    alias('auto_download', 'vibevoice_auto_download')
+                    alias('enable_sage', 'vibevoice_enable_sage')
+                    alias('attention_type', 'vibevoice_attention_type')
+                    alias('cfg_scale', 'vibevoice_cfg_scale')
+                    alias('diffusion_steps', 'vibevoice_diffusion_steps')
+                    alias('temperature', 'vibevoice_temperature')
+                    alias('top_p', 'vibevoice_top_p')
+                    alias('top_k', 'vibevoice_top_k')
+                    alias('stream_chunk_size', 'vibevoice_stream_chunk_size')
+                    alias('stream_buffer_size', 'vibevoice_stream_buffer_size')
+                
+                # Generic target latency for local providers
+                if p == 'chatterbox':
+                    alias('target_latency_ms', 'chatterbox_target_latency_ms')
+                elif p == 'kokoro':
+                    alias('target_latency_ms', 'kokoro_target_latency_ms')
+                elif p == 'dia':
+                    alias('target_latency_ms', 'dia_target_latency_ms')
+                elif p == 'higgs':
+                    alias('target_latency_ms', 'higgs_target_latency_ms')
+
+                return cfg
         
         # Fallback to legacy config
         provider_config = self.config.copy()

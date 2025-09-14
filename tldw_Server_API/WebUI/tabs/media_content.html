@@ -1,5 +1,8 @@
             <!-- Media Management Tab -->
             <div id="tabMediaManagement" class="tab-content">
+                <div class="form-group" style="text-align: right; margin-bottom: 8px;">
+                    <button class="btn btn-secondary" onclick="jumpToVectorStores()">Open Vector Stores</button>
+                </div>
                 <!-- GET /api/v1/media/ - List All Media Items -->
                 <div class="endpoint-section" id="listAllMedia">
                     <h2>GET /api/v1/media/ - List All Media Items</h2>
@@ -97,68 +100,6 @@
                 </div>
             </div>
 
-            <!-- Create Vector Store from Media -->
-            <div class="endpoint-section" id="mediaToVectorStore">
-                <h2>Create/Update Vector Store from Media</h2>
-                <div class="columns">
-                    <div class="column">
-                        <div class="form-group">
-                            <label for="vs_media_store_name">Store Name (for new store):</label>
-                            <input id="vs_media_store_name" placeholder="My Media Store">
-                        </div>
-                        <div class="form-group">
-                            <label for="vs_media_dimensions">Dimensions:</label>
-                            <input id="vs_media_dimensions" type="number" value="1536" min="1">
-                        </div>
-                        <div class="form-group">
-                            <label for="vs_media_model">Embedding Model (optional):</label>
-                            <input id="vs_media_model" placeholder="text-embedding-3-small">
-                        </div>
-                        <div class="form-group">
-                            <label for="vs_media_ids">Media IDs (comma-separated):</label>
-                            <input id="vs_media_ids" placeholder="1,2,3">
-                        </div>
-                        <div class="form-group">
-                            <label for="vs_media_keywords">Keywords (comma-separated):</label>
-                            <input id="vs_media_keywords" placeholder="finance, earnings">
-                        </div>
-                        <div class="form-group" style="display:flex; gap:8px; align-items:center;">
-                            <button class="api-button" onclick="uiCreateStoreFromMedia()">Create New Store</button>
-                            <input id="vs_media_existing_store_id" placeholder="Existing Store ID (vs_...)" style="flex:1;"/>
-                            <select id="vs_media_existing_store_select" style="max-width: 260px;">
-                                <option value="">-- Select Existing Store --</option>
-                            </select>
-                            <button class="api-button" onclick="uiLoadExistingStores()">Load Stores</button>
-                            <button class="api-button" onclick="uiUpdateStoreFromMedia()">Update Existing Store</button>
-                            <button class="api-button" onclick="uiRenameSelectedStore()">Rename Selected</button>
-                        </div>
-                        <div class="form-group" style="display:flex; gap:8px;">
-                            <label for="vs_media_chunk_size">Chunk Size:</label>
-                            <input id="vs_media_chunk_size" type="number" value="500" min="50" style="width:100px;">
-                            <label for="vs_media_chunk_overlap">Overlap:</label>
-                            <input id="vs_media_chunk_overlap" type="number" value="100" min="0" style="width:100px;">
-                            <label for="vs_media_chunk_method">Method:</label>
-                            <select id="vs_media_chunk_method">
-                                <option value="words" selected>words</option>
-                                <option value="sentences">sentences</option>
-                                <option value="paragraphs">paragraphs</option>
-                                <option value="tokens">tokens</option>
-                                <option value="semantic">semantic</option>
-                            </select>
-                            <small style="color: var(--color-text-muted);">Note: when method is 'tokens', Chunk Size is in tokens.</small>
-                            <label>
-                              <input type="checkbox" id="vs_media_use_existing" /> Use existing media embeddings
-                            </label>
-                            <label for="vs_media_language">Language:</label>
-                            <input id="vs_media_language" placeholder="en" style="width:100px;"/>
-                        </div>
-                    </div>
-                    <div class="column">
-                        <h4>Result</h4>
-                        <pre id="vs_media_result">---</pre>
-                    </div>
-                </div>
-            </div>
 
             <!-- Media Versioning Tab -->
             <div id="tabMediaVersioning" class="tab-content">
@@ -266,6 +207,334 @@
                     <pre id="rollbackVersion_curl">---</pre>
                     <h3>Response:</h3>
                     <pre id="rollbackVersion_response">---</pre>
+                </div>
+            </div>
+
+            <!-- Multi-Item Analysis Tab -->
+            <div id="tabMultiItemAnalysis" class="tab-content">
+                <div class="endpoint-section">
+                    <h2>
+                        <span class="endpoint-method get">ANALYZE</span>
+                        <span class="endpoint-path">Multi-Item Review & Analysis</span>
+                    </h2>
+                    <div class="form-group" style="text-align:right; margin-top:-8px; margin-bottom:8px;">
+                        <button class="btn btn-secondary" onclick="jumpToVectorStores()">Open Vector Stores</button>
+                    </div>
+
+                    <!-- Analysis Settings -->
+                    <h3>Analysis Settings</h3>
+                    <div class="columns">
+                        <div class="column">
+                            <div class="form-group">
+                                <label for="multi_model">Model:</label>
+                                <select id="multi_model" class="llm-model-select">
+                                    <option value="">Use default</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="multi_temperature">Temperature:</label>
+                                <input type="number" id="multi_temperature" value="0.7" step="0.1" min="0" max="2">
+                            </div>
+                        </div>
+                        <div class="column">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="multi_perform_analysis" checked>
+                                    Perform Analysis
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="multi_system_prompt">System Prompt:</label>
+                                <textarea id="multi_system_prompt" rows="3" placeholder="You are an expert analyst. Provide concise, structured insights."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="multi_custom_prompt">Analysis Prompt:</label>
+                                <textarea id="multi_custom_prompt" rows="3" placeholder="Summarize key points, takeaways, and action items."></textarea>
+                            </div>
+                        </div>
+                        <div class="column">
+                            <div class="form-group">
+                                <label for="multi_store_option">Store Analysis:</label>
+                                <select id="multi_store_option">
+                                    <option value="none" selected>Do not store</option>
+                                    <option value="media">Store on media (analysis field)</option>
+                                    <option value="version">Store as new version</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="multi_show_metadata" checked>
+                                    Show Details/Metadata in results
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sources: Search or URLs -->
+                    <h3>Sources</h3>
+                    <div class="columns">
+                        <div class="column">
+                            <h4>Search Existing Items</h4>
+                            <div class="form-group">
+                                <label for="multi_search_query">Query:</label>
+                                <input type="text" id="multi_search_query" placeholder="keywords, title, content">
+                            </div>
+                            <div class="form-group">
+                                <button class="btn btn-primary" onclick="multiSearchItems()">Search</button>
+                                <button class="btn" onclick="multiClearSearchResults()">Clear</button>
+                            </div>
+                            <pre id="multi_search_results">(No results)</pre>
+                            <div class="form-group">
+                                <button class="btn btn-success" onclick="multiAddSelectedFromSearch()">Add Selected to Queue</button>
+                            </div>
+                        </div>
+                        <div class="column">
+                            <h4>Submit URLs / Files to Process</h4>
+                            <div class="form-group">
+                                <label for="multi_processing_type">Processing Type:</label>
+                                <select id="multi_processing_type">
+                                    <option value="web" selected>Web Content</option>
+                                    <option value="videos">Videos</option>
+                                    <option value="audios">Audios</option>
+                                    <option value="documents">Documents</option>
+                                    <option value="pdfs">PDFs</option>
+                                    <option value="ebooks">Ebooks</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="group_multi_files">
+                                <label for="multi_files">Upload Files (optional):</label>
+                                <input type="file" id="multi_files" multiple>
+                                <small id="multi_files_hint" class="field-hint">Accepted types depend on Processing Type.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="multi_urls">URLs (one per line):</label>
+                                <textarea id="multi_urls" rows="6" placeholder="https://youtu.be/...\nhttps://example.com/article"></textarea>
+                            </div>
+                            <div class="form-group" id="group_multi_scrape_method">
+                                <label for="multi_scrape_method">Scrape Method:</label>
+                                <select id="multi_scrape_method">
+                                    <option value="Individual URLs" selected>Individual URLs</option>
+                                    <option value="Sitemap">Sitemap</option>
+                                    <option value="URL Level">URL Level</option>
+                                    <option value="Recursive Scraping">Recursive Scraping</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="group_multi_url_level">
+                                <label for="multi_url_level">URL Level (for URL Level):</label>
+                                <input type="number" id="multi_url_level" value="2" min="1">
+                            </div>
+                            <div class="form-group" id="group_multi_max_pages">
+                                <label for="multi_max_pages">Max Pages (for recursive/sitemap):</label>
+                                <input type="number" id="multi_max_pages" value="10" min="1">
+                            </div>
+                            <div class="form-group" id="group_multi_max_depth">
+                                <label for="multi_max_depth">Max Depth (for recursive):</label>
+                                <input type="number" id="multi_max_depth" value="3" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label for="multi_process_mode">Processing Mode:</label>
+                                <select id="multi_process_mode">
+                                    <option value="process_only" selected>Process only (no DB)</option>
+                                    <option value="persist">Persist to DB</option>
+                                </select>
+                                <small>Process-only uses the process-web-scraping endpoint in ephemeral mode and does not store content.</small>
+                            </div>
+                            <div class="form-group">
+                                <button class="btn btn-success" onclick="multiIngestUrlsToQueue()">Process & Add to Queue</button>
+                            </div>
+                            <pre id="multi_ingest_status"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Options (per type) -->
+                    <div class="collapsible">
+                        <div class="collapsible-header" onclick="toggleMultiAdvancedOptions()" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; gap:12px;">
+                            <h3 style="margin:0;">Advanced Options</h3>
+                            <button class="btn btn-sm btn-secondary" id="multi_adv_toggle_btn">Show</button>
+                        </div>
+                        <div class="collapsible-body" id="multi_advanced_options" style="display:none;">
+                            <div class="columns">
+                        <div class="column" id="adv_videos" style="display:none;">
+                            <h4>Video Options</h4>
+                            <div class="form-group">
+                                <label for="multi_vid_transcription_model">Transcription Model:</label>
+                                <input type="text" id="multi_vid_transcription_model" value="deepdml/faster-distil-whisper-large-v3.5">
+                            </div>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <label><input type="checkbox" id="multi_vid_diarize"> Diarize</label>
+                                <label><input type="checkbox" id="multi_vid_vad_use"> VAD</label>
+                                <label><input type="checkbox" id="multi_vid_timestamp_option" checked> Include Timestamps</label>
+                                <label><input type="checkbox" id="multi_vid_confab_check"> Confabulation Check</label>
+                            </div>
+                            <div class="form-group" style="display:flex; gap:12px;">
+                                <div style="flex:1;">
+                                    <label for="multi_vid_start_time">Start Time:</label>
+                                    <input type="text" id="multi_vid_start_time" placeholder="HH:MM:SS or seconds">
+                                </div>
+                                <div style="flex:1;">
+                                    <label for="multi_vid_end_time">End Time:</label>
+                                    <input type="text" id="multi_vid_end_time" placeholder="HH:MM:SS or seconds">
+                                </div>
+                            </div>
+                            <h5>Chunking</h5>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <label><input type="checkbox" id="multi_vid_perform_chunking" checked> Perform Chunking</label>
+                                <label><input type="checkbox" id="multi_vid_use_adaptive_chunking"> Adaptive</label>
+                                <label><input type="checkbox" id="multi_vid_use_multi_level_chunking"> Multi-Level</label>
+                                <label><input type="checkbox" id="multi_vid_summarize_recursively"> Summarize Recursively</label>
+                            </div>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label for="multi_vid_chunk_method">Method:</label>
+                                <select id="multi_vid_chunk_method">
+                                    <option value="words">words</option>
+                                    <option value="sentences" selected>sentences</option>
+                                    <option value="paragraphs">paragraphs</option>
+                                    <option value="tokens">tokens</option>
+                                    <option value="semantic">semantic</option>
+                                </select>
+                                <label for="multi_vid_chunk_size">Size:</label>
+                                <input type="number" id="multi_vid_chunk_size" value="500" min="50" style="width:110px;">
+                                <label for="multi_vid_chunk_overlap">Overlap:</label>
+                                <input type="number" id="multi_vid_chunk_overlap" value="200" min="0" style="width:110px;">
+                                <label for="multi_vid_chunk_language">Lang:</label>
+                                <input type="text" id="multi_vid_chunk_language" placeholder="en" style="width:110px;">
+                            </div>
+                        </div>
+
+                        <div class="column" id="adv_audios" style="display:none;">
+                            <h4>Audio Options</h4>
+                            <div class="form-group">
+                                <label for="multi_aud_transcription_model">Transcription Model:</label>
+                                <input type="text" id="multi_aud_transcription_model" value="deepdml/faster-distil-whisper-large-v3.5">
+                            </div>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <label><input type="checkbox" id="multi_aud_diarize"> Diarize</label>
+                                <label><input type="checkbox" id="multi_aud_vad_use"> VAD</label>
+                                <label><input type="checkbox" id="multi_aud_timestamp_option" checked> Include Timestamps</label>
+                            </div>
+                            <h5>Chunking</h5>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label><input type="checkbox" id="multi_aud_perform_chunking" checked> Perform Chunking</label>
+                                <label><input type="checkbox" id="multi_aud_use_adaptive_chunking"> Adaptive</label>
+                                <label><input type="checkbox" id="multi_aud_use_multi_level_chunking"> Multi-Level</label>
+                                <label><input type="checkbox" id="multi_aud_summarize_recursively"> Summarize Recursively</label>
+                            </div>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label for="multi_aud_chunk_method">Method:</label>
+                                <select id="multi_aud_chunk_method">
+                                    <option value="words">words</option>
+                                    <option value="sentences" selected>sentences</option>
+                                    <option value="paragraphs">paragraphs</option>
+                                    <option value="tokens">tokens</option>
+                                    <option value="semantic">semantic</option>
+                                </select>
+                                <label for="multi_aud_chunk_size">Size:</label>
+                                <input type="number" id="multi_aud_chunk_size" value="500" min="50" style="width:110px;">
+                                <label for="multi_aud_chunk_overlap">Overlap:</label>
+                                <input type="number" id="multi_aud_chunk_overlap" value="200" min="0" style="width:110px;">
+                                <label for="multi_aud_chunk_language">Lang:</label>
+                                <input type="text" id="multi_aud_chunk_language" placeholder="en" style="width:110px;">
+                            </div>
+                        </div>
+
+                        <div class="column" id="adv_documents" style="display:none;">
+                            <h4>Document Options</h4>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <label><input type="checkbox" id="multi_doc_use_cookies"> Use Cookies</label>
+                                <input type="text" id="multi_doc_cookies" placeholder="cookie string" style="flex:1;">
+                            </div>
+                            <h5>Chunking</h5>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label><input type="checkbox" id="multi_doc_perform_chunking" checked> Perform Chunking</label>
+                                <label for="multi_doc_chunk_method">Method:</label>
+                                <select id="multi_doc_chunk_method">
+                                    <option value="words">words</option>
+                                    <option value="sentences" selected>sentences</option>
+                                    <option value="paragraphs">paragraphs</option>
+                                    <option value="tokens">tokens</option>
+                                    <option value="semantic">semantic</option>
+                                </select>
+                                <label for="multi_doc_chunk_size">Size:</label>
+                                <input type="number" id="multi_doc_chunk_size" value="1000" min="50" style="width:110px;">
+                                <label for="multi_doc_chunk_overlap">Overlap:</label>
+                                <input type="number" id="multi_doc_chunk_overlap" value="200" min="0" style="width:110px;">
+                                <label for="multi_doc_chunk_language">Lang:</label>
+                                <input type="text" id="multi_doc_chunk_language" placeholder="en" style="width:110px;">
+                                <label for="multi_doc_custom_chapter_pattern">Chapter Regex:</label>
+                                <input type="text" id="multi_doc_custom_chapter_pattern" placeholder="^(Chapter|Section) \\d+" style="flex:1;">
+                            </div>
+                        </div>
+
+                        <div class="column" id="adv_pdfs" style="display:none;">
+                            <h4>PDF Options</h4>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <label for="multi_pdf_parsing_engine">Parsing Engine:</label>
+                                <input type="text" id="multi_pdf_parsing_engine" value="pymupdf4llm" style="width:200px;">
+                                <label for="multi_pdf_custom_chapter_pattern">Chapter Regex:</label>
+                                <input type="text" id="multi_pdf_custom_chapter_pattern" placeholder="e.g., ^(Chapter|Section) \\d+" style="flex:1;">
+                                <label><input type="checkbox" id="multi_pdf_use_cookies"> Use Cookies</label>
+                                <input type="text" id="multi_pdf_cookies" placeholder="cookie string" style="flex:1;">
+                            </div>
+                            <h5>Chunking</h5>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label><input type="checkbox" id="multi_pdf_perform_chunking" checked> Perform Chunking</label>
+                                <label for="multi_pdf_chunk_method">Method:</label>
+                                <select id="multi_pdf_chunk_method">
+                                    <option value="words">words</option>
+                                    <option value="sentences" selected>sentences</option>
+                                    <option value="paragraphs">paragraphs</option>
+                                    <option value="tokens">tokens</option>
+                                    <option value="semantic">semantic</option>
+                                </select>
+                                <label for="multi_pdf_chunk_size">Size:</label>
+                                <input type="number" id="multi_pdf_chunk_size" value="500" min="50" style="width:110px;">
+                                <label for="multi_pdf_chunk_overlap">Overlap:</label>
+                                <input type="number" id="multi_pdf_chunk_overlap" value="200" min="0" style="width:110px;">
+                                <label for="multi_pdf_chunk_language">Lang:</label>
+                                <input type="text" id="multi_pdf_chunk_language" placeholder="en" style="width:110px;">
+                            </div>
+                        </div>
+
+                        <div class="column" id="adv_ebooks" style="display:none;">
+                            <h4>Ebook Options</h4>
+                            <div class="form-group" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <label><input type="checkbox" id="multi_ebook_perform_chunking" checked> Perform Chunking</label>
+                                <label for="multi_ebook_chunk_method">Method:</label>
+                                <select id="multi_ebook_chunk_method">
+                                    <option value="words">words</option>
+                                    <option value="sentences" selected>sentences</option>
+                                    <option value="paragraphs">paragraphs</option>
+                                    <option value="tokens">tokens</option>
+                                    <option value="semantic">semantic</option>
+                                </select>
+                                <label for="multi_ebook_chunk_size">Size:</label>
+                                <input type="number" id="multi_ebook_chunk_size" value="500" min="50" style="width:110px;">
+                                <label for="multi_ebook_chunk_overlap">Overlap:</label>
+                                <input type="number" id="multi_ebook_chunk_overlap" value="200" min="0" style="width:110px;">
+                                <label for="multi_ebook_custom_chapter_pattern">Chapter Regex:</label>
+                                <input type="text" id="multi_ebook_custom_chapter_pattern" placeholder="^(Chapter|Section) \\d+" style="flex:1;">
+                            </div>
+                        </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Queue & Results -->
+                    <h3>Queue</h3>
+                    <div class="form-group">
+                        <button class="btn btn-primary" onclick="multiAnalyzeAll()">Analyze All</button>
+                        <button class="btn" onclick="multiClearQueue()">Clear Queue</button>
+                    </div>
+                    <div id="multi_progress" style="display:none; margin:8px 0;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span id="multi_progress_text">Processing...</span>
+                            <span id="multi_progress_count"></span>
+                        </div>
+                        <div class="progress-container" style="width:100%; background: var(--color-surface-alt); border:1px solid var(--color-border); border-radius:6px; overflow:hidden; height:12px;">
+                            <div id="multi_progress_bar" class="progress-bar" style="height:100%; width:0%; background: var(--color-primary);"></div>
+                        </div>
+                    </div>
+                    <div id="multi_queue_container"></div>
                 </div>
             </div>
 
@@ -1368,63 +1637,6 @@
             </div>
 
 <script>
-async function uiCreateStoreFromMedia(){
-    const name = document.getElementById('vs_media_store_name')?.value.trim();
-    if (!name){ alert('Enter store name'); return; }
-    const dimensions = parseInt(document.getElementById('vs_media_dimensions')?.value || '1536');
-    const model = document.getElementById('vs_media_model')?.value.trim();
-    const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
-    const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
-    const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
-    const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
-    const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
-    const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
-    const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
-    const body = { store_name: name, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings };
-    const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
-    document.getElementById('vs_media_result').textContent = JSON.stringify(res, null, 2);
-}
-
-async function uiUpdateStoreFromMedia(){
-    let existing = document.getElementById('vs_media_existing_store_id')?.value.trim();
-    const sel = document.getElementById('vs_media_existing_store_select');
-    if (!existing && sel && sel.value) existing = sel.value;
-    if (!existing){ alert('Enter existing store id'); return; }
-    const name = document.getElementById('vs_media_store_name')?.value.trim();
-    const dimensions = parseInt(document.getElementById('vs_media_dimensions')?.value || '1536');
-    const model = document.getElementById('vs_media_model')?.value.trim();
-    const ids = (document.getElementById('vs_media_ids')?.value || '').split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
-    const kws = (document.getElementById('vs_media_keywords')?.value || '').split(',').map(s=>s.trim()).filter(Boolean);
-    const chunk_size = parseInt(document.getElementById('vs_media_chunk_size')?.value || '500');
-    const chunk_overlap = parseInt(document.getElementById('vs_media_chunk_overlap')?.value || '100');
-    const chunk_method = (document.getElementById('vs_media_chunk_method')?.value || 'words');
-    const use_existing_embeddings = document.getElementById('vs_media_use_existing')?.checked || false;
-    const language = (document.getElementById('vs_media_language')?.value || '').trim() || undefined;
-    const body = { store_name: name || existing, dimensions, embedding_model: model || undefined, media_ids: ids.length?ids:undefined, keywords: kws.length?kws:undefined, chunk_size, chunk_overlap, chunk_method, language, use_existing_embeddings, update_existing_store_id: existing };
-    const res = await apiClient.post('/api/v1/vector_stores/create_from_media', body);
-    document.getElementById('vs_media_result').textContent = JSON.stringify(res, null, 2);
-}
-
-async function uiLoadExistingStores(){
-    const sel = document.getElementById('vs_media_existing_store_select');
-    if (!sel) return;
-    const res = await apiClient.get('/api/v1/vector_stores');
-    const list = (res.data || []);
-    sel.innerHTML = '<option value="">-- Select Existing Store --</option>' +
-        list.map(s => `<option value="${s.id}">${s.name} (${s.id})</option>`).join('');
-}
-
-async function uiRenameSelectedStore(){
-    let existing = document.getElementById('vs_media_existing_store_id')?.value.trim();
-    const sel = document.getElementById('vs_media_existing_store_select');
-    if (!existing && sel && sel.value) existing = sel.value;
-    if (!existing){ alert('Select existing store'); return; }
-    const newName = (document.getElementById('vs_media_store_name')?.value || '').trim();
-    if (!newName){ alert('Enter a new store name in the Store Name field'); return; }
-    const res = await apiClient.patch(`/api/v1/vector_stores/${encodeURIComponent(existing)}`, { name: newName });
-    alert('Renamed successfully');
-    try { await uiLoadExistingStores(); } catch(e) {}
-}
 
 // Initialize media tabs
 function initializeMediaTabs() {

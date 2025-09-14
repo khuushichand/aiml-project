@@ -8,7 +8,7 @@
 # Local Imports
 #
 #######################################################################################################################
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict, Any
 
 from pydantic import Field, BaseModel
 
@@ -94,6 +94,10 @@ class OpenAISpeechRequest(BaseModel):
         ge=3.0,
         le=60.0,
         description="Minimum duration in seconds for voice reference audio. If provided, will validate reference audio length.",
+    )
+    extra_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Provider-specific parameters passed through to adapters (e.g., stability, clarity, cfg_scale).",
     )
 
 
