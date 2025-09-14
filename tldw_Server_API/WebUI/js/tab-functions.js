@@ -221,8 +221,8 @@ async function loadProviderVoices() {
             voiceList.innerHTML = '<span class="loading-spinner"></span> Loading voices...';
         }
 
-        const res = await apiClient.get('/api/v1/audio/voices', { provider });
-        const voices = res?.[provider] || [];
+        const res = await apiClient.get('/api/v1/audio/voices/catalog', { provider });
+        const voices = (res && (res[provider] || res[provider?.toLowerCase?.()] || res[provider?.toUpperCase?.()])) || res || [];
 
         // Update dropdown
         if (Array.isArray(voices) && voices.length) {
@@ -1757,21 +1757,18 @@ async function createConversation() {
         const metadata = document.getElementById('conversationsCreate_metadata').value;
         
         const body = {
-            title: document.getElementById('conversationsCreate_title').value,
-            initial_message: document.getElementById('conversationsCreate_initial_message').value
+            title: document.getElementById('conversationsCreate_title').value
         };
         
         const characterId = document.getElementById('conversationsCreate_character_id').value;
-        if (characterId) body.character_id = characterId;
-        
-        const systemPrompt = document.getElementById('conversationsCreate_system_prompt').value;
-        if (systemPrompt) body.system_prompt = systemPrompt;
+        if (!characterId) throw new Error('Character ID is required');
+        body.character_id = parseInt(characterId);
         
         if (metadata && metadata.trim() !== '{}') {
             body.metadata = JSON.parse(metadata);
         }
         
-        const response = await apiClient.makeRequest('POST', '/api/v1/conversations', { body });
+        const response = await apiClient.makeRequest('POST', '/api/v1/chats', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation created successfully');
     } catch (error) {
@@ -1793,7 +1790,7 @@ async function listConversations() {
         if (limit) params.append('limit', limit);
         
         const queryString = params.toString();
-        const url = queryString ? `/api/v1/conversations?${queryString}` : '/api/v1/conversations';
+        const url = queryString ? `/api/v1/chats?${queryString}` : '/api/v1/chats';
         
         const response = await apiClient.makeRequest('GET', url);
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -1816,7 +1813,7 @@ async function getConversationDetails() {
         const includeMessages = document.getElementById('conversationsGet_include_messages').checked;
         const params = includeMessages ? '?include_messages=true' : '';
         
-        const response = await apiClient.makeRequest('GET', `/api/v1/conversations/${conversationId}${params}`);
+        const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -1850,52 +1847,10 @@ async function sendConversationMessage() {
         const stream = document.getElementById('conversationsChat_stream').checked;
         body.stream = stream;
         
-        if (stream) {
-            // Handle streaming response
-            responseEl.textContent = 'Streaming response...\n';
-            const response = await fetch(`${apiClient.baseUrl}/api/v1/conversations/${conversationId}/chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-KEY': apiClient.token
-                },
-                body: JSON.stringify(body)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') continue;
-                        
-                        try {
-                            const parsed = JSON.parse(data);
-                            if (parsed.choices?.[0]?.delta?.content) {
-                                responseEl.textContent += parsed.choices[0].delta.content;
-                            }
-                        } catch (e) {
-                            console.error('Error parsing SSE data:', e);
-                        }
-                    }
-                }
-            }
-        } else {
-            const response = await apiClient.makeRequest('POST', `/api/v1/conversations/${conversationId}/chat`, { body });
-            responseEl.textContent = JSON.stringify(response, null, 2);
-        }
+        // Always use messages endpoint (no streaming)
+        const payload = { role: 'user', content: message };
+        const response = await apiClient.makeRequest('POST', `/api/v1/chats/${conversationId}/messages`, { body: payload });
+        responseEl.textContent = JSON.stringify(response, null, 2);
         
         Toast.success('Message sent successfully');
     } catch (error) {
@@ -1916,7 +1871,10 @@ async function updateConversation() {
         const body = JSON.parse(payload);
         
         responseEl.textContent = 'Updating conversation...';
-        const response = await apiClient.makeRequest('PUT', `/api/v1/conversations/${conversationId}`, { body });
+        const filtered = {};
+        if (body.title) filtered.title = body.title;
+        if (typeof body.rating !== 'undefined') filtered.rating = body.rating;
+        const response = await apiClient.makeRequest('PUT', `/api/v1/chats/${conversationId}`, { body: filtered });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation updated successfully');
     } catch (error) {
@@ -1934,7 +1892,7 @@ async function deleteConversation() {
         }
         
         responseEl.textContent = 'Deleting conversation...';
-        const response = await apiClient.makeRequest('DELETE', `/api/v1/conversations/${conversationId}`);
+        const response = await apiClient.makeRequest('DELETE', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Conversation deleted successfully';
         Toast.success('Conversation deleted successfully');
     } catch (error) {
@@ -1954,7 +1912,7 @@ async function exportConversation() {
         const format = document.getElementById('conversationsExport_format').value;
         
         responseEl.textContent = 'Exporting conversation...';
-        const response = await apiClient.makeRequest('GET', `/api/v1/conversations/${conversationId}/export?format=${format}`);
+        const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}/export?format=${format}`);
         
         if (format === 'json') {
             responseEl.textContent = JSON.stringify(response, null, 2);

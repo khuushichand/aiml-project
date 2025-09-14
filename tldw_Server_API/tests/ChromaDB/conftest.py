@@ -79,11 +79,22 @@ def pytest_configure(config):
     # Register collection-level skipping for unstable suites
     config.addinivalue_line("markers", "legacy_skip: Skip tests targeting legacy behaviors")
 
+
+def pytest_addoption(parser):
+    """Add CLI option to run external model tests."""
+    parser.addoption(
+        "--run-model-tests",
+        action="store_true",
+        default=False,
+        help="Run tests marked with requires_model (downloads lightweight HF model)",
+    )
+
 def pytest_collection_modifyitems(config, items):
-    """Skip only tests explicitly marked as requiring external models."""
+    """Conditionally skip tests requiring external models based on flag/env."""
+    run_models_flag = config.getoption("--run-model-tests") or os.getenv("RUN_MODEL_TESTS") == "1"
     for item in items:
-        if item.get_closest_marker("requires_model"):
-            item.add_marker(pytest.mark.skip(reason="Requires external model; disabled by default"))
+        if item.get_closest_marker("requires_model") and not run_models_flag:
+            item.add_marker(pytest.mark.skip(reason="Requires external model; set RUN_MODEL_TESTS=1 or --run-model-tests to enable"))
 
 # =====================================================================
 # Database Fixtures using MediaDatabase

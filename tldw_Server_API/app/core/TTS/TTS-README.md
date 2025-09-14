@@ -310,6 +310,44 @@ performance:
   cache_enabled: false
 ```
 
+#### Generic vs Provider-Prefixed Keys
+
+The registry automatically aliases common, generic keys from your YAML to the provider-prefixed keys that some adapters expect. This keeps configuration consistent across providers while satisfying adapter expectations.
+
+- OpenAI
+  - Generic: `api_key`, `base_url`, `model`, `stability`, `similarity_boost`, `style`, `speaker_boost`
+  - Aliased to: `openai_api_key`, `openai_base_url`, `openai_model`
+
+- ElevenLabs
+  - Generic: `api_key`, `base_url`, `model`, `stability`, `similarity_boost`, `style`, `speaker_boost`
+  - Aliased to: `elevenlabs_api_key`, `elevenlabs_base_url`, `elevenlabs_model`, `elevenlabs_stability`, `elevenlabs_similarity_boost`, `elevenlabs_style`, `elevenlabs_speaker_boost`
+
+- Kokoro
+  - Generic: `device`, `use_onnx`, `model_path`, `voices_json`, `voice_dir`
+  - Aliased to: `kokoro_device`, `kokoro_use_onnx`, `kokoro_model_path`, `kokoro_voices_json`, `kokoro_voice_dir`
+  - Other Kokoro options are read generically (no alias needed): `sample_rate`, `normalize_text`, `sentence_splitting`
+
+- Higgs
+  - Generic: `model_path`, `tokenizer_path`, `device`, `use_fp16`, `batch_size`
+  - Aliased to: `higgs_model_path`, `higgs_tokenizer_path`, `higgs_device`, `higgs_use_fp16`, `higgs_batch_size`
+
+- Dia
+  - Generic: `model_path`, `device`, `use_safetensors`, `use_bf16`, `sample_rate`, `auto_detect_speakers`, `max_speakers`
+  - Aliased to: `dia_model_path`, `dia_device`, `dia_use_safetensors`, `dia_use_bf16`, `dia_sample_rate`, `dia_auto_detect_speakers`, `dia_max_speakers`
+
+- Chatterbox
+  - Generic: `device`, `use_multilingual`, `disable_watermark`, `sample_rate`, `target_latency_ms`
+  - Aliased to: `chatterbox_device`, `chatterbox_use_multilingual`, `chatterbox_disable_watermark`, `chatterbox_target_latency_ms`
+
+- VibeVoice
+  - Generic: `device`, `sample_rate`, `variant`, `model_path`, `model_dir`, `cache_dir`, `voices_dir`, `background_music`, `enable_singing`, `use_quantization`, `auto_cleanup`, `auto_download`, `enable_sage`, `attention_type`, `cfg_scale`, `diffusion_steps`, `temperature`, `top_p`, `top_k`, `stream_chunk_size`, `stream_buffer_size`
+  - Aliased to the corresponding `vibevoice_*` fields
+
+Notes
+- Environment variables still work and may override YAML (e.g., `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`).
+- Adapters that already read generic names (e.g., Kokoro’s `sample_rate`) don’t require aliasing for those fields.
+- If you add new provider options in YAML, prefer generic names; the registry can be extended to alias them.
+
 ### Voice Cloning Requirements
 
 | Provider | Min Duration | Max Duration | Format | Sample Rate |

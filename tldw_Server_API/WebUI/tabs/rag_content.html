@@ -3,7 +3,7 @@
     <div class="endpoint-section" id="ragSimpleSearch">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/rag/search/simple - Simple RAG Search</span>
+            <span class="endpoint-path">/api/v1/rag/search - Unified RAG Search</span>
         </h2>
         <p>Simple RAG search with essential parameters. Supports multi-database search, automatic context limiting, optional reranking, and keyword filtering.</p>
         
@@ -42,7 +42,7 @@
             </div>
         </div>
 
-        <button class="api-button" onclick="makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search/simple', 'json')">
+        <button class="api-button" onclick="makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search', 'json')">
             Send Request
         </button>
         
@@ -56,7 +56,7 @@
     <div class="endpoint-section" id="ragComplexSearch">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/rag/search/complex - Complex RAG Search</span>
+            <span class="endpoint-path">/api/v1/rag/search - Unified RAG Search</span>
         </h2>
         <p>Complex RAG search with complete configurability. Full control over all pipeline components, per-database configuration, advanced retrieval options, multiple reranking strategies, and comprehensive filtering.</p>
         
@@ -107,7 +107,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('ragComplexSearch', 'POST', '/api/v1/rag/search/complex', 'json')">
+        <button class="api-button" onclick="makeRequest('ragComplexSearch', 'POST', '/api/v1/rag/search', 'json')">
             Send Request
         </button>
         
@@ -121,12 +121,12 @@
     <div class="endpoint-section" id="ragPipelines">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/rag/pipelines - List Available Pipelines</span>
+            <span class="endpoint-path">/api/v1/rag/capabilities - Get RAG Service Capabilities</span>
         </h2>
         <p>Get list of available pipeline presets and their descriptions.</p>
         
-        <button class="api-button" onclick="makeRequest('ragPipelines', 'GET', '/api/v1/rag/pipelines', 'none')">
-            Get Pipelines
+        <button class="api-button" onclick="makeRequest('ragPipelines', 'GET', '/api/v1/rag/health', 'none')">
+            Check Health
         </button>
         
         <h3>cURL Command:</h3>
@@ -139,7 +139,7 @@
     <div class="endpoint-section" id="ragCapabilities">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/rag/capabilities - Get RAG Service Capabilities</span>
+            <span class="endpoint-path">/api/v1/rag/health - RAG Health</span>
         </h2>
         <p>Get detailed information about available RAG service features and capabilities.</p>
         

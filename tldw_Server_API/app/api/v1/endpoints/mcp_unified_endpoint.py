@@ -332,10 +332,18 @@ async def execute_tool(
     
     execution_time = (time.time() - start_time) * 1000
     
+    result_payload = response.result
+    served_by = None
+    try:
+        if isinstance(result_payload, dict):
+            served_by = result_payload.get("module")
+    except Exception:
+        served_by = None
+
     return ToolExecutionResponse(
-        result=response.result,
+        result=result_payload,
         execution_time_ms=execution_time,
-        module="unknown"  # TODO: Get actual module from response
+        module=served_by or "unknown"
     )
 
 

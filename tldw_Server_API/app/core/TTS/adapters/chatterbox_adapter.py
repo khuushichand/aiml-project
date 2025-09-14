@@ -302,19 +302,6 @@ class ChatterboxAdapter(TTSAdapter):
         """Generate waveform with upstream model, progressively encode and stream bytes."""
         model = await self._get_model(language_id)
 
-        # Import StreamingAudioWriter for format conversion
-        from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-            StreamingAudioWriter,
-            AudioNormalizer
-        )
-
-        normalizer = AudioNormalizer()
-        writer = StreamingAudioWriter(
-            format=request.format.value,
-            sample_rate=self.sample_rate,
-            channels=1
-        )
-
         try:
             # Prepare kwargs for upstream generate
             gen_kwargs: Dict[str, Any] = {
@@ -339,28 +326,20 @@ class ChatterboxAdapter(TTSAdapter):
                     self.preprocess_text(request.text),
                     **gen_kwargs,
                 )
-
-            # Convert to numpy 1D float array
-            wav = audio_tensor.squeeze(0).detach().cpu().numpy()
-
-            # Progressive chunking into encoded bytes
-            chunk_samples = int(self.sample_rate * 0.2)  # ~200ms chunks
-            for start in range(0, len(wav), chunk_samples):
-                part = wav[start:start + chunk_samples]
-                if part.size == 0:
-                    continue
-                normalized = normalizer.normalize(part, target_dtype=np.int16)
-                encoded = writer.write_chunk(normalized)
-                if encoded:
-                    yield encoded
-
-            # Finalize
-            final_bytes = writer.write_chunk(finalize=True)
-            if final_bytes:
-                yield final_bytes
+            # Stream using shared waveform streamer
+            from tldw_Server_API.app.core.TTS.waveform_streamer import stream_encoded_waveform
+            async for chunk in stream_encoded_waveform(
+                audio_tensor,
+                format=request.format.value,
+                sample_rate=self.sample_rate,
+                channels=1,
+                chunk_duration_sec=0.2,
+            ):
+                if chunk:
+                    yield chunk
 
         finally:
-            writer.close()
+            pass
     
     async def _generate_complete_chatterbox(
         self,

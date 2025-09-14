@@ -103,9 +103,12 @@
             <input type="text" id="syncStatus_client_id" placeholder="client_device_123">
         </div>
         
-        <button class="api-button" onclick="makeRequest('syncStatus', 'GET', '/api/v1/sync/status', 'query')">
-            Check Sync Status
-        </button>
+        <button class="api-button" onclick="(function(){
+            const cid = document.getElementById('syncStatus_client_id').value.trim();
+            if(!cid){ alert('Enter Client ID'); return; }
+            const url = `/api/v1/sync/get?client_id=${encodeURIComponent(cid)}&since_change_id=0`;
+            makeRequest('syncStatus', 'GET', url, 'none');
+        })()">Check Sync Status</button>
         
         <h3>Response:</h3>
         <pre id="syncStatus_response">---</pre>

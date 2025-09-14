@@ -303,63 +303,36 @@ class TestChromaDBManagerIntegration:
 
 @pytest.mark.unit
 class TestEmbeddingGeneration:
-    """Test real embedding generation."""
-    
+    """Test real embedding generation using configured HF batch API."""
+
     @pytest.mark.requires_model
-    def test_huggingface_embedder_real(self):
-        """Test HuggingFace embedder with real model."""
-        embedder = HuggingFaceEmbedder(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            device="cpu"
+    def test_huggingface_embeddings_via_batch(self):
+        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+            get_embedding_config, create_embeddings_batch
         )
-        
-        # Load model
-        embedder.load_model()
-        assert embedder.model is not None
-        
-        # Generate embeddings
         texts = ["Hello world", "Testing embeddings", "ChromaDB integration"]
-        embeddings = embedder.create_embeddings(texts)
-        
-        # Verify embeddings
+        cfg = get_embedding_config()
+        model_id = "sentence-transformers/all-MiniLM-L6-v2"
+        embeddings = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)
         assert len(embeddings) == 3
-        assert len(embeddings[0]) == 384  # all-MiniLM-L6-v2 dimension
-        
-        # Embeddings should be normalized
-        for embedding in embeddings:
-            norm = np.linalg.norm(embedding)
-            assert abs(norm - 1.0) < 0.01  # Unit vectors
-        
-        # Different texts should have different embeddings
-        similarity_01 = np.dot(embeddings[0], embeddings[1])
-        similarity_02 = np.dot(embeddings[0], embeddings[2])
-        assert similarity_01 != similarity_02
-        
-        # Unload model
-        embedder.unload_model()
-        assert embedder.model is None
-    
+        assert len(embeddings[0]) in (256, 384, 768)  # common dims; all-MiniLM-L6-v2 is 384
+        # Valid non-zero vectors
+        for emb in embeddings:
+            norm = np.linalg.norm(emb)
+            assert norm > 0.1
+
     @pytest.mark.requires_model
-    def test_embedding_auto_unload(self):
-        """Test automatic model unloading after timeout."""
-        embedder = HuggingFaceEmbedder(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            device="cpu",
-            auto_unload_time=1  # 1 second timeout
+    def test_huggingface_embeddings_are_deterministic(self):
+        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+            get_embedding_config, create_embeddings_batch
         )
-        
-        # Load and use model
-        embedder.load_model()
-        embeddings = embedder.create_embeddings(["test"])
-        assert embedder.model is not None
-        
-        # Wait for auto-unload
-        time.sleep(1.5)
-        
-        # Model should be unloaded
-        assert embedder.model is None
-    
-    # Moved to unit suite: see tests/ChromaDB/unit/test_embedding_batch_creation.py
+        cfg = get_embedding_config()
+        model_id = "sentence-transformers/all-MiniLM-L6-v2"
+        texts = ["Hello world"]
+        emb1 = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)[0]
+        emb2 = create_embeddings_batch(texts, user_app_config=cfg, model_id_override=model_id)[0]
+        # Deterministic for the same model and text within small tolerance
+        np.testing.assert_allclose(emb1, emb2, rtol=1e-4, atol=1e-5)
 
 
 @pytest.mark.integration

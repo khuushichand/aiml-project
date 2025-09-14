@@ -1,0 +1,26 @@
+modules:
+  - id: media
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule
+    enabled: true
+    name: Media
+    version: "1.0.0"
+    department: media
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings:
+      db_path: ./Databases/Media_DB_v2.db
+      cache_ttl: 300
+
+  - id: example
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule
+    enabled: true
+    name: Example
+    version: "1.0.0"
+    department: demo
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}

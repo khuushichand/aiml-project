@@ -920,14 +920,13 @@ async def upload_voice(
     
     The voice will be processed and optimized for the specified provider.
     """
-    from tldw_Server_API.app.core.TTS.voice_manager import (
-        get_voice_manager,
-        VoiceUploadRequest,
-        VoiceProcessingError,
-        VoiceQuotaExceededError
-    )
-    
     try:
+        from tldw_Server_API.app.core.TTS.voice_manager import (
+            get_voice_manager,
+            VoiceUploadRequest,
+            VoiceProcessingError,
+            VoiceQuotaExceededError
+        )
         # Get voice manager
         voice_manager = get_voice_manager()
         
@@ -951,6 +950,12 @@ async def upload_voice(
         
         return result.model_dump()
         
+    except ImportError as e:
+        # Placeholder response when voice management is not available
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Custom voice upload is not available in this build"
+        )
     except VoiceQuotaExceededError as e:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -983,9 +988,8 @@ async def list_voices(
     - Duration and format
     - Compatible providers
     """
-    from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
-    
     try:
+        from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voices = await voice_manager.list_user_voices(current_user.id)
         
@@ -994,6 +998,9 @@ async def list_voices(
             "count": len(voices)
         }
         
+    except ImportError:
+        # Placeholder response when voice management is not available
+        return {"voices": [], "count": 0}
     except Exception as e:
         logger.error(f"Error listing voices: {e}")
         raise HTTPException(
@@ -1011,9 +1018,8 @@ async def get_voice_details(
     """
     Get detailed information about a specific voice.
     """
-    from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
-    
     try:
+        from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
         
@@ -1027,6 +1033,11 @@ async def get_voice_details(
         
     except HTTPException:
         raise
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Custom voice management not available"
+        )
     except Exception as e:
         logger.error(f"Error getting voice details: {e}")
         raise HTTPException(
@@ -1046,9 +1057,8 @@ async def delete_voice(
     
     This will remove the voice files and prevent it from being used in future TTS requests.
     """
-    from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
-    
     try:
+        from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         deleted = await voice_manager.delete_voice(current_user.id, voice_id)
         
@@ -1062,6 +1072,11 @@ async def delete_voice(
         
     except HTTPException:
         raise
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Custom voice management not available"
+        )
     except Exception as e:
         logger.error(f"Error deleting voice: {e}")
         raise HTTPException(
@@ -1085,9 +1100,8 @@ async def preview_voice(
     This endpoint generates a short audio sample using the specified voice
     to help users preview how it sounds before using it in full TTS requests.
     """
-    from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
-    
     try:
+        from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         # Validate voice exists
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
@@ -1124,6 +1138,11 @@ async def preview_voice(
         
     except HTTPException:
         raise
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Custom voice preview not available"
+        )
     except Exception as e:
         logger.error(f"Voice preview error: {e}")
         raise HTTPException(

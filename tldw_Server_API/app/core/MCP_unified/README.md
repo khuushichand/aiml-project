@@ -173,6 +173,38 @@ class MyModule(BaseModule):
         )
 ```
 
+## ➕ Adding Modules (Autoload)
+
+Modules can be autoloaded via YAML or environment variables:
+
+- YAML (default path `tldw_Server_API/Config_Files/mcp_modules.yaml`):
+```
+modules:
+  - id: media
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule
+    enabled: true
+    name: Media
+    settings:
+      db_path: ./Databases/Media_DB_v2.db
+```
+
+- Environment variable (comma-separated list):
+```
+export MCP_MODULES="example=tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule"
+```
+
+- Optional quick-start flag:
+```
+export MCP_ENABLE_MEDIA_MODULE=true
+```
+
+Tool results include the serving module:
+```
+{"content": [...], "module": "Media", "tool": "search_media"}
+```
+
+See `Docs/Development/MCP_Modules.md` for a complete guide.
+
 ## 🚢 Production Deployment
 
 ### Environment Variables (Required)

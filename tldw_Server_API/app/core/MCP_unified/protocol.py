@@ -414,7 +414,8 @@ class MCPProtocol:
             else:
                 content = [{"type": "text", "text": str(result)}]
             
-            return {"content": content}
+            module_name = getattr(module, "name", None)
+            return {"content": content, "module": module_name, "tool": tool_name}
             
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name} - {e}")

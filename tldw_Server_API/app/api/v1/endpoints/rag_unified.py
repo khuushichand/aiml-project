@@ -83,6 +83,108 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
     )
 
 
+@router.get(
+    "/capabilities",
+    summary="Capabilities",
+    description="List RAG pipeline features and defaults available to the current user"
+)
+async def get_capabilities(request: Request):
+    """Return supported features, defaults and configuration limits for the unified RAG pipeline.
+
+    This endpoint is informational and does not require database access. It reflects
+    the capabilities compiled into the service and basic configuration toggles.
+    """
+    from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+    settings = get_settings()
+
+    # High-level features supported by the pipeline
+    features = {
+        "query_expansion": {
+            "supported": True,
+            "methods": ["acronym", "synonym", "domain", "entity"],
+        },
+        "semantic_cache": {
+            "supported": True,
+            "adaptive_thresholds": True,
+            "config": RAG_SERVICE_CONFIG.get("cache", {})
+        },
+        "sources": {
+            "supported": True,
+            "datastores": ["media_db", "notes_db", "character_db"],
+        },
+        "security_filtering": {
+            "supported": True,
+            "pii_detection": True
+        },
+        "citation_generation": {
+            "supported": True,
+            "styles": ["APA", "MLA", "Chicago", "Harvard"]
+        },
+        "answer_generation": {
+            "supported": True,
+            "configurable_model": True
+        },
+        "reranking": {
+            "supported": True,
+            "strategies": ["flashrank", "cross_encoder", "hybrid"],
+        },
+        "table_processing": {
+            "supported": True,
+        },
+        "enhanced_chunking": {
+            "supported": True,
+            "parent_context": True
+        },
+        "feedback": {
+            "supported": True,
+            "apply_feedback_boost": True
+        },
+        "monitoring": {
+            "supported": True,
+            "observability": True
+        },
+        "batch_processing": {
+            "supported": True,
+            "concurrent": True
+        },
+        "resilience": {
+            "supported": True,
+            "retries": True,
+            "circuit_breakers": True
+        }
+    }
+
+    defaults = {
+        "retriever": RAG_SERVICE_CONFIG.get("retriever", {}),
+        "processor": RAG_SERVICE_CONFIG.get("processor", {}),
+        "cache": RAG_SERVICE_CONFIG.get("cache", {}),
+        "batch_size": RAG_SERVICE_CONFIG.get("batch_size", 32),
+        "num_workers": RAG_SERVICE_CONFIG.get("num_workers", 4)
+    }
+
+    limits = {
+        "top_k_max": 100,
+        "documents_per_db_max": 1000,
+        "answer_tokens_max": 2048
+    }
+
+    auth = {
+        "mode": settings.AUTH_MODE,
+        "user_scoped": True
+    }
+
+    return {
+        "pipeline": "unified",
+        "version": "1.0.0",
+        "features": features,
+        "defaults": defaults,
+        "limits": limits,
+        "auth": auth
+    }
+
+
 @router.post(
     "/search",
     response_model=UnifiedRAGResponse,

@@ -3,7 +3,7 @@
     <div class="endpoint-section" id="conversationsCreate">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/conversations - Create Conversation</span>
+            <span class="endpoint-path">/api/v1/chats - Create Chat Session</span>
         </h2>
         <p>Start a new conversation with a character or assistant.</p>
         
@@ -13,18 +13,16 @@
         </div>
         
         <div class="form-group">
-            <label for="conversationsCreate_character_id">Character ID (optional):</label>
+            <label for="conversationsCreate_character_id">Character ID (required):</label>
             <input type="text" id="conversationsCreate_character_id" placeholder="Character ID to use for this conversation">
         </div>
         
         <div class="form-group">
-            <label for="conversationsCreate_system_prompt">System Prompt (optional):</label>
-            <textarea id="conversationsCreate_system_prompt" rows="3" placeholder="Override character's system prompt for this conversation"></textarea>
+            <!-- System Prompt not supported by backend create; field removed to match API -->
         </div>
         
         <div class="form-group">
-            <label for="conversationsCreate_initial_message">Initial Message:</label>
-            <textarea id="conversationsCreate_initial_message" rows="3" placeholder="Your first message in the conversation"></textarea>
+            <!-- Initial message should be sent via messages endpoint after creation -->
         </div>
         
         <div class="form-group">
@@ -43,7 +41,7 @@
     <div class="endpoint-section" id="conversationsList">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/conversations - List Conversations</span>
+            <span class="endpoint-path">/api/v1/chats - List Chat Sessions</span>
         </h2>
         <p>List all conversations with optional filtering.</p>
         
@@ -74,7 +72,7 @@
     <div class="endpoint-section" id="conversationsGet">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/conversations/{conversation_id} - Get Conversation</span>
+            <span class="endpoint-path">/api/v1/chats/{chat_id} - Get Chat Session</span>
         </h2>
         <p>Get details and messages of a specific conversation.</p>
         
@@ -101,7 +99,7 @@
     <div class="endpoint-section" id="conversationsChat">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/conversations/{conversation_id}/chat - Send Message</span>
+            <span class="endpoint-path">/api/v1/chats/{chat_id}/messages - Send Message</span>
         </h2>
         <p>Send a message to a conversation and get a response.</p>
         
@@ -155,7 +153,7 @@
     <div class="endpoint-section" id="conversationsUpdate">
         <h2>
             <span class="endpoint-method put">PUT</span>
-            <span class="endpoint-path">/api/v1/conversations/{conversation_id} - Update Conversation</span>
+            <span class="endpoint-path">/api/v1/chats/{chat_id} - Update Chat Session</span>
         </h2>
         <p>Update conversation metadata or settings.</p>
         
@@ -186,7 +184,7 @@
     <div class="endpoint-section" id="conversationsDelete">
         <h2>
             <span class="endpoint-method delete">DELETE</span>
-            <span class="endpoint-path">/api/v1/conversations/{conversation_id} - Delete Conversation</span>
+            <span class="endpoint-path">/api/v1/chats/{chat_id} - Delete Chat Session</span>
         </h2>
         <p>Delete a conversation and all its messages.</p>
         
@@ -206,7 +204,7 @@
     <div class="endpoint-section" id="conversationsExport">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/conversations/{conversation_id}/export - Export Conversation</span>
+            <span class="endpoint-path">/api/v1/chats/{chat_id}/export - Export Chat Session</span>
         </h2>
         <p>Export a conversation in various formats.</p>
         
@@ -240,24 +238,22 @@ async function createConversation() {
         responseEl.textContent = 'Creating conversation...';
         
         const metadata = document.getElementById('conversationsCreate_metadata').value;
-        
         const body = {
-            title: document.getElementById('conversationsCreate_title').value,
-            initial_message: document.getElementById('conversationsCreate_initial_message').value
+            title: document.getElementById('conversationsCreate_title').value
         };
         
         // Add optional fields if provided
         const characterId = document.getElementById('conversationsCreate_character_id').value;
-        if (characterId) body.character_id = characterId;
-        
-        const systemPrompt = document.getElementById('conversationsCreate_system_prompt').value;
-        if (systemPrompt) body.system_prompt = systemPrompt;
+        if (!characterId) {
+            throw new Error('Character ID is required');
+        }
+        body.character_id = parseInt(characterId);
         
         if (metadata && metadata.trim() !== '{}') {
             body.metadata = JSON.parse(metadata);
         }
         
-        const response = await apiClient.makeRequest('POST', '/api/v1/conversations', { body });
+        const response = await apiClient.makeRequest('POST', '/api/v1/chats', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation created successfully');
     } catch (error) {
@@ -279,7 +275,7 @@ async function listConversations() {
         if (limit) params.append('limit', limit);
         
         const queryString = params.toString();
-        const url = queryString ? `/api/v1/conversations?${queryString}` : '/api/v1/conversations';
+        const url = queryString ? `/api/v1/chats?${queryString}` : '/api/v1/chats';
         
         const response = await apiClient.makeRequest('GET', url);
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -299,10 +295,7 @@ async function getConversation() {
         
         responseEl.textContent = 'Loading conversation...';
         
-        const includeMessages = document.getElementById('conversationsGet_include_messages').checked;
-        const params = includeMessages ? '?include_messages=true' : '';
-        
-        const response = await apiClient.makeRequest('GET', `/api/v1/conversations/${conversationId}${params}`);
+        const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -325,65 +318,9 @@ async function sendChatMessage() {
         
         responseEl.textContent = 'Sending message...';
         
-        const body = { message };
-        
-        // Add optional fields
-        const model = document.getElementById('conversationsChat_model').value;
-        if (model) body.model = model;
-        
-        const temperature = document.getElementById('conversationsChat_temperature').value;
-        if (temperature) body.temperature = parseFloat(temperature);
-        
-        const stream = document.getElementById('conversationsChat_stream').checked;
-        body.stream = stream;
-        
-        if (stream) {
-            // Handle streaming response
-            responseEl.textContent = 'Streaming response...\n';
-            const response = await fetch(`${apiClient.baseUrl}/api/v1/conversations/${conversationId}/chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-KEY': apiClient.token
-                },
-                body: JSON.stringify(body)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') continue;
-                        
-                        try {
-                            const parsed = JSON.parse(data);
-                            if (parsed.choices?.[0]?.delta?.content) {
-                                responseEl.textContent += parsed.choices[0].delta.content;
-                            }
-                        } catch (e) {
-                            console.error('Error parsing SSE data:', e);
-                        }
-                    }
-                }
-            }
-        } else {
-            // Handle non-streaming response
-            const response = await apiClient.makeRequest('POST', `/api/v1/conversations/${conversationId}/chat`, { body });
-            responseEl.textContent = JSON.stringify(response, null, 2);
-        }
+        const body = { role: 'user', content: message };
+        const response = await apiClient.makeRequest('POST', `/api/v1/chats/${conversationId}/messages`, { body });
+        responseEl.textContent = JSON.stringify(response, null, 2);
         
         Toast.success('Message sent successfully');
     } catch (error) {
@@ -404,7 +341,11 @@ async function updateConversation() {
         const body = JSON.parse(payload);
         
         responseEl.textContent = 'Updating conversation...';
-        const response = await apiClient.makeRequest('PUT', `/api/v1/conversations/${conversationId}`, { body });
+        // Filter to allowed fields: title, rating
+        const filtered = {};
+        if (body.title) filtered.title = body.title;
+        if (typeof body.rating !== 'undefined') filtered.rating = body.rating;
+        const response = await apiClient.makeRequest('PUT', `/api/v1/chats/${conversationId}`, { body: filtered });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation updated successfully');
     } catch (error) {
@@ -422,7 +363,7 @@ async function deleteConversation() {
         }
         
         responseEl.textContent = 'Deleting conversation...';
-        const response = await apiClient.makeRequest('DELETE', `/api/v1/conversations/${conversationId}`);
+        const response = await apiClient.makeRequest('DELETE', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Conversation deleted successfully';
         Toast.success('Conversation deleted successfully');
     } catch (error) {
@@ -442,7 +383,7 @@ async function exportConversation() {
         const format = document.getElementById('conversationsExport_format').value;
         
         responseEl.textContent = 'Exporting conversation...';
-        const response = await apiClient.makeRequest('GET', `/api/v1/conversations/${conversationId}/export?format=${format}`);
+        const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}/export?format=${format}`);
         
         // Handle different formats
         if (format === 'json') {

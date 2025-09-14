@@ -3,7 +3,7 @@
     <div class="endpoint-section" id="benchmarksList">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/benchmarks - List Available Benchmarks</span>
+            <span class="endpoint-path">/api/v1/benchmarks/list - List Available Benchmarks</span>
         </h2>
         <p>Get a list of all available benchmark tests that can be run.</p>
         
@@ -19,7 +19,7 @@
             </select>
         </div>
         
-        <button class="api-button" onclick="makeRequest('benchmarksList', 'GET', '/api/v1/benchmarks', 'query')">
+        <button class="api-button" onclick="makeRequest('benchmarksList', 'GET', '/api/v1/benchmarks/list', 'query')">
             List Benchmarks
         </button>
         
@@ -33,12 +33,16 @@
     <div class="endpoint-section" id="benchmarksRun">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/benchmarks/run - Run Benchmark Test</span>
+            <span class="endpoint-path">/api/v1/benchmarks/{benchmark_name}/run - Run Benchmark</span>
         </h2>
         <p>Execute a benchmark test to measure system performance.</p>
         
         <div class="form-group">
-            <label for="benchmarksRun_payload">Benchmark Configuration (JSON):</label>
+            <label for="benchmarksRun_name">Benchmark Name:</label>
+            <input id="benchmarksRun_name" placeholder="e.g., simpleqa">
+        </div>
+        <div class="form-group">
+            <label for="benchmarksRun_payload">Run Configuration (JSON):</label>
             <textarea id="benchmarksRun_payload" class="code-input" rows="25">{
   "benchmark_type": "rag_retrieval",
   "name": "RAG Performance Test",
@@ -59,7 +63,7 @@
     "dataset_id": "benchmark_dataset_001"
   },
   "targets": {
-    "endpoints": ["/api/v1/rag/search/simple"],
+    "endpoints": ["/api/v1/rag/search"],
     "models": ["gpt-4", "gpt-3.5-turbo"],
     "configurations": [
       {
@@ -92,9 +96,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('benchmarksRun', 'POST', '/api/v1/benchmarks/run', 'json')">
-            Run Benchmark
-        </button>
+        <button class="api-button" onclick="(function(){ const n=document.getElementById('benchmarksRun_name').value.trim(); if(!n){alert('Enter benchmark name'); return;} makeRequest('benchmarksRun', 'POST', `/api/v1/benchmarks/${n}/run`, 'json') })()">Run Benchmark</button>
         
         <h3>cURL Command:</h3>
         <pre id="benchmarksRun_curl">---</pre>
@@ -106,7 +108,7 @@
     <div class="endpoint-section" id="benchmarksResults">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/benchmarks/{id}/results - Get Benchmark Results</span>
+            <span class="endpoint-path">(Hidden) Results endpoint not available</span>
         </h2>
         <p>Retrieve the results of a completed benchmark test.</p>
         
@@ -125,9 +127,7 @@
             </select>
         </div>
         
-        <button class="api-button" onclick="makeRequest('benchmarksResults', 'GET', '/api/v1/benchmarks/{id}/results', 'query')">
-            Get Results
-        </button>
+        <button class="api-button" style="display:none" onclick="void(0)">Get Results</button>
         
         <h3>cURL Command:</h3>
         <pre id="benchmarksResults_curl">---</pre>
@@ -139,7 +139,7 @@
     <div class="endpoint-section" id="benchmarksCompare">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/benchmarks/compare - Compare Benchmark Runs</span>
+            <span class="endpoint-path">(Hidden) Compare endpoint not available</span>
         </h2>
         <p>Compare results from multiple benchmark runs to identify performance changes.</p>
         
@@ -177,9 +177,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('benchmarksCompare', 'POST', '/api/v1/benchmarks/compare', 'json')">
-            Compare Results
-        </button>
+        <button class="api-button" style="display:none" onclick="void(0)">Compare Results</button>
         
         <h3>cURL Command:</h3>
         <pre id="benchmarksCompare_curl">---</pre>
@@ -191,7 +189,7 @@
     <div class="endpoint-section" id="benchmarksExport">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/benchmarks/{id}/export - Export Benchmark Data</span>
+            <span class="endpoint-path">(Hidden) Export endpoint not available</span>
         </h2>
         <p>Export benchmark results in various formats for analysis or reporting.</p>
         
@@ -216,9 +214,7 @@
             <input type="checkbox" id="benchmarksExport_include_raw">
         </div>
         
-        <button class="api-button" onclick="makeRequest('benchmarksExport', 'GET', '/api/v1/benchmarks/{id}/export', 'query')">
-            Export Data
-        </button>
+        <button class="api-button" style="display:none" onclick="void(0)">Export Data</button>
         
         <h3>cURL Command:</h3>
         <pre id="benchmarksExport_curl">---</pre>
