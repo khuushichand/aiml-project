@@ -137,6 +137,65 @@
   "model": "gpt-4o-mini"
 }</textarea>
         </div>
+
+        <h4>Server Presets</h4>
+        <div class="form-group">
+            <button class="api-button" onclick="ragEvalRefreshPresets()">Refresh Presets</button>
+            <select id="ragEvalPreset_select" style="min-width: 260px;"></select>
+            <button class="api-button" onclick="ragEvalApplyPresetTemplate()">Apply Preset as Test Template</button>
+        </div>
+        <script>
+            async function ragEvalRefreshPresets() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                    const sel = document.getElementById('ragEvalPreset_select');
+                    sel.innerHTML = '';
+                    const items = (resp && resp.items) ? resp.items : [];
+                    items.forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name;
+                        opt.textContent = item.name;
+                        sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${items.length} presets`);
+                } catch (e) {
+                    Toast.error('Failed to list presets: ' + (e?.message || e));
+                }
+            }
+            async function ragEvalApplyPresetTemplate() {
+                try {
+                    const sel = document.getElementById('ragEvalPreset_select');
+                    const name = sel && sel.value ? sel.value : null;
+                    if (!name) { alert('Select a preset first'); return; }
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (!(resp && resp.config)) { alert('Preset not found'); return; }
+                    const cfg = resp.config;
+                    let apiName = 'openai';
+                    try {
+                        const model = (cfg.rag && (Array.isArray(cfg.rag.model) ? cfg.rag.model[0] : cfg.rag.model)) || '';
+                        const m = String(model).toLowerCase();
+                        if (m.includes('claude')) apiName = 'anthropic';
+                        else if (m.includes('groq')) apiName = 'groq';
+                        else if (m.includes('gemini') || m.includes('google')) apiName = 'google';
+                        else if (m.includes('mistral')) apiName = 'mistral';
+                        else apiName = 'openai';
+                    } catch (e) { apiName = 'openai'; }
+                    const tmpl = {
+                        query: "Your question here",
+                        retrieved_contexts: ["Paste or fetch retrieved contexts here"],
+                        generated_response: "Your model response here",
+                        ground_truth: "Optional gold answer",
+                        metrics: ["relevance", "faithfulness", "answer_similarity", "context_precision"],
+                        api_name: apiName
+                    };
+                    const ta = document.getElementById('ragEval_payload');
+                    ta.value = JSON.stringify(tmpl, null, 2);
+                    Toast.success('Inserted test template from preset. Fill contexts/response and run.');
+                } catch (e) {
+                    alert('Failed to apply preset to RAG Eval: ' + (e?.message || e));
+                }
+            }
+        </script>
         
         <button class="api-button" onclick="makeRequest('ragEval', 'POST', '/api/v1/evaluations/rag', 'json')">
             Run RAG Evaluation
@@ -147,6 +206,216 @@
         
         <h3>Response:</h3>
         <pre id="ragEval_response">---</pre>
+    </div>
+</div>
+
+<!-- RAG Pipeline Evaluation Tab -->
+<div id="tabEvalsRAGPipeline" class="tab-content">
+    <div class="endpoint-section" id="ragPipelineEval">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/evaluations (rag_pipeline) + /runs</span>
+        </h2>
+        <p>Create and run a RAG pipeline evaluation using the unified RAG pipeline under the hood.</p>
+
+        <div class="form-group">
+            <label for="ragPipelineCreate_payload">Create rag_pipeline Evaluation (JSON):</label>
+            <textarea id="ragPipelineCreate_payload" class="code-input" rows="20">{
+  "name": "rag_pipeline_demo",
+  "eval_type": "model_graded",
+  "eval_spec": {
+    "sub_type": "rag_pipeline",
+    "rag_pipeline": {
+      "dataset": [
+        {
+          "input": {
+            "question": "What is X?",
+            "corpus": ["X is a thing used in...", "In some docs, X refers to..."]
+          },
+          "expected": {"answer": "X is ...", "relevant_ids": ["doc_1"]}
+        }
+      ],
+      "index_namespace": "rag_eval_ns",
+      "chunking": {"method": ["sentences"], "chunk_size": [512], "overlap": [64]},
+      "retrievers": [{"search_mode": ["hybrid"], "hybrid_alpha": [0.3, 0.7], "top_k": [8]}],
+      "rerankers": [{"strategy": ["flashrank", "cross_encoder"], "top_k": [5]}],
+      "rag": {"model": ["gpt-4o-mini"], "temperature": [0.1], "max_tokens": [256]},
+      "search_strategy": "grid",
+      "max_trials": 4
+    }
+  }
+}</textarea>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('ragPipelineCreate', 'POST', '/api/v1/evaluations', 'json')">
+            Create rag_pipeline Evaluation
+        </button>
+
+        <div class="form-group">
+            <label for="ragPipelineRun_id">Evaluation ID to Run:</label>
+            <input type="text" id="ragPipelineRun_id" placeholder="eval_...">
+        </div>
+
+        <div class="form-group">
+            <label for="ragPipelineRun_config">Run Config (JSON):</label>
+            <textarea id="ragPipelineRun_config" class="code-input" rows="4">{}</textarea>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('ragPipelineRun', 'POST', '/api/v1/evaluations/{id}/runs', 'json')">
+            Start Run
+        </button>
+
+        <h3>Responses:</h3>
+        <pre id="ragPipelineCreate_response">---</pre>
+        <pre id="ragPipelineRun_response">---</pre>
+
+        <h3>Best Config Preset</h3>
+        <div class="form-group">
+            <button class="api-button" onclick="extractBestConfigFromRun()">Extract Best Config From Last Run</button>
+        </div>
+        <div class="form-group">
+            <label for="ragPipelinePreset_name">Preset Name:</label>
+            <input type="text" id="ragPipelinePreset_name" placeholder="my-best-preset" value="rag_pipeline_best">
+        </div>
+        <div class="form-group">
+            <label for="ragPipelinePreset_json">Best Config JSON:</label>
+            <textarea id="ragPipelinePreset_json" class="code-input" rows="8" placeholder="{\n  &quot;chunking&quot;: {...},\n  &quot;retriever&quot;: {...},\n  &quot;reranker&quot;: {...},\n  &quot;rag&quot;: {...}\n}"></textarea>
+        </div>
+        <div class="form-group">
+            <button class="api-button" onclick="saveRagPipelinePreset()">Save Preset</button>
+            <button class="api-button" onclick="applyPresetToCreatePayload()">Apply Preset to Create Payload</button>
+            <button class="api-button" onclick="savePresetToServer()">Save Preset (Server)</button>
+            <button class="api-button" onclick="loadPresetFromServer()">Load Preset (Server)</button>
+        </div>
+
+        <h4>Server Presets</h4>
+        <div class="form-group">
+            <button class="api-button" onclick="refreshServerPresets()">Refresh Presets</button>
+            <select id="ragPipelinePreset_select" style="min-width: 240px;"></select>
+            <button class="api-button" onclick="applySelectedServerPreset()">Apply Selected to Create Payload</button>
+        </div>
+
+        <script>
+            function extractBestConfigFromRun() {
+                try {
+                    const pre = document.getElementById('ragPipelineRun_response');
+                    const text = pre ? pre.textContent.trim() : '';
+                    const obj = JSON.parse(text);
+                    const best = obj && (obj.best_config || (obj.results && obj.results.best_config));
+                    if (!best) { alert('best_config not found in response'); return; }
+                    const cfg = best.config || best;
+                    document.getElementById('ragPipelinePreset_json').value = JSON.stringify(cfg, null, 2);
+                    Toast.success('Best config extracted.');
+                } catch (e) {
+                    alert('Could not parse run response as JSON. Try copying best_config manually.');
+                }
+            }
+            function saveRagPipelinePreset() {
+                const name = (document.getElementById('ragPipelinePreset_name').value || 'rag_pipeline_best').trim();
+                const text = document.getElementById('ragPipelinePreset_json').value;
+                try {
+                    const cfg = JSON.parse(text);
+                    localStorage.setItem('ragPipelinePreset_' + name, JSON.stringify(cfg));
+                    Toast.success('Preset saved as ' + name);
+                } catch (e) {
+                    alert('Invalid JSON for preset: ' + e.message);
+                }
+            }
+            function applyPresetToCreatePayload() {
+                const name = (document.getElementById('ragPipelinePreset_name').value || 'rag_pipeline_best').trim();
+                const presetRaw = localStorage.getItem('ragPipelinePreset_' + name);
+                if (!presetRaw) { alert('Preset not found: ' + name); return; }
+                try {
+                    const preset = JSON.parse(presetRaw);
+                    const ta = document.getElementById('ragPipelineCreate_payload');
+                    const obj = JSON.parse(ta.value);
+                    const rp = (((obj || {}).eval_spec || {}).rag_pipeline || {});
+                    // Merge preset blocks
+                    rp.chunking = preset.chunking || rp.chunking;
+                    rp.retrievers = preset.retriever ? [preset.retriever] : (rp.retrievers || []);
+                    rp.rerankers = preset.reranker ? [preset.reranker] : (rp.rerankers || []);
+                    rp.rag = preset.rag || rp.rag;
+                    obj.eval_spec = obj.eval_spec || {};
+                    obj.eval_spec.rag_pipeline = rp;
+                    ta.value = JSON.stringify(obj, null, 2);
+                    Toast.success('Preset applied to create payload.');
+                } catch (e) {
+                    alert('Failed to apply preset: ' + e.message);
+                }
+            }
+            async function savePresetToServer() {
+                try {
+                    const name = (document.getElementById('ragPipelinePreset_name').value || 'rag_pipeline_best').trim();
+                    const text = document.getElementById('ragPipelinePreset_json').value;
+                    const cfg = JSON.parse(text);
+                    const body = { name, config: cfg };
+                    const resp = await apiClient.makeRequest('POST', '/api/v1/evaluations/rag/pipeline/presets', { body });
+                    if (resp && resp.name) {
+                        Toast.success('Preset saved on server: ' + resp.name);
+                    } else {
+                        Toast.error('Server did not confirm preset save.');
+                    }
+                } catch (e) {
+                    alert('Failed to save preset to server: ' + (e?.message || e));
+                }
+            }
+            async function loadPresetFromServer() {
+                try {
+                    const name = (document.getElementById('ragPipelinePreset_name').value || 'rag_pipeline_best').trim();
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (resp && resp.config) {
+                        document.getElementById('ragPipelinePreset_json').value = JSON.stringify(resp.config, null, 2);
+                        Toast.success('Preset loaded from server.');
+                    } else {
+                        Toast.error('Preset not found on server.');
+                    }
+                } catch (e) {
+                    alert('Failed to load preset from server: ' + (e?.message || e));
+                }
+            }
+            async function refreshServerPresets() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                    const sel = document.getElementById('ragPipelinePreset_select');
+                    sel.innerHTML = '';
+                    const items = (resp && resp.items) ? resp.items : [];
+                    items.forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name;
+                        opt.textContent = item.name;
+                        sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${items.length} presets`);
+                } catch (e) {
+                    alert('Failed to list presets: ' + (e?.message || e));
+                }
+            }
+            async function applySelectedServerPreset() {
+                try {
+                    const sel = document.getElementById('ragPipelinePreset_select');
+                    const name = sel && sel.value ? sel.value : null;
+                    if (!name) { alert('Select a preset first'); return; }
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (!(resp && resp.config)) { alert('Preset not found'); return; }
+                    const ta = document.getElementById('ragPipelineCreate_payload');
+                    const obj = JSON.parse(ta.value);
+                    const rp = (((obj || {}).eval_spec || {}).rag_pipeline || {});
+                    rp.chunking = resp.config.chunking || rp.chunking;
+                    rp.retrievers = resp.config.retriever ? [resp.config.retriever] : (rp.retrievers || []);
+                    rp.rerankers = resp.config.reranker ? [resp.config.reranker] : (rp.rerankers || []);
+                    rp.rag = resp.config.rag || rp.rag;
+                    obj.eval_spec = obj.eval_spec || {};
+                    obj.eval_spec.rag_pipeline = rp;
+                    ta.value = JSON.stringify(obj, null, 2);
+                    Toast.success('Applied selected preset to create payload.');
+                } catch (e) {
+                    alert('Failed to apply preset: ' + (e?.message || e));
+                }
+            }
+        </script>
+
+        <h3>Tip:</h3>
+        <p>When the run completes, the results include a <code>leaderboard</code> and <code>best_config</code> with the winning configuration. You can copy these settings to your RAG defaults.</p>
     </div>
 </div>
 

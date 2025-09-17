@@ -57,11 +57,27 @@ class BufferedTranscriber:
     """
     
     def __init__(self, config: BufferedTranscriptionConfig):
-        """Initialize buffered transcriber."""
+        """Initialize buffered transcriber with strict validation."""
         self.config = config
         self.transcription_history = []
         self.timestamp_history = []
-        
+
+        # Strict validation (do not silently correct invalid settings)
+        if config.chunk_duration <= 0:
+            raise ValueError("chunk_duration must be > 0 seconds")
+        if config.total_buffer <= 0:
+            raise ValueError("total_buffer must be > 0 seconds")
+        if config.total_buffer < config.chunk_duration:
+            raise ValueError(
+                f"total_buffer ({config.total_buffer}s) must be >= chunk_duration ({config.chunk_duration}s)"
+            )
+        # Positive stride condition: total_buffer < 3 * chunk_duration
+        if config.total_buffer >= 3.0 * config.chunk_duration:
+            raise ValueError(
+                "Invalid buffer settings: total_buffer must be < 3x chunk_duration to ensure positive stride. "
+                f"Got chunk_duration={config.chunk_duration}s, total_buffer={config.total_buffer}s"
+            )
+
         # Calculate chunk parameters
         self.chunk_samples_at_16k = int(config.chunk_duration * 16000)
         self.buffer_samples_at_16k = int(config.total_buffer * 16000)
@@ -97,9 +113,27 @@ class BufferedTranscriber:
             audio_data = self._resample(audio_data, sample_rate, 16000)
             sample_rate = 16000
         
+        # Precompute file-specific expected/allowed chunk counts
+        padding_samples_pre = self.buffer_samples_at_16k - self.chunk_samples_at_16k
+        stride_samples_pre = self.chunk_samples_at_16k - padding_samples_pre // 2
+        if stride_samples_pre <= 0:
+            raise ValueError(
+                "Computed non-positive stride from provided settings. "
+                f"chunk_samples={self.chunk_samples_at_16k}, buffer_samples={self.buffer_samples_at_16k}, "
+                f"padding_samples={padding_samples_pre}. Ensure total_buffer < 3 * chunk_duration."
+            )
+        expected_chunks = max(1, math.ceil(len(audio_data) / stride_samples_pre))
+        allowed_max_chunks = expected_chunks * 2  # 2x safety margin
+
         # Calculate chunks
         chunks = self._create_chunks(audio_data)
         num_chunks = len(chunks)
+        # Enforce proportional upper bound
+        if num_chunks > allowed_max_chunks:
+            raise ValueError(
+                f"Chunking produced {num_chunks} chunks which exceeds the file-specific maximum ({allowed_max_chunks}). "
+                f"Expected around {expected_chunks} based on stride. Adjust chunk_duration/total_buffer."
+            )
         
         logger.info(f"Processing {num_chunks} chunks with {self.config.merge_algo.value} algorithm")
         
@@ -139,6 +173,12 @@ class BufferedTranscriber:
         # Calculate stride (non-overlapping part)
         padding_samples = self.buffer_samples_at_16k - self.chunk_samples_at_16k
         stride_samples = self.chunk_samples_at_16k - padding_samples // 2
+        if stride_samples <= 0:
+            raise ValueError(
+                "Computed non-positive stride from provided settings. "
+                f"chunk_samples={self.chunk_samples_at_16k}, buffer_samples={self.buffer_samples_at_16k}, "
+                f"padding_samples={padding_samples}. Ensure total_buffer < 3 * chunk_duration."
+            )
         
         # Create chunks
         position = 0
@@ -309,7 +349,7 @@ def transcribe_long_audio(
     model_name: str = 'parakeet',
     variant: str = 'mlx',
     chunk_duration: float = 30.0,
-    total_buffer: float = 40.0,
+    total_buffer: Optional[float] = None,
     merge_algo: str = 'middle',
     device: str = 'cpu',
     progress_callback: Optional[Callable[[int, int], None]] = None
@@ -343,6 +383,10 @@ def transcribe_long_audio(
     if len(audio_data.shape) > 1:
         audio_data = np.mean(audio_data, axis=1)
     
+    # Determine default total_buffer if not provided: 1.5x chunk (strictly < 3x)
+    if total_buffer is None:
+        total_buffer = max(chunk_duration, min(chunk_duration * 1.5, chunk_duration * 2.9))
+
     # Create config
     config = BufferedTranscriptionConfig(
         chunk_duration=chunk_duration,

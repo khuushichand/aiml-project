@@ -14,7 +14,61 @@ https://medium.com/ai-exploration-journey/how-hirag-turns-data-chaos-into-struct
 https://arxiv.org/pdf/2506.00054
 https://github.com/hhy-huang/HiRAG
 https://archive.is/W64q3
+https://github.com/trustgraph-ai/trustgraph
 https://archive.is/G9rmp
+https://github.com/merveenoyan/smol-vision/blob/main/Image_Search_with_MetaCLIP2.ipynb
+https://huggingface.co/merve/smol-vision/blob/main/Image_Search_with_MetaCLIP2.ipynb
+
+Propositional Chunking
+    https://deepwiki.com/realyinchen/RAG/2.3-proposition-chunking
+    https://eclabs.ai/proposition-based-chunking
+    https://chamomile.ai/reliable-rag-with-data-preprocessing/
+    https://discovery.graphsandnetworks.com/graphAI/rags.html
+
+
+Factual Analysis
+    https://arxiv.org/html/2404.12065v1
+    https://github.com/farrukhrashid1997/Fathom
+    https://aclanthology.org/2024.fever-1.5/
+    https://github.com/uhh-hcds/UHH-at-AVeriTeC
+    https://aclanthology.org/2024.fever-1.6/
+    https://aclanthology.org/2024.fever-1.8/
+    https://arxiv.org/abs/2407.17023
+    https://arxiv.org/abs/2401.15498
+    https://aclanthology.org/2025.fever-1.20.pdf
+    https://aclanthology.org/2025.fever-1.19/
+    https://arxiv.org/abs/2504.14175
+    https://arxiv.org/abs/2503.01670
+    https://arxiv.org/pdf/2305.13117
+    https://arxiv.org/html/2506.19607v1
+    https://huggingface.co/datasets/UCSC-IRKM/RAGuard
+    https://arxiv.org/abs/2402.10735
+    https://arxiv.org/abs/2502.09083
+    https://fever.ai/task.html
+    https://github.com/ssu-humane/HerO2
+    https://github.com/heruberuto/FEVER-8-Shared-Task/tree/main
+    https://gitlab.kit.edu/utjwp/Fact-Checking_GoT_RAG_LLM
+    https://github.com/Raldir/FEVER-8-Shared-Task
+    https://medium.com/data-science-collective/comprehensive-guide-to-fine-tuning-llm-4a8fd4d0e0af
+    https://apxml.com/courses/fine-tuning-adapting-large-language-models/chapter-6-evaluation-analysis-fine-tuned-models/assessing-factual-accuracy
+    https://deepgram.com/learn/truthfulqa-llm-benchmark-guide
+    https://www.confident-ai.com/blog/llm-evaluation-metrics-everything-you-need-for-llm-evaluation
+    https://huggingface.co/FacebookAI/roberta-large-mnli
+    https://huggingface.co/models?sort=modified&search=nli
+    https://huggingface.co/cross-encoder/nli-deberta-v3-base
+    https://huggingface.co/cross-encoder/nli-deberta-v3-large
+    https://aclanthology.org/volumes/2023.fever-1/
+    https://aclanthology.org/volumes/2024.fever-1/
+    https://www.microsoft.com/en-us/research/blog/claimify-extracting-high-quality-claims-from-language-model-outputs/
+    https://www.microsoft.com/en-us/research/publication/towards-effective-extraction-and-evaluation-of-factual-claims/
+    https://arxiv.org/html/2312.06648v3#S3
+    https://raw.githubusercontent.com/NirDiamant/RAG_Techniques/refs/heads/main/all_rag_techniques/HyDe_Hypothetical_Document_Embedding.ipynb
+    https://github.com/NirDiamant/RAG_Techniques/blob/main/all_rag_techniques/HyPE_Hypothetical_Prompt_Embeddings.ipynb
+    https://arxiv.org/pdf/2502.10855
+    https://huggingface.co/datasets/microsoft/claimify-dataset/viewer/default/train?row=0&views%5B%5D=train
+    https://gist.github.com/deshwalmahesh/55ad890a8e4bac8155aaf4058f06cfdb
+    https://arxiv.org/pdf/2406.19803
+
 https://iopscience.iop.org/article/10.1088/2632-2153/ad7228
 https://github.com/lamm-mit/GraphReasoning
 https://arxiv.org/abs/2409.13740

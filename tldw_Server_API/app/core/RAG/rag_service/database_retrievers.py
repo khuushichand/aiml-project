@@ -316,18 +316,20 @@ class MediaDBRetriever(BaseRetriever):
                 await self.vector_store.initialize()
             
             # Generate query embedding
-            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings
+            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                create_embeddings_batch,
+                get_embedding_config,
+            )
             
             # Get embedding for query
             try:
+                user_app_config = get_embedding_config()
                 embeddings = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    create_embeddings,
+                    create_embeddings_batch,
                     [query],  # texts
-                    None,     # model (use default)
-                    None,     # provider (use default)
-                    None,     # api_key
-                    None      # config
+                    user_app_config,
+                    None,
                 )
                 
                 if not embeddings or not embeddings[0]:
@@ -347,10 +349,14 @@ class MediaDBRetriever(BaseRetriever):
             if media_type:
                 filter_dict["media_type"] = media_type
             
-            # Search in user-specific media collection
-            # Format: user_{user_id}_media_embeddings
-            # Use the user_id from the MediaDBRetriever instance
-            collection_name = f"user_{self.user_id}_media_embeddings"
+            # Search in collection; allow override via ephemeral index namespace
+            index_namespace = kwargs.get("index_namespace")
+            if index_namespace:
+                # Use provided namespace directly (already includes user prefix if desired)
+                collection_name = str(index_namespace)
+            else:
+                # Default: user-specific media collection
+                collection_name = f"user_{self.user_id}_media_embeddings"
             
             # Perform vector search
             results = await self.vector_store.search(
@@ -926,7 +932,8 @@ class MultiDatabaseRetriever:
         self,
         query: str,
         sources: Optional[List[DataSource]] = None,
-        config: Optional[RetrievalConfig] = None
+        config: Optional[RetrievalConfig] = None,
+        **kwargs
     ) -> List[Document]:
         """
         Retrieve from multiple databases.
@@ -950,7 +957,7 @@ class MultiDatabaseRetriever:
         tasks = []
         for source in sources:
             if source in self.retrievers:
-                task = self.retrievers[source].retrieve(query)
+                task = self.retrievers[source].retrieve(query, **kwargs)
                 tasks.append(task)
         
         # Gather results

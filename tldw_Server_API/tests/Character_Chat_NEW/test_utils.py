@@ -107,19 +107,40 @@ class CharacterChatManager:
         return None
     
     def add_message(self, chat_id: int, role: str, content: str) -> bool:
-        """Add a message to an existing chat."""
+        """Add a message to an existing chat.
+
+        Supports both DB signatures:
+        - add_message(chat_id, role, content)
+        - add_message({ ... message dict ... })
+        """
         if hasattr(self.db, 'add_message'):
-            result = self.db.add_message(chat_id, role, content)
-            return result is not None
+            try:
+                result = self.db.add_message(chat_id, role, content)
+                return result is not None
+            except TypeError:
+                import uuid
+                msg_data = {
+                    'id': str(uuid.uuid4()),
+                    'conversation_id': chat_id,
+                    'sender': role,
+                    'content': content,
+                    'parent_message_id': None,
+                    'deleted': 0,
+                    'client_id': 'test_client',
+                    'version': 1
+                }
+                result = self.db.add_message(msg_data)
+                return result is not None
         return False
     
     def get_chat_messages(self, chat_id: int) -> List[Dict[str, Any]]:
-        """Get all messages from a chat."""
+        """Get all messages from a chat, trying both DB APIs."""
+        messages: List[Dict[str, Any]] = []
         if hasattr(self.db, 'get_messages'):
-            messages = self.db.get_messages(chat_id)
-        else:
-            messages = []
-        return messages or []
+            messages = self.db.get_messages(chat_id) or []
+        elif hasattr(self.db, 'get_messages_for_conversation'):
+            messages = self.db.get_messages_for_conversation(chat_id) or []
+        return messages
     
     def list_chats_for_character(self, character_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """List all chat sessions for a character."""
@@ -174,13 +195,17 @@ class CharacterChatManager:
     
     def get_chat_session(self, chat_id: int) -> Optional[Dict[str, Any]]:
         """Get information about a chat session."""
-        chat = self.db.get_chat(chat_id) if hasattr(self.db, 'get_chat') else None
+        chat = None
+        if hasattr(self.db, 'get_chat'):
+            chat = self.db.get_chat(chat_id)
+        elif hasattr(self.db, 'get_conversation_by_id'):
+            chat = self.db.get_conversation_by_id(chat_id)
         messages = self.get_chat_messages(chat_id)
         if chat or messages:
             return {
                 'id': chat_id,
-                'title': chat.get('title') if chat else None,
-                'character_id': chat.get('character_id') if chat else None,
+                'title': chat.get('title') if isinstance(chat, dict) else None,
+                'character_id': chat.get('character_id') if isinstance(chat, dict) else None,
                 'message_count': len(messages),
                 'messages': messages,
             }
@@ -211,9 +236,12 @@ class CharacterChatManager:
     
     def get_messages(self, chat_id: int) -> List[Dict[str, Any]]:
         """Get messages from a chat."""
-        if hasattr(self.db, 'get_messages'):
-            return self.db.get_messages(chat_id)
-        return []
+        messages = self.get_chat_messages(chat_id)
+        # Normalize sender -> role for compatibility
+        for msg in messages:
+            if 'sender' in msg and 'role' not in msg:
+                msg['role'] = msg['sender']
+        return messages
     
     def get_recent_messages(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent messages from a chat."""

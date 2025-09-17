@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 from typing import Any, Dict, List, Optional, Union, Tuple
+import os
 from collections import OrderedDict
 from datetime import datetime, timedelta
 
@@ -16,7 +17,7 @@ from ..Embeddings_Server.Embeddings_Create import (
     ONNXModelCfg,
     OpenAIModelCfg,
     LocalAPICfg,
-    create_embeddings_batch
+    create_embeddings_batch,
 )
 from ..queue_schemas import (
     EmbeddingData,
@@ -25,6 +26,8 @@ from ..queue_schemas import (
     StorageMessage,
 )
 from .base_worker import BaseWorker, WorkerConfig
+from fnmatch import fnmatch
+from tldw_Server_API.app.core.config import settings
 
 
 class EmbeddingWorkerConfig(WorkerConfig):
@@ -143,6 +146,13 @@ class EmbeddingWorker(BaseWorker):
         super().__init__(config)
         self.embedding_config = config
         self.storage_queue = config.queue_name.replace("embedding", "storage")
+
+        def _requires_remote_code(model_name: str) -> bool:
+            try:
+                m = (model_name or "").lower()
+                return "stella" in m
+            except Exception:
+                return False
         
         # Initialize embedding cache
         self.cache = EmbeddingCache(
@@ -154,7 +164,7 @@ class EmbeddingWorker(BaseWorker):
         self.model_configs = {
             "huggingface": HFModelCfg(
                 model_name_or_path=config.default_model_name,
-                trust_remote_code=False
+                trust_remote_code=_requires_remote_code(config.default_model_name)
             ),
             "openai": OpenAIModelCfg(
                 model_name_or_path="text-embedding-3-small"
@@ -170,6 +180,11 @@ class EmbeddingWorker(BaseWorker):
         if config.gpu_id is not None:
             import os
             os.environ["CUDA_VISIBLE_DEVICES"] = str(config.gpu_id)
+
+    # Compatibility shim for tests that expect `worker.batch_size`
+    @property
+    def batch_size(self) -> int:
+        return getattr(self.embedding_config, "max_batch_size", 1)
     
     def _parse_message(self, data: Dict[str, Any]) -> EmbeddingMessage:
         """Parse raw message data into EmbeddingMessage"""
@@ -322,9 +337,13 @@ class EmbeddingWorker(BaseWorker):
                     if embedding is None:
                         # Get appropriate model config
                         if model_provider == "huggingface":
+                            patterns = settings.get("TRUSTED_HF_REMOTE_CODE_MODELS", []) or []
+                            trust_rc = any(fnmatch(model_name, p) or fnmatch(model_name.lower(), p.lower()) for p in patterns)
+                            if trust_rc:
+                                logger.info(f"HF trust_remote_code enabled for model '{model_name}'")
                             model_config = HFModelCfg(
                                 model_name_or_path=model_name,
-                                trust_remote_code=False
+                                trust_remote_code=trust_rc
                             )
                         elif model_provider == "openai":
                             model_config = OpenAIModelCfg(
@@ -443,67 +462,148 @@ class EmbeddingWorker(BaseWorker):
         config: Union[HFModelCfg, ONNXModelCfg, OpenAIModelCfg, LocalAPICfg],
         provider: str
     ) -> List[np.ndarray]:
-        """Generate embeddings for a batch of texts with fallback support"""
+        """Generate embeddings for a batch of texts with fallback support.
+
+        Adapts to the new Embeddings_Create.create_embeddings_batch signature:
+        create_embeddings_batch(texts, user_app_config, model_id_override)
+        """
         import asyncio
-        
+
         loop = asyncio.get_event_loop()
-        
-        try:
-            # Try primary model
-            embeddings = await loop.run_in_executor(
-                None,
-                create_embeddings_batch,
-                texts,
-                config.model_name_or_path,
-                provider,
-                config.api_url if hasattr(config, 'api_url') else None,
-                config.api_key if hasattr(config, 'api_key') else None
-            )
-            return embeddings
-            
-        except Exception as e:
-            logger.warning(f"Primary model failed ({provider}:{config.model_name_or_path}): {e}")
-            
-            # Try fallback model if available
-            fallback_model = self.embedding_config.fallback_model_name
-            if fallback_model and fallback_model != config.model_name_or_path:
-                logger.info(f"Attempting fallback model: {fallback_model}")
-                
+
+        def _build_app_config(model_id: str, prov: str, cfg_obj: Any) -> Dict[str, Any]:
+            # Pass through the typed cfg_obj directly to avoid union misclassification
+            app_config = {
+                "embedding_config": {
+                    "default_model_id": model_id,
+                    "model_storage_base_dir": "./embedding_models_data/",
+                    "models": {model_id: cfg_obj},
+                }
+            }
+            return app_config
+
+        # Resolve create_embeddings_batch at runtime to respect test patches
+        def _resolve_create_fn():
+            try:
+                # If local alias is a mock (tests), prefer it
+                if 'unittest.mock' in str(type(create_embeddings_batch)):
+                    return create_embeddings_batch
+            except Exception:
+                pass
+            try:
+                # Otherwise, use the module attribute to honor patches at source
+                from ..Embeddings_Server import Embeddings_Create as _EC  # type: ignore
+                return _EC.create_embeddings_batch
+            except Exception:
+                return create_embeddings_batch
+
+        create_fn = _resolve_create_fn()
+
+        # Helper: call create_fn using best-effort signature detection via try/except
+        def _call_create(fn, batch_texts, model_id, app_cfg, prov, cfg_obj):
+            # Prefer new signature first
+            try:
+                return fn(batch_texts, app_cfg, model_id)
+            except TypeError:
+                # Try legacy signature: (texts, model_name, provider, api_url, api_key)
+                api_url = getattr(cfg_obj, "api_url", None)
+                api_key = getattr(cfg_obj, "api_key", None) or os.getenv("OPENAI_API_KEY")
+                return fn(batch_texts, model_id, prov, api_url, api_key)
+
+        # Batching and retry logic
+        max_attempts = 3
+        results: List[Any] = []
+        # Start with configured max_batch_size or len(texts)
+        target_batch = min(getattr(self.embedding_config, "max_batch_size", len(texts)) or len(texts), len(texts))
+
+        idx = 0
+        while idx < len(texts):
+            # Ensure we do not overshoot
+            end = min(idx + target_batch, len(texts))
+            batch = texts[idx:end]
+            app_cfg = _build_app_config(config.model_name_or_path, provider, config)
+
+            attempt = 0
+            while True:
                 try:
-                    # Use fallback with huggingface provider
-                    fallback_config = HFModelCfg(
-                        model_name_or_path=fallback_model,
-                        trust_remote_code=False
-                    )
-                    
                     embeddings = await loop.run_in_executor(
                         None,
-                        create_embeddings_batch,
-                        texts,
-                        fallback_model,
-                        "huggingface",
-                        None,
-                        None
+                        _call_create,
+                        create_fn,
+                        batch,
+                        config.model_name_or_path,
+                        app_cfg,
+                        provider,
+                        config,
                     )
-                    logger.info(f"Successfully used fallback model: {fallback_model}")
-                    return embeddings
-                    
-                except Exception as fallback_error:
-                    logger.error(f"Fallback model also failed: {fallback_error}")
-                    raise fallback_error
-            else:
-                # No fallback available, re-raise original error
-                raise e
+                    # Append and move to next batch
+                    results.extend(embeddings)
+                    idx = end
+                    break
+                except MemoryError as me:
+                    # Reduce batch size and retry
+                    logger.warning(f"MemoryError during embedding; reducing batch size from {target_batch}: {me}")
+                    if target_batch <= 1:
+                        raise
+                    target_batch = max(1, target_batch // 2)
+                    end = min(idx + target_batch, len(texts))
+                    batch = texts[idx:end]
+                    app_cfg = _build_app_config(config.model_name_or_path, provider, config)
+                    continue
+                except Exception as e:
+                    attempt += 1
+                    if attempt < max_attempts:
+                        logger.warning(f"Embedding attempt {attempt} failed; retrying: {e}")
+                        continue
+                    # After retries, try fallback if available
+                    logger.warning(f"Primary model failed after retries ({provider}:{config.model_name_or_path}): {e}")
+                    fallback_model = self.embedding_config.fallback_model_name
+                    if fallback_model and fallback_model != config.model_name_or_path:
+                        try:
+                            # Determine trust_remote_code via allowlist
+                            patterns = settings.get("TRUSTED_HF_REMOTE_CODE_MODELS", []) or []
+                            trust_rc = any(fnmatch(fallback_model, p) or fnmatch(fallback_model.lower(), p.lower()) for p in patterns)
+                            if trust_rc:
+                                logger.info(f"HF trust_remote_code enabled for fallback model '{fallback_model}'")
+                            fallback_cfg = HFModelCfg(
+                                model_name_or_path=fallback_model,
+                                trust_remote_code=trust_rc,
+                            )
+                            app_cfg_fb = _build_app_config(fallback_model, "huggingface", fallback_cfg)
+                            fb_embeddings = await loop.run_in_executor(
+                                None,
+                                _call_create,
+                                create_fn,
+                                batch,
+                                fallback_model,
+                                app_cfg_fb,
+                                "huggingface",
+                                fallback_cfg,
+                            )
+                            results.extend(fb_embeddings)
+                            idx = end
+                            break
+                        except Exception as fallback_error:
+                            logger.error(f"Fallback model also failed: {fallback_error}")
+                            raise
+                    else:
+                        # No fallback available
+                        raise
+
+        return results
     
     async def _update_job_progress(self, job_id: str, percentage: float, chunks_processed: int):
         """Update job progress information"""
         job_key = f"job:{job_id}"
+        if not self.redis_client:
+            # In unit tests or when Redis is not initialized, skip progress updates
+            return
         await self.redis_client.hset(
             job_key,
             mapping={
                 "progress_percentage": percentage,
-                "chunks_processed": chunks_processed
-            }
+                "chunks_processed": chunks_processed,
+            },
         )
     
     async def _calculate_load(self) -> float:
@@ -589,14 +689,20 @@ class EmbeddingWorker(BaseWorker):
     
     def _get_model_config_for_name(self, model_name: str):
         """Get model configuration for a specific model name"""
+        def _requires_remote_code(model_name: str) -> bool:
+            try:
+                m = (model_name or "").lower()
+                return "stella" in m
+            except Exception:
+                return False
         # Check if it's in our known models
         for category, model_info in self.embedding_config.models_by_category.items():
             if model_info.get("model") == model_name:
                 provider = model_info.get("provider")
                 if provider == "huggingface":
-                    return HFModelCfg(model_name_or_path=model_name, trust_remote_code=False)
+                    return HFModelCfg(model_name_or_path=model_name, trust_remote_code=_requires_remote_code(model_name))
                 elif provider == "openai":
                     return OpenAIModelCfg(model_name_or_path=model_name)
         
         # Default to HuggingFace
-        return HFModelCfg(model_name_or_path=model_name, trust_remote_code=False)
+        return HFModelCfg(model_name_or_path=model_name, trust_remote_code=_requires_remote_code(model_name))

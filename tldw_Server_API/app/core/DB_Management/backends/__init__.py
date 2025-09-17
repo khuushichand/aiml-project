@@ -19,6 +19,7 @@ from .base import (
 
 from .factory import (
     DatabaseBackendFactory,
+    BackendFactory,
     get_backend,
     register_backend
 )
@@ -36,6 +37,7 @@ __all__ = [
     
     # Factory
     'DatabaseBackendFactory',
+    'BackendFactory',
     'get_backend',
     'register_backend'
 ]

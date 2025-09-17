@@ -25,38 +25,46 @@ def client_with_auth():
     app.dependency_overrides.clear()
 
 
-def test_add_document_with_content_real(client_with_auth: TestClient):
+def test_add_document_with_content_real(client_with_auth: TestClient, tmp_path):
     client = client_with_auth
 
-    resp = client.post(
-        "/api/v1/media/add",
-        json={
-            "title": "Integration Doc",
-            "content": "This is integration test content to be stored.",
-            "media_type": "document",
-            "author": "Integration Suite",
-            "chunk_method": "words",
-            "max_chunk_size": 50
-        },
-    )
-    assert resp.status_code == 200, resp.text
+    # Create a small temp text file to upload
+    p = tmp_path / "integration_doc.txt"
+    p.write_text("This is integration test content to be stored.")
+
+    with p.open('rb') as f:
+        resp = client.post(
+            "/api/v1/media/add",
+            data={
+                "title": "Integration Doc",
+                "media_type": "document",
+                "author": "Integration Suite",
+                "chunk_method": "words",
+                "chunk_size": "50",
+            },
+            files=[("files", ("integration_doc.txt", f, "text/plain"))],
+        )
+    assert resp.status_code in (200, 207), resp.text
     data = resp.json()
-    assert data.get("message") == "Media added successfully"
-    assert data.get("media_id") is not None
+    assert isinstance(data, dict) and "results" in data
+    assert any(item.get("db_id") for item in data.get("results", []))
 
 
-def test_add_document_with_sentences_chunking(client_with_auth: TestClient):
+def test_add_document_with_sentences_chunking(client_with_auth: TestClient, tmp_path):
     client = client_with_auth
-    resp = client.post(
-        "/api/v1/media/add",
-        json={
-            "title": "Integration Doc 2",
-            "content": "Sentence one. Sentence two. Sentence three.",
-            "media_type": "document",
-            "chunk_method": "sentences",
-            "max_chunk_size": 200
-        },
-    )
+    p = tmp_path / "sentences.txt"
+    p.write_text("Sentence one. Sentence two. Sentence three.")
+    with p.open('rb') as f:
+        resp = client.post(
+            "/api/v1/media/add",
+            data={
+                "title": "Integration Doc 2",
+                "media_type": "document",
+                "chunk_method": "sentences",
+                "chunk_size": "200",
+            },
+            files=[("files", ("sentences.txt", f, "text/plain"))],
+        )
     assert resp.status_code in (200, 207), resp.text
 
 
@@ -64,16 +72,19 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient):
     client = client_with_auth
     # Add two documents
     for title in ("Alpha Doc", "Beta Doc"):
-        client.post(
-            "/api/v1/media/add",
-            json={
-                "title": title,
-                "content": f"{title} content.",
-                "media_type": "document",
-                "chunk_method": "words",
-                "max_chunk_size": 20
-            },
-        )
+        p = tmp_path / f"{title.replace(' ', '_').lower()}.txt"
+        p.write_text(f"{title} content.")
+        with p.open('rb') as f:
+            client.post(
+                "/api/v1/media/add",
+                data={
+                    "title": title,
+                    "media_type": "document",
+                    "chunk_method": "words",
+                    "chunk_size": "20",
+                },
+                files=[("files", (p.name, f, "text/plain"))],
+            )
 
     # List media
     lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 5})
@@ -107,22 +118,25 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient):
     assert any("Alpha" in item.get("title", "") for item in sdata.get("items", []))
 
 
-def test_add_various_chunk_methods_persist(client_with_auth: TestClient):
+def test_add_various_chunk_methods_persist(client_with_auth: TestClient, tmp_path):
     client = client_with_auth
     titles = [
         ("Words Doc", "words"),
         ("Paragraphs Doc", "paragraphs"),
     ]
     for title, method in titles:
-        r = client.post(
-            "/api/v1/media/add",
-            json={
-                "title": title,
-                "content": f"{title} content.\n\nNew paragraph here.",
-                "media_type": "document",
-                "chunk_method": method,
-            },
-        )
+        p = tmp_path / f"{title.replace(' ', '_').lower()}.txt"
+        p.write_text(f"{title} content.\n\nNew paragraph here.")
+        with p.open('rb') as f:
+            r = client.post(
+                "/api/v1/media/add",
+                data={
+                    "title": title,
+                    "media_type": "document",
+                    "chunk_method": method,
+                },
+                files=[("files", (p.name, f, "text/plain"))],
+            )
         assert r.status_code in (200, 207), r.text
 
     # Verify both present in list
@@ -135,11 +149,9 @@ def test_add_various_chunk_methods_persist(client_with_auth: TestClient):
 
 def test_add_document_with_invalid_payload_returns_422_or_400(client_with_auth: TestClient):
     client = client_with_auth
-    # Missing title and content/url
+    # Missing any files/urls
     resp = client.post(
         "/api/v1/media/add",
-        json={
-            "media_type": "document"
-        },
+        data={"media_type": "document"},
     )
     assert resp.status_code in (400, 422)

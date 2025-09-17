@@ -261,6 +261,16 @@ class ChunkerConfig:
                 logger.warning(f"Unknown chunking method '{default_method}', using default")
                 default_method = ChunkingMethod.WORDS
         
+        # Basic validations
+        if not isinstance(default_max_size, int) or default_max_size <= 0:
+            raise ValueError(f"default_max_size must be a positive integer, got {default_max_size}")
+        if not isinstance(default_overlap, int) or default_overlap < 0:
+            raise ValueError(f"default_overlap must be a non-negative integer, got {default_overlap}")
+        if not isinstance(cache_size, int) or cache_size <= 0:
+            raise ValueError(f"cache_size must be a positive integer, got {cache_size}")
+        if not isinstance(max_text_size, int) or max_text_size <= 0:
+            raise ValueError(f"max_text_size must be a positive integer, got {max_text_size}")
+
         self.default_method = default_method
         self.default_max_size = default_max_size
         self.default_overlap = default_overlap

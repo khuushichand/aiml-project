@@ -133,9 +133,10 @@ class Chunker:
         self.llm_call_func = llm_call_func
         self.llm_config = llm_config or {}
         
-        # Initialize strategy instances
+        # Strategy instances (lazy)
         self._strategies = {}
-        self._initialize_strategies()
+        self._strategy_factories = {}
+        self._register_strategy_factories()
         
         # Cache for processed results - using LRU cache
         self._cache = LRUCache(max_size=self.config.cache_size) if self.config.enable_cache else None
@@ -145,55 +146,37 @@ class Chunker:
         
         logger.info(f"Chunker initialized with default method: {self.config.default_method.value}")
     
-    def _initialize_strategies(self):
-        """Initialize available chunking strategies."""
-        # Import strategies here to avoid circular imports
-        from .strategies.semantic import SemanticChunkingStrategy
-        from .strategies.json_xml import JSONChunkingStrategy, XMLChunkingStrategy
-        from .strategies.paragraphs import ParagraphChunkingStrategy
-        from .strategies.ebook_chapters import EbookChapterChunkingStrategy
-        from .strategies.propositions import PropositionChunkingStrategy
-        
-        # Core strategies
-        self._strategies[ChunkingMethod.WORDS.value] = WordChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.SENTENCES.value] = SentenceChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.PARAGRAPHS.value] = ParagraphChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.PROPOSITIONS.value] = PropositionChunkingStrategy(
-            language=self.config.language,
-            llm_call_func=self.llm_call_func,
-            llm_config=self.llm_config
-        )
-        self._strategies[ChunkingMethod.TOKENS.value] = TokenChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies['structure_aware'] = StructureAwareChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.SEMANTIC.value] = SemanticChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.JSON.value] = JSONChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.XML.value] = XMLChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.EBOOK_CHAPTERS.value] = EbookChapterChunkingStrategy(
-            language=self.config.language
-        )
-        self._strategies[ChunkingMethod.ROLLING_SUMMARIZE.value] = RollingSummarizeStrategy(
-            language=self.config.language,
-            llm_call_func=self.llm_call_func,
-            llm_config=self.llm_config
-        )
-        
-        logger.debug(f"Initialized {len(self._strategies)} chunking strategies")
+    def _register_strategy_factories(self):
+        """Register factories for lazy strategy instantiation."""
+        lang = self.config.language
+        self._strategy_factories = {
+            ChunkingMethod.WORDS.value: lambda: WordChunkingStrategy(language=lang),
+            ChunkingMethod.SENTENCES.value: lambda: SentenceChunkingStrategy(language=lang),
+            ChunkingMethod.PARAGRAPHS.value: lambda: __import__(
+                f"{__package__}.strategies.paragraphs", fromlist=["ParagraphChunkingStrategy"]
+            ).ParagraphChunkingStrategy(language=lang),
+            'structure_aware': lambda: StructureAwareChunkingStrategy(language=lang),
+            ChunkingMethod.PROPOSITIONS.value: lambda: __import__(
+                f"{__package__}.strategies.propositions", fromlist=["PropositionChunkingStrategy"]
+            ).PropositionChunkingStrategy(language=lang, llm_call_func=self.llm_call_func, llm_config=self.llm_config),
+            ChunkingMethod.TOKENS.value: lambda: TokenChunkingStrategy(language=lang),
+            ChunkingMethod.SEMANTIC.value: lambda: __import__(
+                f"{__package__}.strategies.semantic", fromlist=["SemanticChunkingStrategy"]
+            ).SemanticChunkingStrategy(language=lang),
+            ChunkingMethod.JSON.value: lambda: __import__(
+                f"{__package__}.strategies.json_xml", fromlist=["JSONChunkingStrategy"]
+            ).JSONChunkingStrategy(language=lang),
+            ChunkingMethod.XML.value: lambda: __import__(
+                f"{__package__}.strategies.json_xml", fromlist=["XMLChunkingStrategy"]
+            ).XMLChunkingStrategy(language=lang),
+            ChunkingMethod.EBOOK_CHAPTERS.value: lambda: __import__(
+                f"{__package__}.strategies.ebook_chapters", fromlist=["EbookChapterChunkingStrategy"]
+            ).EbookChapterChunkingStrategy(language=lang),
+            ChunkingMethod.ROLLING_SUMMARIZE.value: lambda: RollingSummarizeStrategy(
+                language=lang, llm_call_func=self.llm_call_func, llm_config=self.llm_config
+            ),
+        }
+        logger.debug(f"Registered {len(self._strategy_factories)} strategy factories (lazy)")
     
     def _sanitize_input(self, text: str) -> str:
         """
@@ -302,14 +285,8 @@ class Chunker:
                 logger.debug("Returning cached result")
                 return cached_result
         
-        # Get strategy
-        if method not in self._strategies:
-            available = ', '.join(self._strategies.keys())
-            raise InvalidChunkingMethodError(
-                f"Unknown chunking method: {method}. Available methods: {available}"
-            )
-        
-        strategy = self._strategies[method]
+        # Get strategy lazily
+        strategy = self.get_strategy(method)
         
         # Update strategy language if different
         if language != strategy.language:
@@ -365,11 +342,8 @@ class Chunker:
         overlap = overlap if overlap is not None else self.config.default_overlap
         language = language or self.config.language
         
-        # Get strategy
-        if method not in self._strategies:
-            raise InvalidChunkingMethodError(f"Unknown chunking method: {method}")
-        
-        strategy = self._strategies[method]
+        # Get strategy lazily (supports factory registration)
+        strategy = self.get_strategy(method)
         
         # Update strategy language if different
         if language != strategy.language:
@@ -414,11 +388,8 @@ class Chunker:
         overlap = overlap if overlap is not None else self.config.default_overlap
         language = language or self.config.language
         
-        # Get strategy
-        if method not in self._strategies:
-            raise InvalidChunkingMethodError(f"Unknown chunking method: {method}")
-        
-        strategy = self._strategies[method]
+        # Get strategy lazily (supports factory registration)
+        strategy = self.get_strategy(method)
         
         # Update strategy language if different
         if language != strategy.language:
@@ -435,7 +406,7 @@ class Chunker:
         Returns:
             List of method names
         """
-        return list(self._strategies.keys())
+        return sorted(set(list(self._strategies.keys()) + list(getattr(self, '_strategy_factories', {}).keys())))
     
     def get_strategy(self, method: str):
         """
@@ -450,9 +421,18 @@ class Chunker:
         Raises:
             InvalidChunkingMethodError: If method not found
         """
-        if method not in self._strategies:
-            raise InvalidChunkingMethodError(f"Unknown chunking method: {method}")
-        return self._strategies[method]
+        if method in self._strategies:
+            return self._strategies[method]
+        factory = self._strategy_factories.get(method)
+        if factory is None:
+            available = ', '.join(sorted(list(self._strategies.keys()) + list(self._strategy_factories.keys())))
+            raise InvalidChunkingMethodError(f"Unknown chunking method: {method}. Available methods: {available}")
+        try:
+            instance = factory()
+            self._strategies[method] = instance
+            return instance
+        except Exception as e:
+            raise InvalidChunkingMethodError(f"Failed to initialize strategy '{method}': {e}")
     
     def _get_cache_key(self, text: str, method: str, max_size: int,
                       overlap: int, language: str, options: Dict) -> str:

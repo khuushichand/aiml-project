@@ -24,6 +24,15 @@ from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import Resp
 from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
+from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+    create_embeddings_batch,
+    get_embedding_config,
+)
+
 
 
 class EvaluationRunner:
@@ -120,7 +129,40 @@ class EvaluationRunner:
             }
             self.db.update_run_progress(run_id, progress)
             
-            # Get evaluation function
+            # Special-case: rag_pipeline orchestrates across configs and samples
+            sub_type = None
+            try:
+                sub_type = eval_spec.get("sub_type")
+            except Exception:
+                sub_type = None
+
+            if eval_type == "model_graded" and sub_type == "rag_pipeline":
+                progress = {
+                    "total_samples": total_samples,
+                    "completed_samples": 0,
+                    "failed_samples": 0,
+                    "current_batch": 0
+                }
+                self.db.update_run_progress(run_id, progress)
+
+                # Execute rag_pipeline evaluation end-to-end
+                results, usage = await self._execute_rag_pipeline_run(
+                    run_id=run_id,
+                    samples=samples,
+                    eval_spec=eval_spec,
+                    eval_config=eval_config
+                )
+
+                # Store results and webhook
+                self.db.store_run_results(run_id, results, usage)
+                webhook_url = eval_config.get("webhook_url")
+                if webhook_url:
+                    await self._send_webhook(webhook_url, run_id, eval_id, "completed", results)
+
+                logger.info(f"Evaluation run {run_id} (rag_pipeline) completed in {time.time() - start_time:.2f}s")
+                return results
+
+            # Get evaluation function for standard types
             eval_fn = self._get_evaluation_function(eval_type, eval_spec)
             
             # Process samples in batches
@@ -199,6 +241,613 @@ class EvaluationRunner:
             # Clean up running task
             if run_id in self.running_tasks:
                 del self.running_tasks[run_id]
+
+    # ============= RAG Pipeline Orchestration =============
+
+    def _expand_values(self, value):
+        """Normalize a value or list of values to a list."""
+        if value is None:
+            return [None]
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _cartesian_product(self, dicts_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Cartesian product of parameter dictionaries.
+
+        Each dict may contain fields that are single values or lists.
+        Returns a list of flat dicts for each combination.
+        """
+        if not dicts_list:
+            return [{}]
+        from itertools import product
+        # Merge multiple dicts into a single dict of key->list-of-values
+        merged: Dict[str, List[Any]] = {}
+        for d in dicts_list:
+            for k, v in (d or {}).items():
+                vals = self._expand_values(v)
+                merged.setdefault(k, [])
+                # If multiple sweep blocks set the same key, append and deduplicate later
+                merged[k].extend(vals)
+        # Deduplicate per key preserving order
+        for k, vals in merged.items():
+            seen = set()
+            deduped = []
+            for x in vals:
+                key = str(x)
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(x)
+            merged[k] = deduped
+        # Build product
+        keys = list(merged.keys())
+        values_lists = [merged[k] for k in keys]
+        combos = []
+        for combo in product(*values_lists):
+            combos.append({k: v for k, v in zip(keys, combo)})
+        return combos
+
+    def _build_config_grid(self, eval_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Build configuration combinations from rag_pipeline spec."""
+        rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
+        chunking = rp.get("chunking") or {}
+        retrievers = rp.get("retrievers") or [{}]
+        rerankers = rp.get("rerankers") or [{}]
+        rag = rp.get("rag") or {}
+
+        # Normalize blocks to list of dicts
+        if isinstance(retrievers, dict):
+            retrievers = [retrievers]
+        if isinstance(rerankers, dict):
+            rerankers = [rerankers]
+
+        # Expand each block
+        chunking_combos = self._cartesian_product([chunking]) if chunking else [{}]
+        retriever_combos = []
+        for r in retrievers:
+            retriever_combos.extend(self._cartesian_product([r]))
+        reranker_combos = []
+        for rr in rerankers:
+            reranker_combos.extend(self._cartesian_product([rr]))
+        rag_combos = self._cartesian_product([rag]) if rag else [{}]
+
+        # Cartesian across blocks
+        from itertools import product
+        grid = []
+        for ck, rt, rr, rg in product(chunking_combos, retriever_combos, reranker_combos, rag_combos):
+            cfg = {
+                "chunking": ck,
+                "retriever": rt,
+                "reranker": rr,
+                "rag": rg,
+            }
+            grid.append(cfg)
+
+        # Apply search strategy/max_trials
+        strategy = rp.get("search_strategy", "grid")
+        max_trials = rp.get("max_trials")
+        if max_trials and len(grid) > max_trials:
+            if strategy == "random":
+                import random
+                random.seed(42)
+                grid = random.sample(grid, max_trials)
+            else:
+                grid = grid[:max_trials]
+        return grid
+
+    async def _execute_rag_pipeline_run(
+        self,
+        run_id: str,
+        samples: List[Dict[str, Any]],
+        eval_spec: Dict[str, Any],
+        eval_config: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Run rag_pipeline across a config grid and dataset, aggregating a leaderboard.
+
+        Returns (results_dict, usage_dict)
+        """
+        rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
+        metrics_sel = rp.get("metrics") or {}
+        config_grid = self._build_config_grid(eval_spec)
+
+        # Progress accounting
+        total_work = max(1, len(config_grid) * max(1, len(samples)))
+        completed = 0
+
+        per_config_results = []
+        best = None
+        leaderboard = []
+        built_collections: List[str] = []
+
+        # Metrics helpers
+        custom_metrics = get_custom_metrics()
+
+        # Optional ephemeral indexing base namespace
+        base_namespace = rp.get("index_namespace")
+
+        # Iterate configs
+        for idx, cfg in enumerate(config_grid):
+            cfg_id = f"cfg_{idx+1:03d}"
+            per_sample = []
+            # Aggregate accumulators
+            agg_scores = []
+            agg_latency = []
+            agg_cost = []
+
+            # Unpack blocks
+            ck = cfg.get("chunking", {}) or {}
+            rt = cfg.get("retriever", {}) or {}
+            rr = cfg.get("reranker", {}) or {}
+            rg = cfg.get("rag", {}) or {}
+
+            # Map to unified_rag_pipeline args
+            upr_args_common = {
+                # Retrieval
+                "search_mode": rt.get("search_mode") or "hybrid",
+                "hybrid_alpha": rt.get("hybrid_alpha") if rt.get("hybrid_alpha") is not None else 0.7,
+                "top_k": rt.get("top_k") or 10,
+                "min_score": rt.get("min_score") or 0.0,
+                "keyword_filter": rt.get("keyword_filter"),
+                # Reranking
+                "enable_reranking": True,
+                "reranking_strategy": rr.get("strategy") or "flashrank",
+                "rerank_top_k": rr.get("top_k") or rt.get("top_k") or 10,
+                # Generation
+                "enable_generation": True,
+                "generation_model": (rg.get("model") or [None])[0] if isinstance(rg.get("model"), list) else rg.get("model"),
+                "generation_prompt": (rg.get("prompt_template") or [None])[0] if isinstance(rg.get("prompt_template"), list) else rg.get("prompt_template"),
+                "max_generation_tokens": (rg.get("max_tokens") or [None])[0] if isinstance(rg.get("max_tokens"), list) else (rg.get("max_tokens") or 500),
+            }
+
+            # Enhanced chunking toggles (note: retrieval-time placeholder in unified pipeline)
+            if ck:
+                upr_args_common.update({
+                    "enable_enhanced_chunking": True,
+                    "include_sibling_chunks": (ck.get("include_siblings") or [False])[0] if isinstance(ck.get("include_siblings"), list) else ck.get("include_siblings") or False,
+                })
+
+            # Ephemeral indexing: build collection if dataset provides corpus and index_namespace is set
+            collection_name = None
+            chunk_index_stats = None
+            try:
+                if base_namespace:
+                    collection_name = f"{base_namespace}_{cfg_id}"
+                    chunk_index_stats = await self._build_ephemeral_index(
+                        collection_name=collection_name,
+                        samples=samples,
+                        chunking_cfg=ck
+                    )
+                    upr_args_common["index_namespace"] = collection_name
+                    built_collections.append(collection_name)
+                    # Register ephemeral collection with TTL
+                    try:
+                        ttl = int(rp.get("ephemeral_ttl_seconds") or 86400)
+                        self.db.register_ephemeral_collection(collection_name, ttl_seconds=ttl, run_id=run_id, namespace=base_namespace)
+                    except Exception as re:
+                        logger.warning(f"Failed to register ephemeral collection {collection_name}: {re}")
+            except Exception as e:
+                logger.warning(f"Ephemeral indexing skipped for {cfg_id}: {e}")
+
+            # Evaluate each sample
+            for s_idx, sample in enumerate(samples):
+                # Extract query and ground truth
+                inp = sample.get("input") or {}
+                exp = sample.get("expected") or {}
+                query = inp.get("question") or inp.get("query") or inp.get("prompt") or inp.get("text") or str(inp)
+                ground_truth = exp.get("answer") if isinstance(exp, dict) else (exp if isinstance(exp, str) else None)
+
+                try:
+                    # Call unified RAG pipeline
+                    upr_result = await unified_rag_pipeline(
+                        query=query,
+                        **upr_args_common
+                    )
+                except Exception as e:
+                    logger.error(f"unified_rag_pipeline failed for {cfg_id} sample {s_idx}: {e}")
+                    per_sample.append({"sample_index": s_idx, "error": str(e)})
+                    completed += 1
+                    self.db.update_run_progress(run_id, {"completed": completed, "total": total_work})
+                    continue
+
+                # Extract contexts and response from pipeline result
+                documents = []
+                generated_answer = None
+                timings = {}
+                try:
+                    if isinstance(upr_result, dict):
+                        documents = upr_result.get("documents", [])
+                        generated_answer = upr_result.get("generated_answer")
+                        timings = upr_result.get("timings", {}) or {}
+                    else:
+                        # Dataclass UnifiedSearchResult
+                        documents = getattr(upr_result, "documents", [])
+                        generated_answer = getattr(upr_result, "generated_answer", None)
+                        timings = getattr(upr_result, "timings", {}) or {}
+                except Exception:
+                    pass
+
+                # Convert documents to string contexts
+                ctx_texts: List[str] = []
+                try:
+                    for d in (documents or [])[: upr_args_common.get("top_k", 10)]:
+                        # Document may be dataclass with .content or dict
+                        content = getattr(d, "content", None)
+                        if content is None and isinstance(d, dict):
+                            content = d.get("content")
+                        if isinstance(content, str):
+                            ctx_texts.append(content)
+                except Exception:
+                    pass
+
+                # Fallback: ensure we have a response
+                response = generated_answer or ""
+
+                # Compute RAG evaluation metrics (faithfulness, relevance, answer_similarity)
+                try:
+                    rag_metrics = await self.rag_evaluator.evaluate(
+                        query=query,
+                        contexts=ctx_texts,
+                        response=response,
+                        ground_truth=ground_truth,
+                        metrics=eval_spec.get("metrics", ["relevance", "faithfulness", "answer_similarity"]),
+                        api_name=eval_spec.get("evaluator_model", "openai")
+                    )
+                    # Extract normalized metric scores
+                    scores = {}
+                    for mname, mdata in rag_metrics.get("metrics", {}).items():
+                        try:
+                            scores[mname] = float(getattr(mdata, "score", 0.0))
+                        except Exception:
+                            pass
+                    overall = float(rag_metrics.get("overall_score", 0.0))
+                except Exception as e:
+                    logger.error(f"RAG metrics failed for {cfg_id} sample {s_idx}: {e}")
+                    scores = {}
+                    overall = 0.0
+
+                # Optional: retrieval diversity/coverage
+                try:
+                    cov = await custom_metrics.evaluate_retrieval_coverage(query, ctx_texts)
+                    div = await custom_metrics.evaluate_retrieval_diversity(ctx_texts)
+                    scores["retrieval_coverage"] = cov.score
+                    scores["retrieval_diversity"] = div.score
+                except Exception as e:
+                    logger.debug(f"Custom retrieval metrics skipped: {e}")
+
+                # Optional: retrieval nDCG/MRR when relevant IDs provided
+                try:
+                    expected_rel = None
+                    if isinstance(exp, dict):
+                        expected_rel = exp.get("relevant_ids") or exp.get("relevant_doc_ids")
+                    if expected_rel and isinstance(expected_rel, list):
+                        retrieved_ids = []
+                        for d in (documents or []):
+                            did = getattr(d, "id", None) if not isinstance(d, dict) else d.get("id")
+                            if did is not None:
+                                retrieved_ids.append(str(did))
+                        mrr, ndcg = self._compute_mrr_ndcg(retrieved_ids, [str(x) for x in expected_rel])
+                        scores["mrr"] = mrr
+                        scores["ndcg"] = ndcg
+                except Exception as e:
+                    logger.debug(f"MRR/nDCG computation skipped: {e}")
+
+                # Aggregate per-sample record
+                latency = 0.0
+                try:
+                    latency = float(timings.get("total", 0.0)) * 1000.0
+                except Exception:
+                    pass
+                rec = {
+                    "sample_index": s_idx,
+                    "scores": scores,
+                    "overall": overall,
+                    "latency_ms": latency,
+                }
+                if chunk_index_stats:
+                    rec["chunk_index_stats"] = chunk_index_stats
+                per_sample.append(rec)
+                if overall:
+                    agg_scores.append(overall)
+                if latency:
+                    agg_latency.append(latency)
+
+                completed += 1
+                # Lightweight progress update
+                self.db.update_run_progress(run_id, {"completed": completed, "total": total_work})
+
+            # Aggregate per-config
+            if agg_scores:
+                mean_overall = statistics.mean(agg_scores)
+            else:
+                mean_overall = 0.0
+            mean_latency = statistics.mean(agg_latency) if agg_latency else 0.0
+            # Compute aggregated retrieval stats across samples if present
+            def _mean_score(key: str) -> float:
+                vals = []
+                for r in per_sample:
+                    v = r.get("scores", {}).get(key)
+                    if isinstance(v, (int, float)):
+                        vals.append(float(v))
+                return statistics.mean(vals) if vals else 0.0
+
+            retrieval_cov_mean = _mean_score("retrieval_coverage")
+            retrieval_div_mean = _mean_score("retrieval_diversity")
+            mrr_mean = _mean_score("mrr")
+            ndcg_mean = _mean_score("ndcg")
+
+            # Include chunk stats if available
+            chunk_stats = None
+            for r in per_sample:
+                if r.get("chunk_index_stats"):
+                    chunk_stats = r["chunk_index_stats"]
+                    break
+            cohesion_mean = (chunk_stats or {}).get("cohesion_mean", 0.0)
+            separation_mean = (chunk_stats or {}).get("separation_mean", 0.0)
+
+            # Aggregation weights for leaderboard score
+            weights = rp.get("aggregation_weights") or {"rag_overall": 1.0}
+            config_score = (
+                (weights.get("rag_overall", 1.0) * mean_overall)
+                + (weights.get("retrieval_diversity", 0.0) * retrieval_div_mean)
+                + (weights.get("retrieval_coverage", 0.0) * retrieval_cov_mean)
+                + (weights.get("chunk_cohesion", 0.0) * cohesion_mean)
+                + (weights.get("chunk_separation", 0.0) * separation_mean)
+                + (weights.get("mrr", 0.0) * mrr_mean)
+                + (weights.get("ndcg", 0.0) * ndcg_mean)
+            )
+
+            config_summary = {
+                "config_id": cfg_id,
+                "config": cfg,
+                "aggregate": {
+                    "overall": mean_overall,
+                    "latency_ms": mean_latency,
+                    "retrieval_coverage": retrieval_cov_mean,
+                    "retrieval_diversity": retrieval_div_mean,
+                    "mrr": mrr_mean,
+                    "ndcg": ndcg_mean,
+                    "chunk_cohesion": cohesion_mean,
+                    "chunk_separation": separation_mean,
+                    "config_score": config_score,
+                },
+                "per_sample": per_sample,
+            }
+            per_config_results.append(config_summary)
+            leaderboard.append({
+                "config_id": cfg_id,
+                "overall": mean_overall,
+                "latency_ms": mean_latency,
+                "config_score": config_score,
+                "config": cfg,
+            })
+
+            # Track best (by config_score then overall)
+            if best is None:
+                best = config_summary
+            else:
+                prev_score = best["aggregate"].get("config_score", best["aggregate"].get("overall", 0.0))
+                curr_score = config_summary["aggregate"].get("config_score", mean_overall)
+                if curr_score > prev_score:
+                    best = config_summary
+
+        # Sort leaderboard
+        leaderboard.sort(key=lambda x: (-x.get("config_score", x.get("overall", 0.0)), x["latency_ms"]))
+
+        # Build final results structure
+        results = {
+            "leaderboard": leaderboard,
+            "by_config": per_config_results,
+            "best_config": best,
+            "config_count": len(config_grid),
+            "sample_count": len(samples),
+            "notes": [
+                "Chunking sweeps currently apply at retrieval-time only; indexing-time chunking comparison is planned."
+            ]
+        }
+
+        usage = {
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+
+        # Optional cleanup of ephemeral collections
+        try:
+            if rp.get("cleanup_collections") and built_collections:
+                from tldw_Server_API.app.core.config import settings as app_settings
+                adapter = VectorStoreFactory.create_from_settings(app_settings, user_id=str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+                await adapter.initialize()
+                for cname in built_collections:
+                    try:
+                        await adapter.delete_collection(cname)
+                    except Exception as ce:
+                        logger.warning(f"Failed to delete collection {cname}: {ce}")
+        except Exception as e:
+            logger.warning(f"Ephemeral collection cleanup skipped: {e}")
+
+        return results, usage
+
+    def _compute_mrr_ndcg(self, retrieved_ids: List[str], relevant_ids: List[str]) -> tuple[float, float]:
+        """Compute MRR and nDCG@K for binary relevance.
+
+        Args:
+            retrieved_ids: Ranked list of retrieved document IDs
+            relevant_ids: Set/list of relevant IDs
+        Returns:
+            (mrr, ndcg)
+        """
+        rel_set = set(relevant_ids)
+        # MRR
+        mrr = 0.0
+        for i, rid in enumerate(retrieved_ids, start=1):
+            if rid in rel_set:
+                mrr = 1.0 / i
+                break
+        # nDCG
+        import math
+        gains = [1.0 if rid in rel_set else 0.0 for rid in retrieved_ids]
+        dcg = 0.0
+        for i, g in enumerate(gains, start=1):
+            if g:
+                dcg += 1.0 / math.log2(i + 1)
+        # Ideal DCG with same number of relevant items
+        R = min(len(rel_set), len(retrieved_ids))
+        idcg = sum([1.0 / math.log2(i + 1) for i in range(1, R + 1)]) if R > 0 else 0.0
+        ndcg = (dcg / idcg) if idcg > 0 else 0.0
+        return mrr, ndcg
+
+    async def _build_ephemeral_index(
+        self,
+        collection_name: str,
+        samples: List[Dict[str, Any]],
+        chunking_cfg: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build an ephemeral index (collection) for a run-config if dataset provides a corpus.
+
+        Supports dataset samples with input.corpus or input.documents as a list of strings or
+        list of objects {id, text}.
+        """
+        # Gather corpus texts
+        corpus: List[Dict[str, str]] = []
+        for s in samples:
+            inp = s.get("input") or {}
+            docs = inp.get("corpus") or inp.get("documents") or []
+            if not isinstance(docs, list):
+                continue
+            for i, d in enumerate(docs):
+                if isinstance(d, str):
+                    corpus.append({"id": f"doc_{len(corpus)+1}", "text": d})
+                elif isinstance(d, dict):
+                    tid = str(d.get("id") or f"doc_{len(corpus)+1}")
+                    txt = d.get("text") or d.get("content")
+                    if isinstance(txt, str) and txt.strip():
+                        corpus.append({"id": tid, "text": txt})
+
+        if not corpus:
+            raise ValueError("No corpus provided in dataset input (expect input.corpus/documents)")
+
+        # Create adapter
+        from tldw_Server_API.app.core.config import settings as app_settings
+        adapter = VectorStoreFactory.create_from_settings(app_settings, user_id=str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        await adapter.initialize()
+        await adapter.create_collection(collection_name)
+
+        # Chunk and embed
+        total_chunks = 0
+        adj_sims = []
+        sep_sims = []
+        adj_ngram_jaccard = []
+        entropy_vals = []
+        type_counts = {"text": 0, "code": 0, "table": 0, "header": 0, "list": 0}
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        for doc in corpus:
+            chunks = chunk_for_embedding(doc["text"], file_name=doc["id"],
+                                         method=(chunking_cfg.get("method") or ["sentences"])[0] if isinstance(chunking_cfg.get("method"), list) else (chunking_cfg.get("method") or "sentences"),
+                                         max_size=(chunking_cfg.get("chunk_size") or [512])[0] if isinstance(chunking_cfg.get("chunk_size"), list) else (chunking_cfg.get("chunk_size") or 512),
+                                         overlap=(chunking_cfg.get("overlap") or [64])[0] if isinstance(chunking_cfg.get("overlap"), list) else (chunking_cfg.get("overlap") or 64))
+            if not chunks:
+                continue
+            ids = [f"{doc['id']}_ch_{i}" for i in range(len(chunks))]
+            texts = [c["text"] for c in chunks]
+            docs_text = [c.get("text_for_embedding") or c["text"] for c in chunks]
+            metas = []
+            for i, c in enumerate(chunks):
+                m = c.get("metadata", {}).copy()
+                m.update({"media_id": doc["id"], "chunk_index": i})
+                metas.append(m)
+            # Embeddings
+            user_app_config = get_embedding_config()
+            vectors = await asyncio.get_event_loop().run_in_executor(
+                None,
+                create_embeddings_batch,
+                docs_text,
+                user_app_config,
+                None,
+            )
+            # Convert numpy arrays to lists if needed
+            vecs = []
+            for v in vectors:
+                if hasattr(v, 'tolist'):
+                    vecs.append(v.tolist())
+                else:
+                    vecs.append(v)
+            # Upsert
+            await adapter.upsert_vectors(collection_name, ids, vecs, texts, metas)
+
+            # Cohesion/separation metrics using embeddings for this doc
+            try:
+                if len(vecs) >= 2:
+                    # Adjacent similarities
+                    for i in range(len(vecs) - 1):
+                        s = cosine_similarity([vecs[i]], [vecs[i+1]])[0][0]
+                        adj_sims.append(float(s))
+                        # Adjacent n-gram Jaccard (bigrams)
+                        def bigrams(t: str):
+                            toks = [w for w in t.lower().split() if w]
+                            return set(zip(toks, toks[1:])) if len(toks) > 1 else set()
+                        b1 = bigrams(texts[i])
+                        b2 = bigrams(texts[i+1])
+                        if b1 or b2:
+                            j = len(b1 & b2) / max(1, len(b1 | b2))
+                            adj_ngram_jaccard.append(float(j))
+                if len(vecs) >= 3:
+                    # Non-adjacent separation: compare i and i+2
+                    for i in range(len(vecs) - 2):
+                        s = cosine_similarity([vecs[i]], [vecs[i+2]])[0][0]
+                        sep_sims.append(float(s))
+            except Exception:
+                pass
+
+            # Token entropy per chunk
+            import math
+            for t in texts:
+                toks = [w for w in t.lower().split() if w]
+                if not toks:
+                    continue
+                from collections import Counter
+                counts = Counter(toks)
+                total = sum(counts.values())
+                probs = [c/total for c in counts.values()]
+                H = -sum(p*math.log(p+1e-12, 2) for p in probs)
+                # Normalize by log2(V)
+                V = max(1, len(counts))
+                Hn = H / math.log2(V+1e-12)
+                entropy_vals.append(float(Hn))
+
+            # Heuristic type detection counts
+            for t in texts:
+                tt = t.strip()
+                ctype = "text"
+                if "```" in tt or any(sym in tt for sym in ['{', '}', ';']) and tt.count('\n') > 0:
+                    ctype = "code"
+                elif tt.startswith('#'):
+                    ctype = "header"
+                elif tt.startswith(('- ', '* ', '1.')):
+                    ctype = "list"
+                elif tt.count('|') >= 3 and tt.count('\n') >= 1:
+                    ctype = "table"
+                type_counts[ctype] = type_counts.get(ctype, 0) + 1
+            total_chunks += len(vecs)
+
+        # Summarize chunk stats
+        import statistics
+        # Ratios for types
+        type_ratios = {}
+        if total_chunks > 0:
+            for k, v in type_counts.items():
+                type_ratios[k] = v / total_chunks
+        chunk_stats = {
+            "total_chunks": total_chunks,
+            "cohesion_mean": statistics.mean(adj_sims) if adj_sims else 0.0,
+            "cohesion_count": len(adj_sims),
+            "separation_mean": statistics.mean(sep_sims) if sep_sims else 0.0,
+            "separation_count": len(sep_sims),
+            "ngram_overlap_mean": statistics.mean(adj_ngram_jaccard) if adj_ngram_jaccard else 0.0,
+            "token_entropy_mean": statistics.mean(entropy_vals) if entropy_vals else 0.0,
+            "type_ratios": type_ratios,
+        }
+        return chunk_stats
     
     async def _get_samples(
         self,

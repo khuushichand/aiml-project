@@ -1609,6 +1609,9 @@ async def _save_uploaded_files(
 
     return processed_files, file_handling_errors
 
+# Backwards-compatibility alias for tests referencing old private helper name
+_process_uploaded_files = _save_uploaded_files
+
 
 def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str, Any]]:
     """Prepares the dictionary of chunking options based on form data."""
@@ -4288,7 +4291,7 @@ async def process_documents_endpoint(
                 perform_analysis=form_data.perform_analysis,
                 summarize_recursively=form_data.summarize_recursively,
                 api_name=form_data.api_name,
-                # api_key removed - retrieved from server config
+                api_key=None,  # Use server-configured credentials if needed; explicit None satisfies signature
                 custom_prompt=form_data.custom_prompt,
                 system_prompt=form_data.system_prompt,
                 title_override=form_data.title,

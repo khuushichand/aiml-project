@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
     QuotaExceededError
 )
+from tldw_Server_API.app.core.config import settings as app_settings
 
 #######################################################################################################################
 #
@@ -172,6 +173,43 @@ async def list_users(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users"
         )
+
+
+#######################################################################################################################
+#
+# Ephemeral Cleanup Settings
+
+@router.get("/cleanup-settings")
+async def get_cleanup_settings() -> Dict[str, Any]:
+    """Get cleanup worker settings (enabled, interval in seconds)."""
+    try:
+        enabled = bool(app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
+        interval = int(app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))
+        return {"enabled": enabled, "interval_sec": interval}
+    except Exception as e:
+        logger.error(f"Failed to get cleanup settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cleanup settings")
+
+
+@router.post("/cleanup-settings")
+async def set_cleanup_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Set cleanup worker settings (enabled, interval_sec)."""
+    try:
+        if "enabled" in payload:
+            app_settings["EPHEMERAL_CLEANUP_ENABLED"] = bool(payload["enabled"])  # type: ignore[index]
+        if "interval_sec" in payload:
+            val = int(payload["interval_sec"])  # type: ignore[index]
+            if val < 60 or val > 604800:
+                raise HTTPException(status_code=400, detail="interval_sec must be between 60 and 604800")
+            app_settings["EPHEMERAL_CLEANUP_INTERVAL_SEC"] = val  # type: ignore[index]
+        enabled = bool(app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
+        interval = int(app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))
+        return {"enabled": enabled, "interval_sec": interval}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set cleanup settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set cleanup settings")
 
 
 @router.get("/users/{user_id}")

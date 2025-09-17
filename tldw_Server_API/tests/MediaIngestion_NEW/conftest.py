@@ -122,7 +122,17 @@ def populated_media_db(media_database) -> MediaDatabase:
     ]
     
     for item in test_items:
-        media_database.add_media(**item)
+        # Map to new DB API (add_media_with_keywords)
+        media_database.add_media_with_keywords(
+            url=item.get("url"),
+            title=item.get("title"),
+            media_type=item.get("media_type"),
+            content=item.get("content"),
+            author="Test",
+            ingestion_date=item.get("ingestion_date"),
+            overwrite=False,
+            keywords=[],
+        )
     
     return media_database
 
@@ -453,11 +463,11 @@ def test_client(test_env_vars):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
-    return {
-        "Authorization": "Bearer test-api-key",
-        "Content-Type": "application/json"
-    }
+    """Authentication headers for API requests (single-user mode)."""
+    # Use the real SINGLE_USER_API_KEY so requests authenticate correctly
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    settings = get_settings()
+    return {"X-API-KEY": settings.SINGLE_USER_API_KEY}
 
 # =====================================================================
 # Cleanup Fixtures

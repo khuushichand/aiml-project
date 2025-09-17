@@ -60,6 +60,27 @@ class DatabaseBackendFactory:
         logger.info(f"Creating {backend_type.value} backend")
         
         return backend_class(config)
+
+
+class BackendFactory:
+    """
+    Backward-compatible alias used by some tests/utilities.
+
+    Provides a stricter type check that raises ValueError when an invalid
+    backend type string is provided in the config.
+    """
+
+    @staticmethod
+    def create_backend(config: DatabaseConfig) -> DatabaseBackend:
+        bt = config.backend_type
+        # Coerce string backend types to enum, raising ValueError on invalid input
+        if isinstance(bt, str):
+            try:
+                config.backend_type = BackendType(bt)
+            except ValueError as e:
+                # Match expected behavior in tests
+                raise ValueError(f"Invalid backend type: {bt}") from e
+        return DatabaseBackendFactory.create_backend(config)
     
     @staticmethod
     def create_from_env(

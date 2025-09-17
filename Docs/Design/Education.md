@@ -26,6 +26,9 @@ https://mochi.cards/
 https://shaeda.io/
 https://incontextlearning.com/
 https://www.supermemo.com/en/blog/twenty-rules-of-formulating-knowledge
+https://openstax.org/
+
+
 
 https://andymatuschak.org/hmwl/
 

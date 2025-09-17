@@ -301,6 +301,56 @@ async def lifespan(app: FastAPI):
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
+
+    # Start background worker: ephemeral vector collections cleanup
+    cleanup_task = None
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EvalsDB
+        from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory as _VSF
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        _db_path = str(Path("Databases") / "evaluations.db")
+        # Read settings
+        _enabled = bool(_app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
+        _interval_sec = int(_app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))
+
+        async def _ephemeral_cleanup_loop():
+            logger.info(f"Starting ephemeral collections cleanup worker (every {_interval_sec}s)")
+            db = _EvalsDB(_db_path)
+            adapter = _VSF.create_from_settings(_app_settings, user_id=str(_app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+            await adapter.initialize()
+            while True:
+                try:
+                    # Re-read settings each cycle
+                    _enabled_dyn = bool(_app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
+                    _interval_dyn = int(_app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", _interval_sec))
+                    if not _enabled_dyn:
+                        await _asyncio.sleep(_interval_sec)
+                        continue
+                    expired = db.list_expired_ephemeral_collections()
+                    if expired:
+                        deleted = 0
+                        for cname in expired:
+                            try:
+                                await adapter.delete_collection(cname)
+                                db.mark_ephemeral_deleted(cname)
+                                deleted += 1
+                            except Exception as ce:
+                                logger.warning(f"Ephemeral cleanup: failed to delete {cname}: {ce}")
+                        if deleted:
+                            logger.info(f"Ephemeral cleanup: deleted {deleted}/{len(expired)} expired collections")
+                except Exception as ce:
+                    logger.warning(f"Ephemeral cleanup loop error: {ce}")
+                await _asyncio.sleep(_interval_dyn)
+
+        if _enabled:
+            cleanup_task = _asyncio.create_task(_ephemeral_cleanup_loop())
+        else:
+            logger.info("Ephemeral cleanup worker disabled by settings")
+    except Exception as e:
+        logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
     
     # Display authentication mode and API key for single-user mode
     try:
@@ -329,6 +379,13 @@ async def lifespan(app: FastAPI):
     
     yield
     
+    # Cancel background worker(s)
+    try:
+        if 'cleanup_task' in locals() and cleanup_task:
+            cleanup_task.cancel()
+    except Exception:
+        pass
+
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
     
@@ -428,18 +485,22 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Global SlowAPI rate limiting (consistent 429 handling across endpoints)
-try:
-    from slowapi import Limiter, _rate_limit_exceeded_handler
-    from slowapi.util import get_remote_address
-    from slowapi.errors import RateLimitExceeded
-    from slowapi.middleware import SlowAPIMiddleware
-    app.state.limiter = Limiter(key_func=get_remote_address)
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
-    logger.info("Global rate limiter initialized (SlowAPI)")
-except Exception as _e:
-    logger.warning(f"Global rate limiter not initialized: {_e}")
+# Global SlowAPI rate limiting (skip in test mode)
+import os as _os_mod
+if _os_mod.getenv("TESTING", "").lower() != "true":
+    try:
+        from slowapi import Limiter, _rate_limit_exceeded_handler
+        from slowapi.util import get_remote_address
+        from slowapi.errors import RateLimitExceeded
+        from slowapi.middleware import SlowAPIMiddleware
+        app.state.limiter = Limiter(key_func=get_remote_address)
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        app.add_middleware(SlowAPIMiddleware)
+        logger.info("Global rate limiter initialized (SlowAPI)")
+    except Exception as _e:
+        logger.warning(f"Global rate limiter not initialized: {_e}")
+else:
+    logger.info("TESTING mode detected: Skipping global rate limiter initialization")
 
 # Display API key information on startup for single user mode
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode

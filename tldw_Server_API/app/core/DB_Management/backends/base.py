@@ -56,6 +56,8 @@ class DatabaseConfig:
     """Configuration for a database backend."""
     backend_type: BackendType
     connection_string: Optional[str] = None
+    # Optional client identifier for logging/telemetry correlation (non-functional)
+    client_id: Optional[str] = None
     
     # Connection pool settings
     pool_size: int = 10
@@ -130,7 +132,8 @@ class QueryResult:
 @dataclass
 class FTSQuery:
     """Full-text search query representation."""
-    query_text: str
+    # Public attribute name expected by tests and callers
+    query: str
     columns: List[str] = field(default_factory=list)
     table: Optional[str] = None
     limit: Optional[int] = None
@@ -138,6 +141,11 @@ class FTSQuery:
     highlight_config: Optional[Dict[str, Any]] = None
     rank_expression: Optional[str] = None
     filters: Dict[str, Any] = field(default_factory=dict)
+
+    # Backward-compat alias used by some backends
+    @property
+    def query_text(self) -> str:
+        return self.query
 
 
 class ConnectionPool(ABC):

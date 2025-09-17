@@ -119,26 +119,51 @@ class TransformationRecord:
 #
 
 def ensure_nltk_data():
-    """Best-effort check for NLTK punkt.
+    """Ensure NLTK punkt is available; bound any download to 60s.
 
-    Avoids raising at import time in environments where NLTK data is missing
-    or corrupted (e.g., BadZipFile). Falls back gracefully; downstream calls
-    already handle missing punkt by catching exceptions and using simple
-    splitting strategies.
+    We avoid indefinite hangs by running the download in a daemon thread
+    and joining with a timeout. If it times out or fails, we proceed with
+    fallbacks (later code already handles missing punkt).
     """
     try:
         nltk.data.find('tokenizers/punkt')
         return True
-    except Exception as e:  # Catch broader issues like BadZipFile
-        logging.warning(f"NLTK 'punkt' not available or invalid ({e}). Attempting download...")
-        try:
-            nltk.download('punkt', quiet=True)
-            nltk.data.find('tokenizers/punkt')
-            logging.info("'punkt' downloaded or verified successfully.")
-            return True
-        except Exception as e2:
-            logging.warning(f"'punkt' unavailable after attempt: {e2}. Proceeding with fallbacks.")
+    except Exception as e:
+        logging.warning(f"NLTK 'punkt' not available ({e}). Attempting timed download...")
+        import threading, queue
+
+        q: "queue.Queue[bool]" = queue.Queue(maxsize=1)
+
+        def _runner():
+            ok = False
+            try:
+                ok = nltk.download('punkt', quiet=True)
+            except Exception:
+                ok = False
+            try:
+                q.put_nowait(ok)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join(60)
+        if t.is_alive():
+            logging.warning("NLTK 'punkt' download timed out after 60s; proceeding without it")
             return False
+        try:
+            ok = bool(q.get_nowait())
+        except Exception:
+            ok = False
+        if ok:
+            try:
+                nltk.data.find('tokenizers/punkt')
+                logging.info("'punkt' downloaded or verified successfully.")
+                return True
+            except Exception:
+                pass
+        logging.warning("'punkt' unavailable after attempt; proceeding with fallbacks.")
+        return False
 ensure_nltk_data()
 
 # Load configuration (used for default options)
@@ -996,6 +1021,30 @@ class Chunker:
     def _chunk_ebook_by_chapters(self, text: str, max_size: int, overlap: int, custom_pattern: Optional[str],
                                  language: str = global_default_chunk_language) -> List[Dict[str, Any]]:
         logging.debug(f"Chunking Ebook by Chapters. Custom pattern: {custom_pattern}, Lang: {language}")
+
+        # Validate custom regex safety to prevent ReDoS
+        def _is_dangerous_regex(p: str) -> bool:
+            try:
+                # Reject overly long patterns outright
+                if len(p) > 1000:
+                    return True
+                # Heuristic 1: group with quantifier that is itself quantified (catastrophic backtracking risk)
+                import re as _re
+                if _re.search(r"\([^)]*[+*][^)]*\)[+*]", p):
+                    return True
+                # Heuristic 2: unbounded wildcard repetitions with large ranges
+                if _re.search(r"\(\.?\*\)\{\d{2,},?\d*\}", p) or _re.search(r"\.\*\{\d{2,},?\d*\}", p):
+                    return True
+                # Heuristic 3: nested empty or star groups like ((a*)*)*
+                if "(*)" in p or "(.*)*" in p or "(.+)+" in p:
+                    return True
+            except Exception:
+                # If our validator fails, be conservative and let normal regex handling proceed
+                return False
+            return False
+
+        if custom_pattern and _is_dangerous_regex(custom_pattern):
+            raise InvalidInputError("dangerous regex pattern detected for custom_chapter_pattern")
 
         chapter_patterns = [
             custom_pattern,

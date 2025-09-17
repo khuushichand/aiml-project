@@ -132,7 +132,8 @@ async def import_character_endpoint(
         return CharacterImportResponse(
             id=char_id,
             name=imported_char.get('name', 'Unknown'),
-            message=f"Character '{imported_char.get('name', 'Unknown')}' imported successfully"
+            message=f"Character '{imported_char.get('name', 'Unknown')}' imported successfully",
+            character=_convert_db_char_to_response_model(imported_char)
         )
     except ConflictError as e:  # Character with same name already exists
         # The library function might return the ID of the existing char if we want that behavior.

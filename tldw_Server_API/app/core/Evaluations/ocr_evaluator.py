@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio as _asyncio
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 from loguru import logger
@@ -75,7 +76,13 @@ class OCREvaluator:
     """
 
     def __init__(self) -> None:
-        pass
+        # Ensure a default event loop exists for environments where tests call
+        # asyncio.get_event_loop().run_until_complete without prior loop setup (e.g., Python 3.13)
+        try:
+            _asyncio.get_event_loop()
+        except RuntimeError:
+            loop = _asyncio.new_event_loop()
+            _asyncio.set_event_loop(loop)
 
     async def evaluate(
         self,

@@ -138,6 +138,11 @@ class EvaluationMetric(BaseModel):
 
 class EvaluationSpec(BaseModel):
     """Evaluation specification"""
+    # Optional sub_type for model_graded evaluations
+    sub_type: Optional[Literal['summarization', 'rag', 'response_quality', 'rag_pipeline']] = Field(
+        default=None,
+        description="Optional subtype for model_graded evaluations (e.g., rag_pipeline)"
+    )
     metrics: Optional[List[str]] = Field(
         default=None,
         description="Metrics to compute"
@@ -159,6 +164,12 @@ class EvaluationSpec(BaseModel):
     custom_prompts: Optional[Dict[str, str]] = Field(
         default=None,
         description="Custom evaluation prompts"
+    )
+
+    # Optional nested spec for rag_pipeline evaluations
+    rag_pipeline: Optional["RAGPipelineEvalSpec"] = Field(
+        default=None,
+        description="RAG pipeline evaluation configuration (when sub_type=rag_pipeline)"
     )
 
     # Optional fields for classification/label-choice and NLI fact-checking
@@ -186,6 +197,16 @@ class EvaluationSpec(BaseModel):
         default=None,
         description="Optional NLI model identifier/provider name"
     )
+
+    @model_validator(mode="after")
+    def _validate_rag_pipeline(cls, values: "EvaluationSpec") -> "EvaluationSpec":  # type: ignore[name-defined]
+        # If rag_pipeline subtype is selected, ensure nested spec exists
+        try:
+            if values.sub_type == 'rag_pipeline' and values.rag_pipeline is None:
+                raise ValueError("rag_pipeline subtype requires eval_spec.rag_pipeline configuration")
+        except Exception:
+            pass
+        return values
 
 
 class RunConfig(BaseModel):
@@ -506,6 +527,155 @@ class ResponseQualityResponse(BaseModel):
     format_compliance: Optional[Dict[str, bool]] = None
     issues: Optional[List[str]] = None
     improvements: Optional[List[str]] = None
+
+# ============= RAG Pipeline Evaluation Schemas =============
+
+def _ensure_list(v):
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return v
+    return [v]
+
+
+class ChunkingSweepConfig(BaseModel):
+    """Retrieval-time chunking parameters to sweep via unified_rag_pipeline flags."""
+    method: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Chunking method: structure_aware, sentences, markdown, code, xml"
+    )
+    chunk_size: Optional[Union[int, List[int]]] = Field(
+        default=None, description="Chunk size(s)"
+    )
+    overlap: Optional[Union[int, List[int]]] = Field(
+        default=None, description="Chunk overlap(s)"
+    )
+    structure_aware: Optional[Union[bool, List[bool]]] = Field(default=None)
+    parent_expansion: Optional[Union[bool, List[bool]]] = Field(default=None)
+    include_siblings: Optional[Union[bool, List[bool]]] = Field(default=None)
+    chunk_type_filters: Optional[List[str]] = Field(
+        default=None, description="Optional chunk type filters (e.g., ['code','text'])"
+    )
+
+    @field_validator('method', 'chunk_size', 'overlap', 'structure_aware', 'parent_expansion', 'include_siblings', mode='before')
+    @classmethod
+    def normalize_to_list(cls, v):
+        return _ensure_list(v)
+
+
+class RetrieverSweepConfig(BaseModel):
+    """Retrieval parameters to sweep."""
+    search_mode: Optional[Union[Literal["fts", "vector", "hybrid"], List[Literal["fts", "vector", "hybrid"]]]] = Field(default=None)
+    # Remove ge/le constraints on Union[list] fields; validate ranges in pipeline executor if needed
+    hybrid_alpha: Optional[Union[float, List[float]]] = Field(default=None)
+    top_k: Optional[Union[int, List[int]]] = Field(default=None)
+    min_score: Optional[Union[float, List[float]]] = Field(default=None)
+    keyword_filter: Optional[List[str]] = Field(default=None)
+
+    @field_validator('search_mode', 'hybrid_alpha', 'top_k', 'min_score', mode='before')
+    @classmethod
+    def normalize_to_list(cls, v):
+        return _ensure_list(v)
+
+
+class RerankerSweepConfig(BaseModel):
+    """Reranker parameters to sweep."""
+    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "none"]]]] = Field(default=None)
+    top_k: Optional[Union[int, List[int]]] = Field(default=None)
+    model: Optional[Union[str, List[str]]] = Field(default=None, description="Optional reranker model")
+
+    @field_validator('strategy', 'top_k', 'model', mode='before')
+    @classmethod
+    def normalize_to_list(cls, v):
+        return _ensure_list(v)
+
+
+class GenerationSweepConfig(BaseModel):
+    """Generation parameters to sweep for RAG answers."""
+    model: Optional[Union[str, List[str]]] = Field(default=None)
+    prompt_template: Optional[Union[str, List[str]]] = Field(default=None)
+    temperature: Optional[Union[float, List[float]]] = Field(default=None)
+    max_tokens: Optional[Union[int, List[int]]] = Field(default=None)
+
+    @field_validator('model', 'prompt_template', 'temperature', 'max_tokens', mode='before')
+    @classmethod
+    def normalize_to_list(cls, v):
+        return _ensure_list(v)
+
+
+class PipelineMetricsSelection(BaseModel):
+    """Select which metrics to compute at each step."""
+    chunking_metrics: Optional[List[str]] = Field(default=None)
+    retrieval_metrics: Optional[List[str]] = Field(default=None)
+    generation_metrics: Optional[List[str]] = Field(default=None)
+
+
+class RAGPipelineCaching(BaseModel):
+    """Caching toggles for the pipeline evaluation."""
+    cache_chunksets: Optional[bool] = Field(default=False)
+    cache_embeddings: Optional[bool] = Field(default=True)
+    cache_retrievals: Optional[bool] = Field(default=True)
+
+
+class RAGPipelineEvalSpec(BaseModel):
+    """Spec for evaluating RAG configurations via the unified RAG pipeline."""
+    # Data
+    dataset_id: Optional[str] = Field(default=None, description="Existing dataset id")
+    dataset: Optional[List[DatasetSample]] = Field(default=None, description="Inline dataset samples")
+
+    # Sweeps
+    chunking: Optional[ChunkingSweepConfig] = None
+    retrievers: Optional[List[RetrieverSweepConfig]] = None
+    rerankers: Optional[List[RerankerSweepConfig]] = None
+    rag: Optional[GenerationSweepConfig] = None
+
+    # Execution
+    search_strategy: Optional[Literal['grid', 'random']] = Field(default='grid')
+    max_trials: Optional[int] = Field(default=None, ge=1, le=1000)
+    metrics: Optional[PipelineMetricsSelection] = None
+    caching: Optional[RAGPipelineCaching] = Field(default_factory=RAGPipelineCaching)
+    concurrency: Optional[int] = Field(default=4, ge=1, le=64)
+    timeout_seconds: Optional[int] = Field(default=300, ge=30, le=7200)
+    index_namespace: Optional[str] = Field(default=None, description="Optional target index namespace (future use)")
+    cleanup_collections: Optional[bool] = Field(default=False, description="Delete ephemeral collections after run")
+    ephemeral_ttl_seconds: Optional[int] = Field(default=86400, ge=60, le=604800, description="TTL for ephemeral collections (seconds)")
+
+    # Aggregation weights for leaderboard scoring
+    aggregation_weights: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Weights for combining metrics into config score (e.g., {'rag_overall':1.0,'retrieval_diversity':0.1,'chunk_cohesion':0.1})"
+    )
+
+    @model_validator(mode="after")
+    def _validate_dataset(self) -> "RAGPipelineEvalSpec":
+        if not self.dataset_id and not (self.dataset and len(self.dataset) > 0):
+            raise ValueError("rag_pipeline requires either dataset_id or inline dataset samples")
+        return self
+
+
+# ============= Pipeline Presets & Cleanup Schemas =============
+
+class PipelinePresetCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    config: Dict[str, Any] = Field(..., description="RAG pipeline config blocks: {chunking,retriever,reranker,rag}")
+
+
+class PipelinePresetResponse(BaseModel):
+    name: str
+    config: Dict[str, Any]
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+
+
+class PipelinePresetListResponse(BaseModel):
+    items: List[PipelinePresetResponse]
+    total: int
+
+
+class PipelineCleanupResponse(BaseModel):
+    expired_count: int
+    deleted_count: int
+    errors: Optional[List[str]] = None
 
 # ============= QA3 (Tri-Label) Evaluation Schemas =============
 

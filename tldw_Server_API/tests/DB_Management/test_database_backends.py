@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteBackend
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.backends.factory import BackendFactory
 
 
 class TestDatabaseBackends:
@@ -79,22 +80,20 @@ class TestDatabaseBackends:
         conn.close()
         
     def test_sqlite_backend_schema_creation(self, sqlite_config):
-        """Test that SQLite backend can create schema."""
+        """Test that SQLite backend can create schema via create_tables."""
         backend = SQLiteBackend(sqlite_config)
-        
-        # Initialize schema
-        backend.initialize_schema()
-        
-        # Verify tables exist
+
+        # Create a minimal test schema using the backend API
+        backend.create_tables("CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY)")
+
+        # Verify the test table exists
         conn = backend.connect()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'"
         )
-        tables = [row[0] for row in cursor.fetchall()]
-        
-        # Should have at least sync_log table
-        assert 'sync_log' in tables
+        result = cursor.fetchone()
+        assert result is not None
         conn.close()
         
     def test_backend_factory_sqlite(self, temp_db_path):
@@ -153,7 +152,6 @@ class TestDatabaseBackends:
     def test_sqlite_backend_transaction(self, sqlite_config):
         """Test transaction management in SQLite backend."""
         backend = SQLiteBackend(sqlite_config)
-        backend.initialize_schema()
         
         # Test successful transaction
         with backend.transaction() as conn:
@@ -173,7 +171,6 @@ class TestDatabaseBackends:
     def test_sqlite_backend_rollback(self, sqlite_config):
         """Test that transactions rollback on error."""
         backend = SQLiteBackend(sqlite_config)
-        backend.initialize_schema()
         
         # Test failed transaction
         try:

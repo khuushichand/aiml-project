@@ -27,19 +27,19 @@ def client_with_auth():
 
 
 def _create_media_and_get_id(client: TestClient, title: str) -> int:
+    import io
+    file_bytes = io.BytesIO(f"{title} original content.".encode("utf-8"))
     r = client.post(
         "/api/v1/media/add",
-        json={
-            "title": title,
-            "content": f"{title} original content.",
-            "media_type": "document",
-            "chunk_method": "sentences",
-        },
+        data={"title": title, "media_type": "document", "chunk_method": "sentences"},
+        files=[("files", ("doc.txt", file_bytes, "text/plain"))],
     )
     assert r.status_code in (200, 207), r.text
     data = r.json()
-    assert data.get("media_id") is not None
-    return int(data["media_id"]) if isinstance(data["media_id"], (int,)) else data["media_id"]
+    # Extract media_id from results
+    media_id = next((item.get("db_id") for item in data.get("results", []) if item.get("db_id")), None)
+    assert media_id is not None
+    return int(media_id)
 
 
 def test_media_versions_crud_flow(client_with_auth: TestClient):

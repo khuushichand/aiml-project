@@ -2131,7 +2131,8 @@ class MediaDatabase:
                             )
                             return media_id, media_uuid, f"Media '{title}' URL canonicalized."
 
-                        return None, None, f"Media '{title}' already exists. Overwrite not enabled."
+                        # Return existing record references to allow callers to treat as a non-fatal result
+                        return media_id, media_uuid, f"Media '{title}' already exists. Overwrite not enabled."
 
                 # --- Path B: Record does not exist, perform INSERT ---
                 else:
@@ -2146,7 +2147,8 @@ class MediaDatabase:
                             # Another thread inserted while we were waiting for lock
                             media_id, media_uuid, current_ver = recheck_row["id"], recheck_row["uuid"], recheck_row["version"]
                             if not overwrite:
-                                return None, None, f"Media '{title}' already exists (concurrent insert). Overwrite not enabled."
+                                # Return existing record references to allow idempotent client behavior
+                                return media_id, media_uuid, f"Media '{title}' already exists (concurrent insert). Overwrite not enabled."
                             # If overwrite is True, we could update, but for simplicity return existing
                             return media_id, media_uuid, f"Media '{title}' already exists (handled concurrent insert)."
                         

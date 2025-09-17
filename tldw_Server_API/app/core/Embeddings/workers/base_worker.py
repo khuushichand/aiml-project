@@ -209,7 +209,10 @@ class BaseWorker(ABC):
     async def _update_job_status(self, job_id: str, status: JobStatus, error_message: Optional[str] = None):
         """Update job status in Redis"""
         job_key = f"job:{job_id}"
-        
+        if not self.redis_client:
+            # In unit tests or when Redis is not initialized, skip status updates
+            return
+
         updates = {
             "status": status.value,
             "updated_at": datetime.utcnow().isoformat(),
@@ -239,6 +242,8 @@ class BaseWorker(ABC):
     
     async def _send_heartbeat(self):
         """Send worker heartbeat to Redis"""
+        if not self.redis_client:
+            return
         heartbeat_key = f"worker:heartbeat:{self.config.worker_id}"
         await self.redis_client.setex(
             heartbeat_key,

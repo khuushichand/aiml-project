@@ -281,9 +281,9 @@ class TestCompleteValidation:
     def test_handle_nonexistent_file(self):
         """Test handling of nonexistent files."""
         fake_path = Path("/nonexistent/file.txt")
-        
-        with pytest.raises(FileNotFoundError):
-            _validator.validate_file(fake_path)
+        res = _validator.validate_file(fake_path)
+        assert not res.is_valid
+        assert any("does not exist" in issue.lower() for issue in res.issues)
 
 # ========================================================================
 # Edge Cases and Error Handling

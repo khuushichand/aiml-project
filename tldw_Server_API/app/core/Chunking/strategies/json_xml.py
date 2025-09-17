@@ -63,6 +63,40 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                 f"allowed size ({self.MAX_JSON_SIZE} bytes)"
             )
         
+        # Quick, non-parsing nesting depth guard to avoid recursion bombs
+        # Only counts braces/brackets outside of string literals
+        def _estimate_nesting_depth(s: str, limit: int = 2000) -> None:
+            in_str = False
+            esc = False
+            depth = 0
+            for ch in s:
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch in '{[':
+                        depth += 1
+                        if depth > limit:
+                            raise InvalidInputError(f"JSON nesting depth exceeds safe limit ({limit})")
+                    elif ch in '}]':
+                        if depth > 0:
+                            depth -= 1
+
+        try:
+            _estimate_nesting_depth(text, limit=2000)
+        except InvalidInputError:
+            # Propagate as intended security validation error
+            raise
+        except Exception:
+            # If our estimator fails for any reason, continue to json.loads which will raise appropriately
+            pass
+
         # Parse JSON
         try:
             json_data = json.loads(text)

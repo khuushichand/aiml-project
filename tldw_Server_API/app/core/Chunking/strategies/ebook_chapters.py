@@ -66,7 +66,12 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         super().__init__(language)
         # Policy toggles via environment
         self._force_simple_only = os.getenv("CHUNKING_REGEX_SIMPLE_ONLY", "").lower() in ("1", "true", "yes")
-        self._disable_mp = os.getenv("CHUNKING_DISABLE_MP", "").lower() in ("1", "true", "yes")
+        # Default: disable multiprocessing for regex to avoid platform/harness issues; enable only if explicitly requested
+        disable_mp_env = os.getenv("CHUNKING_DISABLE_MP", None)
+        if disable_mp_env is None:
+            self._disable_mp = True
+        else:
+            self._disable_mp = disable_mp_env.lower() in ("1", "true", "yes")
         # Allow overriding timeout via env
         try:
             env_timeout = float(os.getenv("CHUNKING_REGEX_TIMEOUT", ""))
@@ -115,8 +120,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     except Exception as e:
                         result_container['error'] = e
                 
-                thread = threading.Thread(target=wrapper)
-                thread.daemon = True
+                thread = threading.Thread(target=wrapper, daemon=True)
                 thread.start()
                 thread.join(timeout=self.timeout_seconds)
                 
@@ -216,60 +220,90 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
 
         Returns list of (start, end, group0) tuples or raises ProcessingError on timeout/error.
         """
-        # First, try process-based isolation with a strict deadline, unless disabled.
-        try:
-            if getattr(self, "_disable_mp", False):
-                raise RuntimeError("mp disabled by policy")
-            ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
-            q: mp.Queue = ctx.Queue()
-            p = ctx.Process(target=self._finditer_worker, args=(pattern, text, flags, q))
-            p.daemon = True
-            p.start()
-            p.join(timeout_s)
-            if p.is_alive():
-                try:
-                    p.terminate()
-                finally:
-                    p.join(1)
-                raise ProcessingError("Regex operation timed out - possible ReDoS attack (process)")
+        # Prefer safe thread-based execution first to avoid process spawning issues
+        done_q: Queue = Queue(maxsize=1)
 
-            if not q.empty():
-                status, payload = q.get_nowait()
-                if status == "ok":
-                    return payload  # type: ignore[return-value]
-                raise ProcessingError(f"Regex execution failed: {payload}")
-            # No result from worker
-            raise ProcessingError("Regex execution failed without result (process)")
-        except Exception as _:
-            # Fall back to a daemon-thread approach with a hard deadline.
-            done_q: Queue = Queue(maxsize=1)
-
-            def _runner():
-                try:
-                    compiled = re.compile(pattern, flags)
-                    results: List[Tuple[int, int, str]] = []
-                    for m in compiled.finditer(text):
-                        g = m.group(0)
-                        if len(g) > 1024:
-                            g = g[:1024]
-                        results.append((m.start(), m.end(), g))
-                    done_q.put(("ok", results))
-                except Exception as e:  # pragma: no cover - defensive
-                    done_q.put(("err", str(e)))
-
-            t = threading.Thread(target=_runner, daemon=True)
-            t.start()
-            t.join(timeout_s)
-            if t.is_alive():
-                # Abandon the work; enforce hard limit by failing fast.
-                raise ProcessingError("Regex operation timed out - possible ReDoS attack (thread)")
+        def _runner():
             try:
-                status, payload = done_q.get_nowait()
-            except Exception:
-                raise ProcessingError("Regex execution failed without result (thread)")
-            if status == "ok":
-                return payload  # type: ignore[return-value]
-            raise ProcessingError(f"Regex execution failed: {payload}")
+                compiled = re.compile(pattern, flags)
+                results: List[Tuple[int, int, str]] = []
+                for m in compiled.finditer(text):
+                    g = m.group(0)
+                    if len(g) > 1024:
+                        g = g[:1024]
+                    results.append((m.start(), m.end(), g))
+                done_q.put(("ok", results))
+            except Exception as e:  # pragma: no cover - defensive
+                done_q.put(("err", str(e)))
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if t.is_alive():
+            # Abandon the work; enforce hard limit by failing fast.
+            raise ProcessingError("Regex operation timed out - possible ReDoS attack (thread)")
+        try:
+            status, payload = done_q.get_nowait()
+        except Exception:
+            raise ProcessingError("Regex execution failed without result (thread)")
+        if status == "ok":
+            return payload  # type: ignore[return-value]
+        # Optional: try process-based isolation only if explicitly enabled and thread path failed without timeout
+        if not getattr(self, "_disable_mp", True):
+            try:
+                ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
+                q: mp.Queue = ctx.Queue()
+                p = ctx.Process(target=self._finditer_worker, args=(pattern, text, flags, q))
+                p.daemon = True
+                p.start()
+                p.join(timeout_s)
+                if p.is_alive():
+                    try:
+                        p.terminate()
+                    finally:
+                        p.join(1)
+                    raise ProcessingError("Regex operation timed out - possible ReDoS attack (process)")
+                if not q.empty():
+                    st2, pl2 = q.get_nowait()
+                    if st2 == "ok":
+                        return pl2  # type: ignore[return-value]
+                    raise ProcessingError(f"Regex execution failed: {pl2}")
+                raise ProcessingError("Regex execution failed without result (process)")
+            except Exception as e:
+                raise ProcessingError(f"Regex execution failed: {e}")
+        # If MP disabled, just raise with the earlier payload
+        raise ProcessingError(f"Regex execution failed: {payload}")
+
+    def _timed_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+        """Run a simple finditer in a daemon thread with a timeout.
+
+        Even for simple patterns, guard execution to avoid unexpected hangs.
+        Returns list of (start, end, group0) tuples.
+        """
+        done_q: Queue = Queue(maxsize=1)
+
+        def _runner():
+            try:
+                compiled = re.compile(pattern, flags)
+                results: List[Tuple[int, int, str]] = []
+                for m in compiled.finditer(text):
+                    g = m.group(0)
+                    if len(g) > 1024:
+                        g = g[:1024]
+                    results.append((m.start(), m.end(), g))
+                done_q.put(("ok", results))
+            except Exception as e:
+                done_q.put(("err", str(e)))
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if t.is_alive():
+            raise ProcessingError("Regex operation timed out - possible ReDoS attack (timed)")
+        status, payload = done_q.get()
+        if status == "ok":
+            return payload  # type: ignore[return-value]
+        raise ProcessingError(f"Regex execution failed: {payload}")
     
     def _validate_regex_pattern(self, pattern: str) -> bool:
         """
@@ -353,7 +387,8 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             # Find all chapter markers; prefer direct search for simple safe patterns
             try:
                 if self._is_simple_safe_pattern(chapter_pattern):
-                    chapter_markers = list(re.finditer(chapter_pattern, text, re.MULTILINE))
+                    # Still guard with a timeout, even for simple patterns
+                    chapter_markers = self._timed_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
                 else:
                     spans = self._safe_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
                     # Reconstruct minimal marker info from spans (we need only starts)

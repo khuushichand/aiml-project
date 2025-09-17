@@ -463,10 +463,28 @@ def load_settings():
                 'chunk_overlap': 200
             }
         ),
+        # HuggingFace remote code allowlist (wildcards supported via fnmatch)
+        # HuggingFace remote code allowlist (wildcards supported via fnmatch)
+        # Precedence: ENV > config.txt (Embeddings.trusted_hf_remote_code_models) > default
+        "TRUSTED_HF_REMOTE_CODE_MODELS": (lambda _env_val, _cfg: (
+            [s.strip() for s in _env_val.split(",") if s.strip()] if _env_val is not None else (
+                [s.strip() for s in str(_cfg).split(",") if s.strip()] if _cfg is not None else ["*stella*"]
+            )
+        ))(
+            os.getenv("TRUSTED_HF_REMOTE_CODE_MODELS"),
+            (
+                (comprehensive_config.get('embedding_config') or {}).get('trusted_hf_remote_code_models')
+                if isinstance(comprehensive_config, dict) else None
+            )
+        ),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections
-        "COMPREHENSIVE_CONFIG_RAW": comprehensive_config # Store the raw one if needed elsewhere
+        "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
+
+        # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
+        "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
+        "EPHEMERAL_CLEANUP_INTERVAL_SEC": int(os.getenv("EPHEMERAL_CLEANUP_INTERVAL_SEC", "1800")),
     }
 
     # --- Warnings ---

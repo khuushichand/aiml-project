@@ -219,6 +219,9 @@ async def unified_rag_pipeline(
     # ========== STREAMING ==========
     enable_streaming: bool = False,
     
+    # ========== INDEXING / NAMESPACE ==========
+    index_namespace: Optional[str] = None,
+    
     # ========== QUICK WINS ==========
     highlight_results: bool = False,
     highlight_query_terms: bool = False,
@@ -520,12 +523,13 @@ async def unified_rag_pipeline(
                     rh = getattr(retriever, 'retrieve_hybrid', None)
                     hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
                     if search_mode == "hybrid" and hybrid_supported:
-                        documents = await rh(query=query, alpha=hybrid_alpha)
+                        documents = await rh(query=query, alpha=hybrid_alpha, index_namespace=index_namespace)
                     else:
                         documents = await retriever.retrieve(
                             query=query,
                             sources=data_sources,
-                            config=config
+                            config=config,
+                            index_namespace=index_namespace
                         )
                         
                     result.documents = documents

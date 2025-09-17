@@ -429,8 +429,8 @@ async def generate_embeddings(
                 except Exception:
                     pass
 
-        # Use create_task within background task runner
-        background_tasks.add_task(asyncio.create_task, _run_job())
+        # Schedule the job on the current event loop; avoid creating tasks from non-async background thread
+        asyncio.create_task(_run_job())
 
         # Return accepted response with job id
         return GenerateEmbeddingsResponse(

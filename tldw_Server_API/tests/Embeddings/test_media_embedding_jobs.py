@@ -3,6 +3,7 @@ import time
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
 
@@ -35,7 +36,8 @@ def test_media_embedding_job_lifecycle():
 
         client = _client()
         # Start job
-        r = client.post("/api/v1/media/123/embeddings", json={})
+        api_key = get_settings().SINGLE_USER_API_KEY
+        r = client.post("/api/v1/media/123/embeddings", json={}, headers={"X-API-KEY": api_key})
         assert r.status_code == 200
         body = r.json()
         assert body.get("status") == "accepted"
@@ -43,7 +45,7 @@ def test_media_embedding_job_lifecycle():
         assert job_id
 
         # Get job status (may be processing/completed/failed depending on environment)
-        r2 = client.get(f"/api/v1/media/embeddings/jobs/{job_id}")
+        r2 = client.get(f"/api/v1/media/embeddings/jobs/{job_id}", headers={"X-API-KEY": api_key})
         assert r2.status_code == 200
         data = r2.json()
         assert data.get("id") == job_id
@@ -51,7 +53,7 @@ def test_media_embedding_job_lifecycle():
         assert data.get("status") in ("processing", "completed", "failed")
 
         # List jobs
-        r3 = client.get("/api/v1/media/embeddings/jobs")
+        r3 = client.get("/api/v1/media/embeddings/jobs", headers={"X-API-KEY": api_key})
         assert r3.status_code == 200
         j = r3.json()
         assert isinstance(j.get("data"), list)
@@ -59,4 +61,3 @@ def test_media_embedding_job_lifecycle():
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_media_db_for_user, None)
-

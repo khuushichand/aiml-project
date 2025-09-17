@@ -243,7 +243,8 @@ contextual_llm_model = gpt-3.5-turbo
 contextual_chunk_method = situate_context
 # Method for adding context: 'situate_context' adds document-aware summaries
 # huggingface: model = dunzhang/stella_en_400M_v5
-
+# Trusted Model Definitions
+trusted_hf_remote_code_models = NovaSearch/stella_en_400M_v5, BAAI/bge
 
 
 # Resource Management Settings

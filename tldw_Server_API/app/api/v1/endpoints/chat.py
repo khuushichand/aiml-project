@@ -87,6 +87,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     get_api_keys,
     ChatCompletionRequest,
     DEFAULT_LLM_PROVIDER,
+    API_KEYS as SCHEMAS_API_KEYS,
 )
 from tldw_Server_API.app.core.Chat.Chat_Functions import (
     ChatAPIError,
@@ -159,8 +160,8 @@ import os
 # ---------------------------------------------------------------------------
 # Constants & helpers
 # ---------------------------------------------------------------------------
- # Backward-compatibility for tests that patch API_KEYS directly
-API_KEYS = get_api_keys()
+ # Backward-compatibility for tests that patch API_KEYS directly (in schemas module)
+API_KEYS = SCHEMAS_API_KEYS
 
 router = APIRouter()
 
@@ -417,7 +418,8 @@ async def _save_message_turn_to_db(
 async def create_chat_completion(
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    Token: str = Header(None, description="Bearer token for authentication."),
+    Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
+    Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
     request: Request = None,  # Optional Request object for audit logging and rate limiting
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
@@ -508,12 +510,13 @@ async def create_chat_completion(
 
         # Secure authentication validation
         if is_authentication_required():
-            if not Token:
+            auth_header_val = Authorization or Token
+            if not auth_header_val:
                 metrics.track_auth_failure("missing_token")
                 logger.warning("Authentication required but no token provided")
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token.")
             
-            extracted_token = extract_bearer_token(Token)
+            extracted_token = extract_bearer_token(auth_header_val)
             if not extracted_token:
                 metrics.track_auth_failure("invalid_token_format")
                 logger.warning("Invalid token format provided")
@@ -630,8 +633,8 @@ async def create_chat_completion(
 
     try:
         target_api_provider = provider # Already determined
-        # Get API keys dynamically to support runtime changes (e.g., in tests)
-        api_keys = get_api_keys()
+        # Get API keys; prefer patched dict if available, else dynamic
+        api_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else get_api_keys()
         provider_api_key = api_keys.get(target_api_provider)
 
         # Simplified list, actual check might be in Chat_Functions or per-provider
@@ -1214,7 +1217,7 @@ async def create_chat_completion(
             elif err_status == 504:
                 client_detail = "The chat service request timed out."
             else:
-                client_detail = "An internal server error occurred."
+                client_detail = "An unexpected internal server error occurred."
         raise HTTPException(status_code=err_status, detail=client_detail)
 
     except (InputError, ConflictError, CharactersRAGDBError) as e_db:

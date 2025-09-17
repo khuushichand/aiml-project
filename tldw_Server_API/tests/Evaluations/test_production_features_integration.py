@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
 import aiohttp
+from aioresponses import aioresponses
 
 # Import test configuration
 import sys

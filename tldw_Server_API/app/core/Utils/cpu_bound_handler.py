@@ -7,6 +7,8 @@ import base64
 import json
 import functools
 import sys
+import os
+import atexit
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional, TypeVar
 #
@@ -23,15 +25,51 @@ T = TypeVar('T')
 #
 # Constants:
 
-# Process pool for CPU-intensive operations
-# max_tasks_per_child is only available in Python 3.11+
-if sys.version_info >= (3, 11):
-    CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=4, max_tasks_per_child=100)
-else:
-    CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=4)
+# Process/Thread pools
+# - Process pool is now lazily created to avoid spawning child processes at import time.
+# - It can be disabled via env flags in test environments to prevent semaphore leaks.
 
-# Thread pool for I/O-bound but CPU-heavy operations
+# Global handles (created on demand)
+CPU_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+
+# Thread pool for I/O-bound but CPU-heavy operations (safe to create at import time)
 CPU_THREAD_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cpu_worker")
+
+
+def _env_flag_true(name: str) -> bool:
+    val = os.getenv(name, "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def _get_worker_count(default: int = 4) -> int:
+    try:
+        return int(os.getenv("TLDR_CPU_PROCPOOL_WORKERS", default))
+    except Exception:
+        return default
+
+
+def _process_pool_disabled() -> bool:
+    # Disable if explicit flag set or generic TESTING=true
+    return _env_flag_true("TLDR_DISABLE_CPU_PROCPOOL") or _env_flag_true("TESTING")
+
+
+def get_cpu_process_pool() -> Optional[ProcessPoolExecutor]:
+    """Lazy initializer for the global CPU process pool.
+
+    Respects TLDR_DISABLE_CPU_PROCPOOL/TESTING env flags. If disabled, returns None.
+    """
+    global CPU_PROCESS_POOL
+    if CPU_PROCESS_POOL is not None:
+        return CPU_PROCESS_POOL
+    if _process_pool_disabled():
+        return None
+
+    workers = _get_worker_count(4)
+    if sys.version_info >= (3, 11):
+        CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=workers, max_tasks_per_child=100)
+    else:
+        CPU_PROCESS_POOL = ProcessPoolExecutor(max_workers=workers)
+    return CPU_PROCESS_POOL
 
 #######################################################################################################################
 #
@@ -50,12 +88,16 @@ async def run_cpu_bound(func: Callable[..., T], *args, **kwargs) -> T:
         The function's return value
     """
     loop = asyncio.get_event_loop()
-    
+
     # Use functools.partial to create a picklable callable
     partial_func = functools.partial(func, *args, **kwargs)
-    
+
+    # Prefer process pool unless disabled; fall back to thread pool in tests
+    pool = get_cpu_process_pool()
+    executor = pool if pool is not None else CPU_THREAD_POOL
+
     try:
-        result = await loop.run_in_executor(CPU_PROCESS_POOL, partial_func)
+        result = await loop.run_in_executor(executor, partial_func)
         return result
     except Exception as e:
         logger.error(f"Error in CPU-bound operation: {e}")
@@ -308,5 +350,18 @@ async def batch_json_encode(data: Any) -> str:
 
 def cleanup_pools():
     """Cleanup process and thread pools."""
-    CPU_PROCESS_POOL.shutdown(wait=False)
-    CPU_THREAD_POOL.shutdown(wait=False)
+    global CPU_PROCESS_POOL
+    try:
+        if CPU_PROCESS_POOL is not None:
+            CPU_PROCESS_POOL.shutdown(wait=False)
+            CPU_PROCESS_POOL = None
+    except Exception:
+        pass
+    try:
+        CPU_THREAD_POOL.shutdown(wait=False)
+    except Exception:
+        pass
+
+
+# Ensure pools are cleaned up on interpreter shutdown
+atexit.register(cleanup_pools)

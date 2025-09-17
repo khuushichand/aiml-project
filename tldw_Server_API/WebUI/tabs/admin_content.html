@@ -162,4 +162,55 @@
         <h3>Response:</h3>
         <pre id="adminSystemStatus_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="adminCleanupSettings">
+        <h2>Ephemeral Cleanup Settings</h2>
+        <p>Configure the background worker that deletes expired ephemeral vector collections created during RAG pipeline evaluations.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminCleanup_enabled">Enabled:</label>
+                    <input type="checkbox" id="adminCleanup_enabled" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminCleanup_interval">Interval (seconds):</label>
+                    <input type="number" id="adminCleanup_interval" min="60" max="604800" value="1800" />
+                </div>
+            </div>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-primary" onclick="loadCleanupSettings()">Load Settings</button>
+            <button class="btn btn-primary" onclick="saveCleanupSettings()">Save Settings</button>
+        </div>
+        <h3>Result:</h3>
+        <pre id="adminCleanupSettings_response">---</pre>
+        <script>
+            async function loadCleanupSettings() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/admin/cleanup-settings');
+                    document.getElementById('adminCleanup_enabled').checked = !!resp.enabled;
+                    document.getElementById('adminCleanup_interval').value = resp.interval_sec || 1800;
+                    document.getElementById('adminCleanupSettings_response').textContent = JSON.stringify(resp, null, 2);
+                    Toast.success('Loaded cleanup settings');
+                } catch (e) {
+                    Toast.error('Failed to load cleanup settings: ' + (e?.message || e));
+                }
+            }
+            async function saveCleanupSettings() {
+                try {
+                    const body = {
+                        enabled: document.getElementById('adminCleanup_enabled').checked,
+                        interval_sec: parseInt(document.getElementById('adminCleanup_interval').value, 10)
+                    };
+                    const resp = await apiClient.makeRequest('POST', '/api/v1/admin/cleanup-settings', { body });
+                    document.getElementById('adminCleanupSettings_response').textContent = JSON.stringify(resp, null, 2);
+                    Toast.success('Saved cleanup settings');
+                } catch (e) {
+                    Toast.error('Failed to save cleanup settings: ' + (e?.message || e));
+                }
+            }
+        </script>
+    </div>
 </div>

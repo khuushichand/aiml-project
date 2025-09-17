@@ -1,5 +1,90 @@
 <!-- RAG Search Tab -->
 <div id="tabRAGSearch" class="tab-content">
+    <div class="endpoint-section" id="ragGlobalPresets">
+        <h2>RAG Global Presets</h2>
+        <p>Load a server preset and apply to both Simple and Complex RAG forms.</p>
+        <div class="form-group">
+            <button class="api-button" onclick="refreshGlobalRagPresets()">Refresh Presets</button>
+            <select id="ragGlobalPreset_select" style="min-width: 260px;"></select>
+            <button class="api-button" onclick="applyGlobalRagPreset()">Apply to Both Forms</button>
+        </div>
+        <script>
+            async function refreshGlobalRagPresets() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                    const sel = document.getElementById('ragGlobalPreset_select');
+                    sel.innerHTML = '';
+                    const items = (resp && resp.items) ? resp.items : [];
+                    items.forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name; opt.textContent = item.name;
+                        sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${items.length} presets`);
+                } catch (e) {
+                    Toast.error('Failed to list presets: ' + (e?.message || e));
+                }
+            }
+            async function applyGlobalRagPreset() {
+                try {
+                    const sel = document.getElementById('ragGlobalPreset_select');
+                    const name = sel && sel.value ? sel.value : null;
+                    if (!name) { alert('Select a preset first'); return; }
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (!(resp && resp.config)) { alert('Preset not found'); return; }
+                    const cfg = resp.config;
+                    // Apply to Simple controls
+                    if (cfg.retriever) {
+                        const sm = cfg.retriever.search_mode || cfg.retriever.search_type;
+                        if (sm) {
+                            const selType = document.getElementById('ragSimpleSearch_search_type');
+                            const norm = (sm === 'vector') ? 'semantic' : (sm === 'fts' ? 'fulltext' : 'hybrid');
+                            if (selType) selType.value = norm;
+                        }
+                        if (cfg.retriever.top_k !== undefined) {
+                            const lim = document.getElementById('ragSimpleSearch_limit');
+                            if (lim) lim.value = cfg.retriever.top_k;
+                        }
+                    }
+                    // Apply to Complex JSON
+                    const ta = document.getElementById('ragComplexSearch_payload');
+                    let obj = {};
+                    try { obj = JSON.parse(ta.value); } catch (e) { obj = {}; }
+                    obj.retrieval = obj.retrieval || { search_type: 'hybrid', hybrid_config: {}, vector_config: {}, fts_config: {} };
+                    obj.reranking = obj.reranking || { enabled: true, strategies: ['similarity'], top_k: 10 };
+                    if (cfg.retriever) {
+                        const sm = cfg.retriever.search_mode || cfg.retriever.search_type;
+                        if (sm) {
+                            obj.retrieval.search_type = (sm === 'vector') ? 'semantic' : (sm === 'fts' ? 'fulltext' : 'hybrid');
+                        }
+                        if (cfg.retriever.hybrid_alpha !== undefined) {
+                            obj.retrieval.hybrid_config = obj.retrieval.hybrid_config || {};
+                            obj.retrieval.hybrid_config.alpha = cfg.retriever.hybrid_alpha;
+                        }
+                        if (cfg.retriever.top_k !== undefined) {
+                            obj.retrieval.vector_config = obj.retrieval.vector_config || {};
+                            obj.retrieval.vector_config.top_k = cfg.retriever.top_k;
+                        }
+                    }
+                    if (cfg.reranker) {
+                        const strat = cfg.reranker.strategy;
+                        if (strat) {
+                            if (strat === 'flashrank') obj.reranking.strategies = ['similarity'];
+                            else if (strat === 'cross_encoder') obj.reranking.strategies = ['cross_encoder'];
+                            else obj.reranking.strategies = [String(strat)];
+                        }
+                        if (cfg.reranker.top_k !== undefined) obj.reranking.top_k = cfg.reranker.top_k;
+                        if (cfg.reranker.model) obj.reranking.model = cfg.reranker.model;
+                        obj.reranking.enabled = true;
+                    }
+                    ta.value = JSON.stringify(obj, null, 2);
+                    Toast.success('Preset applied to both Simple & Complex forms.');
+                } catch (e) {
+                    alert('Failed to apply preset: ' + (e?.message || e));
+                }
+            }
+        </script>
+    </div>
     <div class="endpoint-section" id="ragSimpleSearch">
         <h2>
             <span class="endpoint-method post">POST</span>
@@ -45,6 +130,107 @@
         <button class="api-button" onclick="makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search', 'json')">
             Send Request
         </button>
+
+        <h4>Server Presets</h4>
+        <div class="form-group">
+            <button class="api-button" onclick="refreshSimpleRagPresets()">Refresh Presets</button>
+            <select id="ragSimplePreset_select" style="min-width: 240px;"></select>
+            <button class="api-button" onclick="applySimpleRagPreset()">Apply Selected Preset</button>
+        </div>
+        <script>
+            async function refreshSimpleRagPresets() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                    const sel = document.getElementById('ragSimplePreset_select');
+                    sel.innerHTML = '';
+                    const items = (resp && resp.items) ? resp.items : [];
+                    items.forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name; opt.textContent = item.name;
+                        sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${items.length} presets`);
+                } catch (e) {
+                    alert('Failed to list presets: ' + (e?.message || e));
+                }
+            }
+            async function applySimpleRagPreset() {
+                try {
+                    const sel = document.getElementById('ragSimplePreset_select');
+                    const name = sel && sel.value ? sel.value : null;
+                    if (!name) { alert('Select a preset first'); return; }
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (!(resp && resp.config)) { alert('Preset not found'); return; }
+                    const cfg = resp.config;
+                    // Map to simple UI controls
+                    if (cfg.retriever) {
+                        const sm = cfg.retriever.search_mode || cfg.retriever.search_type;
+                        if (sm) {
+                            const selType = document.getElementById('ragSimpleSearch_search_type');
+                            const norm = (sm === 'vector') ? 'semantic' : (sm === 'fts' ? 'fulltext' : 'hybrid');
+                            selType.value = norm;
+                        }
+                        if (cfg.retriever.top_k !== undefined) {
+                            document.getElementById('ragSimpleSearch_limit').value = cfg.retriever.top_k;
+                        }
+                    }
+                    Toast.success('Preset applied to simple search controls.');
+                } catch (e) {
+                    alert('Failed to apply preset: ' + (e?.message || e));
+                }
+            }
+
+            // Keep Complex form in sync with Simple controls
+            function updateComplexFromSimple() {
+                try {
+                    const ta = document.getElementById('ragComplexSearch_payload');
+                    if (!ta) return;
+                    let obj = {};
+                    try { obj = JSON.parse(ta.value); } catch (e) { obj = {}; }
+                    obj.retrieval = obj.retrieval || { search_type: 'hybrid', hybrid_config: {}, vector_config: {}, fts_config: {} };
+
+                    // Map search type
+                    const st = (document.getElementById('ragSimpleSearch_search_type')?.value || 'hybrid');
+                    obj.retrieval.search_type = st;
+                    if (st === 'semantic') obj.retrieval.search_type = 'semantic';
+                    else if (st === 'fulltext') obj.retrieval.search_type = 'fulltext';
+                    else obj.retrieval.search_type = 'hybrid';
+
+                    // Map limit to vector_config.top_k (most impactful for retrieval)
+                    const limStr = (document.getElementById('ragSimpleSearch_limit')?.value || '10');
+                    const lim = parseInt(limStr, 10);
+                    if (!isNaN(lim) && lim > 0) {
+                        obj.retrieval.vector_config = obj.retrieval.vector_config || {};
+                        obj.retrieval.vector_config.top_k = lim;
+                    }
+
+                    // Map score threshold to a conservative place if present
+                    const thresholdStr = (document.getElementById('ragSimpleSearch_threshold')?.value || '0');
+                    const thr = parseFloat(thresholdStr);
+                    if (!isNaN(thr) && thr >= 0 && thr <= 1) {
+                        obj.retrieval.min_score = thr;
+                    }
+
+                    ta.value = JSON.stringify(obj, null, 2);
+                } catch (e) {
+                    console.warn('Failed to sync complex form:', e?.message || e);
+                }
+            }
+
+            // Attach listeners once DOM for this tab is available
+            (function attachSimpleSyncListeners() {
+                try {
+                    const st = document.getElementById('ragSimpleSearch_search_type');
+                    const lim = document.getElementById('ragSimpleSearch_limit');
+                    const thr = document.getElementById('ragSimpleSearch_threshold');
+                    if (st) st.addEventListener('change', updateComplexFromSimple);
+                    if (lim) lim.addEventListener('change', updateComplexFromSimple);
+                    if (thr) thr.addEventListener('change', updateComplexFromSimple);
+                } catch (e) {
+                    // ignore
+                }
+            })();
+        </script>
         
         <h3>cURL Command:</h3>
         <pre id="ragSimpleSearch_curl">---</pre>
@@ -106,6 +292,81 @@
   }
 }</textarea>
         </div>
+
+        <h4>Server Presets</h4>
+        <div class="form-group">
+            <button class="api-button" onclick="refreshRagServerPresets()">Refresh Presets</button>
+            <select id="ragServerPreset_select" style="min-width: 240px;"></select>
+            <button class="api-button" onclick="applyRagServerPreset()">Apply Selected Preset</button>
+        </div>
+        <script>
+            async function refreshRagServerPresets() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                    const sel = document.getElementById('ragServerPreset_select');
+                    sel.innerHTML = '';
+                    const items = (resp && resp.items) ? resp.items : [];
+                    items.forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name;
+                        opt.textContent = item.name;
+                        sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${items.length} presets`);
+                } catch (e) {
+                    alert('Failed to list presets: ' + (e?.message || e));
+                }
+            }
+            async function applyRagServerPreset() {
+                try {
+                    const sel = document.getElementById('ragServerPreset_select');
+                    const name = sel && sel.value ? sel.value : null;
+                    if (!name) { alert('Select a preset first'); return; }
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                    if (!(resp && resp.config)) { alert('Preset not found'); return; }
+                    const cfg = resp.config;
+                    const ta = document.getElementById('ragComplexSearch_payload');
+                    let obj = {};
+                    try { obj = JSON.parse(ta.value); } catch (e) { obj = {}; }
+                    // Ensure default structure
+                    obj.retrieval = obj.retrieval || { search_type: 'hybrid', hybrid_config: {}, vector_config: {}, fts_config: {} };
+                    obj.reranking = obj.reranking || { enabled: true, strategies: ['similarity'], top_k: 10 };
+                    // Map preset -> RAG payload
+                    if (cfg.retriever) {
+                        const sm = cfg.retriever.search_mode || cfg.retriever.search_type;
+                        if (sm) {
+                            // Normalize to our payload keywords
+                            obj.retrieval.search_type = (sm === 'vector') ? 'semantic' : (sm === 'fts' ? 'fulltext' : 'hybrid');
+                        }
+                        if (cfg.retriever.hybrid_alpha !== undefined) {
+                            obj.retrieval.hybrid_config = obj.retrieval.hybrid_config || {};
+                            obj.retrieval.hybrid_config.alpha = cfg.retriever.hybrid_alpha;
+                        }
+                        if (cfg.retriever.top_k !== undefined) {
+                            obj.retrieval.vector_config = obj.retrieval.vector_config || {};
+                            obj.retrieval.vector_config.top_k = cfg.retriever.top_k;
+                        }
+                    }
+                    if (cfg.reranker) {
+                        // Map strategies
+                        const strat = cfg.reranker.strategy;
+                        if (strat) {
+                            if (strat === 'flashrank') obj.reranking.strategies = ['similarity'];
+                            else if (strat === 'cross_encoder') obj.reranking.strategies = ['cross_encoder'];
+                            else obj.reranking.strategies = [String(strat)];
+                        }
+                        if (cfg.reranker.top_k !== undefined) obj.reranking.top_k = cfg.reranker.top_k;
+                        if (cfg.reranker.model) obj.reranking.model = cfg.reranker.model;
+                        obj.reranking.enabled = true;
+                    }
+                    // Generation model doesn’t directly map to search; skip or map to reranking.model if cross-encoder
+                    ta.value = JSON.stringify(obj, null, 2);
+                    Toast.success('Preset applied to RAG search payload.');
+                } catch (e) {
+                    alert('Failed to apply server preset: ' + (e?.message || e));
+                }
+            }
+        </script>
         
         <button class="api-button" onclick="makeRequest('ragComplexSearch', 'POST', '/api/v1/rag/search', 'json')">
             Send Request
@@ -176,8 +437,53 @@
 <!-- RAG Embeddings Tab -->
 <div id="tabRAGEmbeddings" class="tab-content">
     <div class="endpoint-section">
-        <h2>RAG Embeddings Management</h2>
-        <p>The embeddings for RAG are managed through the dedicated Embeddings service. Please use the Embeddings tab for creating and managing embeddings.</p>
+    <h2>RAG Embeddings Management</h2>
+    <p>The embeddings for RAG are managed through the dedicated Embeddings service. Please use the Embeddings tab for creating and managing embeddings.</p>
+
+    <h3>Server Presets (View)</h3>
+    <p>Load a server preset to inspect its retrieval/reranking/generation blocks while working on embeddings.</p>
+    <div class="form-group">
+        <button class="api-button" onclick="ragEmbRefreshPresets()">Refresh Presets</button>
+        <select id="ragEmbPreset_select" style="min-width: 260px;"></select>
+        <button class="api-button" onclick="ragEmbLoadPreset()">Load Preset</button>
+    </div>
+    <h4>Preset Config</h4>
+    <pre id="ragEmbPreset_view">(none loaded)</pre>
+    <script>
+        async function ragEmbRefreshPresets() {
+            try {
+                const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+                const sel = document.getElementById('ragEmbPreset_select');
+                sel.innerHTML = '';
+                const items = (resp && resp.items) ? resp.items : [];
+                items.forEach(item => {
+                    const opt = document.createElement('option');
+                    opt.value = item.name; opt.textContent = item.name;
+                    sel.appendChild(opt);
+                });
+                Toast.success(`Loaded ${items.length} presets`);
+            } catch (e) {
+                Toast.error('Failed to list presets: ' + (e?.message || e));
+            }
+        }
+        async function ragEmbLoadPreset() {
+            try {
+                const sel = document.getElementById('ragEmbPreset_select');
+                const name = sel && sel.value ? sel.value : null;
+                if (!name) { alert('Select a preset first'); return; }
+                const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+                const pre = document.getElementById('ragEmbPreset_view');
+                if (resp && resp.config) {
+                    pre.textContent = JSON.stringify(resp.config, null, 2);
+                    Toast.success('Preset loaded');
+                } else {
+                    pre.textContent = '(not found)';
+                }
+            } catch (e) {
+                Toast.error('Failed to load preset: ' + (e?.message || e));
+            }
+        }
+    </script>
         
         <div class="form-group mt-3">
             <h3>Quick Links</h3>

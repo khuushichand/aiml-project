@@ -106,6 +106,29 @@ class EvaluationsDatabase:
                     embedding_model TEXT
                 )
             """)
+
+            # Pipeline presets for RAG pipeline evaluations
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_presets (
+                    name TEXT PRIMARY KEY,
+                    config TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_id TEXT
+                )
+            """)
+
+            # Ephemeral collections registry for TTL cleanup
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ephemeral_collections (
+                    collection_name TEXT PRIMARY KEY,
+                    namespace TEXT,
+                    run_id TEXT,
+                    ttl_seconds INTEGER DEFAULT 86400,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at TIMESTAMP NULL
+                )
+            """)
             
             # Webhook registrations table (match webhook_manager schema)
             cursor.execute("""
@@ -137,6 +160,8 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_registrations(active)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC)")
             
             conn.commit()
             logger.info("Evaluations database initialized")
@@ -734,3 +759,112 @@ class EvaluationsDatabase:
                 return dict(result)
         
         return None
+
+    # ============= Pipeline Presets Operations =============
+
+    def upsert_pipeline_preset(self, name: str, config: Dict[str, Any], user_id: Optional[str] = None) -> bool:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO pipeline_presets (name, config, user_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    config = excluded.config,
+                    updated_at = CURRENT_TIMESTAMP,
+                    user_id = COALESCE(excluded.user_id, pipeline_presets.user_id)
+                """,
+                (name, json.dumps(config), user_id),
+            )
+            conn.commit()
+            return True
+
+    def get_pipeline_preset(self, name: str) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM pipeline_presets WHERE name = ?", (name,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "name": row["name"],
+                "config": json.loads(row["config"]) if row["config"] else {},
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "user_id": row["user_id"],
+            }
+
+    def list_pipeline_presets(self, limit: int = 50, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM pipeline_presets")
+            total = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                SELECT * FROM pipeline_presets
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+            rows = cursor.fetchall()
+            items = [
+                {
+                    "name": r["name"],
+                    "config": json.loads(r["config"]) if r["config"] else {},
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "user_id": r["user_id"],
+                }
+                for r in rows
+            ]
+            return items, total
+
+    def delete_pipeline_preset(self, name: str) -> bool:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pipeline_presets WHERE name = ?", (name,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    # ============= Ephemeral Collections Operations =============
+
+    def register_ephemeral_collection(
+        self, collection_name: str, ttl_seconds: int = 86400, run_id: Optional[str] = None, namespace: Optional[str] = None
+    ) -> bool:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO ephemeral_collections (collection_name, ttl_seconds, run_id, namespace)
+                VALUES (?, ?, ?, ?)
+                """,
+                (collection_name, ttl_seconds, run_id, namespace),
+            )
+            conn.commit()
+            return True
+
+    def list_expired_ephemeral_collections(self) -> List[str]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT collection_name FROM ephemeral_collections
+                WHERE deleted_at IS NULL AND datetime(created_at, '+' || ttl_seconds || ' seconds') <= CURRENT_TIMESTAMP
+                """
+            )
+            rows = cursor.fetchall()
+            return [r["collection_name"] for r in rows]
+
+    def mark_ephemeral_deleted(self, collection_name: str) -> bool:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE ephemeral_collections SET deleted_at = CURRENT_TIMESTAMP
+                WHERE collection_name = ? AND deleted_at IS NULL
+                """,
+                (collection_name,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0

@@ -19,21 +19,56 @@ import nltk
 from nltk.corpus import wordnet, stopwords
 from nltk.tokenize import word_tokenize
 
-# Download NLTK data if needed
+# --- NLTK downloads guarded by timeout ---
+def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
+    """Attempt to download an NLTK resource with a timeout.
+
+    Returns True on success, False on timeout/failure. Uses a daemon thread so
+    it never blocks process shutdown if the network hangs.
+    """
+    import threading
+    import queue
+
+    q: "queue.Queue[bool]" = queue.Queue(maxsize=1)
+
+    def _runner():
+        ok = False
+        try:
+            ok = nltk.download(resource, quiet=True)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"NLTK download error for '{resource}': {e}")
+            ok = False
+        try:
+            q.put_nowait(ok)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        logger.warning(f"NLTK download for '{resource}' timed out after {timeout_s}s; proceeding without it")
+        return False
+    try:
+        return bool(q.get_nowait())
+    except Exception:
+        return False
+
+# Ensure NLTK resources are present, but avoid hangs by enforcing timeouts
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
-    nltk.download('punkt', quiet=True)
+    _download_with_timeout('punkt', timeout_s=60)
 
 try:
     nltk.data.find('corpora/wordnet')
 except LookupError:
-    nltk.download('wordnet', quiet=True)
+    _download_with_timeout('wordnet', timeout_s=60)
 
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
-    nltk.download('stopwords', quiet=True)
+    _download_with_timeout('stopwords', timeout_s=60)
 
 
 class QueryIntent(Enum):
@@ -84,9 +119,27 @@ class QueryAnalyzer:
     
     def __init__(self):
         """Initialize query analyzer."""
-        self.stop_words = set(stopwords.words('english'))
+        # Stopwords may be unavailable if download failed; fall back gracefully
+        try:
+            self.stop_words = set(stopwords.words('english'))
+        except LookupError:
+            logger.warning("NLTK stopwords not available; using minimal fallback set")
+            self.stop_words = {
+                'the', 'is', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'with',
+                'it', 'this', 'that', 'as', 'by', 'at', 'from', 'are', 'be'
+            }
         self.intent_patterns = self._compile_intent_patterns()
         self.domain_keywords = self._load_domain_keywords()
+
+    @staticmethod
+    def _safe_word_tokenize(text: str) -> List[str]:
+        """Tokenize text, falling back if punkt is unavailable."""
+        try:
+            return word_tokenize(text)
+        except LookupError:
+            import re
+            # Simple fallback: split into words and punctuation
+            return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
     
     def _compile_intent_patterns(self) -> Dict[QueryIntent, List[re.Pattern]]:
         """Compile regex patterns for intent detection."""
@@ -225,7 +278,7 @@ class QueryAnalyzer:
     def _assess_complexity(self, query: str) -> QueryComplexity:
         """Assess query complexity."""
         # Count concepts (approximated by noun phrases)
-        words = word_tokenize(query.lower())
+        words = self._safe_word_tokenize(query.lower())
         
         # Remove stop words
         content_words = [w for w in words if w not in self.stop_words and w.isalnum()]
@@ -243,7 +296,7 @@ class QueryAnalyzer:
     
     def _extract_key_terms(self, query: str) -> List[str]:
         """Extract key terms from query."""
-        words = word_tokenize(query.lower())
+        words = self._safe_word_tokenize(query.lower())
         
         # Filter stop words and punctuation
         key_terms = [

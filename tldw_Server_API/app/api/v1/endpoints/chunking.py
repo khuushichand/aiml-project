@@ -155,8 +155,6 @@ async def process_text_for_chunking_json(
                 current_chunking_method_tmp = effective_options.get('method')
                 if current_chunking_method_tmp == 'rolling_summarize':
                     # Reuse the same provider/model selection logic from below
-                    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
-                    from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
                     server_configs = load_server_configs()
                     if not server_configs:
                         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

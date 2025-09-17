@@ -156,10 +156,29 @@ class ParakeetStreamingTranscriber:
             Transcription result or None if not ready
         """
         try:
-            # Decode base64 audio
-            audio_bytes = base64.b64decode(audio_data)
+            # Accept both base64-encoded strings and raw float32 bytes
+            if isinstance(audio_data, (str, bytes)):
+                if isinstance(audio_data, str):
+                    audio_bytes = base64.b64decode(audio_data)
+                else:
+                    # Heuristic: if bytes look like base64 text (ASCII), decode; otherwise treat as raw
+                    try:
+                        ascii_sample = audio_data[:16]
+                        if all(32 <= b <= 126 or b in (10, 13) for b in ascii_sample):
+                            audio_bytes = base64.b64decode(audio_data)
+                        else:
+                            audio_bytes = audio_data
+                    except Exception:
+                        audio_bytes = audio_data
+            else:
+                # Fallback: attempt to coerce to bytes via base64
+                audio_bytes = base64.b64decode(audio_data)
             
             # Convert to numpy array (assuming float32 samples)
+            # Ensure buffer aligns to float32 size
+            remainder = len(audio_bytes) % 4
+            if remainder:
+                audio_bytes = audio_bytes[:-remainder]
             audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
             
             # Add to buffer
