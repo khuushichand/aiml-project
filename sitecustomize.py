@@ -36,21 +36,18 @@ if _under_pytest() or os.getenv("TESTING", "").strip().lower() in {"1", "true", 
     # Reduce HF tokenizers parallelism
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-    # As a last-resort guard: replace ProcessPoolExecutor with a thread-backed
-    # executor to avoid spawning child processes in tests. This helps sidestep
-    # semaphore leaks and sandbox/process limits that can kill pytest runs.
+    # Avoid monkeypatching ProcessPoolExecutor; rely on env/threading controls above.
     try:
-        import concurrent.futures as _f
-        from concurrent.futures import ThreadPoolExecutor as _TPE
-
-        class _PatchedProcessPoolExecutor(_TPE):  # type: ignore[misc]
-            def __init__(self, max_workers=None, *args, **kwargs):  # noqa: D401
-                # Drop kwargs that only ProcessPoolExecutor supports
-                for k in ("max_tasks_per_child", "mp_context", "initializer", "initargs"):
-                    if k in kwargs:
-                        kwargs.pop(k, None)
-                super().__init__(max_workers=max_workers, thread_name_prefix="ppool_as_thread")
-
-        _f.ProcessPoolExecutor = _PatchedProcessPoolExecutor  # type: ignore[assignment]
+        # Configure Hypothesis to suppress function_scoped_fixture health check globally in tests
+        # This aligns with several tests which intentionally use function-scoped fixtures with @given
+        from hypothesis import settings as _hyp_settings
+        from hypothesis import HealthCheck as _HypHealthCheck
+        _hyp_settings.register_profile(
+            "tldw_pytest_defaults",
+            deadline=None,
+            suppress_health_check=[_HypHealthCheck.function_scoped_fixture],
+        )
+        _hyp_settings.load_profile("tldw_pytest_defaults")
     except Exception:
+        # Hypothesis may not be installed in all environments; ignore if unavailable
         pass

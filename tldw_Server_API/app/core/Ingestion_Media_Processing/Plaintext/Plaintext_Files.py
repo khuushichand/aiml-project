@@ -334,7 +334,8 @@ def process_document_content( # Renamed from _process_single_document for clarit
 
         # 4. Summarization / Analysis
         final_analysis_text = None
-        if perform_analysis and api_name and api_key and processed_chunks:
+        # Allow analysis to proceed without explicit api_key (server-side config handles credentials)
+        if perform_analysis and api_name and processed_chunks:
             logging.info(f"Analysis enabled for {len(processed_chunks)} chunks of {doc_path}.")
             log_counter("document_analysis_attempt", value=len(processed_chunks), labels={"file_path": str(doc_path), "api_name": api_name})
 
@@ -356,7 +357,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                             api_name=api_name,
                             input_data=chunk_text_to_analyze,
                             custom_prompt_arg=custom_prompt,
-                            api_key=api_key,
+                            api_key=None,
                             system_message=system_prompt,
                             temp=None,
                             recursive_summarization=False,
@@ -387,7 +388,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                              api_name=api_name,
                              input_data="\n\n---\n\n".join(chunk_summaries),
                              custom_prompt_arg=custom_prompt or "Provide a concise overall summary of the following text sections.",
-                             api_key=api_key,
+                             api_key=None,
                              system_message=system_prompt,
                              temp=None,
                              recursive_summarization=False, # Final pass
@@ -415,7 +416,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
 
         # Log skipped analysis reasons
         elif not perform_analysis: logging.info(f"Analysis disabled for {doc_path}.")
-        elif not api_name or not api_key: logging.warning(f"Analysis skipped for {doc_path}: API credentials missing.")
+        elif not api_name: logging.warning(f"Analysis skipped for {doc_path}: API name missing.")
         elif not processed_chunks: logging.warning(f"Analysis skipped for {doc_path}: No processable chunks available.")
         else: logging.warning(f"Analysis skipped for {doc_path} due to unknown condition.")
 

@@ -388,7 +388,8 @@ class TestErrorHandling:
             },
             headers=auth_headers
         )
-        assert first_response.status_code == 200
+        # Creation may return 201 (Created) or 200 depending on API semantics
+        assert first_response.status_code in [200, 201]
         
         # Try to create duplicate
         duplicate_response = test_client.post(

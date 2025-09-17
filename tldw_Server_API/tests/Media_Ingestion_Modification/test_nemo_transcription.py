@@ -49,13 +49,14 @@ class TestNemoTranscription:
             pytest.skip("Nemo module not available")
     
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
-    def test_cache_dir_creation(self, mock_config_data):
+    def test_cache_dir_creation(self, mock_config_data, mock_config):
         """Test that cache directory is created properly."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             _get_cache_dir
         )
         
-        mock_config_data.return_value = self.mock_config()
+        # Use fixture-provided config through the patched callable
+        mock_config_data.return_value = mock_config
         
         cache_dir = _get_cache_dir()
         assert isinstance(cache_dir, Path)
@@ -78,7 +79,7 @@ class TestNemoTranscription:
     
     @patch('nemo.collections.asr.models.EncDecRNNTBPEModel.from_pretrained')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
-    def test_load_parakeet_standard(self, mock_config_data, mock_from_pretrained):
+    def test_load_parakeet_standard(self, mock_config_data, mock_from_pretrained, mock_config):
         """Test loading standard Parakeet model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_parakeet_model, _model_cache
@@ -87,7 +88,7 @@ class TestNemoTranscription:
         # Clear cache first
         _model_cache.clear()
         
-        mock_config_data.return_value = self.mock_config()
+        mock_config_data.return_value = mock_config
         mock_model = MagicMock()
         mock_from_pretrained.return_value = mock_model
         
@@ -99,7 +100,7 @@ class TestNemoTranscription:
     
     @patch('nemo.collections.asr.models.EncDecMultiTaskModel.from_pretrained')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
-    def test_load_canary_model(self, mock_config_data, mock_from_pretrained):
+    def test_load_canary_model(self, mock_config_data, mock_from_pretrained, mock_config):
         """Test loading Canary model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_canary_model, _model_cache
@@ -108,7 +109,7 @@ class TestNemoTranscription:
         # Clear cache first
         _model_cache.clear()
         
-        mock_config_data.return_value = self.mock_config()
+        mock_config_data.return_value = mock_config
         mock_model = MagicMock()
         mock_from_pretrained.return_value = mock_model
         
@@ -200,13 +201,13 @@ class TestNemoTranscription:
     @patch('onnxruntime.InferenceSession')
     @patch('huggingface_hub.snapshot_download')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
-    def test_load_parakeet_onnx(self, mock_config_data, mock_download, mock_ort_session):
+    def test_load_parakeet_onnx(self, mock_config_data, mock_download, mock_ort_session, mock_config):
         """Test loading ONNX variant of Parakeet."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_parakeet_model
         )
         
-        mock_config_data.return_value = self.mock_config()
+        mock_config_data.return_value = mock_config
         
         # Create a temporary directory and file to simulate model
         with tempfile.TemporaryDirectory() as tmpdir:

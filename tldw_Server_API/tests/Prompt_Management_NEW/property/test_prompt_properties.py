@@ -5,13 +5,21 @@ Tests invariants and properties that should always hold true.
 """
 
 import pytest
-from hypothesis import given, strategies as st, assume, settings
+from hypothesis import given, strategies as st, assume, settings, HealthCheck
 from hypothesis.stateful import RuleBasedStateMachine, rule, precondition, invariant, Bundle
 import json
 import re
 from datetime import datetime
 
 from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import PromptsInteropService
+
+# Apply a default Hypothesis profile for this module to suppress fixture health checks
+settings.register_profile(
+    "tldw_prompt_props",
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+settings.load_profile("tldw_prompt_props")
 from tldw_Server_API.app.core.DB_Management.Prompts_DB_V2 import PromptsDB
 
 # ========================================================================

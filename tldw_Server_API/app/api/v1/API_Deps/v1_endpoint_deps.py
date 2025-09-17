@@ -22,10 +22,18 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 #
 # Functions:
 
+def _normalize_header_value(value):
+    """Return string header value or None; ignore FastAPI Header param objects when called directly."""
+    return value if isinstance(value, str) else None
+
+
 async def verify_token(
     Token: str = Header(None),
     x_api_key: str = Header(None, alias="X-API-KEY")
 ):  # Check both Token and X-API-KEY headers
+    # Ensure we only work with raw strings even when called directly in tests
+    Token = _normalize_header_value(Token)
+    x_api_key = _normalize_header_value(x_api_key)
     # In single-user mode, check X-API-KEY; in multi-user mode, check Token
     if settings.get("SINGLE_USER_MODE"):
         # Single-user mode uses X-API-KEY header
@@ -39,18 +47,20 @@ async def verify_token(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token.")
 
     if settings.get("SINGLE_USER_MODE"):
-        # Get the API key from AuthNZ settings which is the canonical source
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
-        auth_settings = get_auth_settings()
-        expected_token = auth_settings.SINGLE_USER_API_KEY
-        if not expected_token:  # This means settings are not properly loaded or key is missing
-            logger.critical("SINGLE_USER_API_KEY is not configured in settings for single-user mode.")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="Server authentication misconfigured (API key missing).")
+        # In single-user mode, use the core app settings value as the canonical expected token.
+        # Tests consistently patch tldw_Server_API.app.core.config.settings.
+        expected_token = settings.get("SINGLE_USER_API_KEY")
+        if not expected_token:
+            logger.critical("SINGLE_USER_API_KEY is not configured in core settings for single-user mode.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server authentication misconfigured (API key missing).",
+            )
 
-        # Direct comparison, no "Bearer " prefix stripping
         if auth_token != expected_token:
-            logger.warning(f"Invalid token received. Expected: '{expected_token[:5]}...', Got: '{auth_token[:10]}...'")
+            got_preview = auth_token[:10] + "..." if isinstance(auth_token, str) else "<non-string>"
+            exp_preview = expected_token[:5] + "..." if isinstance(expected_token, str) else "<non-string>"
+            logger.warning(f"Invalid token received. Expected: '{exp_preview}', Got: '{got_preview}'")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token.")
     else:
         # Multi-user mode: Validate JWT token

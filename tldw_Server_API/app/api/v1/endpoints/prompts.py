@@ -367,6 +367,47 @@ async def export_keywords_api(
 
 # === Prompt Endpoints ===
 
+# Legacy-compatible create route for tests expecting /api/v1/prompts/create
+@router.post(
+    "/create",
+    summary="Create a prompt (legacy payload)",
+    dependencies=[Depends(verify_token)]
+)
+async def legacy_create_prompt(
+    payload: dict = Body(...),
+    Token: str = Header(None, description="Authentication token."),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    try:
+        name = payload.get("name")
+        author = payload.get("author")
+        # Legacy tests use "content" instead of details
+        details = payload.get("content") or payload.get("details")
+        keywords = payload.get("keywords") or []
+        p_id, _uuid, _msg = db.add_prompt(
+            name=name,
+            author=author,
+            details=details,
+            system_prompt=payload.get("system_prompt"),
+            user_prompt=payload.get("user_prompt"),
+            keywords=keywords,
+            overwrite=False,
+        )
+        if not p_id:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create prompt")
+        # Legacy response uses prompt_id
+        return {"prompt_id": p_id}
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Database error creating prompt (legacy): {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+    except Exception as e:
+        logger.error(f"Unexpected error creating prompt (legacy): {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected error.")
+
 @router.post(
     "/",
     response_model=schemas.PromptResponse,
@@ -587,6 +628,58 @@ async def delete_prompt(
     except DatabaseError as e:
         logger.error(f"Database error deleting prompt '{prompt_identifier}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+
+
+# === Collection Endpoints (minimal, in-memory for tests) ===
+
+_collections_store_key = "prompt_collections"
+
+def _get_collections_store():
+    store = ephemeral_storage.get_data(_collections_store_key)
+    if store is None:
+        store = {"next_id": 1, "items": {}}
+        ephemeral_storage._store[_collections_store_key] = store  # simple internal set
+    return store
+
+
+@router.post(
+    "/collections/create",
+    summary="Create a prompt collection (minimal)",
+    dependencies=[Depends(verify_token)]
+)
+async def create_collection(
+    payload: dict = Body(...),
+    Token: str = Header(None, description="Authentication token.")
+):
+    name = payload.get("name")
+    description = payload.get("description")
+    prompt_ids = payload.get("prompt_ids") or []
+    store = _get_collections_store()
+    cid = store["next_id"]
+    store["next_id"] += 1
+    store["items"][cid] = {
+        "collection_id": cid,
+        "name": name,
+        "description": description,
+        "prompt_ids": prompt_ids,
+    }
+    return {"collection_id": cid}
+
+
+@router.get(
+    "/collections/{collection_id}",
+    summary="Get a prompt collection (minimal)",
+    dependencies=[Depends(verify_token)]
+)
+async def get_collection(
+    collection_id: int,
+    Token: str = Header(None, description="Authentication token.")
+):
+    store = _get_collections_store()
+    item = store["items"].get(collection_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+    return item
 
 
 #

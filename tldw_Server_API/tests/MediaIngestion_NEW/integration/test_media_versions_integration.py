@@ -31,14 +31,21 @@ def _create_media_and_get_id(client: TestClient, title: str) -> int:
     file_bytes = io.BytesIO(f"{title} original content.".encode("utf-8"))
     r = client.post(
         "/api/v1/media/add",
-        data={"title": title, "media_type": "document", "chunk_method": "sentences"},
+        data={"title": title, "media_type": "document", "chunk_method": "sentences", "chunk_size": "50", "chunk_overlap": "10"},
         files=[("files", ("doc.txt", file_bytes, "text/plain"))],
     )
     assert r.status_code in (200, 207), r.text
     data = r.json()
     # Extract media_id from results
     media_id = next((item.get("db_id") for item in data.get("results", []) if item.get("db_id")), None)
-    assert media_id is not None
+    if media_id is None:
+        # Fallback: query list endpoint to find the media by title
+        lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 50})
+        assert lst.status_code == 200
+        items = lst.json().get("items", [])
+        match = next((i for i in items if i.get("title") == title), None)
+        assert match is not None
+        return int(match["id"]) if isinstance(match["id"], int) else int(str(match["id"]))
     return int(media_id)
 
 

@@ -46,7 +46,13 @@ def _get_model_cache_key(model_name: str, variant: str = 'standard') -> str:
 
 def _get_cache_dir() -> Path:
     """Get the cache directory for Nemo models."""
-    config = loaded_config_data or load_and_log_configs()
+    cfg = loaded_config_data
+    try:
+        config = cfg() if callable(cfg) else cfg
+    except Exception:
+        config = cfg
+    if not config:
+        config = load_and_log_configs()
     if config and 'STT-Settings' in config:
         cache_dir = config['STT-Settings'].get('nemo_cache_dir', './models/nemo')
     else:
@@ -87,7 +93,13 @@ def load_canary_model():
         model = nemo_asr.models.EncDecMultiTaskModel.from_pretrained("nvidia/canary-1b-v2")
         
         # Configure device
-        config = loaded_config_data or load_and_log_configs()
+        cfg = loaded_config_data
+        try:
+            config = cfg() if callable(cfg) else cfg
+        except Exception:
+            config = cfg or load_and_log_configs()
+        if not config:
+            config = load_and_log_configs()
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if config and 'STT-Settings' in config:
             device = config['STT-Settings'].get('nemo_device', device)
@@ -124,7 +136,13 @@ def load_parakeet_model(variant: str = 'standard'):
         logging.debug(f"Using cached Parakeet model (variant: {variant})")
         return _model_cache[cache_key]
     
-    config = loaded_config_data or load_and_log_configs()
+    cfg = loaded_config_data
+    try:
+        config = cfg() if callable(cfg) else cfg
+    except Exception:
+        config = cfg
+    if not config:
+        config = load_and_log_configs()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if config and 'STT-Settings' in config:
         device = config['STT-Settings'].get('nemo_device', device)
@@ -376,7 +394,13 @@ def transcribe_with_parakeet(
     """
     # Get variant from config if not specified
     if variant == 'auto':
-        config = loaded_config_data or load_and_log_configs()
+        cfg = loaded_config_data
+        try:
+            config = cfg() if callable(cfg) else cfg
+        except Exception:
+            config = cfg
+        if not config:
+            config = load_and_log_configs()
         if config and 'STT-Settings' in config:
             variant = config['STT-Settings'].get('nemo_model_variant', 'standard')
     

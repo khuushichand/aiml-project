@@ -89,62 +89,54 @@ class TestParakeetMLX:
         mock_check.return_value = False
         assert check_mlx_available() == False
     
-    @patch('builtins.__import__')
-    def test_model_loading(self, mock_import):
+    def test_model_loading(self, monkeypatch):
         """Test Parakeet MLX model loading."""
-        # Create mock parakeet_mlx module
-        mock_parakeet_mlx = MagicMock()
+        import sys, types
+        # Create mock parakeet_mlx module and inject into sys.modules
+        mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
         mock_model = MagicMock()
         mock_model.name = "parakeet-tdt-0.6b"
-        mock_parakeet_mlx.from_pretrained.return_value = mock_model
-        
-        # Setup import mock to return our mock module for parakeet_mlx
-        original_import = __import__
-        def custom_import(name, *args, **kwargs):
-            if name == 'parakeet_mlx':
-                return mock_parakeet_mlx
-            return original_import(name, *args, **kwargs)
-        mock_import.side_effect = custom_import
-        
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-            load_parakeet_mlx_model
-        )
-        
+        def _from_pretrained(*args, **kwargs):
+            return mock_model
+        mock_parakeet_mlx.from_pretrained = MagicMock(side_effect=_from_pretrained)
+        monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
+
+        # Import after injecting the fake module
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+
+        # Force macOS availability in tests and MLX availability
+        monkeypatch.setattr(mlx_mod, 'IS_MACOS', True)
+        monkeypatch.setattr(mlx_mod, 'check_mlx_available', lambda: True)
+
         # Load model
-        model = load_parakeet_mlx_model(force_reload=True)
-        
+        model = mlx_mod.load_parakeet_mlx_model(force_reload=True)
+
         assert model is not None
         assert model == mock_model
         mock_parakeet_mlx.from_pretrained.assert_called_once()
-        
+
         # Test cache hit (should not call from_pretrained again)
-        model2 = load_parakeet_mlx_model()
+        model2 = mlx_mod.load_parakeet_mlx_model()
         assert model2 == mock_model
         assert mock_parakeet_mlx.from_pretrained.call_count == 1  # Still only called once
     
-    @patch('builtins.__import__')
-    def test_model_loading_with_custom_path(self, mock_import):
+    def test_model_loading_with_custom_path(self, monkeypatch):
         """Test loading model from custom path."""
-        # Create mock parakeet_mlx module
-        mock_parakeet_mlx = MagicMock()
+        import sys, types
+        mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
         mock_model = MagicMock()
-        mock_parakeet_mlx.from_pretrained.return_value = mock_model
-        
-        # Setup import mock
-        original_import = __import__
-        def custom_import(name, *args, **kwargs):
-            if name == 'parakeet_mlx':
-                return mock_parakeet_mlx
-            return original_import(name, *args, **kwargs)
-        mock_import.side_effect = custom_import
-        
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-            load_parakeet_mlx_model
-        )
-        
+        def _from_pretrained(*args, **kwargs):
+            return mock_model
+        mock_parakeet_mlx.from_pretrained = MagicMock(side_effect=_from_pretrained)
+        monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+        monkeypatch.setattr(mlx_mod, 'IS_MACOS', True)
+        monkeypatch.setattr(mlx_mod, 'check_mlx_available', lambda: True)
+
         custom_path = "/path/to/custom/model"
-        model = load_parakeet_mlx_model(model_path=custom_path, force_reload=True)
-        
+        model = mlx_mod.load_parakeet_mlx_model(force_reload=True, model_path=custom_path)
+
         assert model == mock_model
         mock_parakeet_mlx.from_pretrained.assert_called_once()
     

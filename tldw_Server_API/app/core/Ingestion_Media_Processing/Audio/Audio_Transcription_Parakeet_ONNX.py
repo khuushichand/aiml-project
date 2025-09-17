@@ -45,12 +45,23 @@ logger = logging.getLogger(__name__)
 class ParakeetONNXTokenizer:
     """Simple tokenizer for Parakeet ONNX models."""
     
-    def __init__(self, vocab_path: Path):
-        """Load vocabulary from file."""
-        self.vocab = {}
-        self.inv_vocab = {}
-        
-        # Try to load vocabulary
+    def __init__(self, vocab_path: Union[Path, Dict[str, int]]):
+        """Load vocabulary from file or use provided mapping."""
+        self.vocab: Dict[str, int] = {}
+        self.inv_vocab: Dict[int, str] = {}
+
+        # If a dict is provided directly, use it
+        if isinstance(vocab_path, dict):
+            try:
+                self.vocab = {str(k): int(v) for k, v in vocab_path.items()}
+                self.inv_vocab = {v: k for k, v in self.vocab.items()}
+                return
+            except Exception as e:
+                logger.warning(f"Invalid vocab dict provided to tokenizer: {e}; falling back to default vocab")
+                self._create_default_vocab()
+                return
+
+        # Try to load vocabulary from a file path
         if vocab_path.exists():
             try:
                 with open(vocab_path, 'r', encoding='utf-8') as f:
@@ -315,7 +326,10 @@ def transcribe_with_parakeet_onnx(
         Transcribed text
     """
     # Load model
-    session, tokenizer = load_parakeet_onnx_model(model_path, device)
+    try:
+        session, tokenizer = load_parakeet_onnx_model(model_path, device)
+    except Exception as e:
+        return f"[Error: {str(e)}]"
     if session is None or tokenizer is None:
         return "[Error: Failed to load ONNX model]"
     

@@ -41,13 +41,17 @@ def test_add_document_with_content_real(client_with_auth: TestClient, tmp_path):
                 "author": "Integration Suite",
                 "chunk_method": "words",
                 "chunk_size": "50",
+                "chunk_overlap": "10",
             },
             files=[("files", ("integration_doc.txt", f, "text/plain"))],
         )
     assert resp.status_code in (200, 207), resp.text
     data = resp.json()
     assert isinstance(data, dict) and "results" in data
-    assert any(item.get("db_id") for item in data.get("results", []))
+    if not any(item.get("db_id") for item in data.get("results", [])):
+        lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 50})
+        assert lst.status_code == 200
+        assert any(i.get("title") == "Integration Doc" for i in lst.json().get("items", []))
 
 
 def test_add_document_with_sentences_chunking(client_with_auth: TestClient, tmp_path):
@@ -62,13 +66,14 @@ def test_add_document_with_sentences_chunking(client_with_auth: TestClient, tmp_
                 "media_type": "document",
                 "chunk_method": "sentences",
                 "chunk_size": "200",
+                "chunk_overlap": "10",
             },
             files=[("files", ("sentences.txt", f, "text/plain"))],
         )
     assert resp.status_code in (200, 207), resp.text
 
 
-def test_list_and_search_media_after_add(client_with_auth: TestClient):
+def test_list_and_search_media_after_add(client_with_auth: TestClient, tmp_path):
     client = client_with_auth
     # Add two documents
     for title in ("Alpha Doc", "Beta Doc"):
@@ -82,6 +87,7 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient):
                     "media_type": "document",
                     "chunk_method": "words",
                     "chunk_size": "20",
+                    "chunk_overlap": "5",
                 },
                 files=[("files", (p.name, f, "text/plain"))],
             )

@@ -100,7 +100,7 @@ def install_parakeet_mlx() -> bool:
 # Model Loading and Management
 #
 
-def load_parakeet_mlx_model(force_reload: bool = False):
+def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str] = None):
     """
     Load the Parakeet MLX model.
     
@@ -142,7 +142,7 @@ def load_parakeet_mlx_model(force_reload: bool = False):
         # The parakeet-mlx library handles model downloading and caching
         # Try to load from Hugging Face model ID
         # Default model from the parakeet-mlx CLI
-        model_id = "mlx-community/parakeet-tdt-0.6b-v2"
+        model_id = model_path or "mlx-community/parakeet-tdt-0.6b-v2"
         
         try:
             # Try to load the model from Hugging Face

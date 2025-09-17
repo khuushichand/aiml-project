@@ -51,8 +51,8 @@ class TestParakeetONNX:
             vocab_size = 128256
             logits = np.random.randn(batch_size, seq_len, vocab_size).astype(np.float32)
             return [logits]
-        
-        session.run = mock_run
+        # Make run a MagicMock so tests can assert calls
+        session.run = MagicMock(side_effect=mock_run)
         
         return session
     

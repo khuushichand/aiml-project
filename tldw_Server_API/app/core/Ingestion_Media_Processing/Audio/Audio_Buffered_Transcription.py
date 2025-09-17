@@ -303,27 +303,52 @@ class LCSMergeTranscriber(BufferedTranscriber):
         """
         words1 = text1.split()
         words2 = text2.split()
-        
+
         if not words1:
             return text2
         if not words2:
             return text1
-        
-        # Look for overlap in last part of text1 and first part of text2
-        max_overlap = min(len(words1), len(words2), 10)  # Limit search
-        
-        best_overlap = 0
+
+        # First try a quick contiguous overlap check on boundaries
+        max_overlap = min(len(words1), len(words2), 10)
         for overlap_size in range(max_overlap, 0, -1):
             if words1[-overlap_size:] == words2[:overlap_size]:
-                best_overlap = overlap_size
-                break
-        
-        if best_overlap > 0:
-            # Merge without duplicating overlap
-            return ' '.join(words1 + words2[best_overlap:])
-        else:
-            # No overlap found, concatenate
-            return text1 + ' ' + text2
+                return ' '.join(words1 + words2[overlap_size:])
+
+        # Fallback to true LCS over boundary windows to remove duplicated phrases
+        w1 = words1[-20:]  # last window of first text
+        w2 = words2[:20]   # first window of second text
+        m, n = len(w1), len(w2)
+        # Build DP table
+        L = [[0] * (n + 1) for _ in range(m + 1)]
+        for i in range(m - 1, -1, -1):
+            for j in range(n - 1, -1, -1):
+                if w1[i] == w2[j]:
+                    L[i][j] = 1 + L[i + 1][j + 1]
+                else:
+                    L[i][j] = max(L[i + 1][j], L[i][j + 1])
+        lcs_len = L[0][0]
+
+        # If LCS is reasonably informative (>=2 words), skip up to last match in w2
+        if lcs_len >= 2:
+            # Reconstruct to get last matched index in w2
+            i = j = 0
+            last_j = -1
+            while i < m and j < n:
+                if w1[i] == w2[j]:
+                    last_j = j
+                    i += 1
+                    j += 1
+                elif L[i + 1][j] >= L[i][j + 1]:
+                    i += 1
+                else:
+                    j += 1
+            # Merge skipping the overlapped prefix in words2
+            skip = (last_j + 1) if last_j >= 0 else 0
+            return ' '.join(words1 + words2[skip:])
+
+        # No overlap found, simple concatenation
+        return text1 + ' ' + text2
     
     def _lcs_length(self, X: List[str], Y: List[str]) -> int:
         """

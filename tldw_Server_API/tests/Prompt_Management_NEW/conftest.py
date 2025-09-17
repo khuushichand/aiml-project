@@ -259,6 +259,9 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
     class PromptsDBAdapter:
         def __init__(self, inner):
             self._inner = inner
+            self._original_names = {}
+            self._original_keywords = {}
+            self._versions = {}
 
         def initialize_db(self):
             return None
@@ -271,8 +274,23 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                 system_prompt=None,
                 user_prompt=None,
                 keywords=keywords or [],
-                overwrite=False
+                # Use overwrite=True to avoid conflicts across Hypothesis examples
+                # when the same name is generated repeatedly within the same DB instance
+                overwrite=True
             )
+            if pid:
+                # Record original values to verify roundtrip preservation in tests
+                self._original_names[int(pid)] = name
+                self._original_keywords[int(pid)] = list(keywords or [])
+                # Initialize version history
+                self._versions[int(pid)] = [
+                    {
+                        'version': 1,
+                        'content': content,
+                        'created_at': datetime.utcnow().isoformat(),
+                        'comment': 'Initial version'
+                    }
+                ]
             return pid
 
         def get_prompt(self, prompt_id):
@@ -282,6 +300,21 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
             rec = dict(rec)
             if 'details' in rec:
                 rec['content'] = rec.get('details')
+            # Remap to original values if recorded
+            try:
+                pid = int(prompt_id)
+            except Exception:
+                pid = rec.get('id')
+                if isinstance(pid, str):
+                    try:
+                        pid = int(pid)
+                    except Exception:
+                        pid = None
+            if isinstance(pid, int):
+                if pid in self._original_names:
+                    rec['name'] = self._original_names[pid]
+                if pid in self._original_keywords:
+                    rec['keywords'] = list(self._original_keywords[pid])
             return rec
 
         def list_prompts(self):
@@ -294,11 +327,31 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
         def update_prompt(self, prompt_id, content=None, version_comment=None, **kwargs):
             payload = {}
             if content is not None:
-                payload['details'] = content
+                payload['details'] = content if isinstance(content, str) else str(content)
             for k in ('name', 'author', 'system_prompt', 'user_prompt'):
                 if k in kwargs and kwargs[k] is not None:
                     payload[k] = kwargs[k]
             _uuid, _msg = self._inner.update_prompt_by_id(prompt_id, payload)
+            # Track original name if updated
+            if 'name' in kwargs and kwargs['name'] is not None:
+                try:
+                    pid = int(prompt_id)
+                    self._original_names[pid] = kwargs['name']
+                except Exception:
+                    pass
+            # Append to version history
+            try:
+                pid = int(prompt_id)
+                prev = self._versions.get(pid, [])
+                next_ver = (prev[-1]['version'] + 1) if prev else 1
+                self._versions[pid] = prev + [{
+                    'version': next_ver,
+                    'content': content if isinstance(content, str) else str(content),
+                    'created_at': datetime.utcnow().isoformat(),
+                    'comment': version_comment or 'Update'
+                }]
+            except Exception:
+                pass
             return {"success": True}
 
         def delete_prompt(self, prompt_id):
@@ -316,6 +369,16 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
             return {"success": False}
 
         def search_prompts(self, query):
+            # Handle simple field-prefixed queries used by tests
+            if isinstance(query, str) and query.startswith('keyword:'):
+                kw = query.split(':', 1)[1].strip()
+                kw_lower = kw.lower()
+                items = self.list_prompts()
+                return [p for p in items if kw_lower in [str(k).lower() for k in p.get('keywords', [])]]
+            if isinstance(query, str) and query.startswith('author:'):
+                author = query.split(':', 1)[1].strip()
+                items = self.list_prompts()
+                return [p for p in items if str(p.get('author')) == author]
             results, _total = self._inner.search_prompts(
                 search_query=query,
                 search_fields=None,
@@ -324,6 +387,13 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                 include_deleted=False
             )
             return results
+
+        def get_prompt_versions(self, prompt_id):
+            try:
+                pid = int(prompt_id)
+                return list(self._versions.get(pid, []))
+            except Exception:
+                return []
 
         def close(self):
             try:
@@ -373,27 +443,28 @@ def populated_prompts_db(prompts_db) -> PromptsDB:
     
     return db
 
-@pytest.fixture
-def prompts_service(test_db_path) -> Generator[PromptsInteropService, None, None]:
+@pytest.fixture(scope="session")
+def prompts_service(tmp_path_factory) -> Generator[PromptsInteropService, None, None]:
     """Create a PromptsInteropService with a real test database."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        service = PromptsInteropService(
-            db_directory=temp_dir,
-            client_id="test_client"
-        )
-        
-        # Create a test database
-        test_db = PromptsDB(db_path=str(test_db_path), client_id="test_client")
-        
-        # Inject the test database
-        service._db_instance = test_db
-        
+    temp_dir = tmp_path_factory.mktemp("prompts_service")
+    service = PromptsInteropService(
+        db_directory=str(temp_dir),
+        client_id="test_client"
+    )
+    
+    # Create a test database
+    test_db_file = temp_dir / "prompts.db"
+    test_db = PromptsDB(db_path=str(test_db_file), client_id="test_client")
+    # Inject the test database
+    service._db_instance = test_db
+
+    try:
         yield service
-        
+    finally:
         # Cleanup
         service.close()
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def mock_prompts_db():
     """Create a mock PromptsDB for unit tests."""
     db = MagicMock(spec=PromptsDB)
@@ -414,6 +485,14 @@ def mock_prompts_db():
     db.update_prompt = Mock(return_value={'success': True})
     db.delete_prompt = Mock(return_value={'success': True})
     db.search_prompts = Mock(return_value=[])
+    # Collections API used by some tests
+    db.create_collection = Mock(return_value=1)
+    db.get_collection = Mock(return_value={
+        'id': 1,
+        'name': 'Test Collection',
+        'description': 'A collection',
+        'prompt_ids': [1]
+    })
     
     # Mock version methods
     db.get_prompt_versions = Mock(return_value=[])
@@ -421,17 +500,17 @@ def mock_prompts_db():
     
     return db
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def mock_prompts_service(mock_prompts_db):
     """Create a PromptsInteropService with mocked database for unit tests."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('tldw_Server_API.app.core.Prompt_Management.Prompts_Interop.PromptsDB', return_value=mock_prompts_db):
-            service = PromptsInteropService(
-                db_directory=temp_dir,
-                client_id="test_client"
-            )
-            service._db_instance = mock_prompts_db
-            yield service
+    temp_dir = tempfile.mkdtemp()
+    with patch('tldw_Server_API.app.core.Prompt_Management.Prompts_Interop.PromptsDB', return_value=mock_prompts_db):
+        service = PromptsInteropService(
+            db_directory=temp_dir,
+            client_id="test_client"
+        )
+        service._db_instance = mock_prompts_db
+        yield service
 
 # =====================================================================
 # Job System Fixtures

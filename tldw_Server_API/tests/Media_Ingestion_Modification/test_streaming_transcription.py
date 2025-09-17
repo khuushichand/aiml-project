@@ -12,6 +12,14 @@ from unittest.mock import Mock, patch, MagicMock, AsyncMock
 import websockets
 from typing import Dict, Any, Optional
 
+# Compatibility for different websockets versions
+try:
+    from websockets.exceptions import ConnectionClosed as WSConnectionClosed
+except Exception:
+    class WSConnectionClosed(Exception):
+        def __init__(self, *args, **kwargs):
+            super().__init__("closed")
+
 pytestmark = pytest.mark.unit
 
 
@@ -207,7 +215,7 @@ class TestStreamingTranscription:
             json.dumps({'type': 'audio', 'data': 'base64audiodata'}),
             json.dumps({'type': 'stop'})
         ]
-        mock_websocket.recv.side_effect = messages + [websockets.exceptions.ConnectionClosed(None, None)]
+        mock_websocket.recv.side_effect = messages + [WSConnectionClosed(None, None)]
         
         with patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet.ParakeetStreamingTranscriber') as mock_transcriber_class:
             mock_transcriber = AsyncMock()
@@ -399,7 +407,7 @@ class TestStreamingErrorScenarios:
         # Simulate disconnection after first message
         mock_websocket.recv.side_effect = [
             json.dumps({'type': 'start', 'config': {'sample_rate': 16000}}),
-            websockets.exceptions.ConnectionClosed(None, None)
+            WSConnectionClosed(None, None)
         ]
         
         # Should handle gracefully without raising
