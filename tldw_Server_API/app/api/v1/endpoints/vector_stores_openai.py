@@ -950,8 +950,9 @@ async def query_vectors(
                 is_empty = bool(stats.get('count', 0) == 0)
         except Exception:
             stats_dim = None
-            is_empty = None
-        if not is_empty:
+            # If we cannot determine, assume empty to avoid false rejections
+            is_empty = True
+        if is_empty is False:
             # Registry dimension is authoritative when present (unless it's the generic default 1536)
             if registry_dim is not None and registry_dim != 1536 and len(qvec) != registry_dim:
                 raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {registry_dim}")

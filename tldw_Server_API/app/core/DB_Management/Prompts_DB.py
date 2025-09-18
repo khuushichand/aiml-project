@@ -553,10 +553,29 @@ class PromptsDatabase:
         return str(uuid.uuid4())
 
     def _normalize_keyword(self, keyword: str) -> str:
-        # Lowercase, strip, and collapse whitespace for stable matching
-        # Preserve non-whitespace characters (including control chars) to allow exact matches when needed by clients/tests
-        s = keyword.lower().strip()
+        """Normalize keyword while preserving case for round‑trip display/export.
+
+        - Trim and collapse internal whitespace
+        - Do NOT lowercase; table uses COLLATE NOCASE for case‑insensitive uniqueness
+        """
+        s = keyword.strip()
         s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    @staticmethod
+    def _normalize_text_for_search(val: Any) -> str:
+        """Robust case-insensitive text normalization for search.
+
+        Handles Unicode edge cases (e.g., Turkish dotted/dotless I), removes
+        diacritics and applies casefold, so different casings yield same matches.
+        """
+        import unicodedata as _ud
+        s = '' if val is None else str(val)
+        # Map Turkish I variants to ASCII I/i to stabilize comparisons
+        s = s.replace('İ', 'I').replace('ı', 'i')
+        s = s.casefold()
+        s = _ud.normalize('NFKD', s)
+        s = ''.join(ch for ch in s if _ud.category(ch) != 'Mn')
         return s
 
     def _get_next_version(self, conn: sqlite3.Connection, table: str, id_col: str, id_val: Any) -> Optional[
@@ -1352,7 +1371,8 @@ class PromptsDatabase:
             author_value = search_query.split(":", 1)[1]
             if author_value is None:
                 author_value = ""
-            cond = "LOWER(p.author) = LOWER(?)"
+            # Exact author match (case-insensitive)
+            cond = "p.author = ? COLLATE NOCASE"
             if not include_deleted:
                 conditions = ["p.deleted = 0", cond]
             else:
@@ -1379,9 +1399,9 @@ class PromptsDatabase:
             kw_value_raw = search_query.split(":", 1)[1] or ""
             kw_value = self._normalize_keyword(kw_value_raw)
             try:
-                # Match active keywords (case-insensitive exact match)
+                # Match active keywords (case-insensitive exact match via NOCASE collation)
                 kw_cursor = self.execute_query(
-                    "SELECT id FROM PromptKeywordsTable WHERE LOWER(keyword) = LOWER(?) AND deleted = 0",
+                    "SELECT id FROM PromptKeywordsTable WHERE keyword = ? COLLATE NOCASE AND deleted = 0",
                     (kw_value,),
                 )
                 kw_ids = [row['id'] for row in kw_cursor.fetchall()]
@@ -1419,7 +1439,10 @@ class PromptsDatabase:
         # --- FTS search using subqueries, with robust fallback ---
         used_fts = False
         fts_error = False
-        if search_query and search_fields:
+        # Prefer Python-side normalization when fields are not explicitly specified (common in tests)
+        prefer_naive = bool(search_query) and (not search_fields or len(search_fields) == 0)
+
+        if search_query and search_fields and not prefer_naive:
             matching_prompt_ids = set()
             text_search_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
 
@@ -1491,7 +1514,7 @@ class PromptsDatabase:
             if search_query:
                 if fts_error:
                     do_naive = True
-                elif not used_fts and (not search_fields or len(search_fields) == 0):
+                elif prefer_naive or (not used_fts and (not search_fields or len(search_fields) == 0)):
                     do_naive = True
             if do_naive:
                 try:
@@ -1500,7 +1523,7 @@ class PromptsDatabase:
                     all_rows_cursor = self.execute_query(
                         f"SELECT p.* {from_clause} {base_where}"
                     )
-                    q = str(search_query).casefold()
+                    q = self._normalize_text_for_search(search_query)
                     # Determine which fields to scan
                     text_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
                     fields_to_scan = set(search_fields) if search_fields else (text_fields | {"keywords"})
@@ -1510,10 +1533,10 @@ class PromptsDatabase:
                         haystack_parts = []
                         for f in fields_to_scan:
                             if f == "keywords":
-                                haystack_parts.extend([str(k) for k in kws])
+                                haystack_parts.extend([self._normalize_text_for_search(k) for k in kws])
                             elif f in text_fields:
-                                haystack_parts.append(str(rowd.get(f, "")))
-                        if q in ' '.join(haystack_parts).casefold():
+                                haystack_parts.append(self._normalize_text_for_search(rowd.get(f, "")))
+                        if q in ' '.join(haystack_parts):
                             rowd['keywords'] = kws
                             fallback_items.append(rowd)
                     # Merge unique by id with any existing results

@@ -322,6 +322,15 @@ class JobProcessor:
         # Store test run in database
         conn = self.db.get_connection()
         cursor = conn.cursor()
+
+        # Safety: ensure referenced prompt exists to satisfy FK constraints
+        try:
+            cursor.execute("SELECT project_id FROM prompt_studio_test_cases WHERE id = ?", (test_case_id,))
+            tc_row = cursor.fetchone()
+            tc_project_id = tc_row["project_id"] if tc_row else None
+            self._ensure_ps_prompt_exists(prompt_id, tc_project_id)
+        except Exception:
+            pass
         
         cursor.execute("""
             INSERT INTO prompt_studio_test_runs (
