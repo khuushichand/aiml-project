@@ -3411,8 +3411,11 @@ UPDATE db_schema_version
         Returns:
             A list of matching keyword dictionaries.
         """
-        safe_search_term = f'"{search_term}"'
-        return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", safe_search_term, limit)
+        # Support prefix/substring search expectations in tests by using prefix match
+        # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
+        # Avoid quoting here to preserve wildcard behavior.
+        fts_query = f"{search_term}*"
+        return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
 
     # Keyword Collections
     def add_keyword_collection(self, name: str, parent_id: Optional[int] = None) -> Optional[int]:

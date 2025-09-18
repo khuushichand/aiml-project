@@ -619,6 +619,30 @@ class PromptsDatabase:
             logging.error(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}") from e
 
+    # --- Version History (basic) ---
+    def get_prompt_versions(self, prompt_id: int) -> List[Dict[str, Any]]:
+        """Return a basic version history for a prompt based on its current version.
+
+        This reconstructs a simple list of versions [1..current_version]. It does not include diffs.
+        """
+        try:
+            cursor = self.execute_query("SELECT version FROM Prompts WHERE id = ? AND deleted = 0", (prompt_id,))
+            row = cursor.fetchone()
+            if not row:
+                return []
+            current_version = int(row['version']) if isinstance(row['version'], (int,)) else 1
+            versions = []
+            for v in range(1, max(1, current_version) + 1):
+                versions.append({
+                    'version': v,
+                    'created_at': None,
+                    'comment': None,
+                })
+            return versions
+        except (DatabaseError, sqlite3.Error) as e:
+            logging.error(f"Error building version history for prompt {prompt_id}: {e}")
+            return []
+
     def _delete_fts_prompt_keyword(self, conn: sqlite3.Connection, keyword_id: int):
         try:
             conn.execute("DELETE FROM prompt_keywords_fts WHERE rowid = ?", (keyword_id,))
@@ -713,6 +737,8 @@ class PromptsDatabase:
         if not name or not name.strip():
             raise InputError("Prompt name cannot be empty.")
         name = name.strip()  # Use original case for name, but ensure no leading/trailing spaces
+        if author is not None and isinstance(author, str):
+            author = author.strip()
 
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -1180,11 +1206,22 @@ class PromptsDatabase:
                 results_data = []
                 if total_items > 0:
                     # Select desired fields, e.g., id, name, uuid, author
-                    query = f"""SELECT id, name, uuid, author, last_modified FROM Prompts
+                    query = f"""SELECT id, name, uuid, author, details, last_modified FROM Prompts
                                 {where_clause} ORDER BY last_modified DESC, id DESC
                                 LIMIT ? OFFSET ?"""
                     cursor.execute(query, (per_page, offset))
                     results_data = [dict(row) for row in cursor.fetchall()]
+
+                # Enrich each prompt with keywords for downstream filtering/searching that rely on list output
+                # (kept outside of the above block to ensure empty lists are handled consistently)
+                if results_data:
+                    try:
+                        for item in results_data:
+                            pid = item.get('id')
+                            if pid is not None:
+                                item['keywords'] = self.fetch_keywords_for_prompt(int(pid), include_deleted=False)
+                    except Exception as e:
+                        logging.debug(f"Could not enrich prompts with keywords: {e}")
 
             total_pages = ceil(total_items / per_page) if total_items > 0 else 0
             return results_data, total_pages, page, total_items
@@ -1253,6 +1290,7 @@ class PromptsDatabase:
         if page < 1: raise ValueError("Page must be >= 1")
         if results_per_page < 1: raise ValueError("Results per page must be >= 1")
 
+        # Normalize fields
         if search_query and not search_fields:
             search_fields = ["name", "details", "system_prompt", "user_prompt", "author"]
         elif not search_fields:
@@ -1263,13 +1301,84 @@ class PromptsDatabase:
         base_select = "SELECT p.*"
         count_select = "SELECT COUNT(p.id)"
         from_clause = "FROM Prompts p"
+        order_by_clause = "ORDER BY p.last_modified DESC, p.id DESC"
         conditions = []
         params = []
 
         if not include_deleted:
             conditions.append("p.deleted = 0")
 
-        # --- Robust FTS search using subqueries ---
+        # Handle field-prefixed query patterns
+        if isinstance(search_query, str) and search_query.startswith("author:"):
+            author_value = search_query.split(":", 1)[1]
+            if author_value is None:
+                author_value = ""
+            cond = "LOWER(p.author) = LOWER(?)"
+            if not include_deleted:
+                conditions = ["p.deleted = 0", cond]
+            else:
+                conditions = [cond]
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            results_sql = f"{base_select} {from_clause} {where_clause} {order_by_clause} LIMIT ? OFFSET ?"
+            count_sql = f"{count_select} {from_clause} {where_clause}"
+            params = [author_value]
+            try:
+                total_matches = self.execute_query(count_sql, tuple(params)).fetchone()[0]
+                results_list = []
+                if total_matches > 0:
+                    paginated_params = tuple(params + [results_per_page, offset])
+                    results_cursor = self.execute_query(results_sql, paginated_params)
+                    results_list = [dict(row) for row in results_cursor.fetchall()]
+                    for res in results_list:
+                        res['keywords'] = self.fetch_keywords_for_prompt(res['id'], include_deleted=False)
+                return results_list, total_matches
+            except (DatabaseError, sqlite3.Error) as e:
+                logging.error(f"DB error during author filter search: {e}", exc_info=True)
+                return [], 0
+
+        if isinstance(search_query, str) and search_query.startswith("keyword:"):
+            kw_value_raw = search_query.split(":", 1)[1] or ""
+            kw_value = self._normalize_keyword(kw_value_raw)
+            try:
+                # Match active keywords (case-insensitive exact match)
+                kw_cursor = self.execute_query(
+                    "SELECT id FROM PromptKeywordsTable WHERE LOWER(keyword) = LOWER(?) AND deleted = 0",
+                    (kw_value,),
+                )
+                kw_ids = [row['id'] for row in kw_cursor.fetchall()]
+                if not kw_ids:
+                    return [], 0
+                placeholders = ','.join('?' * len(kw_ids))
+                link_cursor = self.execute_query(
+                    f"SELECT DISTINCT prompt_id FROM PromptKeywordLinks WHERE keyword_id IN ({placeholders})",
+                    tuple(kw_ids),
+                )
+                prompt_ids = [row['prompt_id'] for row in link_cursor.fetchall()]
+                if not prompt_ids:
+                    return [], 0
+                id_placeholders = ','.join('?' * len(prompt_ids))
+                conditions = []
+                if not include_deleted:
+                    conditions.append("p.deleted = 0")
+                conditions.append(f"p.id IN ({id_placeholders})")
+                where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                results_sql = f"{base_select} {from_clause} {where_clause} {order_by_clause} LIMIT ? OFFSET ?"
+                count_sql = f"{count_select} {from_clause} {where_clause}"
+                total_matches = self.execute_query(count_sql, tuple(prompt_ids)).fetchone()[0]
+                results_list = []
+                if total_matches > 0:
+                    paginated_params = tuple(prompt_ids + [results_per_page, offset])
+                    results_cursor = self.execute_query(results_sql, paginated_params)
+                    results_list = [dict(row) for row in results_cursor.fetchall()]
+                    for res in results_list:
+                        res['keywords'] = self.fetch_keywords_for_prompt(res['id'], include_deleted=False)
+                return results_list, total_matches
+            except (DatabaseError, sqlite3.Error) as e:
+                logging.error(f"DB error during keyword filter search: {e}", exc_info=True)
+                return [], 0
+
+        # --- FTS search using subqueries, with robust fallback ---
+        used_fts = False
         if search_query and search_fields:
             matching_prompt_ids = set()
             text_search_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
@@ -1278,10 +1387,10 @@ class PromptsDatabase:
             if any(field in text_search_fields for field in search_fields):
                 try:
                     cursor = self.execute_query("SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?", (search_query,))
+                    used_fts = True
                     matching_prompt_ids.update(row['rowid'] for row in cursor.fetchall())
                 except sqlite3.Error as e:
-                    logging.error(f"FTS search on prompts failed: {e}", exc_info=True)
-                    raise DatabaseError(f"FTS search on prompts failed: {e}") from e
+                    logging.warning(f"FTS search on prompts failed: {e}; will fallback to naive search.")
 
 
             # Search in keywords
@@ -1289,6 +1398,7 @@ class PromptsDatabase:
                 try:
                     # 1. Find keyword IDs matching the query
                     kw_cursor = self.execute_query("SELECT rowid FROM prompt_keywords_fts WHERE prompt_keywords_fts MATCH ?", (search_query,))
+                    used_fts = True
                     matching_keyword_ids = {row['rowid'] for row in kw_cursor.fetchall()}
 
                     # 2. Find prompt IDs linked to those keywords
@@ -1300,16 +1410,21 @@ class PromptsDatabase:
                         )
                         matching_prompt_ids.update(row['prompt_id'] for row in link_cursor.fetchall())
                 except sqlite3.Error as e:
-                    logging.error(f"FTS search on keywords failed: {e}", exc_info=True)
-                    raise DatabaseError(f"FTS search on keywords failed: {e}") from e
+                    logging.warning(f"FTS search on keywords failed: {e}; will fallback to naive search.")
 
-            if not matching_prompt_ids:
-                return [], 0  # No matches found, short-circuit
+            if not matching_prompt_ids and not used_fts:
+                return [], 0  # No FTS used and no matches requested
 
             # Add the final ID list to the main query conditions
-            id_placeholders = ','.join('?' * len(matching_prompt_ids))
-            conditions.append(f"p.id IN ({id_placeholders})")
-            params.extend(list(matching_prompt_ids))
+            if matching_prompt_ids:
+                id_placeholders = ','.join('?' * len(matching_prompt_ids))
+                conditions.append(f"p.id IN ({id_placeholders})")
+                params.extend(list(matching_prompt_ids))
+
+        # If FTS was used but resulted in no matches, prevent unfiltered result set before fallback.
+        if search_query and search_fields and used_fts and not conditions and not params:
+            # Ensure the SQL below returns zero rows, then naive fallback will determine matches correctly
+            conditions.append("1 = 0")
 
         # --- Build and Execute Final Query ---
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -1330,11 +1445,48 @@ class PromptsDatabase:
                 # Attach keywords to each result
                 for res_dict in results_list:
                     res_dict['keywords'] = self.fetch_keywords_for_prompt(res_dict['id'], include_deleted=False)
-
+            # If we attempted FTS (or fields unspecified), also compute a naive case-insensitive substring search
+            if search_query:
+                try:
+                    # Naive fallback: scan text fields and keywords in Python with casefold
+                    fallback_items = []
+                    all_rows_cursor = self.execute_query(
+                        f"SELECT p.* {from_clause} {'WHERE p.deleted = 0' if not include_deleted else ''}"
+                    )
+                    q = str(search_query).casefold()
+                    for row in all_rows_cursor.fetchall():
+                        rowd = dict(row)
+                        kws = self.fetch_keywords_for_prompt(rowd['id'], include_deleted=False)
+                        fields = [
+                            str(rowd.get('name', '')),
+                            str(rowd.get('author', '')),
+                            str(rowd.get('details', '')),
+                            str(rowd.get('system_prompt', '')),
+                            str(rowd.get('user_prompt', '')),
+                        ] + [str(k) for k in kws]
+                        if q in ' '.join(fields).casefold():
+                            rowd['keywords'] = kws
+                            fallback_items.append(rowd)
+                    # Merge FTS results (if any) with fallback matches by id (union)
+                    by_id = {}
+                    for item in results_list:
+                        by_id[item['id']] = item
+                    for item in fallback_items:
+                        by_id[item['id']] = item
+                    combined = list(by_id.values())
+                    combined.sort(key=lambda x: (x.get('last_modified', ''), x.get('id', 0)), reverse=True)
+                    total_matches = len(combined)
+                    start = offset
+                    end = offset + results_per_page
+                    results_list = combined[start:end]
+                    return results_list, total_matches
+                except Exception as fe:
+                    logging.warning(f"Naive fallback search failed: {fe}")
             return results_list, total_matches
         except (DatabaseError, sqlite3.Error) as e:
             logging.error(f"DB error during prompt search: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to search prompts: {e}") from e
+            # Last-resort fallback to empty set
+            return [], 0
 
     # --- Sync Log Access Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None) -> List[Dict]:

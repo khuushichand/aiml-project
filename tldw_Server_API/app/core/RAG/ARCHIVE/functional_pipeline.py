@@ -19,13 +19,13 @@ import time
 from loguru import logger
 from typing import cast
 
-from .types import Document, SearchResult, DataSource
-from .config import RAGConfig
-from .metrics_collector import MetricsCollector, QueryMetrics
+from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource
+from tldw_Server_API.app.core.RAG.rag_service.config import RAGConfig
+from tldw_Server_API.app.core.RAG.rag_service.metrics_collector import MetricsCollector, QueryMetrics
 
 # Import enhanced chunking functions
 try:
-    from .enhanced_chunking_integration import (
+    from tldw_Server_API.app.core.RAG.rag_service.enhanced_chunking_integration import (
         enhanced_chunk_documents,
         filter_chunks_by_type,
         expand_with_parent_context,
@@ -38,7 +38,7 @@ except ImportError:
 
 # Expose semantic_cache at module level so tests can patch it here
 try:
-    from . import semantic_cache  # type: ignore
+    from tldw_Server_API.app.core.RAG.rag_service import semantic_cache  # type: ignore
 except Exception:
     semantic_cache = None  # type: ignore
 

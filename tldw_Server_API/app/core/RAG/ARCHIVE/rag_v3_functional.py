@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, List, Literal
 from uuid import uuid4
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -28,12 +28,11 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 # Functional Pipeline
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     minimal_pipeline,
     standard_pipeline,
     quality_pipeline,
     custom_pipeline,
-    build_pipeline,
     RAGPipelineContext,
     # Individual functions for custom pipelines
     expand_query,
@@ -329,7 +328,7 @@ async def search(
             
         elif request.pipeline == "enhanced":
             # Import enhanced pipeline
-            from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import enhanced_pipeline
+            from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import enhanced_pipeline
             context = await enhanced_pipeline(request.query, config)
             pipeline_used = "enhanced"
             

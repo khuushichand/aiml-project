@@ -75,8 +75,10 @@ def test_create_get_update_delete_note(client_with_notes_db: TestClient):
     assert isinstance(data, dict) and "notes" in data
     assert any(n.get("id") == note_id for n in data["notes"])  # noqa: SIM118
 
-    # Delete (soft)
-    del_resp = client.delete(f"/api/v1/notes/{note_id}")
+    # Delete (soft) requires expected-version header
+    curr = client.get(f"/api/v1/notes/{note_id}").json()
+    ver = curr.get("version", 1)
+    del_resp = client.delete(f"/api/v1/notes/{note_id}", headers={"expected-version": str(ver)})
     assert del_resp.status_code in (200, 204)
 
 

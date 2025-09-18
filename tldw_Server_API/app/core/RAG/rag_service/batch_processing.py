@@ -10,10 +10,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Callable, AsyncIterator
-from collections import defaultdict, deque
-import hashlib
-from datetime import datetime
+from typing import Any, Dict, List, Optional, Callable, AsyncIterator
+from collections import deque
 import uuid
 
 from loguru import logger
@@ -604,18 +602,11 @@ async def batch_process_queries(
         List of results
     """
     processor = BatchProcessor(max_concurrent=max_concurrent)
-    
-    # Create wrapper for pipeline function
+
+    # Create wrapper for pipeline function that avoids deprecated context
     async def process_query(query: str, config: Dict[str, Any]) -> Any:
-        from .functional_pipeline import RAGPipelineContext
-        
-        context = RAGPipelineContext(
-            query=query,
-            original_query=query,
-            config=config or {}
-        )
-        
-        result = await pipeline_func(context.query, context.config)
+        cfg = config or {}
+        result = await pipeline_func(query, cfg)
         return result.documents if hasattr(result, 'documents') else result
     
     # Process batch
@@ -659,18 +650,11 @@ async def stream_process_queries(
         Batch results
     """
     processor = BatchProcessor()
-    
-    # Create wrapper
+
+    # Create wrapper that avoids deprecated context
     async def process_query(query: str, config: Dict[str, Any]) -> Any:
-        from .functional_pipeline import RAGPipelineContext
-        
-        context = RAGPipelineContext(
-            query=query,
-            original_query=query,
-            config=config or {}
-        )
-        
-        result = await pipeline_func(context.query, context.config)
+        cfg = config or {}
+        result = await pipeline_func(query, cfg)
         return result
     
     # Process stream

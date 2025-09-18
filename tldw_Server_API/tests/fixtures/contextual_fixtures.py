@@ -9,10 +9,9 @@ from unittest.mock import Mock, MagicMock, AsyncMock
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import tempfile
-import json
 
+from dataclasses import dataclass, field
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import RAGPipelineContext
 
 
 # Sample document content for testing
@@ -56,6 +55,18 @@ SAMPLE_DOCUMENTS = {
     | T5    | 91.3%    | Med   |
     """
 }
+
+
+@dataclass
+class SimpleContext:
+    query: str
+    original_query: str
+    documents: List[Document] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    config: Dict[str, Any] = field(default_factory=dict)
+    cache_hit: bool = False
+    timings: Dict[str, float] = field(default_factory=dict)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -124,7 +135,7 @@ def mock_documents():
 @pytest.fixture
 def mock_pipeline_context(mock_documents):
     """Create a mock RAG pipeline context."""
-    context = RAGPipelineContext(
+    context = SimpleContext(
         query="What is machine learning?",
         config={
             "top_k": 10,

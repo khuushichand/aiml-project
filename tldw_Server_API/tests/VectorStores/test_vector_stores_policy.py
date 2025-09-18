@@ -1,13 +1,25 @@
 import os
+import pytest
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 
 def _client():
     c = TestClient(app)
     c.cookies.set("csrf_token", "test-csrf")
     return c
+
+
+@pytest.fixture(autouse=True)
+def override_user_dep():
+    """Override authentication to provide a test user without requiring X-API-KEY."""
+    async def _override_user():
+        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+    app.dependency_overrides[get_request_user] = _override_user
+    yield
+    app.dependency_overrides.clear()
 
 
 def test_upsert_content_token_limit_and_allowlist():
@@ -66,4 +78,3 @@ def test_query_token_limit_and_allowlist():
         assert "not allowed" in r2.text.lower()
     finally:
         os.environ.pop("TESTING", None)
-

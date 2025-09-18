@@ -208,18 +208,35 @@ async def create_vector_store(
     adapter = await _get_adapter_for_user(current_user, payload.dimensions)
     await adapter.initialize()
 
-    # Enforce unique names per-user using meta DB
+    # Enforce unique names per-user using meta DB, but ignore stale entries (no backing collection)
+    uid = str(getattr(current_user, 'id', '1'))
     if payload.name and payload.name.strip():
-        uid = str(getattr(current_user, 'id', '1'))
         try:
             init_meta_db(uid)
             existing = meta_find_store_by_name(uid, payload.name)
             if existing:
+                # Enforce uniqueness purely via meta DB (even if collection is missing)
                 raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
         except HTTPException:
             raise
         except Exception as _e:
             logger.warning(f"Meta DB uniqueness check failed: {_e}")
+        # As a fallback when meta lookup fails, scan adapter collections by metadata.name
+        try:
+            for col in await adapter.list_collections():
+                try:
+                    st = await adapter.get_collection_stats(col)
+                    md = st.get('metadata') or {}
+                    if md.get('name') and md.get('name').strip().lower() == payload.name.strip().lower():
+                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
+                except HTTPException:
+                    raise
+                except Exception:
+                    continue
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     # Use store_id as collection name for uniqueness; keep human name in metadata
     metadata = dict(payload.metadata or {})
@@ -394,8 +411,14 @@ async def update_vector_store(
 ):
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
-    # Fetch current stats then write metadata
-    stats = await adapter.get_collection_stats(store_id)
+    # Ensure exists by name list to avoid implicit creation, then fetch stats
+    try:
+        names = await adapter.list_collections()
+        if store_id not in names:
+            raise HTTPException(status_code=404, detail="Vector store not found")
+        stats = await adapter.get_collection_stats(store_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
     md = stats.get("metadata", {}) or {}
     # Enforce unique name per-user using meta DB first
     if payload.name and payload.name.strip():
@@ -491,21 +514,12 @@ async def upsert_vectors(
     adapter = await _get_adapter_for_user(current_user, embedding_dim=first_values_len or 1536)
     await adapter.initialize()
 
-    # Determine target dimension: prefer in-memory registry, then stats, then first values len
+    # Determine target dimension: prefer in-memory registry, then adapter stats, then first values len
     registry_dim = _STORE_DIMENSIONS.get(store_id)
     stats = await adapter.get_collection_stats(store_id)
     stats_dim = stats.get("dimension")
-    # Check if the collection is empty for this store (best-effort; tests may use fakes)
-    try:
-        col = adapter.manager.get_or_create_collection(store_id)
-        is_empty = (col.count() == 0)
-    except Exception:
-        is_empty = False
-    # If empty and caller provided explicit vectors, infer from first record; otherwise prefer registry/stats
-    if is_empty and first_values_len:
-        dim = first_values_len
-    else:
-        dim = registry_dim or stats_dim or first_values_len or 1536
+    # Always prioritize declared store dimension over incoming values to catch mismatches
+    dim = registry_dim or stats_dim or first_values_len or 1536
 
     # Prepare buffers
     ids: List[str] = []
@@ -559,9 +573,9 @@ async def upsert_vectors(
             if tok > max_tokens:
                 too_long.append((idx, tok))
         if too_long:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=400,
-                detail={
+                content={
                     "error": "input_too_long",
                     "message": f"One or more inputs exceed max tokens {max_tokens} for model {model_id}",
                     "details": [{"index": i, "tokens": tok} for (i, tok) in too_long]
@@ -708,6 +722,27 @@ async def delete_vector(
 ):
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
+    # Ensure store exists (avoid implicit creation)
+    try:
+        names = await adapter.list_collections()
+        if store_id not in names:
+            raise HTTPException(status_code=404, detail="Vector store not found")
+        await adapter.get_collection_stats(store_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
+    # Verify the vector exists before deletion
+    try:
+        # Use get-only access to avoid accidental creation
+        collection = adapter.manager.client.get_collection(name=store_id)
+        data = collection.get(ids=[vector_id], include=[])
+        ids_found = set(data.get('ids') or []) if isinstance(data, dict) else set()
+        if vector_id not in ids_found:
+            raise HTTPException(status_code=404, detail="Vector not found")
+    except HTTPException:
+        raise
+    except Exception:
+        # If collection get fails unexpectedly, report not found
+        raise HTTPException(status_code=404, detail="Vector not found")
     await adapter.delete_vectors(store_id, ids=[vector_id])
     return {"id": vector_id, "deleted": True}
 
@@ -1105,7 +1140,11 @@ async def get_vector_store(
     """
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
+    # Ensure store actually exists by listing collections to avoid implicit creation
     try:
+        names = await adapter.list_collections()
+        if store_id not in names:
+            raise HTTPException(status_code=404, detail="Vector store not found")
         stats = await adapter.get_collection_stats(store_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")

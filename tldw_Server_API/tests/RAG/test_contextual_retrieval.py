@@ -5,9 +5,6 @@ Tests parent document expansion and sibling chunk inclusion.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
-from typing import List, Dict, Any
-import asyncio
 
 from tldw_Server_API.app.core.RAG.rag_service.enhanced_chunking_integration import (
     expand_with_parent_context,
@@ -15,7 +12,7 @@ from tldw_Server_API.app.core.RAG.rag_service.enhanced_chunking_integration impo
     prioritize_by_chunk_type
 )
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import RAGPipelineContext
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import RAGPipelineContext
 
 
 class TestParentContextExpansion:

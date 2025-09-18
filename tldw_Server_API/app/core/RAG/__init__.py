@@ -5,7 +5,7 @@
 
 from .rag_service.config import RAGConfig
 from .rag_service.types import DataSource, Document, SearchResult
-from .rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     RAGPipelineContext,
     minimal_pipeline,
     standard_pipeline,

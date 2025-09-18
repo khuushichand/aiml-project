@@ -9,6 +9,7 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
@@ -49,7 +50,13 @@ async def verify_token(
     if settings.get("SINGLE_USER_MODE"):
         # In single-user mode, use the core app settings value as the canonical expected token.
         # Tests consistently patch tldw_Server_API.app.core.config.settings.
+        # Determine expected API key from core config settings (tests patch this).
         expected_token = settings.get("SINGLE_USER_API_KEY")
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server authentication misconfigured (API key missing).",
+            )
         if not expected_token:
             logger.critical("SINGLE_USER_API_KEY is not configured in core settings for single-user mode.")
             raise HTTPException(

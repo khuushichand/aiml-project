@@ -4,28 +4,20 @@ Comprehensive tests for the refactored RAG module with functional pipeline.
 
 import pytest
 import asyncio
-from typing import List, Dict, Any
-from unittest.mock import Mock, AsyncMock, patch
 
 from tldw_Server_API.app.core.RAG import (
     # Pipelines
     minimal_pipeline,
     standard_pipeline,
-    quality_pipeline,
     build_pipeline,
     # Context
     RAGPipelineContext,
     # Functions
-    expand_query,
     check_cache,
-    retrieve_documents,
-    rerank_documents,
-    store_in_cache,
     analyze_performance,
     # Types
     DataSource,
-    Document,
-    RAGConfig
+    Document
 )
 
 
@@ -178,7 +170,7 @@ class TestResilience:
         )
         
         # Import fallback functions from the module
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
             expand_query_fallback,
             retrieve_documents_fallback
         )
@@ -252,7 +244,7 @@ class TestPerformanceMonitoring:
     @pytest.mark.asyncio
     async def test_timing_decorator(self):
         """Test that timing decorator works."""
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import timer
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import timer
         
         @timer("test_function")
         async def timed_function(context: RAGPipelineContext) -> RAGPipelineContext:

@@ -301,6 +301,10 @@ def get_add_media_form(
     chunk_overlap: int = Form(200, description="Chunk overlap size"),
     custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
     perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
+    # Contextual chunking options
+    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
+    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
+    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
     summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
     # Embedding options
     generate_embeddings: bool = Form(False, description="Generate embeddings after media processing"),
@@ -322,6 +326,37 @@ def get_add_media_form(
             transcription_model = "whisper-large-v3"  # Default to a reliable model
     
     try:
+        # Coerce JSON string inputs for urls into a list for robustness
+        if isinstance(urls, str):
+            try:
+                parsed = json.loads(urls)
+                urls = parsed if isinstance(parsed, list) else [parsed]
+            except Exception:
+                urls = [urls]
+        elif isinstance(urls, list) and len(urls) == 1 and isinstance(urls[0], str):
+            # Some clients send a single form field 'urls' containing a JSON array string
+            first = urls[0]
+            if first.strip().startswith("[") or first.strip().startswith("\""):
+                try:
+                    parsed = json.loads(first)
+                    urls = parsed if isinstance(parsed, list) else [parsed]
+                except Exception:
+                    pass
+        # Normalize common boolean/integer coercions for robust form handling
+        if isinstance(enable_contextual_chunking, str):
+            enable_contextual_chunking = enable_contextual_chunking.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(use_adaptive_chunking, str):
+            use_adaptive_chunking = use_adaptive_chunking.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(use_multi_level_chunking, str):
+            use_multi_level_chunking = use_multi_level_chunking.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(perform_chunking, str):
+            perform_chunking = perform_chunking.strip().lower() in {"true", "1", "yes", "on"}
+        try:
+            if isinstance(context_window_size, str):
+                context_window_size = int(context_window_size)
+        except Exception:
+            pass
+
         # Create the Pydantic model instance using the parsed form data.
         # Pass the received Form(...) parameters to the model constructor
         form_instance = AddMediaForm(
@@ -358,6 +393,10 @@ def get_add_media_form(
             custom_chapter_pattern=custom_chapter_pattern,
             perform_rolling_summarization=perform_rolling_summarization,
             summarize_recursively=summarize_recursively,
+            # Contextual chunking options must be forwarded so validation applies
+            enable_contextual_chunking=enable_contextual_chunking,
+            contextual_llm_model=contextual_llm_model,
+            context_window_size=context_window_size,
             generate_embeddings=generate_embeddings,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
@@ -610,7 +649,7 @@ async def create_version(
 
     except InputError as e: # Catch specific error if media_id not found/inactive
         logger.warning(f"Cannot create version for media {media_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or inactive")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or deleted")
     except (DatabaseError, ConflictError) as e: # Catch DB errors from new library
         logger.error(f"Database error creating version for media {media_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred")
@@ -1633,6 +1672,8 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
     if form_data.media_type == 'ebook':
         final_chunk_method = 'ebook_chapters'
 
+    # Infer contextual enablement if related fields provided
+    inferred_enable_contextual = bool(getattr(form_data, 'contextual_llm_model', None) or getattr(form_data, 'context_window_size', None))
     chunk_options = {
         'method': final_chunk_method,
         'max_size': form_data.chunk_size,
@@ -1643,7 +1684,7 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
         'language': form_data.chunk_language or (form_data.transcription_language if form_data.media_type in ['audio', 'video'] else None),
         'custom_chapter_pattern': form_data.custom_chapter_pattern,
         # Add contextual chunking options
-        'enable_contextual_chunking': form_data.enable_contextual_chunking,
+        'enable_contextual_chunking': form_data.enable_contextual_chunking or inferred_enable_contextual,
         'contextual_llm_model': form_data.contextual_llm_model,
         'context_window_size': form_data.context_window_size
     }
@@ -2667,7 +2708,10 @@ async def add_media(
         # Handle potential errors during temp dir creation/management
         logging.error(f"OSError during processing setup: {e}", exc_info=True)
         # Cleanup is handled by TempDirManager context exit
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="System error during setup")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OS error during setup: {e}"
+        )
     except Exception as e:
         # Catch unexpected errors, ensure cleanup
         logging.error(f"Unhandled exception in add_media endpoint: {type(e).__name__} - {e}", exc_info=True)
@@ -2723,6 +2767,10 @@ def get_process_videos_form(
     custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
     perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
     summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
+    # Contextual chunking options (missing earlier; add to avoid NameError and enable validation)
+    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
+    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
+    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
     # --- Keep Token and Files separate ---
     #token: str = Header(..., description="Authentication token"),  # Auth handled by get_media_db_for_user
     db=Depends(get_media_db_for_user)
@@ -2774,6 +2822,9 @@ def get_process_videos_form(
             custom_chapter_pattern=custom_chapter_pattern,
             perform_rolling_summarization=perform_rolling_summarization,
             summarize_recursively=summarize_recursively,
+            enable_contextual_chunking=enable_contextual_chunking,
+            contextual_llm_model=contextual_llm_model,
+            context_window_size=context_window_size,
         )
         return form_instance
     except ValidationError as e:
@@ -3360,7 +3411,7 @@ async def process_audios_endpoint(
         except Exception as exec_err:
             # Catch errors during the execution setup or within the library if it raises unexpectedly
             logging.error(f"Error executing process_audio_files: {exec_err}", exc_info=True)
-            error_msg = f"Error during audio processing execution: {type(exec_err).__name__}"
+            error_msg = f"Error during audio processing execution: {type(exec_err).__name__}: {exec_err}"
             # Calculate errors based on *attempted* inputs for this batch
             num_attempted = len(all_inputs)
             batch_result["errors_count"] += num_attempted # Assume all failed if executor errored
@@ -3439,8 +3490,8 @@ async def process_audios_endpoint(
              pass
         elif processing_output is not None:
             # Handle unexpected output format from the library function more gracefully
-            logging.error(f"process_audio_files returned unexpected format: Type={type(processing_output)}")
-            error_msg = "Audio processing library returned invalid data."
+            logging.error(f"process_audio_files returned unexpected format: Type={type(processing_output)}; Value={processing_output}")
+            error_msg = "Audio processing library returned invalid data (unexpected output structure)."
             num_attempted = len(all_inputs)
             batch_result["errors_count"] += num_attempted
             batch_result["errors"].append(error_msg)
@@ -3549,7 +3600,8 @@ def _process_single_ebook(
             chunk_options=chunk_options,
             perform_analysis=perform_analysis,
             api_name=api_name,
-            # api_key removed - retrieved from server config
+            # Supply None; provider functions will resolve API key at call time
+            api_key=None,
             custom_prompt=custom_prompt,
             system_prompt=system_prompt,
             summarize_recursively=summarize_recursively,

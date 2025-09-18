@@ -190,7 +190,18 @@ class ChromaDBAdapter(VectorStoreAdapter):
             await self.initialize()
         
         try:
-            collection = self.manager.get_or_create_collection(collection_name)
+            # Use get-only to avoid creating missing collections implicitly
+            collection = self.manager.client.get_collection(name=collection_name)
+            # Verify the vectors exist before attempting deletion
+            try:
+                data = collection.get(ids=ids, include=[])
+                existing_ids = set(data.get("ids") or []) if isinstance(data, dict) else set()
+                missing = [vid for vid in ids if vid not in existing_ids]
+                if missing:
+                    raise ValueError(f"Vector(s) not found: {missing}")
+            except Exception as e:
+                # Bubble up as not-found for endpoint to translate to 404/400
+                raise
             collection.delete(ids=ids)
             logger.info(f"Deleted {len(ids)} vectors from collection '{collection_name}'")
         except Exception as e:
@@ -342,32 +353,38 @@ class ChromaDBAdapter(VectorStoreAdapter):
             await self.initialize()
         
         try:
-            collection = self.manager.get_or_create_collection(collection_name)
-            
+            # Use get-only call; raise if collection does not exist
+            collection = self.manager.client.get_collection(name=collection_name)
+
             # Get collection count
             count = collection.count()
-            
+
             # Get collection metadata
             metadata = collection.metadata if hasattr(collection, 'metadata') else {}
-            
-            # Try to get a sample to determine dimension
-            dimension = self.config.embedding_dim  # Default
-            if count > 0:
+
+            # Determine dimension: prefer metadata 'embedding_dimension', else sample, else config
+            dimension = None
+            try:
+                if metadata and "embedding_dimension" in metadata:
+                    dimension = int(metadata["embedding_dimension"]) or None
+            except Exception:
+                dimension = None
+            if dimension is None and count > 0:
                 sample = collection.get(limit=1, include=["embeddings"])
-                if sample is not None:
-                    emb = sample.get("embeddings")
-                    # emb may be a list or numpy array; avoid truthiness ambiguity
-                    try:
-                        if isinstance(emb, list) and len(emb) > 0:
-                            dimension = len(emb[0])
-                        elif hasattr(emb, "__len__") and len(emb) > 0:
-                            first = emb[0]
-                            try:
-                                dimension = len(first)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                emb = sample.get("embeddings") if isinstance(sample, dict) else None
+                try:
+                    if isinstance(emb, list) and len(emb) > 0:
+                        dimension = len(emb[0])
+                    elif hasattr(emb, "__len__") and len(emb) > 0:
+                        first = emb[0]
+                        try:
+                            dimension = len(first)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if dimension is None:
+                dimension = self.config.embedding_dim
             
             return {
                 "name": collection_name,

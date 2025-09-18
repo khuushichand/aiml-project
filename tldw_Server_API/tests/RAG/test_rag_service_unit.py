@@ -5,19 +5,15 @@ Tests the functional pipeline components and their composition.
 """
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from pathlib import Path
-import asyncio
+from unittest.mock import Mock, AsyncMock, patch
 
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     RAGPipelineContext,
     build_pipeline,
     standard_pipeline,
     minimal_pipeline,
     expand_query,
-    check_cache,
     retrieve_documents,
-    rerank_documents,
     get_pipeline,
     register_pipeline
 )
@@ -143,7 +139,7 @@ class TestPipelineComponents:
             mock_expand.return_value = "Machine Learning ML"
             
             # Import and test the actual expand_query function
-            from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import expand_query
+            from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import expand_query
             result = await expand_query(context)
             
             # Query should be expanded
@@ -165,7 +161,7 @@ class TestPipelineComponents:
             mock_cache.get_instance.return_value = mock_cache_instance
             mock_cache_instance.get.return_value = None  # Cache miss
             
-            from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import check_cache
+            from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import check_cache
             result = await check_cache(context)
             
             assert result.cache_hit is False
@@ -193,7 +189,7 @@ class TestPipelineComponents:
             mock_retriever.return_value = mock_retriever_instance
             mock_retriever_instance.retrieve = AsyncMock(return_value=mock_docs)
             
-            from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import retrieve_documents
+            from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import retrieve_documents
             result = await retrieve_documents(context)
             
             assert len(result.documents) > 0
@@ -216,7 +212,7 @@ class TestPipelineReranking:
             ]
         )
         
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import rerank_documents
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import rerank_documents
         
         with patch('tldw_Server_API.app.core.RAG.rag_service.advanced_reranking.rerank_by_similarity') as mock_rerank:
             mock_rerank.return_value = context.documents[:2]  # Return top 2
@@ -244,7 +240,7 @@ class TestPipelineReranking:
             ]
         )
         
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import process_tables
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import process_tables
         
         with patch('tldw_Server_API.app.core.RAG.rag_service.table_serialization.serialize_table') as mock_serialize:
             mock_serialize.return_value = "Table: A | B"
@@ -316,7 +312,7 @@ class TestPerformanceMonitoring:
             }
         )
         
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import analyze_performance
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import analyze_performance
         
         result = await analyze_performance(context)
         
@@ -336,7 +332,7 @@ class TestPerformanceMonitoring:
             ]
         )
         
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import store_in_cache
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import store_in_cache
         
         with patch('tldw_Server_API.app.core.RAG.rag_service.semantic_cache') as mock_cache:
             mock_cache_instance = Mock()
@@ -359,7 +355,7 @@ class TestPerformanceMonitoring:
             metadata={"collection_size": 100000}
         )
         
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import optimize_chromadb_search
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import optimize_chromadb_search
         
         with patch('tldw_Server_API.app.core.RAG.rag_service.chromadb_optimizer.optimize_for_large_collection') as mock_optimize:
             mock_optimize.return_value = {"optimization_applied": True}
@@ -376,7 +372,7 @@ class TestPipelineUtilities:
     @pytest.mark.asyncio
     async def test_conditional_execution(self):
         """Test conditional pipeline execution."""
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import conditional
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import conditional
         
         context = RAGPipelineContext(
             query="test",
@@ -418,7 +414,7 @@ class TestPipelineUtilities:
     @pytest.mark.asyncio
     async def test_parallel_execution(self):
         """Test parallel pipeline execution."""
-        from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import parallel
+        from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import parallel
         
         context = RAGPipelineContext(
             query="test",

@@ -219,6 +219,9 @@ class TestParakeetMLX:
         
         audio_data, sample_rate = sample_audio_data
         mock_check_mlx.return_value = False
+        # Ensure cache is clear to avoid reuse of previously mocked models
+        import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+        mlx_mod._mlx_model_cache = None
         
         result = transcribe_with_parakeet_mlx(audio_data, sample_rate)
         

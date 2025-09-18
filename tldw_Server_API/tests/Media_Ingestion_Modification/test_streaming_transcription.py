@@ -23,6 +23,17 @@ except Exception:
 pytestmark = pytest.mark.unit
 
 
+# Provide a module-level websocket fixture so tests in multiple classes can reuse it
+@pytest.fixture
+def mock_websocket():
+    ws = AsyncMock()
+    ws.send = AsyncMock()
+    ws.recv = AsyncMock()
+    ws.close = AsyncMock()
+    ws.closed = False
+    return ws
+
+
 class TestStreamingTranscription:
     """Test suite for streaming transcription functionality."""
     

@@ -224,7 +224,19 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
     """
     global _onnx_model_cache
     
-    if ort is None:
+    global ort
+    if ort is None or not hasattr(ort, 'InferenceSession'):
+        # Attempt a late import to support tests that patch onnxruntime
+        try:
+            import onnxruntime as _ort
+            ort = _ort
+        except Exception:
+            try:
+                import sys as _sys
+                ort = _sys.modules.get('onnxruntime', None)
+            except Exception:
+                ort = None
+    if ort is None or not hasattr(ort, 'InferenceSession'):
         logger.error("ONNX Runtime not available")
         return None, None
     
@@ -272,10 +284,17 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         providers.append('CPUExecutionProvider')
         
         # Create ONNX session
-        session_options = ort.SessionOptions()
-        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        
-        session = ort.InferenceSession(
+        # Use a fresh import so patched attributes are respected
+        try:
+            import importlib as _importlib
+            _runtime = _importlib.import_module('onnxruntime')
+        except Exception:
+            _runtime = ort
+
+        session_options = _runtime.SessionOptions()
+        session_options.graph_optimization_level = _runtime.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        session = _runtime.InferenceSession(
             str(onnx_path),
             sess_options=session_options,
             providers=providers

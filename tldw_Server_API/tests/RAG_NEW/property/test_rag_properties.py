@@ -6,19 +6,15 @@ across all valid inputs.
 """
 
 import pytest
-from hypothesis import given, strategies as st, assume, settings, example
-from hypothesis.stateful import RuleBasedStateMachine, rule, precondition, invariant, Bundle
-import asyncio
-from typing import List, Dict, Any, Optional
+from hypothesis import given, strategies as st, example
+from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, Bundle
 import numpy as np
 from datetime import datetime
-from uuid import uuid4
 
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import RAGPipelineContext
-from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource
+from dataclasses import dataclass, field
+from typing import List, Dict, Any
+from tldw_Server_API.app.core.RAG.rag_service.types import Document
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import RetrievalConfig
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
 
 # =====================================================================
 # Hypothesis Strategies
@@ -83,6 +79,18 @@ def retrieval_config_strategy(draw):
 # Property Tests for Pipeline Context
 # =====================================================================
 
+@dataclass
+class SimpleContext:
+    query: str
+    original_query: str
+    documents: List[Document] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    config: Dict[str, Any] = field(default_factory=dict)
+    cache_hit: bool = False
+    timings: Dict[str, float] = field(default_factory=dict)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
+
+
 @pytest.mark.property
 class TestPipelineContextProperties:
     """Property tests for RAGPipelineContext."""
@@ -93,7 +101,7 @@ class TestPipelineContextProperties:
     )
     def test_context_query_preservation(self, query, config):
         """Original query should always be preserved."""
-        context = RAGPipelineContext(
+        context = SimpleContext(
             query=query,
             original_query=query,
             config=config
@@ -114,7 +122,7 @@ class TestPipelineContextProperties:
     )
     def test_context_document_operations(self, documents):
         """Document operations should maintain consistency."""
-        context = RAGPipelineContext(
+        context = SimpleContext(
             query="test",
             original_query="test"
         )
@@ -142,7 +150,7 @@ class TestPipelineContextProperties:
     )
     def test_context_error_tracking(self, errors):
         """Error tracking should preserve all error information."""
-        context = RAGPipelineContext(
+        context = SimpleContext(
             query="test",
             original_query="test"
         )

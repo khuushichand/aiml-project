@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StreamingConfig:
     """Configuration for streaming transcription."""
-    model_variant: str = 'mlx'  # 'standard', 'onnx', 'mlx'
+    model_variant: str = 'standard'  # 'standard', 'onnx', 'mlx'
     sample_rate: int = 16000
     chunk_duration: float = 2.0  # Seconds of audio to accumulate before transcribing
     overlap_duration: float = 0.5  # Overlap between chunks

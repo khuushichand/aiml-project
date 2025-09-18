@@ -802,7 +802,8 @@ def process_epub(
 
         # 3. Summarization / Analysis
         final_analysis = None # Renamed for consistency
-        if perform_analysis and api_name and api_key and processed_chunks:
+        # Resolve API key at call-time within provider functions; don't require here
+        if perform_analysis and api_name and processed_chunks:
             logging.info(f"Summarization enabled for {len(processed_chunks)} chunks of EPUB '{final_title}'.")
             log_counter("epub_summarization_attempt", value=len(processed_chunks), labels={"file_path": file_path, "api_name": api_name})
             chunk_summaries = []
@@ -819,7 +820,7 @@ def process_epub(
                             api_name=api_name,
                             input_data=chunk_text,
                             custom_prompt_arg=custom_prompt, # Use this name
-                            api_key=api_key,
+                            api_key=api_key,  # May be None; provider will load from config
                             system_message=system_prompt, # Use this name
                             temp=None,
                             recursive_summarization=False, # Summarize chunk first
@@ -877,9 +878,12 @@ def process_epub(
             log_counter("epub_chunks_summarized", value=len(chunk_summaries), labels={"file_path": file_path})
             logging.info(f"Summarization processing completed for EPUB '{final_title}'.")
 
-        elif not perform_analysis: logging.info(f"Summarization disabled for EPUB '{final_title}'.")
-        elif not api_name or not api_key: logging.warning(f"Summarization skipped for EPUB '{final_title}': API name or key not provided.")
-        elif not processed_chunks: logging.warning(f"Summarization skipped for EPUB '{final_title}': No processable chunks available.")
+        elif not perform_analysis:
+            logging.info(f"Summarization disabled for EPUB '{final_title}'.")
+        elif not api_name:
+            logging.warning(f"Summarization skipped for EPUB '{final_title}': API name not provided.")
+        elif not processed_chunks:
+            logging.warning(f"Summarization skipped for EPUB '{final_title}': No processable chunks available.")
         else: logging.warning(f"Summarization skipped for EPUB '{final_title}' due to unknown condition.")
 
 
@@ -1094,7 +1098,7 @@ def _process_markup_or_plain_text(
             e.g., `{'method': 'recursive', 'max_size': 1000, 'overlap': 200}`.
             Defaults to `{'method': 'recursive', ...}`.
         perform_analysis (bool, optional): Whether to perform summarization.
-            Requires `api_name` and `api_key`. Defaults to False.
+            Requires `api_name`. API key is resolved by provider at call time if not provided. Defaults to False.
         api_name (Optional[str], optional): API name for summarization. Defaults to None.
         api_key (Optional[str], optional): API key for summarization. Defaults to None.
         custom_prompt (Optional[str], optional): Custom prompt for summarization. Defaults to None.
@@ -1258,7 +1262,7 @@ def _process_markup_or_plain_text(
         # 3. Summarization / Analysis
         final_analysis = None
         # `processed_chunks` is guaranteed to be non-empty list here if markdown_content was valid.
-        if perform_analysis and api_name and api_key:
+        if perform_analysis and api_name:
             logging.info(f"Summarization enabled for {len(processed_chunks)} chunks of {file_type}.")
             log_counter(f"{file_type}_summarization_attempt", value=len(processed_chunks), labels={"file_path": file_path, "api_name": api_name})
             chunk_summaries = []
@@ -1269,7 +1273,7 @@ def _process_markup_or_plain_text(
                 chunk_metadata = chunk.get('metadata', {})
                 if chunk_text:
                     try:
-                        summary_text = analyze(api_name, chunk_text, custom_prompt, api_key, system_prompt, None, False, )
+                        summary_text = analyze(api_name, chunk_text, custom_prompt, api_key, system_message=system_prompt, temp=None, streaming=False)
                         if summary_text and summary_text.strip():
                             chunk_summaries.append(summary_text)
                             chunk_metadata['summary'] = summary_text
@@ -1290,7 +1294,15 @@ def _process_markup_or_plain_text(
                 if summarize_recursively and len(chunk_summaries) > 1:
                     logging.info("Performing recursive summarization on chunk summaries.")
                     try:
-                        final_analysis = analyze(api_name, "\n\n---\n\n".join(chunk_summaries), custom_prompt or "Provide an overall summary.", api_key, system_prompt, None, False, )
+                        final_analysis = analyze(
+                            api_name,
+                            "\n\n---\n\n".join(chunk_summaries),
+                            custom_prompt or "Provide an overall summary.",
+                            api_key,
+                            system_message=system_prompt,
+                            temp=None,
+                            streaming=False
+                        )
                         if not final_analysis or not final_analysis.strip():
                             logging.warning(f"Recursive summarization for {file_path} yielded empty result. Falling back.")
                             final_analysis = "\n\n---\n\n".join(chunk_summaries)
@@ -1311,8 +1323,8 @@ def _process_markup_or_plain_text(
         # Log summarization skipped reasons
         elif not perform_analysis:
             logging.info("Summarization disabled.")
-        elif not api_name or not api_key: # This implies perform_analysis was true
-            logging.warning("Summarization skipped: API name or key not provided.")
+        elif not api_name: # This implies perform_analysis was true
+            logging.warning("Summarization skipped: API name not provided.")
         # The case for `not processed_chunks` is unreachable here if content was extracted.
         # If `processed_chunks` was empty for some reason, summarization loop above handles it gracefully.
 

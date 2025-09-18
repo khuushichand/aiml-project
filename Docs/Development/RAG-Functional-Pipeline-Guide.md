@@ -343,14 +343,15 @@ config = {
 ### Basic Template
 
 ```python
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     RAGPipelineContext,
     timer
 )
 
+
 @timer("my_custom_function")
 async def my_custom_function(
-    context: RAGPipelineContext
+        context: RAGPipelineContext
 ) -> RAGPipelineContext:
     """
     Custom processing function.
@@ -365,31 +366,33 @@ async def my_custom_function(
     for doc in context.documents:
         # Process each document
         doc.metadata["custom_field"] = compute_value(doc)
-    
+
     return context
 ```
 
 ### With Resilience
 
 ```python
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     RAGPipelineContext,
     timer,
     with_resilience
 )
 
+
 # Define fallback
 async def my_function_fallback(
-    context: RAGPipelineContext
+        context: RAGPipelineContext
 ) -> RAGPipelineContext:
     logger.warning("Custom function failed, using fallback")
     return context
+
 
 # Main function with resilience
 @timer("my_resilient_function")
 @with_resilience("my_resilient_function", my_function_fallback)
 async def my_resilient_function(
-    context: RAGPipelineContext
+        context: RAGPipelineContext
 ) -> RAGPipelineContext:
     """
     Resilient custom function with automatic retry and fallback.

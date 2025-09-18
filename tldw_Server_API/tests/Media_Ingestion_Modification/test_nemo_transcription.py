@@ -187,7 +187,9 @@ class TestNemoTranscription:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             unload_nemo_models, _model_cache
         )
-        
+        # Ensure a clean cache state for deterministic assertions
+        _model_cache.clear()
+
         # Add mock models to cache
         _model_cache['test_model'] = MagicMock()
         _model_cache['test_model2'] = MagicMock()

@@ -295,11 +295,12 @@ collection = client.create_collection(
 1. Create a new async function that accepts and returns `RAGPipelineContext`:
 
 ```python
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import (
+from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
     RAGPipelineContext,
     timer,
     with_resilience
 )
+
 
 @timer("custom_processing")
 @with_resilience("custom_processing", custom_fallback)  # Optional
@@ -316,14 +317,15 @@ async def custom_processing(context: RAGPipelineContext) -> RAGPipelineContext:
     # Your custom logic here
     for doc in context.documents:
         doc.metadata["custom_score"] = calculate_custom_score(doc, context.query)
-    
+
     # Sort by custom score
     context.documents.sort(
-        key=lambda d: d.metadata.get("custom_score", 0), 
+        key=lambda d: d.metadata.get("custom_score", 0),
         reverse=True
     )
-    
+
     return context
+
 
 # Fallback function for resilience
 async def custom_fallback(context: RAGPipelineContext) -> RAGPipelineContext:

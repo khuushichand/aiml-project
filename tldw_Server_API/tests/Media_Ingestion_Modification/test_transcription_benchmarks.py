@@ -171,8 +171,9 @@ class TestMLXPerformance(TranscriptionBenchmark):
             overlap_duration=5.0
         )
         
-        speedup = metrics_no_chunk['time'] / metrics_chunked['time']
-        memory_ratio = metrics_chunked['memory_used'] / metrics_no_chunk['memory_used']
+        speedup = metrics_no_chunk['time'] / metrics_chunked['time'] if metrics_chunked['time'] > 0 else float('inf')
+        denom_mem = metrics_no_chunk['memory_used'] if metrics_no_chunk['memory_used'] != 0 else 1e-9
+        memory_ratio = metrics_chunked['memory_used'] / denom_mem
         
         print(f"\nChunking Performance Comparison:")
         print(f"No chunking: {metrics_no_chunk['time']:.3f}s, {metrics_no_chunk['memory_used']:.1f}MB")

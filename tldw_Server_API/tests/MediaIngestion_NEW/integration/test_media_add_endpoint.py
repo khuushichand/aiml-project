@@ -26,21 +26,23 @@ class TestAddMediaEndpoint:
         mock_transcribe.return_value = ("This is a test transcription.", [])
 
         with open(test_video_file, 'rb') as f:
+            form = {
+                "media_type": "video",
+                "title": "Test Video",
+                "chunk_method": "sentences",
+                "chunk_size": "500",
+                "chunk_overlap": "50",
+                "transcription_language": "en",
+                "transcription_model": "deepdml/faster-distil-whisper-large-v3.5",
+                "diarize": "false",
+                "vad_use": "false",
+                "timestamp_option": "true",
+            }
+            files = {"files": ("test_video.mp4", f, "video/mp4")}
             response = test_client.post(
                 "/api/v1/media/add",
-                data=[
-                    ("media_type", "video"),
-                    ("title", "Test Video"),
-                    ("chunk_method", "sentences"),
-                    ("chunk_size", "500"),
-                    ("chunk_overlap", "50"),
-                    ("transcription_language", "en"),
-                    ("transcription_model", "deepdml/faster-distil-whisper-large-v3.5"),
-                    ("diarize", "false"),
-                    ("vad_use", "false"),
-                    ("timestamp_option", "true"),
-                ],
-                files=[("files", ("test_video.mp4", f, "video/mp4"))],
+                data=form,
+                files=files,
                 headers=auth_headers
             )
 
@@ -298,21 +300,23 @@ class TestErrorHandling:
         mock_transcribe.side_effect = Exception("Transcription failed")
 
         with open(test_video_file, 'rb') as f:
+            form = {
+                "media_type": "video",
+                "title": "Failing Transcription",
+                "chunk_method": "sentences",
+                "chunk_size": "200",
+                "chunk_overlap": "10",
+                "transcription_language": "en",
+                "transcription_model": "deepdml/faster-distil-whisper-large-v3.5",
+                "diarize": "false",
+                "vad_use": "false",
+                "timestamp_option": "true",
+            }
+            files = {"files": ("test_video.mp4", f, "video/mp4")}
             response = test_client.post(
                 "/api/v1/media/add",
-                data=[
-                    ("media_type", "video"),
-                    ("title", "Failing Transcription"),
-                    ("chunk_method", "sentences"),
-                    ("chunk_size", "200"),
-                    ("chunk_overlap", "10"),
-                    ("transcription_language", "en"),
-                    ("transcription_model", "deepdml/faster-distil-whisper-large-v3.5"),
-                    ("diarize", "false"),
-                    ("vad_use", "false"),
-                    ("timestamp_option", "true"),
-                ],
-                files=[("files", ("test_video.mp4", f, "video/mp4"))],
+                data=form,
+                files=files,
                 headers=auth_headers
             )
 

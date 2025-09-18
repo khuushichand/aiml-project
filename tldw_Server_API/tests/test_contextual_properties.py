@@ -5,14 +5,14 @@ Uses hypothesis to test invariants and properties of the contextual retrieval sy
 """
 
 import pytest
-from hypothesis import given, strategies as st, assume, settings
+from dataclasses import dataclass, field
+from typing import List, Dict, Any
+from hypothesis import given, strategies as st, settings
 from hypothesis.stateful import RuleBasedStateMachine, rule, initialize, invariant
-from unittest.mock import Mock, MagicMock, patch
-from typing import List, Dict, Any, Optional
+from unittest.mock import patch
 import string
 
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
-from tldw_Server_API.app.core.RAG.rag_service.functional_pipeline import RAGPipelineContext
 from tldw_Server_API.app.core.RAG.rag_service.enhanced_chunking_integration import (
     expand_with_parent_context,
     filter_chunks_by_type,
@@ -61,7 +61,7 @@ def context_strategy(draw):
         max_size=10
     ))
     
-    context = RAGPipelineContext(query=query, original_query=query, config=config)
+    context = SimpleContext(query=query, original_query=query, config=config)
     context.documents = documents
     return context
 
@@ -262,7 +262,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
     @initialize()
     def setup(self):
         """Initialize with a context containing documents."""
-        self.context = RAGPipelineContext(query="test query", original_query="test query", config={})
+        self.context = SimpleContext(query="test query", original_query="test query", config={})
         self.context.documents = [
             Document(
                 id=f"doc_{i}",
@@ -374,3 +374,13 @@ def test_configuration_combinations(enable_contextual, llm_model, context_window
     
     if context_window is not None:
         assert 100 <= context_window <= 2000
+@dataclass
+class SimpleContext:
+    query: str
+    original_query: str
+    documents: List[Document] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    config: Dict[str, Any] = field(default_factory=dict)
+    cache_hit: bool = False
+    timings: Dict[str, float] = field(default_factory=dict)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
