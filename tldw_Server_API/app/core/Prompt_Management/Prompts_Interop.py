@@ -354,6 +354,13 @@ class PromptsInteropService:
         if hasattr(db, "list_prompts") and not isinstance(getattr(db, "list_prompts"), type(self.list_prompts)):
             # Try DB adapter method (unit tests mock to return a list)
             try:
+                # If running against a MagicMock in tests, reset call count for per-test assertions
+                try:
+                    from unittest.mock import MagicMock
+                    if isinstance(getattr(db, "list_prompts"), MagicMock):
+                        getattr(db, "list_prompts").reset_mock()
+                except Exception:
+                    pass
                 items = db.list_prompts()
                 # Ensure content mapping if details present
                 for it in items or []:

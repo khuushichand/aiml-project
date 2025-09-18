@@ -36,35 +36,15 @@ class ChromaDBAdapter(VectorStoreAdapter):
     async def initialize(self) -> None:
         """Initialize ChromaDB connection."""
         try:
-            # Always use the user_id from config, even with default manager
+            # Always use a fresh manager bound to current settings (avoids cross-test leakage)
+            from tldw_Server_API.app.core.config import settings
             user_id = self.config.user_id
-            
-            # Get or create ChromaDB manager
-            if self.config.connection_params.get("use_default", True):
-                # For single-user mode (use_default=True), ensure we use user_id="1"
-                # which matches the SINGLE_USER_FIXED_ID
-                from tldw_Server_API.app.core.config import settings
-                single_user_id = str(settings.get("SINGLE_USER_FIXED_ID", "1"))
-                
-                # If the configured user_id matches single user mode, use default manager
-                if user_id == single_user_id:
-                    self.manager = get_default_chroma_manager()
-                else:
-                    # Create a new manager with the specific user_id
-                    embedding_config = self.config.connection_params.get("embedding_config", {})
-                    # Add USER_DB_BASE_DIR from settings
-                    embedding_config["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
-                    self.manager = ChromaDBManager(
-                        user_id=user_id,
-                        user_embedding_config=embedding_config
-                    )
-            else:
-                # Create a new manager with custom config
-                embedding_config = self.config.connection_params.get("embedding_config", {})
-                self.manager = ChromaDBManager(
-                    user_id=user_id,
-                    user_embedding_config=embedding_config
-                )
+            embedding_config = self.config.connection_params.get("embedding_config", {}).copy()
+            embedding_config["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
+            self.manager = ChromaDBManager(
+                user_id=user_id,
+                user_embedding_config=embedding_config
+            )
             
             self._initialized = True
             self._loop = asyncio.get_event_loop()

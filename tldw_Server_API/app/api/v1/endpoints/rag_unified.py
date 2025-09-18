@@ -749,13 +749,13 @@ async def list_features():
 
 
 @router.get(
-    "/health",
-    summary="Health Check",
-    description="Check the health of the unified RAG pipeline",
+    "/health/simple",
+    summary="Unified Health (Simple)",
+    description="Lightweight health check for the unified RAG pipeline",
     response_description="Health status",
     dependencies=[Depends(check_rate_limit)]
 )
-async def health_check(request: Request):
+async def unified_health_simple(request: Request):
     """
     Health check for the unified pipeline.
     """

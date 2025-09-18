@@ -300,3 +300,6 @@ uv.lock
 /tldw_Server_API/Test_Cache
 /logs
 /.pytest_tmp
+/.pytest_cache_local/
+/logs/
+/Databases/
