@@ -415,6 +415,13 @@ async def legacy_create_prompt(
     summary="Create a new prompt",
     dependencies=[Depends(verify_token)] # Apply token verification
 )
+@router.post(
+    "",
+    response_model=schemas.PromptResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new prompt [no-slash alias]",
+    dependencies=[Depends(verify_token)]
+)
 async def create_prompt(
     prompt_data: schemas.PromptCreate,
     Token: str = Header(None, description="Bearer token for authentication."),
@@ -477,6 +484,12 @@ async def create_prompt(
     summary="List all prompts (paginated)",
     dependencies=[Depends(verify_token)]
 )
+@router.get(
+    "",
+    response_model=schemas.PaginatedPromptsResponse,
+    summary="List all prompts (paginated) [no-slash alias]",
+    dependencies=[Depends(verify_token)]
+)
 async def list_all_prompts(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
@@ -501,6 +514,51 @@ async def list_all_prompts(
     except DatabaseError as e:
         logger.error(f"Database error listing prompts: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error listing prompts.")
+
+
+# Compatibility endpoint for older clients/tests that post to /create with 'content'
+@router.post(
+    "/create",
+    summary="Create prompt (compatibility)",
+    dependencies=[Depends(verify_token)]
+)
+async def create_prompt_compat(
+    payload: dict = Body(...),
+    Token: str = Header(None, description="Authentication token."),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    try:
+        name = payload.get("name")
+        author = payload.get("author")
+        details = payload.get("details", payload.get("content"))
+        system_prompt = payload.get("system_prompt")
+        user_prompt = payload.get("user_prompt")
+        keywords = payload.get("keywords") or []
+        if not isinstance(keywords, list):
+            keywords = []
+
+        prompt_id, _uuid, _msg = db.add_prompt(
+            name=name,
+            author=author,
+            details=details,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            keywords=keywords,
+            overwrite=False,
+        )
+        if not prompt_id:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create prompt.")
+        return {"prompt_id": int(prompt_id)}
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Database error creating prompt (compat): {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during prompt creation.")
+    except Exception as e:
+        logger.error(f"Unexpected error creating prompt (compat): {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
 @router.get(

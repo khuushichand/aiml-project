@@ -77,8 +77,8 @@ class TestCaseManager:
     ####################################################################################################################
     # CRUD Operations
     
-    def create_test_case(self, project_id: int, name: Optional[str], description: Optional[str],
-                        inputs: Dict[str, Any], expected_outputs: Optional[Dict[str, Any]] = None,
+    def create_test_case(self, project_id: int, name: Optional[str], inputs: Dict[str, Any],
+                        description: Optional[str] = None, expected_outputs: Optional[Dict[str, Any]] = None,
                         tags: Optional[List[str]] = None, is_golden: bool = False,
                         signature_id: Optional[int] = None) -> Dict[str, Any]:
         """

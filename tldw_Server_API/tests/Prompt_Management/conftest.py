@@ -21,6 +21,8 @@ from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
 from tldw_Server_API.app.api.v1.endpoints.prompts import verify_token
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import PromptsDatabase
 from tldw_Server_API.app.core.config import settings
+# Prompt Studio DB
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 #
 ########################################################################################################################
 #
@@ -83,6 +85,28 @@ def client(test_user, test_api_token):
 
     fastapi_app.dependency_overrides.clear()
     teardown_test_db_environment()
+
+# Additional fixtures for Prompt Studio job system tests
+
+@pytest.fixture
+def prompt_studio_db(tmp_path: Path) -> PromptStudioDatabase:
+    """Create an isolated PromptStudioDatabase for job system tests."""
+    db_path = tmp_path / "prompt_studio.db"
+    db = PromptStudioDatabase(str(db_path), client_id="test-client")
+    try:
+        yield db
+    finally:
+        try:
+            if hasattr(db, "close"):
+                db.close()
+        except Exception:
+            pass
+
+@pytest.fixture
+def test_project(prompt_studio_db: PromptStudioDatabase):
+    """Create a sample project in the PromptStudioDatabase."""
+    project = prompt_studio_db.create_project(name="Test Project", description="For job tests")
+    return project
 
 #
 # End of conftest.py

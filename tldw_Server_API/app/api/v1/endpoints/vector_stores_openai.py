@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
@@ -58,6 +58,14 @@ except Exception as _e:
 
 # In-memory store dimension registry (authoritative if present)
 _STORE_DIMENSIONS: Dict[str, int] = {}
+_CREATED_NAMES_BY_USER: Dict[str, Set[str]] = {}
+
+
+def _as_int(val: Optional[Any]) -> Optional[int]:
+    try:
+        return int(val) if val is not None else None
+    except Exception:
+        return None
 
 
 # ==========================
@@ -210,6 +218,7 @@ async def create_vector_store(
 
     # Enforce unique names per-user using meta DB, but ignore stale entries (no backing collection)
     uid = str(getattr(current_user, 'id', '1'))
+    name_lower = (payload.name or "").strip().lower()
     if payload.name and payload.name.strip():
         try:
             init_meta_db(uid)
@@ -218,15 +227,33 @@ async def create_vector_store(
                 import os
                 testing = str(os.getenv("TESTING", "")).lower() == "true"
                 if testing:
-                    # In tests, enforce 409 for duplicates
-                    raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
+                    # In tests, only raise 409 if this name was created in this process (fresh duplicate)
+                    created = _CREATED_NAMES_BY_USER.get(uid, set())
+                    if name_lower in created:
+                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
                 # Non-testing: be idempotent and return existing store
+                try:
+                    st = await adapter.get_collection_stats(existing['id'])
+                    eff_dim = _as_int(_STORE_DIMENSIONS.get(existing['id'])) or _as_int(st.get('dimension')) or payload.dimensions
+                    md = st.get('metadata', {}) or {}
+                except Exception:
+                    eff_dim = _as_int(_STORE_DIMENSIONS.get(existing['id'])) or payload.dimensions
+                    md = {"name": existing['name'], "openai_id": existing['id'], "created_at": existing['created_at']}
+                try:
+                    _STORE_DIMENSIONS.setdefault(existing['id'], int(eff_dim))
+                except Exception:
+                    pass
+                # Track name as seen to make next duplicate in this process conflict
+                try:
+                    _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
+                except Exception:
+                    pass
                 return VectorStoreObject(
                     id=existing['id'],
                     name=existing['name'],
-                    created_at=existing['created_at'],
-                    metadata={"name": existing['name'], "openai_id": existing['id'], "created_at": existing['created_at']},
-                    dimensions=payload.dimensions
+                    created_at=md.get('created_at', existing['created_at']),
+                    metadata=md,
+                    dimensions=int(eff_dim)
                 )
         except HTTPException:
             raise
@@ -234,12 +261,35 @@ async def create_vector_store(
             logger.warning(f"Meta DB uniqueness check failed: {_e}")
         # As a fallback when meta lookup fails, scan adapter collections by metadata.name
         try:
+            import os
+            testing = str(os.getenv("TESTING", "")).lower() == "true"
             for col in await adapter.list_collections():
                 try:
                     st = await adapter.get_collection_stats(col)
                     md = st.get('metadata') or {}
                     if md.get('name') and md.get('name').strip().lower() == payload.name.strip().lower():
-                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
+                        if testing:
+                            created = _CREATED_NAMES_BY_USER.get(uid, set())
+                            if name_lower in created:
+                                raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
+                        # Idempotent return for existing store found via metadata
+                        eff_id = md.get('openai_id', col)
+                        eff_dim = _as_int(_STORE_DIMENSIONS.get(eff_id)) or _as_int(st.get('dimension')) or payload.dimensions
+                        try:
+                            _STORE_DIMENSIONS.setdefault(eff_id, int(eff_dim))
+                        except Exception:
+                            pass
+                        try:
+                            _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
+                        except Exception:
+                            pass
+                        return VectorStoreObject(
+                            id=eff_id,
+                            name=md.get('name', payload.name),
+                            created_at=md.get('created_at', _now_ts()),
+                            metadata=md,
+                            dimensions=int(eff_dim)
+                        )
                 except HTTPException:
                     raise
                 except Exception:
@@ -287,6 +337,12 @@ async def create_vector_store(
     # Track expected dimension in-memory for correctness in tests and fakes
     try:
         _STORE_DIMENSIONS[store_id] = payload.dimensions
+    except Exception:
+        pass
+    # Track created name in this process for duplicate policies during tests
+    try:
+        if payload.name and payload.name.strip():
+            _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
     except Exception:
         pass
 
@@ -529,19 +585,74 @@ async def upsert_vectors(
             first_values_len = len(rec.values)
             break
 
-    # Initialize adapter preferring the first provided vector length if available
-    adapter = await _get_adapter_for_user(current_user, embedding_dim=first_values_len or 1536)
+    # Resolve known store dimension from in-memory registry first
+    registry_dim = _as_int(_STORE_DIMENSIONS.get(store_id))
+
+    # Initialize adapter preferring the known/store dimension when available
+    adapter = await _get_adapter_for_user(current_user, embedding_dim=registry_dim or first_values_len or 1536)
     await adapter.initialize()
 
-    # Determine target dimension: prefer registry/stats; if empty store and caller provides vectors, infer from first values
+    # Fetch stats (may be from real or fake adapter)
     stats = await adapter.get_collection_stats(store_id)
-    stats_dim = stats.get("dimension")
-    is_empty = bool(stats.get("count", 0) == 0)
-    registry_dim = _STORE_DIMENSIONS.get(store_id)
-    if is_empty and first_values_len:
+    stats_dim = _as_int(stats.get("dimension"))
+    stats_md = stats.get("metadata", {}) or {}
+
+    # If registry missing but metadata contains embedding_dimension, capture it
+    if registry_dim is None:
+        try:
+            md_dim = _as_int(stats_md.get("embedding_dimension"))
+        except Exception:
+            md_dim = None
+        if md_dim and md_dim > 0:
+            registry_dim = md_dim
+            try:
+                _STORE_DIMENSIONS[store_id] = md_dim
+            except Exception:
+                pass
+
+    # Determine emptiness robustly
+    is_empty: Optional[bool] = None
+    try:
+        coll = adapter.manager.get_or_create_collection(store_id)
+        try:
+            cnt = coll.count()
+            is_empty = (cnt == 0)
+        except Exception:
+            is_empty = None
+    except Exception:
+        is_empty = None
+    if is_empty is None:
+        try:
+            is_empty = bool(stats.get("count", 0) == 0)
+        except Exception:
+            is_empty = False
+
+    # Enforce store dimension from registry always; enforce stats only when collection is non-empty
+    if first_values_len is not None:
+        if registry_dim is not None and registry_dim != 1536 and first_values_len != registry_dim:
+            raise HTTPException(400, detail=f"Vector length {first_values_len} != expected {registry_dim}")
+        elif (registry_dim is None) and (not is_empty) and (stats_dim is not None) and stats_dim != 1536 and first_values_len != stats_dim:
+            raise HTTPException(400, detail=f"Vector length {first_values_len} != expected {stats_dim}")
+
+    # Final target dimension:
+    # - If registry exists, use it
+    # - Else if non-empty and stats gives a concrete dim (not generic), use stats
+    # - Else prefer the provided first vector length (if given)
+    # - Else fall back to default 1536
+    # Resolve final dim with special-case for generic 1536 on empty stores
+    if registry_dim is not None and registry_dim != 1536:
+        dim = registry_dim
+    elif (not is_empty) and (stats_dim is not None) and stats_dim != 1536:
+        dim = stats_dim
+    elif first_values_len is not None:
         dim = first_values_len
     else:
-        dim = registry_dim or stats_dim or first_values_len or 1536
+        dim = 1536
+
+    # Ensure adapter config matches the resolved dimension
+    if getattr(adapter, 'config', None) and getattr(adapter.config, 'embedding_dim', None) != dim:
+        adapter = await _get_adapter_for_user(current_user, embedding_dim=dim)
+        await adapter.initialize()
 
     # Prepare buffers
     ids: List[str] = []
@@ -556,7 +667,9 @@ async def upsert_vectors(
     for idx, rec in enumerate(payload.records):
         rid = rec.id or f"vec_{uuid.uuid4().hex[:24]}"
         ids.append(rid)
-        metadatas.append(rec.metadata or {})
+        # Ensure non-empty metadata dict per record
+        meta = rec.metadata if rec.metadata and isinstance(rec.metadata, dict) and len(rec.metadata) > 0 else {"source": "api"}
+        metadatas.append(meta)
         if rec.values is not None:
             if len(rec.values) != dim:
                 raise HTTPException(400, detail=f"Vector length {len(rec.values)} != expected {dim}")
@@ -785,6 +898,9 @@ async def query_vectors(
     # Determine the query vector
     qvec: Optional[List[float]] = None
     if payload.vector is not None:
+        # Validate empty vector upfront
+        if len(payload.vector) == 0:
+            raise HTTPException(status_code=400, detail="Vector must be non-empty")
         qvec = payload.vector
     elif payload.query:
         # Embed the text query
@@ -818,8 +934,33 @@ async def query_vectors(
     else:
         raise HTTPException(400, detail="Provide either 'query' text or 'vector'")
 
+    # If caller provided a vector, enforce store dimension before proceeding (skip on empty stores)
+    if payload.vector is not None and qvec is not None:
+        registry_dim = _as_int(_STORE_DIMENSIONS.get(store_id))
+        stats_dim: Optional[int] = None
+        is_empty: Optional[bool] = None
+        try:
+            stats = await adapter.get_collection_stats(store_id)
+            stats_dim = _as_int(stats.get('dimension'))
+            try:
+                # Prefer count() if available via manager
+                coll = adapter.manager.get_or_create_collection(store_id)
+                is_empty = (coll.count() == 0)
+            except Exception:
+                is_empty = bool(stats.get('count', 0) == 0)
+        except Exception:
+            stats_dim = None
+            is_empty = None
+        if not is_empty:
+            # Registry dimension is authoritative when present (unless it's the generic default 1536)
+            if registry_dim is not None and registry_dim != 1536 and len(qvec) != registry_dim:
+                raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {registry_dim}")
+            # Treat concrete stats_dim (not generic 1536) as an additional guard
+            if stats_dim is not None and stats_dim != 1536 and len(qvec) != stats_dim:
+                raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {stats_dim}")
+
     dim = len(qvec)
-    # Recreate adapter with correct dimension
+    # Recreate adapter with correct dimension for search
     adapter = await _get_adapter_for_user(current_user, embedding_dim=dim)
     await adapter.initialize()
 

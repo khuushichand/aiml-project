@@ -4,7 +4,10 @@
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
+import os
+import uuid as _uuid
+from fastapi import Request
 #
 # Third-party imports
 from fastapi import Depends, HTTPException, status
@@ -49,7 +52,7 @@ _prompts_db_lock = threading.Lock() # Lock for path cache and initialization coo
 
 # --- Helper Functions ---
 
-def _get_prompts_db_path_for_user(user_id: int) -> Path:
+def _get_prompts_db_path_for_user(user_id: int, salt: Optional[str] = None) -> Path:
     """
     Determines the Prompts database file path for a given user ID.
     Ensures the user's specific directory exists.
@@ -57,7 +60,9 @@ def _get_prompts_db_path_for_user(user_id: int) -> Path:
     """
     user_dir_name = str(user_id)
     user_specific_prompts_base_dir = MAIN_USER_DATA_BASE_DIR / user_dir_name / DEFAULT_PROMPTS_DB_SUBDIR
-    db_file = user_specific_prompts_base_dir / "user_prompts_v2.sqlite" # Added v2 to filename
+    # Optional per-app-instance salt for test isolation
+    filename = "user_prompts_v2.sqlite" if not salt else f"user_prompts_v2_{salt}.sqlite"
+    db_file = user_specific_prompts_base_dir / filename  # Added v2 to filename
 
     try:
         user_specific_prompts_base_dir.mkdir(parents=True, exist_ok=True)
@@ -71,11 +76,12 @@ def _get_prompts_db_path_for_user(user_id: int) -> Path:
 
 # --- Main Dependency Function ---
 
-_user_db_instances: Dict[int, PromptsDatabase] = {} # Simple dict for instances per user_id for this request scope
-_user_db_locks: Dict[int, threading.Lock] = {} # Per-user lock for initialization
+_user_db_instances: Dict[Tuple[int, str], PromptsDatabase] = {}
+_user_db_locks: Dict[Tuple[int, str], threading.Lock] = {}
 
 async def get_prompts_db_for_user(
-        current_user: User = Depends(get_request_user)
+        current_user: User = Depends(get_request_user),
+        request: Request = None
 ) -> PromptsDatabase:
     """
     FastAPI dependency to get the PromptsDatabase instance for the identified user,
@@ -92,12 +98,24 @@ async def get_prompts_db_for_user(
 
     user_id = current_user.id
 
+    # In test mode, isolate DB per app instance to avoid cross-test conflicts
+    salt = ""
+    try:
+        if os.environ.get("TEST_MODE", "").lower() == "true" and request is not None:
+            if not hasattr(request.app.state, "prompts_db_salt"):
+                setattr(request.app.state, "prompts_db_salt", _uuid.uuid4().hex)
+            salt = str(getattr(request.app.state, "prompts_db_salt"))
+    except Exception:
+        salt = ""
+
+    cache_key = (user_id, salt)
+
     # Get or create a lock for this specific user_id
-    if user_id not in _user_db_locks:
+    if cache_key not in _user_db_locks:
         with _prompts_db_lock: # Protect access to _user_db_locks
-            if user_id not in _user_db_locks: # Double check
-                _user_db_locks[user_id] = threading.Lock()
-    user_specific_lock = _user_db_locks[user_id]
+            if cache_key not in _user_db_locks: # Double check
+                _user_db_locks[cache_key] = threading.Lock()
+    user_specific_lock = _user_db_locks[cache_key]
 
     with user_specific_lock:
         # Check if an instance for this user_id already exists (cached for this request/app lifetime if persistent)
@@ -120,8 +138,8 @@ async def get_prompts_db_for_user(
         #           The `prompts_interop.py` utility functions that take `db_instance` can still be used.
         #           The interop's own instance-based methods will be bypassed.
 
-        if user_id in _user_db_instances:
-            db_instance = _user_db_instances.get(user_id)
+        if cache_key in _user_db_instances:
+            db_instance = _user_db_instances.get(cache_key)
             if db_instance:
                 try:
                     # Quick check if connection is alive
@@ -131,12 +149,13 @@ async def get_prompts_db_for_user(
                     return db_instance
                 except Exception as e:
                     logger.warning(f"Cached PromptsDatabase for user {user_id} inactive ({e}). Re-creating.")
-                    _user_db_instances.pop(user_id, None) # Remove bad instance
+                    _user_db_instances.pop(cache_key, None) # Remove bad instance
 
         # If not cached or cache was bad, create a new one
         db_path: Optional[Path] = None
         try:
-            db_path = _get_prompts_db_path_for_user(user_id)
+            # Call with positional args to be compatible with test monkeypatches
+            db_path = _get_prompts_db_path_for_user(user_id, salt or None)
             logger.info(f"Initializing PromptsDatabase instance for user {user_id} at path: {db_path}")
 
             # Instantiate PromptsDatabase directly
@@ -147,8 +166,8 @@ async def get_prompts_db_for_user(
             # For now, using a global server client ID.
             db_instance = PromptsDatabase(db_path=str(db_path), client_id=str(current_user.id))
 
-            _user_db_instances[user_id] = db_instance # Cache it
-            logger.info(f"PromptsDatabase instance created and cached for user {user_id}")
+            _user_db_instances[cache_key] = db_instance # Cache it for this user/app salt
+            logger.info(f"PromptsDatabase instance created and cached for user {user_id} (salt={salt or 'none'}) at {db_path}")
             return db_instance
 
         except (DatabaseError, SchemaError, InputError, ConflictError) as e:

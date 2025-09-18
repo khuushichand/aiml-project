@@ -15,7 +15,8 @@ from loguru import logger
 from ....core.RAG.rag_service.advanced_cache import RAGCache
 from ....core.RAG.rag_service.metrics_collector import get_metrics_collector
 from ....core.RAG.rag_service.resilience import get_coordinator, HealthStatus
-from ....core.RAG.rag_service.quick_wins import get_cost_tracker
+# Avoid importing optional quick_wins at module import time to prevent test collection failures
+# get_cost_tracker will be imported lazily inside the cost summary endpoint
 from ....core.RAG.rag_service.batch_processing import BatchProcessor
 
 
@@ -324,6 +325,17 @@ async def get_metrics_summary() -> Dict[str, Any]:
 async def get_cost_summary() -> Dict[str, Any]:
     """Get summary of LLM API costs."""
     try:
+        # Lazy import to avoid hard dependency during module import
+        try:
+            from ....core.RAG.rag_service.quick_wins import get_cost_tracker  # type: ignore
+        except Exception:
+            # Cost tracking not available; return minimal summary
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "summary": {"total_cost": 0.0, "by_model": {}},
+                "warnings": [{"level": "info", "message": "Cost tracking not available"}]
+            }
+
         tracker = get_cost_tracker()
         summary = tracker.get_summary()
         

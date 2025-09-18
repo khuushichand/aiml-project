@@ -131,10 +131,11 @@ CREATE TABLE IF NOT EXISTS prompt_studio_optimizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     project_id INTEGER NOT NULL REFERENCES prompt_studio_projects(id) ON DELETE CASCADE,
+    name TEXT,
     initial_prompt_id INTEGER NOT NULL REFERENCES prompt_studio_prompts(id),
     optimized_prompt_id INTEGER REFERENCES prompt_studio_prompts(id),
     optimizer_type TEXT NOT NULL,
-    optimization_config JSON NOT NULL,
+    optimization_config JSON,
     initial_metrics JSON,
     final_metrics JSON,
     improvement_percentage REAL,
@@ -148,7 +149,8 @@ CREATE TABLE IF NOT EXISTS prompt_studio_optimizations (
     client_id TEXT NOT NULL,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted INTEGER DEFAULT 0
 );
 
 -- Optimization job queue

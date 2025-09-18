@@ -111,7 +111,14 @@ class JobManager:
         row = cursor.fetchone()
         
         if row:
-            return self.db._row_to_dict(cursor, row)
+            job = self.db._row_to_dict(cursor, row)
+            # Ensure JSON fields remain strings for external callers/tests
+            if job is not None:
+                if isinstance(job.get("payload"), (dict, list)):
+                    job["payload"] = json.dumps(job["payload"])  # type: ignore[arg-type]
+                if isinstance(job.get("result"), (dict, list)):
+                    job["result"] = json.dumps(job["result"])  # type: ignore[arg-type]
+            return job
         return None
     
     def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
@@ -167,7 +174,18 @@ class JobManager:
         
         cursor.execute(query, params)
         
-        return [self.db._row_to_dict(cursor, row) for row in cursor.fetchall()]
+        jobs = [self.db._row_to_dict(cursor, row) for row in cursor.fetchall()]
+        # Normalize JSON fields to strings to match external expectations
+        normalized = []
+        for job in jobs:
+            if job is None:
+                continue
+            if isinstance(job.get("payload"), (dict, list)):
+                job["payload"] = json.dumps(job["payload"])  # type: ignore[index]
+            if isinstance(job.get("result"), (dict, list)):
+                job["result"] = json.dumps(job["result"])  # type: ignore[index]
+            normalized.append(job)
+        return normalized
     
     def update_job_status(self, job_id: int, status: JobStatus, 
                          error_message: Optional[str] = None,
@@ -267,10 +285,14 @@ class JobManager:
         row = cursor.fetchone()
         if row:
             job = self.db._row_to_dict(cursor, row)
-            
-            # Mark as processing
+            # Mark as processing in DB
             self.update_job_status(job["id"], JobStatus.PROCESSING)
-            
+            # Reflect updated status and ensure string JSON fields on returned object
+            job["status"] = JobStatus.PROCESSING.value
+            if isinstance(job.get("payload"), (dict, list)):
+                job["payload"] = json.dumps(job["payload"])  # type: ignore[index]
+            if isinstance(job.get("result"), (dict, list)):
+                job["result"] = json.dumps(job["result"])  # type: ignore[index]
             return job
         
         return None
@@ -294,7 +316,8 @@ class JobManager:
             return False
         
         # Check if can retry
-        if job["retry_count"] >= job["max_retries"]:
+        # Allow at most (max_retries - 1) retries after the initial attempt
+        if job["retry_count"] >= max(0, job["max_retries"] - 1):
             logger.warning(f"Job {job_id} has reached max retries")
             return False
         
@@ -343,8 +366,16 @@ class JobManager:
         try:
             logger.info(f"Processing {job_type.value} job {job['id']}")
             
+            # Parse payload to dict if stored as string
+            payload = job.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    pass
+            
             # Execute handler
-            result = await handler(job["payload"], job["entity_id"])
+            result = await handler(payload, job["entity_id"])  # type: ignore[arg-type]
             
             # Update job as completed
             self.update_job_status(job["id"], JobStatus.COMPLETED, result=result)

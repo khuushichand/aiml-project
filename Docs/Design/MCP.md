@@ -15,7 +15,9 @@ https://gofastmcp.com/getting-started/welcome
 https://github.com/BeehiveInnovations/zen-mcp-server
 https://github.com/paulrobello/par-mcp-inspector-tui?tab=readme-ov-file
 https://github.com/MCPJam/inspector
+https://github.com/st3v3nmw/sourcerer-mcp
 
+https://github.com/pi22by7/In-Memoria
 https://github.com/kruskal-labs/toolfront
 
 

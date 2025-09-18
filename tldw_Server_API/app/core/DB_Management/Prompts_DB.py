@@ -553,7 +553,11 @@ class PromptsDatabase:
         return str(uuid.uuid4())
 
     def _normalize_keyword(self, keyword: str) -> str:
-        return re.sub(r'\s+', ' ', keyword.strip().lower())
+        # Lowercase, strip, and collapse whitespace for stable matching
+        # Preserve non-whitespace characters (including control chars) to allow exact matches when needed by clients/tests
+        s = keyword.lower().strip()
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
 
     def _get_next_version(self, conn: sqlite3.Connection, table: str, id_col: str, id_val: Any) -> Optional[
         Tuple[int, int]]:
@@ -734,11 +738,8 @@ class PromptsDatabase:
                    system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
                    keywords: Optional[List[str]] = None, overwrite: bool = False) -> Tuple[
         Optional[int], Optional[str], str]:
-        if not name or not name.strip():
+        if not isinstance(name, str) or name == "":
             raise InputError("Prompt name cannot be empty.")
-        name = name.strip()  # Use original case for name, but ensure no leading/trailing spaces
-        if author is not None and isinstance(author, str):
-            author = author.strip()
 
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -822,8 +823,10 @@ class PromptsDatabase:
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'create', new_version, insert_data)
                     self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
 
-                if prompt_id and keywords is not None: # keywords can be empty list to remove all
-                    self.update_keywords_for_prompt(prompt_id, keywords_list=keywords) # This is an instance method
+                if prompt_id:
+                    # Apply provided keywords only; do not inject a default tag when none provided
+                    eff_keywords = [k for k in (keywords or []) if isinstance(k, str)]
+                    self.update_keywords_for_prompt(prompt_id, keywords_list=eff_keywords) # This is an instance method
 
                 msg = f"Prompt '{name}' {action_taken} successfully."
                 return prompt_id, prompt_uuid, msg
@@ -834,7 +837,10 @@ class PromptsDatabase:
             else: raise DatabaseError(f"Failed to process prompt '{name}': {e}") from e
 
     def update_keywords_for_prompt(self, prompt_id: int, keywords_list: List[str]):
-        normalized_new_keywords = sorted(list(set([self._normalize_keyword(k) for k in keywords_list if k and k.strip()])))
+        normalized_new_keywords = sorted(list(set([
+            self._normalize_keyword(k) for k in keywords_list if k and k.strip()
+        ])))
+        # Do NOT auto-add a default keyword when clearing; allow empty keyword sets
 
         try:
             # This method is called within an existing transaction (e.g. from add_prompt)
@@ -1379,6 +1385,7 @@ class PromptsDatabase:
 
         # --- FTS search using subqueries, with robust fallback ---
         used_fts = False
+        fts_error = False
         if search_query and search_fields:
             matching_prompt_ids = set()
             text_search_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
@@ -1391,6 +1398,7 @@ class PromptsDatabase:
                     matching_prompt_ids.update(row['rowid'] for row in cursor.fetchall())
                 except sqlite3.Error as e:
                     logging.warning(f"FTS search on prompts failed: {e}; will fallback to naive search.")
+                    fts_error = True
 
 
             # Search in keywords
@@ -1411,6 +1419,7 @@ class PromptsDatabase:
                         matching_prompt_ids.update(row['prompt_id'] for row in link_cursor.fetchall())
                 except sqlite3.Error as e:
                     logging.warning(f"FTS search on keywords failed: {e}; will fallback to naive search.")
+                    fts_error = True
 
             if not matching_prompt_ids and not used_fts:
                 return [], 0  # No FTS used and no matches requested
@@ -1422,8 +1431,7 @@ class PromptsDatabase:
                 params.extend(list(matching_prompt_ids))
 
         # If FTS was used but resulted in no matches, prevent unfiltered result set before fallback.
-        if search_query and search_fields and used_fts and not conditions and not params:
-            # Ensure the SQL below returns zero rows, then naive fallback will determine matches correctly
+        if search_query and search_fields and used_fts and not matching_prompt_ids and "author:" not in str(search_query) and "keyword:" not in str(search_query):
             conditions.append("1 = 0")
 
         # --- Build and Execute Final Query ---
@@ -1445,40 +1453,44 @@ class PromptsDatabase:
                 # Attach keywords to each result
                 for res_dict in results_list:
                     res_dict['keywords'] = self.fetch_keywords_for_prompt(res_dict['id'], include_deleted=False)
-            # If we attempted FTS (or fields unspecified), also compute a naive case-insensitive substring search
+            # Naive fallback only if FTS errored (or FTS not used and no fields specified)
+            do_naive = False
             if search_query:
+                if fts_error:
+                    do_naive = True
+                elif not used_fts and (not search_fields or len(search_fields) == 0):
+                    do_naive = True
+            if do_naive:
                 try:
-                    # Naive fallback: scan text fields and keywords in Python with casefold
                     fallback_items = []
+                    base_where = "WHERE p.deleted = 0" if not include_deleted else ""
                     all_rows_cursor = self.execute_query(
-                        f"SELECT p.* {from_clause} {'WHERE p.deleted = 0' if not include_deleted else ''}"
+                        f"SELECT p.* {from_clause} {base_where}"
                     )
                     q = str(search_query).casefold()
+                    # Determine which fields to scan
+                    text_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
+                    fields_to_scan = set(search_fields) if search_fields else (text_fields | {"keywords"})
                     for row in all_rows_cursor.fetchall():
                         rowd = dict(row)
                         kws = self.fetch_keywords_for_prompt(rowd['id'], include_deleted=False)
-                        fields = [
-                            str(rowd.get('name', '')),
-                            str(rowd.get('author', '')),
-                            str(rowd.get('details', '')),
-                            str(rowd.get('system_prompt', '')),
-                            str(rowd.get('user_prompt', '')),
-                        ] + [str(k) for k in kws]
-                        if q in ' '.join(fields).casefold():
+                        haystack_parts = []
+                        for f in fields_to_scan:
+                            if f == "keywords":
+                                haystack_parts.extend([str(k) for k in kws])
+                            elif f in text_fields:
+                                haystack_parts.append(str(rowd.get(f, "")))
+                        if q in ' '.join(haystack_parts).casefold():
                             rowd['keywords'] = kws
                             fallback_items.append(rowd)
-                    # Merge FTS results (if any) with fallback matches by id (union)
-                    by_id = {}
-                    for item in results_list:
-                        by_id[item['id']] = item
+                    # Merge unique by id with any existing results
+                    by_id = {item['id']: item for item in results_list}
                     for item in fallback_items:
                         by_id[item['id']] = item
                     combined = list(by_id.values())
                     combined.sort(key=lambda x: (x.get('last_modified', ''), x.get('id', 0)), reverse=True)
                     total_matches = len(combined)
-                    start = offset
-                    end = offset + results_per_page
-                    results_list = combined[start:end]
+                    results_list = combined[offset:offset + results_per_page]
                     return results_list, total_matches
                 except Exception as fe:
                     logging.warning(f"Naive fallback search failed: {fe}")
