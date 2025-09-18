@@ -301,6 +301,8 @@ class PromptsInteropService:
         self.client_id = client_id
         self._db_instance: Optional[PromptsDatabase] = None
         self._collections = {"next_id": 1, "items": {}}  # simple in-memory collections for tests
+        # Preserve original-case keywords for prompts created/imported via this service
+        self._orig_keywords: Dict[int, list] = {}
 
     def __enter__(self):
         return self
@@ -344,6 +346,11 @@ class PromptsInteropService:
             keywords=keywords or [],
             overwrite=True,
         )
+        if pid is not None and keywords is not None:
+            try:
+                self._orig_keywords[int(pid)] = list(keywords)
+            except Exception:
+                pass
         return int(pid) if pid is not None else 0
 
     def get_prompt(self, prompt_id: Optional[int] = None, **kwargs):
@@ -357,7 +364,15 @@ class PromptsInteropService:
         if "details" in data and "content" not in data:
             data["content"] = data.get("details")
         if "keywords" in data:
-            data["keywords"] = self._clean_keywords(data.get("keywords"))
+            kid = None
+            try:
+                kid = int(prompt_id) if prompt_id is not None else int(data.get("id"))
+            except Exception:
+                kid = None
+            if kid is not None and kid in self._orig_keywords:
+                data["keywords"] = list(self._orig_keywords[kid])
+            else:
+                data["keywords"] = self._clean_keywords(data.get("keywords"))
         return data
 
     def list_prompts(self):
@@ -377,8 +392,16 @@ class PromptsInteropService:
                 for it in items or []:
                     if isinstance(it, dict) and "details" in it and "content" not in it:
                         it["content"] = it.get("details")
-                    if isinstance(it, dict) and "keywords" in it:
-                        it["keywords"] = self._clean_keywords(it.get("keywords"))
+                    if isinstance(it, dict):
+                        try:
+                            pid = int(it.get("id"))
+                            if pid in self._orig_keywords:
+                                it["keywords"] = list(self._orig_keywords[pid])
+                            elif "keywords" in it:
+                                it["keywords"] = self._clean_keywords(it.get("keywords"))
+                        except Exception:
+                            if "keywords" in it:
+                                it["keywords"] = self._clean_keywords(it.get("keywords"))
                 return items
             except TypeError:
                 pass
@@ -387,8 +410,15 @@ class PromptsInteropService:
         for it in items:
             if "details" in it and "content" not in it:
                 it["content"] = it.get("details")
-            if "keywords" in it:
-                it["keywords"] = self._clean_keywords(it.get("keywords"))
+            try:
+                pid = int(it.get("id"))
+                if pid in self._orig_keywords:
+                    it["keywords"] = list(self._orig_keywords[pid])
+                elif "keywords" in it:
+                    it["keywords"] = self._clean_keywords(it.get("keywords"))
+            except Exception:
+                if "keywords" in it:
+                    it["keywords"] = self._clean_keywords(it.get("keywords"))
         return items
 
     def update_prompt(self, prompt_id: int, content: Optional[str] = None, version_comment: Optional[str] = None,

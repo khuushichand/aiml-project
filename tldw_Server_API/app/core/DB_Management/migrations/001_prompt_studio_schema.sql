@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS prompt_studio_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     project_id INTEGER NOT NULL REFERENCES prompt_studio_projects(id) ON DELETE CASCADE,
-    prompt_id INTEGER NOT NULL REFERENCES prompt_studio_prompts(id) ON DELETE CASCADE,
+    -- Allow creating evaluations before prompt exists; link may be set later
+    prompt_id INTEGER REFERENCES prompt_studio_prompts(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
     name TEXT,
     description TEXT,
     test_case_ids JSON NOT NULL,
@@ -132,7 +133,8 @@ CREATE TABLE IF NOT EXISTS prompt_studio_optimizations (
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     project_id INTEGER NOT NULL REFERENCES prompt_studio_projects(id) ON DELETE CASCADE,
     name TEXT,
-    initial_prompt_id INTEGER NOT NULL REFERENCES prompt_studio_prompts(id),
+    -- Allow creating optimization before prompt exists; link may be set later
+    initial_prompt_id INTEGER REFERENCES prompt_studio_prompts(id) ON DELETE SET NULL,
     optimized_prompt_id INTEGER REFERENCES prompt_studio_prompts(id),
     optimizer_type TEXT NOT NULL,
     optimization_config JSON,
