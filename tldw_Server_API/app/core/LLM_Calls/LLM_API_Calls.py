@@ -446,27 +446,45 @@ def chat_with_openai(
             return response_data
 
     except requests.exceptions.HTTPError as e:
-        error_content_text = "No response text"
-        error_content_json = None
+        # Map HTTP errors from OpenAI into structured Chat* errors so the
+        # FastAPI endpoint can return appropriate status codes instead of 500.
+        status_code = None
+        msg = ""
         if e.response is not None:
-            # Use repr() to safely log JSON responses that might contain curly braces
-            logging.error(f"OpenAI Full Error Response (status {e.response.status_code}): {repr(e.response.text)}")
+            status_code = e.response.status_code
+            # Use repr() to safely log messages that may contain braces
+            logging.error(
+                f"OpenAI Full Error Response (status {status_code}): {repr(e.response.text)}"
+            )
+            try:
+                err_json = e.response.json()
+                msg = err_json.get("error", {}).get("message") or err_json.get("message") or ""
+            except Exception:
+                msg = e.response.text or str(e)
         else:
             logging.error(f"OpenAI HTTPError with no response object: {e}")
-        raise
-        # if e.response is not None:
-        #     error_content_text = e.response.text
-        #     try:
-        #         error_content_json = e.response.json()
-        #     except json.JSONDecodeError:
-        #         pass
-        # logging.error(
-        #     f"OpenAI HTTPError {e.response.status_code if e.response is not None else 'Unknown'}. Text: {error_content_text}. JSON: {error_content_json}",
-        #     exc_info=True)
-        # raise
+            msg = str(e)
+
+        # Default a generic message if empty
+        if not msg:
+            msg = "OpenAI API error"
+
+        # Map status codes
+        if status_code in (400, 404, 422):
+            raise ChatBadRequestError(provider="openai", message=msg)
+        elif status_code in (401, 403):
+            raise ChatAuthenticationError(provider="openai", message=msg)
+        elif status_code == 429:
+            raise ChatRateLimitError(provider="openai", message=msg)
+        elif status_code in (500, 502, 503, 504):
+            raise ChatProviderError(provider="openai", message=msg, status_code=status_code)
+        else:
+            raise ChatAPIError(provider="openai", message=msg, status_code=(status_code or 500))
+
     except requests.exceptions.RequestException as e:
+        # Network/transport layer issue → surface as provider/unavailable (504-like)
         logging.error(f"OpenAI RequestException: {e}", exc_info=True)
-        raise
+        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
     except Exception as e: # Catch any other unexpected error
         logging.error(f"OpenAI: Unexpected error in chat_with_openai: {e}", exc_info=True)
         raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")

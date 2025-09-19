@@ -154,15 +154,34 @@ class WorkerOrchestrator:
         self.job_manager: Optional[EmbeddingJobManager] = None
         self.running = False
         self._tasks: List[asyncio.Task] = []
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
     
+    def _log_signal_notice(self, signum: int):
+        try:
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+        except Exception:
+            pass
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
-        logger.info(f"Received signal {signum}, initiating shutdown...")
+        # Avoid Loguru logging inside signal handlers to prevent re-entrant deadlocks.
         self.running = False
+        try:
+            import sys
+            sys.stderr.write(f"[orchestrator] Signal {signum} received, shutting down...\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        # Queue a safe log call on the loop thread if available
+        try:
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._log_signal_notice, signum)
+        except Exception:
+            pass
     
     async def start(self):
         """Start the orchestrator and all worker pools"""
@@ -171,6 +190,11 @@ class WorkerOrchestrator:
         # Configure logging
         logger.remove()
         logger.add(sys.stderr, level=self.config.log_level)
+        # Capture running event loop for queued logging from signal handler
+        try:
+            self._loop = asyncio.get_running_loop()
+        except Exception:
+            self._loop = None
         
         # Start monitoring if enabled
         if self.config.enable_monitoring:

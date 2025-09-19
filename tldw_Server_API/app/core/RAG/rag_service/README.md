@@ -1,120 +1,79 @@
-# RAG Service - Functional Pipeline Implementation
+# RAG Service – Unified Pipeline (Internal Overview)
 
-A modern, efficient RAG (Retrieval-Augmented Generation) implementation using a functional pipeline architecture for the tldw_server application.
+This directory contains the internal building blocks of the RAG (Retrieval‑Augmented Generation) module.
+
+As of v4, the project uses a single, unified pipeline where all features are controlled via explicit parameters (no external config, no presets). The previous functional‑pipeline presets have been archived. For how to use RAG from applications or via API, see:
+
+- tldw_Server_API/app/core/RAG/README.md (primary dev/user guide)
+- tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md (endpoint/parameter reference)
 
 ## Overview
 
-This RAG service provides a **functional pipeline architecture** where pure functions are composed into custom retrieval and processing workflows. It replaces the previous object-oriented approach with a simpler, more flexible design that allows callers to build pipelines at call time.
+This package provides the internal modules used by the unified pipeline. The unified entry point is `unified_pipeline.py`. The former functional preset pipelines have been moved to ARCHIVE and are not recommended for new code.
 
-## Features
+## Highlights
 
-- **Functional Architecture**: Composable pure functions instead of class hierarchies
-- **Multiple Data Sources**: Search across media files, notes, prompts, and character cards
-- **Hybrid Search**: Combines keyword (FTS5) and vector search for best results
-- **Smart Processing**: Document deduplication, reranking, and context optimization
-- **Security & Privacy**: PII detection, content filtering, and access control
-- **Batch Processing**: Handle multiple queries concurrently with priority scheduling
-- **User Feedback**: Collect relevance feedback to improve search quality
-- **Citation Management**: Automatic citation extraction and formatting
-- **Flexible Pipelines**: Pre-built pipelines or build your own
-- **Production Ready**: Optional resilience features (circuit breakers, retries)
-- **Performance**: Built-in caching, metrics, and efficient resource usage
+- Unified pipeline entrypoint with explicit parameters
+- Multi‑database retrieval (media, notes, characters/chats)
+- Hybrid search (FTS + vector) and optional reranking
+- Optional features: query expansion, caching, security filtering, table processing
+- Citations, answer generation, metrics/observability (optional)
+- Batch processing and resilience options
 
 ## Architecture
 
 ```
 rag_service/
-├── functional_pipeline.py      # Core pipeline functions and presets
+├── unified_pipeline.py         # Unified pipeline entry point (single function)
 ├── database_retrievers.py      # Database retrieval strategies
 ├── query_expansion.py          # Query enhancement strategies
 ├── semantic_cache.py           # Semantic caching implementation
-├── advanced_cache.py          # Advanced caching strategies
+├── advanced_cache.py           # Advanced caching strategies
 ├── advanced_reranking.py       # Document reranking strategies
-├── security_filters.py        # PII detection and content filtering
-├── batch_processing.py        # Batch query processing
-├── feedback_system.py         # User feedback collection
-├── citations.py              # Citation generation
-├── parent_retrieval.py       # Parent document retrieval
-├── generation.py             # Answer generation
+├── security_filters.py         # PII detection and content filtering
+├── batch_processing.py         # Batch query processing
+├── feedback_system.py          # User feedback collection
+├── citations.py                # Citation generation utilities
+├── parent_retrieval.py         # Parent document retrieval (experimental)
+├── generation.py               # Answer generation
 ├── table_serialization.py      # Table processing functionality
 ├── performance_monitor.py      # Performance monitoring
-├── metrics_collector.py      # Comprehensive metrics
-├── resilience.py              # Fault tolerance (circuit breakers, retries)
-├── observability.py           # Logging and tracing
-├── health_check.py           # Health monitoring
+├── metrics_collector.py        # Comprehensive metrics
+├── resilience.py               # Fault tolerance (circuit breakers, retries)
+├── observability.py            # Logging and tracing
+├── health_check.py             # Health monitoring
 ├── config.py                  # Configuration management
 ├── types.py                   # Type definitions
 └── utils.py                   # Helper utilities
 ```
 
-## Quick Start
+## Quick Start (internal programmatic use)
 
-### Basic Usage
+Prefer using the API endpoints. If calling from inside the backend, use the unified pipeline:
 
 ```python
-from tldw_Server_API.app.core.RAG import minimal_pipeline, standard_pipeline, quality_pipeline
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 
-# Simple search with minimal pipeline (fastest)
-result = await minimal_pipeline("What is machine learning?")
-
-# Standard search with caching and expansion
-result = await standard_pipeline(
-    "What is ML?",
-    config={
-        "enable_cache": True,
-        "expansion_strategies": ["acronym", "synonym"],
-        "top_k": 10
-    }
+result = await unified_rag_pipeline(
+    query="What is machine learning?",
+    sources=["media_db", "notes"],
+    expand_query=True,
+    expansion_strategies=["acronym", "synonym"],
+    top_k=10,
+    enable_reranking=True,
 )
 
-# High-quality search with all features
-result = await quality_pipeline(
-    "machine learning applications",
-    config={
-        "enable_chromadb": True,
-        "process_tables": True,
-        "reranking_strategy": "cross_encoder"
-    }
-)
-
-# Access results
-print(f"Found {len(result.documents)} documents")
-print(f"Search took {sum(result.timings.values()):.2f} seconds")
+print(len(result.documents), result.timings)
 ```
 
-### Building Custom Pipelines
+### Convenience Wrappers
 
 ```python
-from tldw_Server_API.app.core.RAG import (
-    build_pipeline,
-    expand_query,
-    check_cache,
-    retrieve_documents,
-    rerank_documents,
-    RAGPipelineContext
-)
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import simple_search, advanced_search, unified_batch_pipeline
 
-# Build your custom pipeline
-my_pipeline = build_pipeline(
-    expand_query,      # Enhance the query
-    check_cache,       # Check if cached
-    retrieve_documents, # Fetch documents
-    rerank_documents   # Reorder by relevance
-)
-
-# Create context with configuration
-context = RAGPipelineContext(
-    query="your search query",
-    original_query="your search query",
-    config={
-        "enable_cache": True,
-        "sources": ["media_db", "notes"],
-        "top_k": 20
-    }
-)
-
-# Execute pipeline
-result = await my_pipeline(context)
+docs = await simple_search("What is ML?", top_k=5)
+full = await advanced_search("neural networks", with_citations=True, with_answer=True)
+batch = await unified_batch_pipeline(["q1", "q2"], max_concurrent=3)
 ```
 
 ## Pipeline Functions
@@ -136,35 +95,7 @@ result = await my_pipeline(context)
 - `rerank_documents()` - Reorder documents by relevance
 - `analyze_performance()` - Collect performance metrics
 
-### Pre-built Pipelines
-
-1. **minimal_pipeline**
-   ```python
-   # Just retrieval and basic reranking
-   # ~50-100ms execution time
-   result = await minimal_pipeline(query)
-   ```
-
-2. **standard_pipeline**
-   ```python
-   # Query expansion, caching, retrieval, reranking
-   # ~200-300ms (cache miss), ~20-30ms (cache hit)
-   result = await standard_pipeline(query, config)
-   ```
-
-3. **quality_pipeline**
-   ```python
-   # All features for maximum accuracy
-   # ~500-800ms execution time
-   result = await quality_pipeline(query, config)
-   ```
-
-4. **enhanced_pipeline**
-   ```python
-   # Advanced chunking and parent document retrieval
-   # ~800-1200ms execution time
-   result = await enhanced_pipeline(query, config)
-   ```
+Note: The older functional pipelines (minimal/standard/quality/enhanced) are retained only for backward compatibility under ARCHIVE; prefer the unified pipeline.
 
 ## Configuration
 

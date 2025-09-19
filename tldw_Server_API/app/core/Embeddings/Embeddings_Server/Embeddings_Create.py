@@ -1196,7 +1196,22 @@ def get_embedding_config() -> Dict[str, Any]:
                 trust_remote_code=False,
                 hf_cache_dir_subpath="huggingface_cache"
             )
-    
+
+    # Optional: test override for model unload timeout
+    # If TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS (or EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS) is set,
+    # apply it to all configured models. This is helpful to shorten timers during pytest runs.
+    try:
+        timeout_env = os.getenv("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS") or os.getenv("EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS")
+        if timeout_env:
+            timeout_val = int(timeout_env)
+            for model_cfg in config["embedding_config"]["models"].values():
+                # Pydantic models allow attribute mutation by default
+                if hasattr(model_cfg, "unload_timeout_seconds"):
+                    model_cfg.unload_timeout_seconds = timeout_val
+    except Exception as _e:
+        # Do not fail configuration if env var is malformed; ignore silently in production path
+        pass
+
     return config
 
 #

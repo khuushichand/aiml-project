@@ -23,3 +23,7 @@ os.environ.setdefault("TRANSFORMERS_CACHE", str(TEST_CACHE / "transformers"))
 # Direct file-based loggers to a local, writable folder; or disable if needed
 os.environ.setdefault("TLDB_LOG_DIR", str(TEST_LOGS))
 os.environ.setdefault("TLDB_DISABLE_FILE_LOGS", "1")
+
+# Speed up embeddings auto-unload during tests to reduce idle timer waits
+# Default in code is 300s; use 15s for test runs
+os.environ.setdefault("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS", "15")

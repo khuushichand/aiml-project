@@ -303,3 +303,4 @@ uv.lock
 /.pytest_cache_local/
 /logs/
 /Databases/
+/tldw_Server_API/Logs

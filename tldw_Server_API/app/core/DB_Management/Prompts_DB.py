@@ -336,6 +336,21 @@ class PromptsDatabase:
             finally:
                 if hasattr(self._local, 'conn'): self._local.conn = None
 
+    # Simple alias for test fixtures and callers expecting a generic close()
+    def close(self):
+        """Close any open SQLite connection held by this instance.
+
+        Provided for compatibility with test fixtures that call `db.close()`.
+        Internally delegates to `close_connection()` which manages the
+        thread-local connection lifecycle.
+        """
+        try:
+            self.close_connection()
+        except Exception as _e:
+            # Be conservative: swallowing errors during close ensures test teardown
+            # can proceed to unlink temporary files on platforms like Windows.
+            logging.warning(f"PromptsDatabase.close() encountered an error: {_e}")
+
     def backup_database(self, backup_file_path: str) -> bool:
         """
         Creates a backup of the current database to the specified file path.

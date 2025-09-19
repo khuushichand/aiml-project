@@ -475,7 +475,7 @@ class PostgreSQLBackend(DatabaseBackend):
     def escape_identifier(self, identifier: str) -> str:
         """Escape a PostgreSQL identifier."""
         # PostgreSQL uses double quotes for identifiers
-        return f'"{identifier.replace('"', '""')}"'
+        return '"' + identifier.replace('"', '""') + '"'
     
     def get_last_insert_id(self, connection: Optional[Any] = None) -> Optional[int]:
         """Get the last inserted row ID using RETURNING clause."""

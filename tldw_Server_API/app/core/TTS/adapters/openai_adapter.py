@@ -40,7 +40,10 @@ from ..tts_resource_manager import get_resource_manager
 # OpenAI TTS Adapter Implementation
 
 class OpenAIAdapter(TTSAdapter):
-    """Adapter for OpenAI's TTS API"""
+    """Adapter for OpenAI's TTS API.
+    Note: This class implements all abstract methods so it can be instantiated
+    directly by tests that import OpenAIAdapter (legacy name).
+    """
     
     # OpenAI voice definitions
     VOICES = {
@@ -86,7 +89,12 @@ class OpenAIAdapter(TTSAdapter):
         super().__init__(config)
         self.api_key = self.config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
         self.base_url = self.config.get("openai_base_url", "https://api.openai.com/v1/audio/speech")
-        self.model = self.config.get("openai_model", "tts-1")  # or "tts-1-hd"
+        # Support both legacy and new config keys for model selection
+        self.model = (
+            self.config.get("openai_tts_model")
+            or self.config.get("openai_model")
+            or "tts-1"
+        )  # e.g., "tts-1" or "tts-1-hd"
         self.client: Optional[httpx.AsyncClient] = None
         
         if not self.api_key:
@@ -131,10 +139,6 @@ class OpenAIAdapter(TTSAdapter):
                 details={"error": str(e)}
             )
 
-# Backward-compat alias expected by some tests
-class OpenAITTSAdapter(OpenAIAdapter):
-    pass
-    
     async def get_capabilities(self) -> TTSCapabilities:
         """Get OpenAI TTS capabilities"""
         return TTSCapabilities(
@@ -164,7 +168,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
             sample_rate=24000,
             default_format=AudioFormat.MP3
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using OpenAI TTS API"""
         if not await self.ensure_initialized():
@@ -172,23 +176,23 @@ class OpenAITTSAdapter(OpenAIAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
-        
+
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_name.lower())
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
-        
+
         # Map voice if needed
         voice = self.map_voice(request.voice or "alloy")
-        
+
         # Prepare request payload
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         payload = {
             "model": self.model,
             "input": self.preprocess_text(request.text),
@@ -196,12 +200,12 @@ class OpenAITTSAdapter(OpenAIAdapter):
             "response_format": request.format.value,
             "speed": request.speed
         }
-        
+
         logger.info(
             f"{self.provider_name}: Generating speech with model={self.model}, "
             f"voice={voice}, format={request.format.value}"
         )
-        
+
         try:
             if request.stream:
                 # Return streaming response
@@ -224,19 +228,19 @@ class OpenAITTSAdapter(OpenAIAdapter):
                     voice_used=voice,
                     provider=self.provider_name
                 )
-                
+
         except httpx.HTTPStatusError as e:
             error_content = await e.response.aread()
             error_msg = error_content.decode()
             logger.error(f"{self.provider_name} API error: {e.response.status_code} - {error_msg}")
-            
+
             if e.response.status_code == 401:
                 raise auth_error("Invalid OpenAI API key", self.provider_name)
             elif e.response.status_code == 429:
                 # Try to extract retry-after header
                 retry_after = e.response.headers.get('retry-after')
                 raise rate_limit_error(
-                    self.provider_name, 
+                    self.provider_name,
                     retry_after=int(retry_after) if retry_after else None
                 )
             elif e.response.status_code == 400:
@@ -251,15 +255,15 @@ class OpenAITTSAdapter(OpenAIAdapter):
                     provider=self.provider_name,
                     error_code=str(e.response.status_code)
                 )
-                
+
         except httpx.TimeoutException as e:
             logger.error(f"{self.provider_name} timeout error: {e}")
             raise timeout_error(self.provider_name, timeout_duration=60.0)
-            
+
         except httpx.NetworkError as e:
             logger.error(f"{self.provider_name} network error: {e}")
             raise network_error(f"Network error communicating with {self.provider_name}", self.provider_name)
-                
+
         except Exception as e:
             if not isinstance(e, (TTSProviderError, TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError)):
                 logger.error(f"{self.provider_name} unexpected error: {e}")
@@ -269,7 +273,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
                     details={"error": str(e), "error_type": type(e).__name__}
                 )
             raise
-    
+
     async def _stream_audio(
         self,
         headers: Dict[str, str],
@@ -297,7 +301,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
         response = await self.client.post(self.base_url, headers=headers, json=payload)
         response.raise_for_status()
         return response.content
-    
+
     async def _cleanup_resources(self):
         """Clean up OpenAI adapter resources"""
         # Note: HTTP clients are now managed by the resource manager
@@ -308,7 +312,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
             logger.debug(f"{self.provider_name}: Resources cleaned up")
         except Exception as e:
             logger.warning(f"{self.provider_name}: Error during cleanup: {e}")
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to OpenAI voice"""
         # Check if it's already a valid OpenAI voice
@@ -326,6 +330,10 @@ class OpenAITTSAdapter(OpenAIAdapter):
         }
         
         return voice_mappings.get(voice_id.lower(), "alloy")
+
+# Backward-compat alias expected by some tests
+class OpenAITTSAdapter(OpenAIAdapter):
+    pass
 
 #
 # End of openai_adapter.py

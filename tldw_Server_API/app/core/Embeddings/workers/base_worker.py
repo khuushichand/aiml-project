@@ -50,6 +50,7 @@ class BaseWorker(ABC):
         self.jobs_failed = 0
         self.processing_times: List[float] = []
         self._tasks: List[asyncio.Task] = []
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -57,10 +58,35 @@ class BaseWorker(ABC):
         
         logger.info(f"Initialized {self.config.worker_type} worker: {self.config.worker_id}")
     
+    def _log_signal_notice(self, signum: int):
+        """Log signal notice outside of signal handler context."""
+        try:
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+        except Exception:
+            # Avoid raising from logging paths
+            pass
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
-        logger.info(f"Received signal {signum}, initiating shutdown...")
+        # IMPORTANT: Do not log from within a signal handler. Loguru (and many
+        # loggers) are not re-entrant and can deadlock when used here.
+        # Just flip the running flag; regular loops will exit and log during
+        # normal control flow outside the signal context.
         self.running = False
+        try:
+            # Optionally emit a minimal, non-logger notice to stderr.
+            # Avoid raising if stderr is unavailable.
+            import sys
+            sys.stderr.write(f"[worker:{self.config.worker_id}] Signal {signum} received, shutting down...\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        # Queue a safe log call onto the event loop thread if available
+        try:
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._log_signal_notice, signum)
+        except Exception:
+            pass
     
     @asynccontextmanager
     async def _redis_connection(self):
@@ -79,6 +105,11 @@ class BaseWorker(ABC):
         """Start the worker"""
         async with self._redis_connection():
             self.running = True
+            # Capture the running event loop for safe cross-thread scheduling
+            try:
+                self._loop = asyncio.get_running_loop()
+            except Exception:
+                self._loop = None
             
             # Start background tasks
             self._tasks = [
