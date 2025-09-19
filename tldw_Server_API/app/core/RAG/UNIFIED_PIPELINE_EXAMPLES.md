@@ -100,15 +100,17 @@ POST /api/v1/rag/unified/search
 }
 ```
 
-### Enhanced Chunking with Parent Context
+### Contextual Retrieval Controls (Parent + Siblings)
 ```python
 {
     "query": "code implementation details",
-    "enable_enhanced_chunking": true,
-    "chunk_type_filter": ["code", "text"],
-    "enable_parent_expansion": true,
+    "chunk_type_filter": ["code", "text"],  # Filter only when metadata has chunk_type
+    "enable_parent_expansion": true,          # Add parent excerpt around the chunk
     "parent_context_size": 1000,
-    "include_sibling_chunks": true
+    "include_sibling_chunks": true,           # Include neighbors after rerank
+    "sibling_window": 2,                      # Include 2 on each side
+    "include_parent_document": false,         # Include parent doc if below token threshold
+    "parent_max_tokens": 1200
 }
 ```
 
@@ -142,7 +144,6 @@ POST /api/v1/rag/unified/search
     
     # Processing
     "enable_table_processing": true,
-    "enable_enhanced_chunking": true,
     "enable_parent_expansion": true,
     
     # Quality

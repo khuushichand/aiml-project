@@ -280,6 +280,15 @@ enable_parent_expansion = false
 parent_expansion_size = 500
 # Size of parent context to include (in characters)
 include_sibling_chunks = false
+# Number of sibling chunks to include on each side of a selected chunk
+sibling_window = 1
+
+# Include the full parent document for each selected chunk if it is below a token threshold
+include_parent_document = false
+# Approximate token threshold for including parent documents (len(text)/4 heuristic)
+parent_max_tokens = 1200
+
+# Enable enhanced chunking in unified pipeline (sentence-based)
 # Include adjacent chunks from the same document for continuity
 # Performance Settings
 semantic_cache_enabled = true

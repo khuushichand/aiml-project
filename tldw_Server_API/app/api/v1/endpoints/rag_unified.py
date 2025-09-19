@@ -373,11 +373,13 @@ async def unified_search_endpoint(
             table_method=request.table_method,
             
             # Chunking
-            enable_enhanced_chunking=request.enable_enhanced_chunking,
             chunk_type_filter=request.chunk_type_filter,
             enable_parent_expansion=request.enable_parent_expansion,
             parent_context_size=request.parent_context_size,
             include_sibling_chunks=request.include_sibling_chunks,
+            sibling_window=request.sibling_window,
+            include_parent_document=request.include_parent_document,
+            parent_max_tokens=request.parent_max_tokens,
             
             # Reranking
             enable_reranking=request.enable_reranking,

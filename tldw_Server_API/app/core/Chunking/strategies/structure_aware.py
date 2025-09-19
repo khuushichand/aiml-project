@@ -199,6 +199,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                 - preserve_code_blocks: Keep code blocks intact
                 - preserve_headers: Include header hierarchy
                 - table_serialization: How to serialize tables ('markdown', 'entity', 'narrative')
+                - contextual_header_mode: 'none' (default) or 'simple' to prepend a computed header
+                - doc_title: Optional document title to include in the contextual header
                 
         Returns:
             List of text chunks preserving structure
@@ -494,6 +496,14 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             Text representation
         """
         lines = []
+
+        # Optionally prepend a computed contextual header derived from structure
+        header_mode = str(options.get('contextual_header_mode', 'none')).lower()
+        if header_mode in ('simple', 'contextual', 'header'):
+            header_line = self._build_contextual_header(elements, options)
+            if header_line:
+                lines.append(header_line)
+                lines.append("")
         
         for element in elements:
             if element.type == StructureType.HEADER:
@@ -539,3 +549,32 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                 lines.append(element.content)
         
         return '\n'.join(lines).strip()
+
+    def _build_contextual_header(self, elements: List[DocumentElement], options: Dict[str, Any]) -> str:
+        """Build a lightweight contextual header for a chunk based on structural hints.
+
+        Strategy:
+        - Use provided doc_title if available
+        - Extract the most relevant header within the chunk (prefer the smallest level number)
+        - Compose a concise header like: "Doc: <title> | Section: <hX>"
+        """
+        doc_title = options.get('doc_title')
+        # Collect headers from elements within this chunk
+        headers = [
+            (e.level or 7, e.content.strip())
+            for e in elements
+            if e.type == StructureType.HEADER and isinstance(e.content, str) and e.content.strip()
+        ]
+        # Prefer the highest-level header (lowest numeric level)
+        section_text = None
+        if headers:
+            headers.sort(key=lambda t: t[0])
+            section_text = headers[0][1]
+
+        parts = []
+        if isinstance(doc_title, str) and doc_title.strip():
+            parts.append(f"Doc: {doc_title.strip()}")
+        if section_text:
+            parts.append(f"Section: {section_text}")
+
+        return " | ".join(parts) if parts else ""

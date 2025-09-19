@@ -120,6 +120,8 @@ class TestUnifiedPipelineUnit:
             # Chunk citations should also be present by default
             assert isinstance(result.chunk_citations, list)
             assert len(result.chunk_citations) >= 1
+
+    # Note: Retrieval-time enhanced chunking removed from unified pipeline
     
     @pytest.mark.unit
     @pytest.mark.asyncio 

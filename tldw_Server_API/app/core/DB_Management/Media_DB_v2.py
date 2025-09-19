@@ -433,6 +433,27 @@ class MediaDatabase:
     );
     """
 
+    _CLAIMS_FTS_TRIGGERS_SQL = """
+    -- Keep claims_fts in sync with Claims via triggers
+    CREATE TRIGGER IF NOT EXISTS claims_ai AFTER INSERT ON Claims BEGIN
+        -- Only index non-deleted claims
+        INSERT INTO claims_fts(rowid, claim_text)
+        SELECT NEW.id, NEW.claim_text WHERE NEW.deleted = 0;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS claims_au AFTER UPDATE ON Claims BEGIN
+        -- Remove any existing row
+        DELETE FROM claims_fts WHERE rowid = NEW.id;
+        -- Re-insert when not deleted
+        INSERT INTO claims_fts(rowid, claim_text)
+        SELECT NEW.id, NEW.claim_text WHERE NEW.deleted = 0;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS claims_ad AFTER DELETE ON Claims BEGIN
+        DELETE FROM claims_fts WHERE rowid = OLD.id;
+    END;
+    """
+
     _CLAIMS_TABLE_SQL = """
     -- Claims table for ingestion-time factual statements tied to media chunks
     CREATE TABLE IF NOT EXISTS Claims (
@@ -800,6 +821,7 @@ class MediaDatabase:
             try:
                 logging.debug("[Schema V1] Applying FTS Tables...")
                 conn.executescript(self._FTS_TABLES_SQL)
+                conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
                 conn.commit()
                 logging.info("[Schema V1] FTS Tables created successfully.")
             except sqlite3.Error as fts_err:
@@ -829,6 +851,7 @@ class MediaDatabase:
                     conn.executescript(self._CLAIMS_TABLE_SQL)
                     # Ensure FTS (including claims_fts) exists
                     conn.executescript(self._FTS_TABLES_SQL)
+                    conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
                     conn.commit()
                     logging.debug("Verified FTS tables exist.")
                 except sqlite3.Error as fts_err:
@@ -995,6 +1018,27 @@ class MediaDatabase:
         except sqlite3.Error as e:
             logging.error(f"Failed to soft-delete claims for media_id={media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to soft-delete claims: {e}") from e
+
+    def rebuild_claims_fts(self) -> int:
+        """
+        Rebuild the claims_fts index from Claims.
+
+        Returns:
+            int: Number of rows indexed.
+        """
+        conn = self.get_connection()
+        try:
+            # Clear and repopulate
+            conn.execute("DELETE FROM claims_fts")
+            conn.execute(
+                "INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0"
+            )
+            conn.commit()
+            cur = conn.execute("SELECT count(*) FROM claims_fts")
+            return int(cur.fetchone()[0])
+        except sqlite3.Error as e:
+            logging.error(f"Failed to rebuild claims_fts: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to rebuild claims_fts: {e}") from e
 
     # --- Backwards Compatibility Helpers ---
     def initialize_db(self):

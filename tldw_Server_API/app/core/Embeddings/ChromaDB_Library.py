@@ -369,7 +369,16 @@ class ChromaDBManager:
     # FIXME - Explore async/batching for situate_context LLM calls
     # This would likely involve using an async HTTP client for `analyze` or a batching LLM API.
     def situate_context(self, api_name_for_context: str, doc_content: str, chunk_content: str) -> str:
-        """Generates a succinct context for a chunk within a larger document using an LLM."""
+        """Generates a succinct context for a chunk within a larger document using an LLM.
+
+        Args:
+            api_name_for_context: Provider/model alias to use for the LLM call
+            doc_content: The surrounding document content to provide as context (may be a windowed slice)
+            chunk_content: The specific chunk text being situated
+
+        Returns:
+            A short, succinct context string (may be empty string on failure)
+        """
         # Prompts could be made configurable
         doc_content_prompt = f"<document>\n{doc_content}\n</document>"
         chunk_context_prompt = (
@@ -534,6 +543,27 @@ class ChromaDBManager:
                 logger.warning(f"User '{self.user_id}': Ingestion-time claims step failed (non-fatal): {e}")
             # End TODO MediaDatabase
 
+            # Determine optional context-window size and storage preferences
+            context_window_size: Optional[int] = None
+            store_context_header_in_docs: bool = False
+            prepend_header_to_embedding: bool = True
+            if isinstance(chunk_options, dict):
+                try:
+                    cws = chunk_options.get("context_window_size")
+                    if isinstance(cws, str):
+                        cws = int(cws)
+                    if isinstance(cws, int) and cws > 0:
+                        context_window_size = cws
+                except Exception:
+                    context_window_size = None
+                # Optional toggles to control header usage
+                sch = chunk_options.get("store_contextual_header_in_docs")
+                if isinstance(sch, bool):
+                    store_context_header_in_docs = sch
+                phe = chunk_options.get("prepend_header_to_embedding")
+                if isinstance(phe, bool):
+                    prepend_header_to_embedding = phe
+
             if create_embeddings:
                 docs_for_chroma = []  # This will hold the text that's actually stored in Chroma
                 texts_for_embedding_generation = []  # This will hold the text used to generate embeddings
@@ -543,9 +573,49 @@ class ChromaDBManager:
                     docs_for_chroma.append(chunk_text)  # Store original chunk text in Chroma document
 
                     if create_contextualized:
-                        context_summary = self.situate_context(effective_llm_model_for_context, content, chunk_text)
-                        # Embed the chunk + context, but store only the chunk text (or chunk+context if preferred)
-                        text_to_embed = f"{chunk_text}\n\nContextual Summary: {context_summary}"
+                        # Compute an optional document window around this chunk using start/end metadata
+                        meta = chunk.get('metadata', {}) or {}
+                        start_idx = meta.get('start_char', meta.get('start_index'))
+                        end_idx = meta.get('end_char', meta.get('end_index'))
+                        windowed_doc = content
+                        if (
+                            isinstance(context_window_size, int) and context_window_size > 0 and
+                            isinstance(start_idx, (int, float)) and isinstance(end_idx, (int, float))
+                        ):
+                            try:
+                                s = max(0, int(start_idx) - int(context_window_size))
+                                e = min(len(content), int(end_idx) + int(context_window_size))
+                                windowed_doc = content[s:e]
+                                meta['context_window_start'] = s
+                                meta['context_window_end'] = e
+                                meta['context_window_size_used'] = int(context_window_size)
+                            except Exception:
+                                windowed_doc = content
+
+                        context_summary = self.situate_context(
+                            effective_llm_model_for_context,
+                            windowed_doc,
+                            chunk_text
+                        )
+
+                        # Build an AutoContext-style header for downstream reuse
+                        section_name = meta.get('section') or meta.get('chapter_title') or meta.get('header')
+                        safe_section = section_name if isinstance(section_name, str) and section_name.strip() else "Unknown"
+                        context_header = f"Doc: {file_name} | Section: {safe_section} | Summary: {context_summary}"
+
+                        # Persist header and summary reference in metadata
+                        meta['context_header'] = context_header
+                        meta['contextual_summary_ref'] = context_summary
+
+                        # Build text to embed; keep the explicit Contextual Summary marker for compatibility
+                        if prepend_header_to_embedding:
+                            text_to_embed = f"{context_header}\n\n{chunk_text}\n\nContextual Summary: {context_summary}"
+                        else:
+                            text_to_embed = f"{chunk_text}\n\nContextual Summary: {context_summary}"
+
+                        # Optionally store header inline with the text in Chroma documents
+                        if store_context_header_in_docs and docs_for_chroma:
+                            docs_for_chroma[-1] = f"{context_header}\n\n{chunk_text}"
                         texts_for_embedding_generation.append(text_to_embed)
                         # If you want to store the contextualized text in Chroma's document field:
                         # docs_for_chroma[-1] = text_to_embed

@@ -242,6 +242,90 @@
     </div>
 </div>
 
+<!-- Claims Management Tab -->
+<div id="tabClaims" class="tab-content" role="tabpanel">
+    <div class="endpoint-section">
+        <h2>Claims (Factual Statements)</h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="claims_media_id">Media ID</label>
+                    <input id="claims_media_id" type="number" min="1" placeholder="Enter media_id" />
+                </div>
+                <div class="btn-group">
+                    <button class="btn" onclick="uiClaimsLoad()">Load Claims</button>
+                    <button class="btn btn-warning" onclick="uiClaimsRebuildOne()">Rebuild (Background)</button>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>Rebuild All Policy</label>
+                    <select id="claims_rebuild_policy">
+                        <option value="missing">Missing</option>
+                        <option value="stale">Stale</option>
+                        <option value="all">All</option>
+                    </select>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-warning" onclick="uiClaimsRebuildAll()">Rebuild All</button>
+                    <button class="btn btn-secondary" onclick="uiClaimsRebuildFTS()">Rebuild FTS Index</button>
+                </div>
+            </div>
+        </div>
+        <pre id="claims_output" style="min-height:160px; white-space: pre-wrap;"></pre>
+    </div>
+    <script>
+        async function uiClaimsLoad() {
+            const out = document.getElementById('claims_output');
+            const mid = parseInt(document.getElementById('claims_media_id').value || '0', 10);
+            if (!mid) { out.textContent = 'Enter a valid media_id'; return; }
+            try {
+                const resp = await fetch(`/api/v1/claims/${mid}`);
+                if (!resp.ok) throw new Error(await resp.text());
+                const data = await resp.json();
+                out.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                out.textContent = 'Error: ' + e;
+            }
+        }
+        async function uiClaimsRebuildOne() {
+            const out = document.getElementById('claims_output');
+            const mid = parseInt(document.getElementById('claims_media_id').value || '0', 10);
+            if (!mid) { out.textContent = 'Enter a valid media_id'; return; }
+            try {
+                const resp = await fetch(`/api/v1/claims/${mid}/rebuild`, { method: 'POST' });
+                if (!resp.ok) throw new Error(await resp.text());
+                const data = await resp.json();
+                out.textContent = 'Rebuild queued: ' + JSON.stringify(data);
+            } catch (e) {
+                out.textContent = 'Error: ' + e;
+            }
+        }
+        async function uiClaimsRebuildAll() {
+            const out = document.getElementById('claims_output');
+            const pol = document.getElementById('claims_rebuild_policy').value;
+            try {
+                const resp = await fetch(`/api/v1/claims/rebuild/all?policy=${encodeURIComponent(pol)}`, { method: 'POST' });
+                if (!resp.ok) throw new Error(await resp.text());
+                const data = await resp.json();
+                out.textContent = 'Rebuild all queued: ' + JSON.stringify(data);
+            } catch (e) {
+                out.textContent = 'Error: ' + e;
+            }
+        }
+        async function uiClaimsRebuildFTS() {
+            const out = document.getElementById('claims_output');
+            try {
+                const resp = await fetch(`/api/v1/claims/rebuild_fts`, { method: 'POST' });
+                if (!resp.ok) throw new Error(await resp.text());
+                const data = await resp.json();
+                out.textContent = 'FTS index rebuilt: ' + JSON.stringify(data);
+            } catch (e) {
+                out.textContent = 'Error: ' + e;
+            }
+        }
+    </script>
+</div>
 <style>
 .progress-bar {
     width: 100%;

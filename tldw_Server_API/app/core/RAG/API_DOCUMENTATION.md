@@ -52,10 +52,12 @@ The main RAG endpoint with complete feature access.
   "reranking_strategy": "hybrid",  // "flashrank" | "cross_encoder" | "hybrid"
   "rerank_top_k": 20,             // Docs to rerank (defaults to top_k)
   "enable_table_processing": false,
-  "enable_enhanced_chunking": false,
   "enable_parent_expansion": false,
   "parent_context_size": 500,      // Characters of parent context
   "include_sibling_chunks": false,
+  "sibling_window": 1,
+  "include_parent_document": false,
+  "parent_max_tokens": 1200,
   
   // ========== CITATIONS ==========
   "enable_citations": false,

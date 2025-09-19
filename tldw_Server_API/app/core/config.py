@@ -499,6 +499,42 @@ def load_settings():
         # Policy: missing | all | stale (stale requires CLAIMS_STALE_DAYS)
         "CLAIMS_REBUILD_POLICY": os.getenv("CLAIMS_REBUILD_POLICY", "missing"),
         "CLAIMS_STALE_DAYS": int(os.getenv("CLAIMS_STALE_DAYS", "7")),
+
+        # Contextual retrieval defaults (parent/siblings) - from env or config.txt [RAG] section
+        "RAG_CONTEXTUAL_DEFAULTS": (lambda: (
+            # Build contextual defaults from env first, then config.txt [RAG] section
+            (lambda _envs, _cfg: {
+                "include_parent_document": (
+                    (_envs.get("RAG_INCLUDE_PARENT_DOCUMENT").lower() == "true") if _envs.get("RAG_INCLUDE_PARENT_DOCUMENT") is not None else (
+                        str(_cfg.get('include_parent_document', 'false')).lower() == 'true'
+                    )
+                ),
+                "parent_max_tokens": (
+                    int(_envs.get("RAG_PARENT_MAX_TOKENS")) if _envs.get("RAG_PARENT_MAX_TOKENS") is not None else int(str(_cfg.get('parent_max_tokens', '1200')) or 1200)
+                ),
+                "include_sibling_chunks": (
+                    (_envs.get("RAG_INCLUDE_SIBLING_CHUNKS").lower() == "true") if _envs.get("RAG_INCLUDE_SIBLING_CHUNKS") is not None else (
+                        str(_cfg.get('include_sibling_chunks', 'false')).lower() == 'true'
+                    )
+                ),
+                "sibling_window": (
+                    int(_envs.get("RAG_SIBLING_WINDOW")) if _envs.get("RAG_SIBLING_WINDOW") is not None else int(str(_cfg.get('sibling_window', '1')) or 1)
+                ),
+            })(
+                {
+                    "RAG_INCLUDE_PARENT_DOCUMENT": os.getenv("RAG_INCLUDE_PARENT_DOCUMENT"),
+                    "RAG_PARENT_MAX_TOKENS": os.getenv("RAG_PARENT_MAX_TOKENS"),
+                    "RAG_INCLUDE_SIBLING_CHUNKS": os.getenv("RAG_INCLUDE_SIBLING_CHUNKS"),
+                    "RAG_SIBLING_WINDOW": os.getenv("RAG_SIBLING_WINDOW"),
+                },
+                (lambda _cp: (
+                    (lambda d: d)(
+                        {k: (_cp.get('RAG', k, fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None)
+                         for k in ['include_parent_document', 'parent_max_tokens', 'include_sibling_chunks', 'sibling_window']}
+                    )
+                ))(load_comprehensive_config())
+            )
+        ))(),
     }
 
     # --- Warnings ---

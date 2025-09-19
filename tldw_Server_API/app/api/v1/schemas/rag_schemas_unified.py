@@ -8,6 +8,22 @@ providing a clean API interface with all features accessible.
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, validator
 
+# Load contextual retrieval defaults from settings (config.txt/env)
+try:
+    from tldw_Server_API.app.core.config import settings as _settings
+    _ctx_defaults = _settings.get("RAG_CONTEXTUAL_DEFAULTS", {}) if isinstance(_settings, dict) else {}
+    _DEF_SIB_WIN = int(_ctx_defaults.get("sibling_window", 1))
+    _DEF_INC_PARENT = bool(_ctx_defaults.get("include_parent_document", False))
+    _DEF_PARENT_MAX_TOK = int(_ctx_defaults.get("parent_max_tokens", 1200))
+    _DEF_INC_SIB = bool(_ctx_defaults.get("include_sibling_chunks", False))
+    _DEF_ENH_CHUNK = bool(_ctx_defaults.get("enable_enhanced_chunking", False))
+except Exception:
+    _DEF_SIB_WIN = 1
+    _DEF_INC_PARENT = False
+    _DEF_PARENT_MAX_TOK = 1200
+    _DEF_INC_SIB = False
+    _DEF_ENH_CHUNK = False
+
 
 class UnifiedRAGRequest(BaseModel):
     """
@@ -172,11 +188,6 @@ class UnifiedRAGRequest(BaseModel):
     )
     
     # ========== CHUNKING & CONTEXT ==========
-    enable_enhanced_chunking: bool = Field(
-        default=False,
-        description="Enable enhanced document chunking",
-        example=False
-    )
     
     chunk_type_filter: Optional[List[str]] = Field(
         default=None,
@@ -199,9 +210,30 @@ class UnifiedRAGRequest(BaseModel):
     )
     
     include_sibling_chunks: bool = Field(
-        default=False,
+        default=_DEF_INC_SIB,
         description="Include adjacent chunks from same document",
         example=False
+    )
+    
+    sibling_window: int = Field(
+        default=_DEF_SIB_WIN,
+        ge=0,
+        le=50,
+        description="Number of sibling chunks to include on each side when include_sibling_chunks is true",
+        example=2
+    )
+    
+    include_parent_document: bool = Field(
+        default=_DEF_INC_PARENT,
+        description="Include the full parent document for each selected chunk",
+        example=False
+    )
+
+    parent_max_tokens: Optional[int] = Field(
+        default=_DEF_PARENT_MAX_TOK,
+        ge=1,
+        description="Maximum tokens allowed to include a parent document; if parent exceeds, it is omitted",
+        example=1200
     )
 
     # ========== CLAIMS & FACTUALITY ==========
@@ -694,6 +726,9 @@ class UnifiedBatchRequest(BaseModel):
     enable_parent_expansion: bool = Field(default=False)
     parent_context_size: int = Field(default=500, ge=100, le=2000)
     include_sibling_chunks: bool = Field(default=False)
+    sibling_window: int = Field(default=_DEF_SIB_WIN, ge=0, le=50)
+    include_parent_document: bool = Field(default=_DEF_INC_PARENT)
+    parent_max_tokens: Optional[int] = Field(default=_DEF_PARENT_MAX_TOK, ge=1)
     
     # Reranking
     enable_reranking: bool = Field(default=True)

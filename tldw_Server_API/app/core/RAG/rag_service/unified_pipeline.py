@@ -90,6 +90,12 @@ except ImportError:
     RerankingStrategy = None
     RerankingConfig = None
 
+# Chunking support
+try:
+    from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
+except ImportError:
+    Chunker = None
+    ChunkerConfig = None
 try:
     from .citations import CitationGenerator, CitationStyle
 except ImportError:
@@ -186,6 +192,9 @@ async def unified_rag_pipeline(
     enable_parent_expansion: bool = False,
     parent_context_size: int = 500,
     include_sibling_chunks: bool = False,
+    sibling_window: int = 1,
+    include_parent_document: bool = False,
+    parent_max_tokens: Optional[int] = 1200,
     
     # ========== RERANKING ==========
     enable_reranking: bool = True,
@@ -559,6 +568,17 @@ async def unified_rag_pipeline(
             result.documents = filtered_docs
             result.metadata["post_filter_count"] = len(filtered_docs)
             result.timings["keyword_filter"] = time.time() - filter_start
+
+        # ========== OPTIONAL CHUNK TYPE FILTER (metadata-based) ==========
+        if chunk_type_filter and result.documents:
+            try:
+                allowed = {str(t).lower() for t in chunk_type_filter}
+                before = len(result.documents)
+                result.documents = [d for d in result.documents if str((d.metadata or {}).get("chunk_type", "")).lower() in allowed]
+                result.metadata["chunk_type_filter_before"] = before
+                result.metadata["chunk_type_filter_after"] = len(result.documents)
+            except Exception:
+                pass
         
         # ========== SECURITY FILTERING ==========
         if enable_security_filter and result.documents:
@@ -625,19 +645,8 @@ async def unified_rag_pipeline(
                 result.errors.append("Table processing module not available")
                 logger.warning("Table processing requested but module not available")
         
-        # ========== ENHANCED CHUNKING ==========
-        if enable_enhanced_chunking and result.documents:
-            chunking_start = time.time()
-            try:
-                # No-op placeholder to acknowledge flag; real integration is handled
-                # in enhanced_chunking_integration module via functional pipeline.
-                
-                result.timings["enhanced_chunking"] = time.time() - chunking_start
-                
-            except ImportError:
-                result.errors.append("Enhanced chunking module not available")
-                logger.warning("Enhanced chunking requested but module not available")
-        
+        # No retrieval-time chunking in unified pipeline
+
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
             rerank_start = time.time()
@@ -671,7 +680,45 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Reranking failed: {str(e)}")
                 logger.error(f"Reranking error: {e}")
-        
+
+        # ========== SIBLING INCLUSION ==========
+        if include_sibling_chunks and result.documents and sibling_window and sibling_window > 0:
+            siblings_start = time.time()
+            try:
+                # Index docs by parent and index
+                parents: Dict[str, Dict[int, Document]] = {}
+                for d in result.documents:
+                    pid = str(d.metadata.get("parent_id", ""))
+                    cidx_md = d.metadata.get("chunk_index", -1)
+                    cidx = int(cidx_md) if isinstance(cidx_md, int) or (isinstance(cidx_md, str) and cidx_md.isdigit()) else -1
+                    if pid and cidx >= 0:
+                        parents.setdefault(pid, {})[cidx] = d
+
+                added: List[Document] = []
+                seen_ids = {getattr(d, 'id', None) for d in result.documents}
+
+                for d in list(result.documents):
+                    pid = str(d.metadata.get("parent_id", ""))
+                    cidx_md = d.metadata.get("chunk_index", -1)
+                    cidx = int(cidx_md) if isinstance(cidx_md, int) or (isinstance(cidx_md, str) and cidx_md.isdigit()) else -1
+                    if not pid or cidx < 0:
+                        continue
+                    siblings = parents.get(pid, {})
+                    # expand symmetrically up to window size
+                    for w in range(1, int(sibling_window) + 1):
+                        for adj in (cidx - w, cidx + w):
+                            sdoc = siblings.get(adj)
+                            if sdoc is not None and getattr(sdoc, 'id', None) not in seen_ids:
+                                added.append(sdoc)
+                                seen_ids.add(getattr(sdoc, 'id', None))
+
+                if added:
+                    result.documents.extend(added)
+                result.metadata["siblings_added_count"] = len(added)
+                result.timings["sibling_inclusion"] = time.time() - siblings_start
+            except Exception as e:
+                result.errors.append(f"Sibling inclusion failed: {str(e)}")
+
         # ========== CITATION GENERATION ==========
         if enable_citations and result.documents:
             citation_start = time.time()

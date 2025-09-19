@@ -943,7 +943,7 @@ class ClaimsRetriever(BaseRetriever):
             sql = (
                 "SELECT c.id, c.media_id, c.chunk_index, c.claim_text "
                 "FROM claims_fts f JOIN Claims c ON f.rowid = c.id "
-                "WHERE f.claim_text MATCH ? AND c.deleted = 0 LIMIT ?"
+                "WHERE f MATCH ? AND c.deleted = 0 LIMIT ?"
             )
             params = (query, int(self.config.max_results))
             rows = self._execute_query(sql, params)
