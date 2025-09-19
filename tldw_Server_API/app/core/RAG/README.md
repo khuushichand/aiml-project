@@ -4,7 +4,7 @@
 
 The RAG (Retrieval-Augmented Generation) module provides intelligent search and question-answering capabilities for the tldw_server application. It uses a **unified pipeline architecture** where ALL features are accessible through a single function with explicit parameters - no configuration files, no presets, just direct parameter control.
 
-✅ **Current Status**: This documentation reflects the actual implementation. Approximately 80% of RAG features are fully connected and accessible via the unified API endpoints.
+✅ Current Status: Unified pipeline is the primary interface. The parameters and examples below match the request schema in `api/v1/schemas/rag_schemas_unified.py`.
 
 ## Available Features
 
@@ -15,7 +15,7 @@ The RAG (Retrieval-Augmented Generation) module provides intelligent search and 
 - **Hybrid Search**: Combines keyword (FTS5) and vector similarity search
 - **Smart Caching**: Semantic cache with adaptive thresholds and LRU eviction
 - **Document Reranking**: Multiple strategies (FlashRank, cross-encoder, hybrid)
-- **Dual Citation System**: Academic citations (MLA/APA/Chicago/Harvard/IEEE) + chunk citations for verification
+- **Citations**: Academic citations (APA/MLA/Chicago/Harvard/IEEE); chunk‑level details in progress
 - **Analytics Integration**: Privacy-preserving server analytics with SHA256 hashing
 - **Batch Processing**: Concurrent processing of multiple queries
 - **Security Features**: PII detection and content filtering
@@ -38,7 +38,7 @@ result = await unified_rag_pipeline(
     query="What is machine learning?",
     sources=["media_db", "notes"],
     enable_cache=True,
-    enable_query_expansion=True,
+    expand_query=True,
     expansion_strategies=["acronym", "synonym"],
     top_k=10,
     enable_citations=True,
@@ -54,7 +54,7 @@ generated_answer = result.generated_answer
 
 ## Claims & Factuality
 
-Enable per-claim extraction and verification, and get a factuality summary:
+Enable per‑claim extraction and verification, and get a factuality summary:
 
 ```python
 result = await unified_rag_pipeline(
@@ -109,7 +109,7 @@ RAG/
 ├── rag_audit_logger.py        # Audit logging (not used)
 ├── rag_custom_metrics.py      # Metrics collection
 ├── rag_service/               # Core implementation
-│   ├── functional_pipeline.py # Main pipeline functions
+│   ├── unified_pipeline.py    # Unified pipeline entry point
 │   ├── database_retrievers.py # Database retrieval
 │   ├── query_expansion.py     # Query enhancement
 │   ├── semantic_cache.py      # Caching layer
@@ -139,9 +139,9 @@ RAG/
 Instead of pre-built pipelines, the unified architecture provides direct parameter control:
 
 ```python
-# All features accessible via parameters
-result = await unified_rag_pipeline(
-    query="your query here",
+    # All features accessible via parameters
+    result = await unified_rag_pipeline(
+        query="your query here",
     
     # Data sources
     sources=["media_db", "notes", "characters", "chats"],
@@ -151,7 +151,7 @@ result = await unified_rag_pipeline(
     top_k=10,
     
     # Query expansion
-    enable_query_expansion=True,
+    expand_query=True,
     expansion_strategies=["acronym", "synonym", "domain", "entity"],
     
     # Caching
@@ -168,22 +168,20 @@ result = await unified_rag_pipeline(
     enable_chunk_citations=True,
     
     # Generation
-    enable_answer_generation=True,
-    llm_provider="openai",
-    model="gpt-4o",
+    enable_generation=True,
+    generation_model="gpt-4o",
     
     # Security
-    enable_pii_detection=True,
-    content_filter_level="medium",
+    enable_security_filter=True,
+    detect_pii=True,
+    content_filter=True,
     
-    # Performance
-    enable_connection_pooling=True,
-    enable_embedding_cache=True,
+    # Monitoring
+    enable_monitoring=True,
     
-    # Analytics
-    enable_analytics=True,
-    enable_feedback_collection=True
-)
+    # Feedback
+    collect_feedback=True
+    )
 ```
 
 ### Feature Combinations
@@ -204,7 +202,7 @@ result = await unified_rag_pipeline(
     query="Explain neural networks",
     sources=["media_db", "notes"],
     search_mode="hybrid",
-    enable_query_expansion=True,
+    expand_query=True,
     expansion_strategies=["acronym", "synonym", "domain", "entity"],
     enable_cache=True,
     enable_reranking=True,
@@ -212,9 +210,8 @@ result = await unified_rag_pipeline(
     enable_citations=True,
     citation_style="apa",
     enable_chunk_citations=True,
-    enable_answer_generation=True,
-    enable_pii_detection=True,
-    enable_analytics=True,
+    enable_generation=True,
+    enable_security_filter=True,
     top_k=20
 )
 
@@ -227,7 +224,7 @@ results = await unified_batch_pipeline(
 )
 ```
 
-## Parameter Reference
+## Parameter Reference (selected)
 
 ### Core Parameters
 - `query: str` - The search query (required)
@@ -236,37 +233,36 @@ results = await unified_batch_pipeline(
 - `top_k: int` - Maximum results to return (default: 10)
 
 ### Query Enhancement
-- `enable_query_expansion: bool` - Enable query expansion
+- `expand_query: bool` - Enable query expansion
 - `expansion_strategies: List[str]` - Strategies (["acronym", "synonym", "domain", "entity"])
-- `enable_spell_check: bool` - Correct query spelling
+- `spell_check: bool` - Correct query spelling
 
-### Caching & Performance
+### Caching
 - `enable_cache: bool` - Enable semantic caching
 - `cache_threshold: float` - Similarity threshold (0.0-1.0)
-- `enable_connection_pooling: bool` - Database connection pooling
-- `enable_embedding_cache: bool` - LRU embedding cache
 
 ### Document Processing
 - `enable_reranking: bool` - Enable document reranking
 - `reranking_strategy: str` - Strategy ("flashrank", "cross_encoder", "hybrid")
 - `enable_table_processing: bool` - Process table content
-- `enable_parent_retrieval: bool` - Include parent document context
+- `enable_parent_expansion: bool` - Include parent document context
 
 ### Citations
-- `enable_citations: bool` - Generate academic citations
-- `citation_style: str` - Format ("mla", "apa", "chicago", "harvard", "ieee")
+- `enable_citations: bool` - Generate citations
+- `citation_style: str` - Format ("apa", "mla", "chicago", "harvard", "ieee")
 - `enable_chunk_citations: bool` - Include chunk citations for verification
 
 ### Answer Generation
-- `enable_answer_generation: bool` - Generate LLM response
-- `llm_provider: str` - LLM provider ("openai", "anthropic", etc.)
-- `model: str` - Model name ("gpt-4o", "claude-3-sonnet", etc.)
+- `enable_generation: bool` - Generate LLM response
+- `generation_model: str` - Model name (e.g., "gpt-4o")
 - `generation_prompt: str` - Custom generation prompt
 
 ### Security & Privacy
-- `enable_pii_detection: bool` - Detect personally identifiable information
-- `content_filter_level: str` - Filter level ("none", "low", "medium", "high")
-- `enable_content_filtering: bool` - Filter inappropriate content
+- `enable_security_filter: bool` - Enable security/PII filter
+- `detect_pii: bool` - Detect personally identifiable information
+- `redact_pii: bool` - Redact detected PII
+- `sensitivity_level: str` - Max sensitivity ("public", "internal", "confidential", "restricted")
+- `content_filter: bool` - Enable content filtering
 
 ### Analytics & Feedback
 - `enable_analytics: bool` - Record analytics (privacy-preserving)
@@ -296,22 +292,7 @@ result = await unified_rag_pipeline(
 print(result.citations[0])  # "Smith, J. (2024). Introduction to Machine Learning. Tech Publications."
 ```
 
-### Chunk Citations
-Verification citations that track which specific chunks were used:
-
-```python
-result = await unified_rag_pipeline(
-    query="Explain neural networks",
-    enable_chunk_citations=True
-)
-
-# Access chunk-level citations for verification
-for citation in result.chunk_citations:
-    print(f"Source: {citation.source_document_title}")
-    print(f"Location: {citation.location}")
-    print(f"Confidence: {citation.confidence}")
-    print(f"Text: {citation.text_snippet}")
-```
+Chunk‑level citation details are being unified in the response; for now, use the primary `citations` list. Advanced breakdown will be documented when exposed in the response model.
 
 ### Combined Usage
 Both citation types can be enabled simultaneously:
@@ -374,12 +355,8 @@ curl -X POST "http://localhost:8000/api/v1/rag/batch" \
 ## Testing
 
 ```bash
-# Run all RAG tests
-python -m pytest tests/RAG/ -v
-
-# Run specific test suites
-python -m pytest tests/RAG/test_functional_pipeline.py -v
-python -m pytest tests/RAG/test_rag_refactored.py -v
+# Run unified RAG tests
+python -m pytest tldw_Server_API/tests/RAG_NEW/ -v
 
 # Run with coverage
 python -m pytest tests/RAG/ --cov=app.core.RAG --cov-report=html
@@ -586,15 +563,8 @@ Typical unified pipeline execution times (on standard hardware):
 ### From Functional Pipeline (v3.0) to Unified Pipeline (v4.0)
 
 ```python
-# Old functional pipeline way
-from app.core.RAG.rag_service.functional_pipeline import standard_pipeline
-result = await standard_pipeline(
-    query, 
-    config={"enable_cache": True, "top_k": 10}
-)
-
-# New unified pipeline way
-from app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+# Unified pipeline way
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 result = await unified_rag_pipeline(
     query="same query",
     enable_cache=True,
@@ -632,12 +602,11 @@ result = await unified_rag_pipeline(
 
 When extending the RAG module:
 
-1. Add new functions to `functional_pipeline.py` or create new modules
-2. Follow the pattern: async functions that accept and return `RAGPipelineContext`
-3. Use the `@timer` decorator for performance tracking
-4. Add `@with_resilience` decorator for optional fault tolerance
-5. Write tests in `tests/RAG/`
-6. Update this README
+1. Extend unified behavior under `rag_service/` modules (e.g., retrieval, reranking)
+2. Prefer adding explicit parameters in unified_rag_pipeline rather than hidden config
+3. Keep features optional and guarded (graceful fallbacks)
+4. Write tests under `tldw_Server_API/tests/RAG_NEW/`
+5. Update this README
 
 ## Related Documentation
 

@@ -91,9 +91,10 @@ except ImportError:
     RerankingConfig = None
 
 try:
-    from .citations import DualCitationGenerator
+    from .citations import CitationGenerator, CitationStyle
 except ImportError:
-    DualCitationGenerator = None
+    CitationGenerator = None
+    CitationStyle = None
 
 try:
     from .generation import AnswerGenerator
@@ -193,8 +194,9 @@ async def unified_rag_pipeline(
     
     # ========== CITATIONS ==========
     enable_citations: bool = False,
-    citation_style: Literal["apa", "mla", "chicago", "harvard"] = "apa",
+    citation_style: Literal["apa", "mla", "chicago", "harvard", "ieee"] = "apa",
     include_page_numbers: bool = False,
+    enable_chunk_citations: bool = True,
     
     # ========== ANSWER GENERATION ==========
     enable_generation: bool = True,
@@ -674,30 +676,41 @@ async def unified_rag_pipeline(
         if enable_citations and result.documents:
             citation_start = time.time()
             try:
-                if DualCitationGenerator:
-                    generator = DualCitationGenerator()
-                    citations = await generator.generate_citations(
+                if CitationGenerator:
+                    generator = CitationGenerator()
+                    # Map style string to enum if available
+                    style_map = {
+                        "apa": getattr(CitationStyle, "APA", None),
+                        "mla": getattr(CitationStyle, "MLA", None),
+                        "chicago": getattr(CitationStyle, "CHICAGO", None),
+                        "harvard": getattr(CitationStyle, "HARVARD", None),
+                        "ieee": getattr(CitationStyle, "IEEE", None),
+                    }
+                    style_enum = style_map.get(citation_style) or next(iter([v for v in style_map.values() if v is not None]), None)
+
+                    dual = await generator.generate_citations(
                         documents=result.documents,
                         query=query,
-                        style=citation_style,
-                        include_metadata=include_page_numbers
+                        style=style_enum if style_enum is not None else CitationStyle.MLA if CitationStyle else None,
+                        include_chunks=bool(enable_chunk_citations),
+                        max_citations=min(len(result.documents), (rerank_top_k or top_k or 10))
                     )
-                    
-                    result.citations = [
-                        {
-                            "text": c.text,
-                            "source": c.document_title,
-                            "confidence": c.confidence,
-                            "type": c.match_type.value
-                        }
-                        for c in citations
-                    ]
-                    
+
+                    # Combined citations list for backward compatibility
+                    result.citations = (
+                        [{"type": "academic", "formatted": s} for s in (dual.academic_citations or [])] +
+                        ([{"type": "chunk", **c.to_dict()} for c in (dual.chunk_citations or [])])
+                    )
+                    # Expose detailed structures via metadata
+                    result.metadata["academic_citations"] = dual.academic_citations or []
+                    result.metadata["chunk_citations"] = [c.to_dict() for c in (dual.chunk_citations or [])]
+                    result.metadata["inline_citations"] = dual.inline_markers or {}
+                    result.metadata["citation_map"] = dual.citation_map or {}
+
                     result.timings["citation_generation"] = time.time() - citation_start
-                    
-            except ImportError:
-                result.errors.append("Citation module not available")
-                logger.warning("Citations requested but module not available")
+                else:
+                    result.errors.append("Citation module not available")
+                    logger.warning("Citations requested but module not available")
             except Exception as e:
                 result.errors.append(f"Citation generation failed: {str(e)}")
                 logger.error(f"Citation error: {e}")
@@ -809,20 +822,108 @@ async def unified_rag_pipeline(
                             logger.debug(f"Per-claim retrieval fallback to base docs due to error: {e}")
                         return result.documents[:top_k] if result.documents else []
 
-                    claims_out = await engine.run(
-                        answer=result.generated_answer,
-                        query=query,
-                        documents=result.documents or [],
-                        claim_extractor=claim_extractor,
-                        claim_verifier=claim_verifier,
-                        claims_top_k=claims_top_k,
-                        claims_conf_threshold=claims_conf_threshold,
-                        claims_max=claims_max,
-                        retrieve_fn=_retrieve_for_claim,
-                        nli_model=nli_model,
-                    )
-                    claims_payload = claims_out.get("claims")
-                    factuality_payload = claims_out.get("summary")
+                    # Prefer pre-extracted claims if available for current documents
+                    claims_out = None
+                    try:
+                        pre_claims: List[str] = []
+                        if media_db_path and (result.documents or []):
+                            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+                            from tldw_Server_API.app.core.config import settings as _settings
+                            db = MediaDatabase(db_path=media_db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
+                            # Collect media IDs present in documents
+                            media_ids: List[int] = []
+                            for d in result.documents:
+                                try:
+                                    mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
+                                    if mid is not None:
+                                        media_ids.append(int(mid))
+                                except Exception:
+                                    continue
+                            media_ids = list(dict.fromkeys(media_ids))[:5]
+                            if media_ids:
+                                # Fetch a small number of claims per media
+                                for mid in media_ids:
+                                    rows = db.execute_query(
+                                        "SELECT claim_text FROM Claims WHERE media_id = ? AND deleted = 0 LIMIT ?",
+                                        (int(mid), int(claims_max)),
+                                    ).fetchall()
+                                    pre_claims.extend([r[0] for r in rows])
+                            try:
+                                db.close_connection()
+                            except Exception:
+                                pass
+                        if pre_claims:
+                            # Verify these claims directly, skipping extraction
+                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import Claim as _Claim
+                            verifications = []
+                            for i, ctext in enumerate(pre_claims[:claims_max]):
+                                cv = await engine.verifier.verify(
+                                    claim=_Claim(id=f"pc{i+1}", text=ctext),
+                                    query=query,
+                                    base_documents=result.documents or [],
+                                    retrieve_fn=_retrieve_for_claim,
+                                    top_k=claims_top_k,
+                                    conf_threshold=claims_conf_threshold,
+                                )
+                                verifications.append(cv)
+                            supported = sum(1 for v in verifications if v.label == "supported")
+                            refuted = sum(1 for v in verifications if v.label == "refuted")
+                            nei = sum(1 for v in verifications if v.label == "nei")
+                            total = max(1, len(verifications))
+                            precision = supported / total
+                            coverage = (supported + refuted) / total
+                            claims_payload = [
+                                {
+                                    "id": v.claim.id,
+                                    "text": v.claim.text,
+                                    "span": list(v.claim.span) if v.claim.span else None,
+                                    "label": v.label,
+                                    "confidence": v.confidence,
+                                    "evidence": [{"doc_id": e.doc_id, "snippet": e.snippet, "score": e.score} for e in v.evidence],
+                                    "citations": v.citations,
+                                    "rationale": v.rationale,
+                                }
+                                for v in verifications
+                            ]
+                            factuality_payload = {
+                                "supported": supported,
+                                "refuted": refuted,
+                                "nei": nei,
+                                "precision": precision,
+                                "coverage": coverage,
+                            }
+                        else:
+                            # Fall back to on-the-fly extraction from the generated answer
+                            claims_run = await engine.run(
+                                answer=result.generated_answer,
+                                query=query,
+                                documents=result.documents or [],
+                                claim_extractor=claim_extractor,
+                                claim_verifier=claim_verifier,
+                                claims_top_k=claims_top_k,
+                                claims_conf_threshold=claims_conf_threshold,
+                                claims_max=claims_max,
+                                retrieve_fn=_retrieve_for_claim,
+                                nli_model=nli_model,
+                            )
+                            claims_payload = claims_run.get("claims")
+                            factuality_payload = claims_run.get("summary")
+                    except Exception as _eclaims:
+                        logger.debug(f"Pre-extracted claims path failed: {_eclaims}")
+                        claims_run = await engine.run(
+                            answer=result.generated_answer,
+                            query=query,
+                            documents=result.documents or [],
+                            claim_extractor=claim_extractor,
+                            claim_verifier=claim_verifier,
+                            claims_top_k=claims_top_k,
+                            claims_conf_threshold=claims_conf_threshold,
+                            claims_max=claims_max,
+                            retrieve_fn=_retrieve_for_claim,
+                            nli_model=nli_model,
+                        )
+                        claims_payload = claims_run.get("claims")
+                        factuality_payload = claims_run.get("summary")
                     # Also store in metadata for debugging/analytics
                     result.metadata["claims"] = claims_payload
                     result.metadata["factuality"] = factuality_payload
@@ -1024,6 +1125,8 @@ async def unified_rag_pipeline(
             metadata=result.metadata,
             timings=result.timings,
             citations=result.citations,
+            academic_citations=(result.metadata or {}).get("academic_citations", []),
+            chunk_citations=(result.metadata or {}).get("chunk_citations", []),
             generated_answer=result.generated_answer,
             cache_hit=result.cache_hit,
             errors=result.errors,

@@ -126,6 +126,7 @@ def test_minimal_integration_with_real_persistent_client(temp_chroma_path):
     # List should contain the collection we used
     names = [c.name for c in mgr.list_collections()]
     assert coll in names
+    mgr.close()
 
 
 @pytest.mark.unit
@@ -161,6 +162,7 @@ def test_vector_search_with_mocked_query_embedding(temp_chroma_path, monkeypatch
     first = results[0]
     assert first.get("id") in {"a", "b"}
     assert "content" in first
+    mgr.close()
 
 
 @pytest.mark.unit
@@ -192,6 +194,7 @@ def test_vector_search_k2_ids(temp_chroma_path, monkeypatch):
     assert isinstance(results, list) and len(results) == 2
     got_ids = {r["id"] for r in results}
     assert got_ids == {"a", "b"}
+    mgr.close()
 
 
 @pytest.mark.unit
@@ -225,6 +228,7 @@ def test_vector_search_where_filter(temp_chroma_path, monkeypatch):
     assert isinstance(results, list) and len(results) >= 1
     for r in results:
         assert r.get("metadata", {}).get("source") == "keep"
+    mgr.close()
 
 
 @pytest.mark.unit
@@ -257,6 +261,7 @@ def test_vector_search_include_embeddings_returns_embeddings(temp_chroma_path, m
     r0 = results[0]
     assert "embedding" in r0
     assert isinstance(r0["embedding"], list) and len(r0["embedding"]) == 3
+    mgr.close()
 
 
 @pytest.mark.unit
@@ -278,3 +283,4 @@ def test_reset_collection_clears_items_count(temp_chroma_path):
 
     mgr.reset_chroma_collection(coll)
     assert mgr.count_items_in_collection(coll) == 0
+    mgr.close()

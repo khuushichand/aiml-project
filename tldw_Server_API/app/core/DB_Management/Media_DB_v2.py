@@ -424,6 +424,43 @@ class MediaDatabase:
         content='Keywords',    -- Keep reference to source table
         content_rowid='id'  -- Link to Keywords.id
     );
+
+    -- Optional FTS for Claims (content-backed; Stage 1 has no triggers)
+    CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5(
+        claim_text,
+        content='Claims',     -- Keep reference to source table
+        content_rowid='id'    -- Link to Claims.id
+    );
+    """
+
+    _CLAIMS_TABLE_SQL = """
+    -- Claims table for ingestion-time factual statements tied to media chunks
+    CREATE TABLE IF NOT EXISTS Claims (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_id INTEGER NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        span_start INTEGER,
+        span_end INTEGER,
+        claim_text TEXT NOT NULL,
+        confidence REAL,
+        extractor TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        chunk_hash TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        uuid TEXT UNIQUE NOT NULL,
+        last_modified DATETIME NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        client_id TEXT NOT NULL,
+        deleted BOOLEAN NOT NULL DEFAULT 0,
+        prev_version INTEGER,
+        merge_parent_uuid TEXT,
+        FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_claims_media_id ON Claims(media_id);
+    CREATE INDEX IF NOT EXISTS idx_claims_media_chunk ON Claims(media_id, chunk_index);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_uuid ON Claims(uuid);
+    CREATE INDEX IF NOT EXISTS idx_claims_deleted ON Claims(deleted);
     """
 
     def __init__(self, db_path: Union[str, Path], client_id: str):
@@ -725,6 +762,14 @@ class MediaDatabase:
                 conn.executescript(core_schema_script_with_version_update)
                 logging.debug("[Schema V1] Core Schema script (incl. version update) executed.")
 
+                # Ensure Claims table exists as part of base schema (additive)
+                try:
+                    conn.executescript(self._CLAIMS_TABLE_SQL)
+                    logging.debug("[Schema V1] Claims table and indices ensured.")
+                except sqlite3.Error as e:
+                    logging.error(f"[Schema V1] Failed creating Claims table: {e}", exc_info=True)
+                    raise
+
                 # --- Validation step (optional but good) - Check Media table ---
                 try:
                     cursor = conn.execute("PRAGMA table_info(Media)")
@@ -780,6 +825,9 @@ class MediaDatabase:
                 logging.debug("Database schema is up to date.")
                 # Optionally ensure FTS tables exist even if schema version matches
                 try:
+                    # Ensure Claims table exists for older DBs without bumping version
+                    conn.executescript(self._CLAIMS_TABLE_SQL)
+                    # Ensure FTS (including claims_fts) exists
                     conn.executescript(self._FTS_TABLES_SQL)
                     conn.commit()
                     logging.debug("Verified FTS tables exist.")
@@ -853,6 +901,100 @@ class MediaDatabase:
         """
         # Use ISO 8601 format with Z for UTC, more standard
         return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+    # --- Claims Helpers (Stage 1 minimal CRUD) ---
+    def upsert_claims(self, claims: List[Dict[str, Any]]) -> int:
+        """
+        Insert claims in bulk. This is a minimal Stage 1 helper.
+
+        Expects each item to contain: media_id, chunk_index, claim_text, chunk_hash,
+        extractor, extractor_version. Optional: span_start, span_end, confidence,
+        uuid, last_modified, version, client_id, deleted.
+
+        Returns:
+            int: Number of rows inserted.
+        """
+        if not claims:
+            return 0
+        now = self._get_current_utc_timestamp_str()
+        rows: List[tuple] = []
+        for c in claims:
+            rows.append((
+                int(c["media_id"]),
+                int(c.get("chunk_index", 0)),
+                c.get("span_start"),
+                c.get("span_end"),
+                str(c["claim_text"]),
+                float(c.get("confidence")) if c.get("confidence") is not None else None,
+                str(c.get("extractor", "heuristic")),
+                str(c.get("extractor_version", "v1")),
+                str(c["chunk_hash"]),
+                str(c.get("uuid", self._generate_uuid())),
+                str(c.get("last_modified", now)),
+                int(c.get("version", 1)),
+                str(c.get("client_id", self.client_id)),
+                int(c.get("deleted", 0)),
+                c.get("prev_version"),
+                c.get("merge_parent_uuid"),
+            ))
+        with self.transaction():
+            self.execute_many(
+                """
+                INSERT INTO Claims (
+                    media_id, chunk_index, span_start, span_end, claim_text, confidence,
+                    extractor, extractor_version, chunk_hash, uuid, last_modified,
+                    version, client_id, deleted, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+                commit=False,
+            )
+        return len(rows)
+
+    def get_claims_by_media(self, media_id: int, *, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Fetch claims for a media item (excluding soft-deleted), ordered by chunk_index then id.
+        """
+        cur = self.execute_query(
+            """
+            SELECT id, media_id, chunk_index, span_start, span_end, claim_text, confidence,
+                   extractor, extractor_version, chunk_hash, created_at, uuid,
+                   last_modified, version, client_id
+            FROM Claims
+            WHERE media_id = ? AND deleted = 0
+            ORDER BY chunk_index ASC, id ASC
+            LIMIT ?
+            """,
+            (media_id, int(limit)),
+        )
+        rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def soft_delete_claims_for_media(self, media_id: int) -> int:
+        """
+        Soft-delete all claims for a given media_id by setting deleted=1 and bumping version.
+        Returns the number of affected rows.
+        """
+        conn = self.get_connection()
+        try:
+            current_time = self._get_current_utc_timestamp_str()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE Claims
+                SET deleted = 1,
+                    version = version + 1,
+                    last_modified = ?,
+                    client_id = ?
+                WHERE media_id = ? AND deleted = 0
+                """,
+                (current_time, self.client_id, int(media_id)),
+            )
+            conn.commit()
+            return cur.rowcount or 0
+        except sqlite3.Error as e:
+            logging.error(f"Failed to soft-delete claims for media_id={media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to soft-delete claims: {e}") from e
 
     # --- Backwards Compatibility Helpers ---
     def initialize_db(self):

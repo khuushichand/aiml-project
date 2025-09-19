@@ -1,0 +1,46 @@
+<section id="claims-tab" class="tab-section" style="display:none">
+  <h2>Claims (Factual Statements)</h2>
+  <div class="card">
+    <div class="row">
+      <label>Media ID</label>
+      <input id="claims-media-id" type="number" min="1" placeholder="Enter media_id" />
+      <button id="claims-load-btn">Load Claims</button>
+      <button id="claims-rebuild-btn">Rebuild (Background)</button>
+    </div>
+    <div class="row">
+      <label>Results</label>
+      <pre id="claims-results" style="min-height: 160px; white-space: pre-wrap;"></pre>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const mediaIdEl = document.getElementById('claims-media-id');
+      const resultsEl = document.getElementById('claims-results');
+      document.getElementById('claims-load-btn').onclick = async () => {
+        const mid = parseInt(mediaIdEl.value || '0', 10);
+        if (!mid) { resultsEl.textContent = 'Enter a valid media_id'; return; }
+        try {
+          const resp = await fetch(`/api/v1/claims/${mid}`);
+          if (!resp.ok) throw new Error(await resp.text());
+          const data = await resp.json();
+          resultsEl.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          resultsEl.textContent = 'Error: ' + e;
+        }
+      };
+      document.getElementById('claims-rebuild-btn').onclick = async () => {
+        const mid = parseInt(mediaIdEl.value || '0', 10);
+        if (!mid) { resultsEl.textContent = 'Enter a valid media_id'; return; }
+        try {
+          const resp = await fetch(`/api/v1/claims/${mid}/rebuild`, { method: 'POST' });
+          if (!resp.ok) throw new Error(await resp.text());
+          const data = await resp.json();
+          resultsEl.textContent = 'Rebuild queued: ' + JSON.stringify(data);
+        } catch (e) {
+          resultsEl.textContent = 'Error: ' + e;
+        }
+      };
+    })();
+  </script>
+</section>

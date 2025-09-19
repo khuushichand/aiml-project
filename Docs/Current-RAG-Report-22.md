@@ -1,4 +1,9 @@
 # RAG Module Comprehensive Analysis Report
+Note: This report describes the state during the functional‑pipeline refactor (v3, mid‑2024). The project now uses the v4 Unified Pipeline with direct parameters. For up‑to‑date status and usage, see:
+
+- tldw_Server_API/app/core/RAG/README.md
+- tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md
+- tldw_Server_API/app/core/RAG/IMPLEMENTATION_STATUS.md
 **Date**: 2025-08-30  
 **Version**: v3.0 (Functional Pipeline Architecture)  
 **Status**: Partially Implemented

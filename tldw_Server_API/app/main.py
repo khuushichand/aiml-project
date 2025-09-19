@@ -42,6 +42,7 @@ from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as ch
 # Embedding Endpoint (v5 enhanced version with circuit breaker)
 from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
 from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
+from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
 #
 # Media Endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
@@ -303,8 +304,9 @@ async def lifespan(app: FastAPI):
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
 
-    # Start background worker: ephemeral vector collections cleanup
+    # Start background workers: ephemeral collections cleanup, claims rebuild
     cleanup_task = None
+    claims_task = None
     try:
         import os as _os
         import asyncio as _asyncio
@@ -352,6 +354,69 @@ async def lifespan(app: FastAPI):
             logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
+
+    # Claims rebuild worker (periodic)
+    try:
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.config import settings as _app_settings
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
+        from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
+        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
+
+        _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
+        _claims_interval = int(_app_settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600))
+        _claims_policy = str(_app_settings.get("CLAIMS_REBUILD_POLICY", "missing")).lower()
+
+        async def _claims_rebuild_loop():
+            if not _claims_enabled:
+                logger.info("Claims rebuild worker disabled by settings")
+                return
+            logger.info(f"Starting claims rebuild worker (every {_claims_interval}s, policy={_claims_policy})")
+            svc = _get_claims_svc()
+            while True:
+                try:
+                    # Single-user path; for multi-user extend with per-user iteration
+                    user_id = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                    db_path = _get_media_db_path(user_id)
+                    db = _MediaDB(db_path=db_path, client_id=str(_app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
+                    # Find media missing claims
+                    if _claims_policy == "missing":
+                        sql = (
+                            "SELECT m.id FROM Media m "
+                            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+                            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+                            ") LIMIT 25"
+                        )
+                    elif _claims_policy == "all":
+                        sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
+                    else:
+                        # rudimentary stale policy: claims older than N days since media last_modified
+                        days = int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
+                        sql = (
+                            "SELECT m.id FROM Media m "
+                            "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                            "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?) "
+                            "LIMIT 25"
+                        )
+                    if _claims_policy == "stale":
+                        rows = db.execute_query(sql, (int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),)).fetchall()
+                    else:
+                        rows = db.execute_query(sql).fetchall()
+                    mids = [int(r[0]) for r in rows]
+                    for mid in mids:
+                        svc.submit(media_id=mid, db_path=db_path)
+                    try:
+                        db.close_connection()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning(f"Claims rebuild loop error: {e}")
+                await _asyncio.sleep(_claims_interval)
+
+        if _claims_enabled:
+            claims_task = _asyncio.create_task(_claims_rebuild_loop())
+    except Exception as e:
+        logger.warning(f"Failed to start claims rebuild worker: {e}")
     
     # Display authentication mode and API key for single-user mode
     try:
@@ -384,6 +449,8 @@ async def lifespan(app: FastAPI):
     try:
         if 'cleanup_task' in locals() and cleanup_task:
             cleanup_task.cancel()
+        if 'claims_task' in locals() and claims_task:
+            claims_task.cancel()
     except Exception:
         pass
 
@@ -715,6 +782,7 @@ app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["
 app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
 # Router for Vector Store (OpenAI-compatible) endpoints
 app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+app.include_router(claims_router, prefix=f"{API_V1_PREFIX}")
 
 # Router for Media Embeddings Endpoint
 app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])

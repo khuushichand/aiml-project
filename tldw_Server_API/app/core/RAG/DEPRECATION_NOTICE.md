@@ -1,14 +1,14 @@
 # RAG Module Deprecation Notice
 
-## Current Architecture (v3.0 - Functional Pipeline)
+## Current Architecture (v4.0 – Unified Pipeline)
 
-The RAG system has been refactored to use a **functional pipeline architecture** as of 2024-08-19.
+The RAG system now uses a single, unified pipeline where all features are controlled by explicit parameters. See `rag_service/unified_pipeline.py` and the `/api/v1/rag/*` endpoints.
 
 ### Active Modules (Keep These)
 
 Located in `/app/core/RAG/rag_service/`:
 
-1. **functional_pipeline.py** - Main functional pipeline implementation
+1. **unified_pipeline.py** - Unified pipeline entry point
 2. **table_serialization.py** - Table processing functionality
 3. **query_expansion.py** - Query expansion strategies
 4. **semantic_cache.py** - Semantic caching implementation
@@ -22,12 +22,12 @@ Located in `/app/core/RAG/rag_service/`:
 
 These modules are replaced by the functional pipeline and should be archived:
 
-#### Object-Oriented Pipeline (Replaced by functional_pipeline.py)
+#### Object-Oriented Pipeline (replaced)
 - **app.py** - Old RAGApplication class
 - **integration.py** - Old RAGService class
 - **pipeline_orchestrator.py** - Object-oriented pipeline (replaced by functional approach)
 
-#### Old Retrieval/Processing (Now integrated in functional_pipeline.py)
+#### Old Retrieval/Processing (superseded)
 - **retrieval.py** - Separate retriever classes
 - **processing.py** - Separate processor classes
 - **generation.py** - Separate generator classes
@@ -47,50 +47,30 @@ These modules are replaced by the functional pipeline and should be archived:
 ### API Endpoints
 
 #### Active
-- **/api/v1/rag/v3/** - New functional pipeline API (rag_v3_functional.py)
+- `/api/v1/rag/search` – Unified search
+- `/api/v1/rag/batch` – Unified batch processing
+- `/api/v1/rag/simple`, `/api/v1/rag/advanced`, `/api/v1/rag/features`, `/api/v1/rag/health/*`
 
-#### To Be Deprecated
-- **/api/v1/rag/** - Old v1 endpoints
-- **/api/v1/rag/v2/** - v2 endpoints (can remain for backward compatibility)
+#### Deprecated
+- Legacy v1/v2 endpoints (retained temporarily)
 
 ### Migration Path
 
-1. **For API Users:**
-   - Switch from `/api/v1/rag/v2/search` to `/api/v1/rag/v3/search`
-   - Update to use pipeline selection ("minimal", "standard", "quality", "custom")
-   - Configuration now passed as a dictionary
+1. For API users
+   - Move to `/api/v1/rag/search` and pass features as request parameters
+   - Use `/api/v1/rag/batch` for multi‑query processing
 
-2. **For Direct Module Users:**
+2. For direct module users
    ```python
-   # Old way (deprecated)
-   from app.core.RAG.rag_service.app import RAGApplication
-   app = RAGApplication(config)
-   result = await app.search(query)
-   
-   # New way (functional)
-   from app.core.RAG.rag_service.functional_pipeline import standard_pipeline
-   result = await standard_pipeline(query, config)
+   from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+   result = await unified_rag_pipeline(query="your query", top_k=10, expand_query=True)
    ```
 
 3. **Custom Pipeline Example:**
    ```python
-   from app.core.RAG.rag_service.functional_pipeline import (
-       build_pipeline,
-       expand_query,
-       check_cache,
-       retrieve_documents,
-       rerank_documents
-   )
-   
-   # Build custom pipeline
-   my_pipeline = build_pipeline(
-       expand_query,
-       check_cache,
-       retrieve_documents,
-       rerank_documents
-   )
-   
-   result = await my_pipeline(query, config)
+   # Unified pipeline example
+   from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+   result = await unified_rag_pipeline(query, top_k=10, expand_query=True)
    ```
 
 ### Archive Structure
@@ -116,18 +96,17 @@ Move deprecated files to:
 
 ### Timeline
 
-- **2024-08-19**: Functional pipeline implemented
-- **2024-09-01**: Mark old modules as deprecated
-- **2024-10-01**: Move deprecated modules to archive
-- **2024-11-01**: Remove deprecated API endpoints
+- 2024‑08‑19: Functional pipeline implemented (v3)
+- 2025‑08‑xx: Unified pipeline introduced (v4)
+- 2025‑Q4: Retire remaining deprecated endpoints
 
-### Benefits of New Architecture
+### Benefits of Unified Architecture
 
-1. **Simplicity**: Pure functions instead of complex class hierarchies
-2. **Flexibility**: Easy to compose custom pipelines
-3. **Performance**: Less overhead, better caching
-4. **Testability**: Functions are easier to test in isolation
-5. **Modularity**: Each function is independent and reusable
+1. Simplicity: Single function, explicit parameters
+2. Flexibility: Mix‑and‑match features per request
+3. Transparency: No hidden configuration layers
+4. Testability: Direct parameterization simplifies testing
+5. Maintainability: Fewer surfaces, clearer contracts
 
 ### Contact
 

@@ -42,19 +42,21 @@ def validate_user_id(user_id: str) -> str:
     if not user_id:
         raise ValueError("user_id cannot be empty")
     
-    # Convert to string and strip whitespace
-    user_id = str(user_id).strip()
-    
-    # Check for path traversal attempts
-    if any(pattern in user_id for pattern in ['..', '/', '\\', '\x00', '\n', '\r']):
+    # Convert to string
+    raw_user_id = str(user_id)
+    # First, check raw input for forbidden characters (before trimming)
+    if any(pattern in raw_user_id for pattern in ['..', '/', '\\', '\x00', '\n', '\r']):
         logger.error(f"Potential path traversal attempt detected in user_id: {user_id[:50]}")
         audit_log(
             AuditEventType.PATH_TRAVERSAL_ATTEMPT,
-            user_id=user_id[:50],
-            details={"attempted_value": user_id[:100]},
+            user_id=raw_user_id[:50],
+            details={"attempted_value": raw_user_id[:100]},
             severity="WARNING"
         )
         raise ValueError("Invalid user_id: contains forbidden characters")
+    
+    # Now trim safe leading/trailing whitespace
+    user_id = raw_user_id.strip()
     
     # Only allow alphanumeric, underscore, and hyphen
     if not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
@@ -207,6 +209,48 @@ class ChromaDBManager:
             f"Default Embedding Model ID: {self.default_embedding_model_id or 'Not Set (Override Required)'} "
             f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
         )
+
+    # Resource management helpers
+    def close(self) -> None:
+        """Close underlying ChromaDB client and release file descriptors."""
+        with self._lock:
+            client = getattr(self, "client", None)
+            if client is None:
+                return
+            try:
+                # Prefer explicit close if available (future APIs)
+                close_fn = getattr(client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+                else:
+                    # ChromaDB PersistentClient uses an internal system service
+                    system = getattr(client, "_system", None)
+                    stop_fn = getattr(system, "stop", None) if system is not None else None
+                    if callable(stop_fn):
+                        stop_fn()
+            except Exception as e:
+                # Best-effort close; log and continue
+                logger.warning(f"User '{self.user_id}': Error while closing ChromaDB client: {e}")
+            finally:
+                try:
+                    self.client = None
+                except Exception:
+                    pass
+
+    # Support context manager usage
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        # Last-resort cleanup if user forgot to close
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _batched(self, iterable, n):
         """Helper to yield batches from an iterable."""
@@ -412,6 +456,82 @@ class ChromaDBManager:
             # if sql_db_chunks_to_add:
             #     # media_db_instance.add_media_chunks_in_batches(media_id=media_id, chunks_to_add=sql_db_chunks_to_add)
             #     logger.info(f"User '{self.user_id}': TODO - Stored {len(sql_db_chunks_to_add)} chunk references in SQL DB for media_id {media_id}.")
+            # Optional: Ingestion-time claims (factual statements)
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+                if bool(_settings.get("ENABLE_INGESTION_CLAIMS", False)):
+                    # Only proceed if we have a DB path attached to this manager
+                    db_path = getattr(self, "db_path", None)
+                    if db_path:
+                        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import (
+                            extract_claims_for_chunks, store_claims,
+                        )
+                        # Build map: chunk_index -> chunk_text
+                        chunk_text_map = {}
+                        for ch in chunks:
+                            meta = ch.get("metadata", {}) or {}
+                            idx = int(meta.get("chunk_index") or meta.get("index") or 0)
+                            chunk_text_map[idx] = ch.get("text") or ch.get("content") or ""
+
+                        max_per = int(_settings.get("CLAIMS_MAX_PER_CHUNK", 3))
+                        mode = str(_settings.get("CLAIM_EXTRACTOR_MODE", "heuristic"))
+                        claims = extract_claims_for_chunks(chunks, extractor_mode=mode, max_per_chunk=max_per)
+                        if claims:
+                            try:
+                                # Ensure media_id can be used as integer FK
+                                mid = int(media_id)
+                            except Exception:
+                                logger.warning(f"Claims disabled for non-integer media_id: {media_id}")
+                            else:
+                                db = MediaDatabase(db_path=db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
+                                inserted = store_claims(db, media_id=mid, chunk_texts_by_index=chunk_text_map, claims=claims)
+                                try:
+                                    db.close_connection()
+                                except Exception:
+                                    pass
+                                logger.info(f"User '{self.user_id}': Stored {inserted} ingestion-time claims for media {mid}.")
+                        # Optional: embed claims into a dedicated Chroma collection
+                        try:
+                            if bool(_settings.get("CLAIMS_EMBED", False)) and claims:
+                                claim_texts = [c.get("claim_text", "") for c in claims if c.get("claim_text")]
+                                if claim_texts:
+                                    # Embed with same model unless overridden
+                                    claim_model_id = embedding_model_id_override or self.default_embedding_model_id
+                                    emb_vectors = create_embeddings_batch(
+                                        texts=claim_texts,
+                                        user_app_config=self.user_embedding_config,
+                                        model_id_override=claim_model_id
+                                    )
+                                    # Create or access claims collection
+                                    coll_name = f"claims_for_{self.user_id}"
+                                    try:
+                                        claims_coll = self.client.get_or_create_collection(name=coll_name)
+                                    except Exception:
+                                        # Fallback via our helper
+                                        claims_coll = self.get_or_create_collection(coll_name)
+                                    import hashlib as _hashlib
+                                    ids = [
+                                        f"claim_{media_id}_{(c.get('chunk_index') or 0)}_{_hashlib.sha1(str(c.get('claim_text','')).encode()).hexdigest()[:12]}"
+                                        for c in claims
+                                    ]
+                                    metas = []
+                                    for c in claims:
+                                        metas.append({
+                                            "media_id": str(media_id),
+                                            "chunk_index": int(c.get("chunk_index", 0)),
+                                            "source": "claim",
+                                            "extractor": mode,
+                                            "file_name": str(file_name),
+                                        })
+                                    claims_coll.upsert(documents=claim_texts, embeddings=emb_vectors, ids=ids, metadatas=metas)
+                                    logger.info(f"User '{self.user_id}': Upserted {len(ids)} claim embeddings to collection '{coll_name}'.")
+                        except Exception as e_emb:
+                            logger.debug(f"Claim embedding step skipped/failed: {e_emb}")
+                    else:
+                        logger.debug("Ingestion-time claims enabled but no db_path attached to ChromaDBManager; skipping.")
+            except Exception as e:
+                logger.warning(f"User '{self.user_id}': Ingestion-time claims step failed (non-fatal): {e}")
             # End TODO MediaDatabase
 
             if create_embeddings:

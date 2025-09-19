@@ -927,63 +927,102 @@ class MultiDatabaseRetriever:
             self.retrievers[DataSource.CHARACTER_CARDS] = CharacterCardsRetriever(
                 db_paths["character_cards_db"]
             )
+        # Optional: Claims retriever if provided
+        if "claims_db" in db_paths:
+            try:
+                self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
+            except Exception as e:
+                logger.debug(f"ClaimsRetriever init skipped: {e}")
+
+class ClaimsRetriever(BaseRetriever):
+    """Retriever for Claims table (ingestion-time factual statements)."""
+    async def retrieve(self, query: str, **kwargs) -> List[Document]:
+        documents: List[Document] = []
+        try:
+            # Try FTS on claims_fts first
+            sql = (
+                "SELECT c.id, c.media_id, c.chunk_index, c.claim_text "
+                "FROM claims_fts f JOIN Claims c ON f.rowid = c.id "
+                "WHERE f.claim_text MATCH ? AND c.deleted = 0 LIMIT ?"
+            )
+            params = (query, int(self.config.max_results))
+            rows = self._execute_query(sql, params)
+            for r in rows:
+                doc_id = f"claim_{r['id']}"
+                content = r["claim_text"]
+                documents.append(
+                    Document(
+                        id=doc_id,
+                        content=content,
+                        metadata={
+                            "media_id": r["media_id"],
+                            "chunk_index": r["chunk_index"],
+                            "source": "claim",
+                        },
+                        source=DataSource.CLAIMS,
+                        score=0.6,
+                    )
+                )
+            if not documents:
+                # Fallback to LIKE if FTS returns no rows
+                sql = (
+                    "SELECT id, media_id, chunk_index, claim_text FROM Claims "
+                    "WHERE deleted = 0 AND claim_text LIKE ? LIMIT ?"
+                )
+                params = (f"%{query}%", int(self.config.max_results))
+                rows = self._execute_query(sql, params)
+                for r in rows:
+                    doc_id = f"claim_{r['id']}"
+                    content = r["claim_text"]
+                    documents.append(
+                        Document(
+                            id=doc_id,
+                            content=content,
+                            metadata={
+                                "media_id": r["media_id"],
+                                "chunk_index": r["chunk_index"],
+                                "source": "claim",
+                            },
+                            source=DataSource.CLAIMS,
+                            score=0.4,
+                        )
+                    )
+        except Exception as e:
+            logger.debug(f"Claims FTS failed, fallback to LIKE: {e}")
+            sql = (
+                "SELECT id, media_id, chunk_index, claim_text FROM Claims "
+                "WHERE deleted = 0 AND claim_text LIKE ? LIMIT ?"
+            )
+            params = (f"%{query}%", int(self.config.max_results))
+            rows = self._execute_query(sql, params)
+            for r in rows:
+                doc_id = f"claim_{r['id']}"
+                content = r["claim_text"]
+                documents.append(
+                    Document(
+                        id=doc_id,
+                        content=content,
+                        metadata={
+                            "media_id": r["media_id"],
+                            "chunk_index": r["chunk_index"],
+                            "source": "claim",
+                        },
+                        source=DataSource.CLAIMS,
+                        score=0.4,
+                    )
+                )
+        return documents
+
+    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+        try:
+            cid = doc_id.replace("claim_", "")
+            sql = "SELECT * FROM Claims WHERE id = ?"
+            rows = self._execute_query(sql, (cid,))
+            return dict(rows[0]) if rows else {}
+        except Exception:
+            return {}
     
-    async def retrieve(
-        self,
-        query: str,
-        sources: Optional[List[DataSource]] = None,
-        config: Optional[RetrievalConfig] = None,
-        **kwargs
-    ) -> List[Document]:
-        """
-        Retrieve from multiple databases.
-        
-        Args:
-            query: Search query
-            sources: List of sources to search (None = all)
-            config: Retrieval configuration
-            
-        Returns:
-            Combined list of documents from all sources
-        """
-        sources = sources or list(self.retrievers.keys())
-        
-        # Configure retrievers
-        if config:
-            for retriever in self.retrievers.values():
-                retriever.config = config
-        
-        # Parallel retrieval from all sources
-        tasks = []
-        for source in sources:
-            if source in self.retrievers:
-                task = self.retrievers[source].retrieve(query, **kwargs)
-                tasks.append(task)
-        
-        # Gather results
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Combine documents
-        all_documents = []
-        for result in results:
-            if isinstance(result, list):
-                all_documents.extend(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Retrieval error: {result}")
-        
-        # Sort by score
-        all_documents.sort(key=lambda x: x.score, reverse=True)
-        
-        # Apply global limit
-        if config and config.max_results:
-            all_documents = all_documents[:config.max_results]
-        
-        logger.info(
-            f"Retrieved {len(all_documents)} documents from "
-            f"{len(sources)} sources"
-        )
-        
-        return all_documents
+    # (no second retrieve method inside ClaimsRetriever)
     
 # ---------------------------------------------------------------------------
 # Backward compatibility aliases for test suites expecting older names

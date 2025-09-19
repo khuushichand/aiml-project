@@ -238,6 +238,21 @@ overlap = 200
 # Contextual Chunking Settings
 enable_contextual_chunking = false
 # When enabled, uses LLM to add contextual information to each chunk before embedding
+
+[Claims]
+# Ingestion-time claim extraction and optional embeddings (default off)
+ENABLE_INGESTION_CLAIMS = false
+CLAIM_EXTRACTOR_MODE = heuristic
+CLAIMS_MAX_PER_CHUNK = 3
+CLAIMS_EMBED = false
+CLAIMS_EMBED_MODEL_ID = ""
+
+# Background claims rebuild worker (default off)
+CLAIMS_REBUILD_ENABLED = false
+CLAIMS_REBUILD_INTERVAL_SEC = 3600
+# Policy can be 'missing', 'all', or 'stale'
+CLAIMS_REBUILD_POLICY = missing
+CLAIMS_STALE_DAYS = 7
 contextual_llm_model = gpt-3.5-turbo
 # LLM model to use for generating contextual summaries
 contextual_chunk_method = situate_context

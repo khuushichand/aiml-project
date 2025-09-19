@@ -1,51 +1,23 @@
-# RAG Module Exports
-#
-# This module provides the main RAG (Retrieval Augmented Generation) functionality
-# for the tldw_server application using a functional pipeline architecture.
+"""
+RAG public API exports for the unified pipeline.
 
-from .rag_service.config import RAGConfig
+Prefer these unified helpers over archived presets.
+"""
+
 from .rag_service.types import DataSource, Document, SearchResult
-from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
-    RAGPipelineContext,
-    minimal_pipeline,
-    standard_pipeline,
-    quality_pipeline,
-    enhanced_pipeline,
-    custom_pipeline,
-    build_pipeline,
-    # Individual pipeline functions
-    expand_query,
-    check_cache,
-    retrieve_documents,
-    optimize_chromadb_search,
-    process_tables,
-    rerank_documents,
-    store_in_cache,
-    analyze_performance,
+from .rag_service.unified_pipeline import (
+    unified_rag_pipeline,
+    unified_batch_pipeline,
+    simple_search,
+    advanced_search,
 )
 
 __all__ = [
-    # Configuration and types
-    'RAGConfig',
     'DataSource',
     'Document',
     'SearchResult',
-    'RAGPipelineContext',
-    # Pre-built pipelines
-    'minimal_pipeline',
-    'standard_pipeline',
-    'quality_pipeline',
-    'enhanced_pipeline',
-    'custom_pipeline',
-    # Pipeline builder
-    'build_pipeline',
-    # Individual functions
-    'expand_query',
-    'check_cache',
-    'retrieve_documents',
-    'optimize_chromadb_search',
-    'process_tables',
-    'rerank_documents',
-    'store_in_cache',
-    'analyze_performance',
+    'unified_rag_pipeline',
+    'unified_batch_pipeline',
+    'simple_search',
+    'advanced_search',
 ]

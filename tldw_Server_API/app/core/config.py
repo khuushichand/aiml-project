@@ -485,6 +485,20 @@ def load_settings():
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
         "EPHEMERAL_CLEANUP_INTERVAL_SEC": int(os.getenv("EPHEMERAL_CLEANUP_INTERVAL_SEC", "1800")),
+
+        # Ingestion-time claims (factual statements) - default off for safety
+        "ENABLE_INGESTION_CLAIMS": os.getenv("ENABLE_INGESTION_CLAIMS", "false").lower() == "true",
+        "CLAIM_EXTRACTOR_MODE": os.getenv("CLAIM_EXTRACTOR_MODE", "heuristic"),
+        "CLAIMS_MAX_PER_CHUNK": int(os.getenv("CLAIMS_MAX_PER_CHUNK", "3")),
+        "CLAIMS_EMBED": os.getenv("CLAIMS_EMBED", "false").lower() == "true",
+        "CLAIMS_EMBED_MODEL_ID": os.getenv("CLAIMS_EMBED_MODEL_ID", ""),
+
+        # Claims periodic rebuild worker
+        "CLAIMS_REBUILD_ENABLED": os.getenv("CLAIMS_REBUILD_ENABLED", "false").lower() == "true",
+        "CLAIMS_REBUILD_INTERVAL_SEC": int(os.getenv("CLAIMS_REBUILD_INTERVAL_SEC", "3600")),
+        # Policy: missing | all | stale (stale requires CLAIMS_STALE_DAYS)
+        "CLAIMS_REBUILD_POLICY": os.getenv("CLAIMS_REBUILD_POLICY", "missing"),
+        "CLAIMS_STALE_DAYS": int(os.getenv("CLAIMS_STALE_DAYS", "7")),
     }
 
     # --- Warnings ---

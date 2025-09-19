@@ -155,8 +155,20 @@ def chroma_client(temp_chroma_path):
         allow_reset=True
     )
     client = chromadb.PersistentClient(path=temp_chroma_path, settings=settings)
-    yield client
-    # Cleanup handled by temp_chroma_path fixture
+    try:
+        yield client
+    finally:
+        # Best-effort shutdown to release file descriptors
+        try:
+            if hasattr(client, "close"):
+                client.close()  # type: ignore[attr-defined]
+            else:
+                system = getattr(client, "_system", None)
+                stop_fn = getattr(system, "stop", None) if system is not None else None
+                if callable(stop_fn):
+                    stop_fn()
+        except Exception:
+            pass
 
 @pytest.fixture
 def mock_chroma_client():
@@ -228,7 +240,13 @@ def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
     # Use the provided client to share the same persistent dir
     manager.client = chroma_client
     manager.db_path = temp_media_db
-    yield manager
+    try:
+        yield manager
+    finally:
+        try:
+            manager.close()
+        except Exception:
+            pass
 
 # =====================================================================
 # Embedding Fixtures

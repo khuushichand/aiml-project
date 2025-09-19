@@ -132,6 +132,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         metadata=result.metadata,
         timings=result.timings,
         citations=result.citations,
+        academic_citations=(result.metadata or {}).get("academic_citations", []),
+        chunk_citations=(result.metadata or {}).get("chunk_citations", []),
         feedback_id=result.feedback_id,
         generated_answer=result.generated_answer,
         cache_hit=result.cache_hit,
@@ -386,6 +388,7 @@ async def unified_search_endpoint(
             enable_citations=request.enable_citations,
             citation_style=request.citation_style,
             include_page_numbers=request.include_page_numbers,
+            enable_chunk_citations=request.enable_chunk_citations,
             
             # Generation
             enable_generation=request.enable_generation,

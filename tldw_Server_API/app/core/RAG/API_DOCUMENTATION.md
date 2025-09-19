@@ -19,7 +19,7 @@ Authorization: Bearer <your-jwt-token>
 
 The main RAG endpoint with complete feature access.
 
-#### Request Schema
+#### Request Schema (matches UnifiedRAGRequest)
 
 ```json
 {
@@ -28,99 +28,78 @@ The main RAG endpoint with complete feature access.
   
   // ========== DATA SOURCES ==========
   "sources": ["media_db", "notes", "characters", "chats"],  // Default: ["media_db"]
-  "media_db_path": "string (optional)",
-  "notes_db_path": "string (optional)",
-  "character_db_path": "string (optional)",
   
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
+  "hybrid_alpha": 0.7,      // 0=FTS only, 1=Vector only
   "top_k": 10,              // Max results (1-100)
-  "similarity_threshold": 0.3,  // Vector similarity threshold (0.0-1.0)
-  "fts_weight": 0.5,        // FTS weight in hybrid search (0.0-1.0)
-  "vector_weight": 0.5,     // Vector weight in hybrid search (0.0-1.0)
+  "min_score": 0.0,         // Minimum relevance score
   
   // ========== QUERY ENHANCEMENT ==========
-  "enable_query_expansion": false,
+  "expand_query": false,
   "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
-  "enable_spell_check": false,
-  "spell_check_language": "en",
+  "spell_check": false,
   
   // ========== FILTERING ==========
   "keyword_filter": ["term1", "term2"],  // Must contain these keywords
-  "exclude_keywords": ["term1"],         // Must not contain these
-  "date_range": {
-    "start": "2024-01-01",
-    "end": "2024-12-31"
-  },
-  "source_filter": ["youtube", "pdf"],   // Filter by content source type
   
   // ========== CACHING ==========
   "enable_cache": true,
   "cache_threshold": 0.85,    // Semantic similarity threshold (0.0-1.0)
-  "cache_ttl": 3600,          // Cache TTL in seconds
   
   // ========== DOCUMENT PROCESSING ==========
   "enable_reranking": true,
   "reranking_strategy": "hybrid",  // "flashrank" | "cross_encoder" | "hybrid"
-  "reranking_top_k": 20,          // Candidates before reranking
+  "rerank_top_k": 20,             // Docs to rerank (defaults to top_k)
   "enable_table_processing": false,
-  "enable_parent_retrieval": false,
-  "parent_context_size": 2,        // Number of surrounding chunks
+  "enable_enhanced_chunking": false,
+  "enable_parent_expansion": false,
+  "parent_context_size": 500,      // Characters of parent context
+  "include_sibling_chunks": false,
   
   // ========== CITATIONS ==========
   "enable_citations": false,
-  "citation_style": "apa",  // "mla" | "apa" | "chicago" | "harvard" | "ieee"
+  "citation_style": "apa",  // "apa" | "mla" | "chicago" | "harvard" | "ieee"
+  "include_page_numbers": false,
   "enable_chunk_citations": true,
-  "citation_threshold": 0.7,  // Minimum confidence for citations
   
   // ========== ANSWER GENERATION ==========
-  "enable_answer_generation": false,
-  "llm_provider": "openai",     // "openai" | "anthropic" | "cohere" | etc.
-  "model": "gpt-4o",           // Model name
-  "generation_prompt": "string (optional custom prompt)",
-  "max_tokens": 1000,          // Max tokens for generated answer
-  "temperature": 0.1,          // Generation temperature (0.0-2.0)
+  "enable_generation": false,
+  "generation_model": "gpt-4o",     // Model name
+  "generation_prompt": "string (optional)",
+  "max_generation_tokens": 500,
   
   // ========== SECURITY & PRIVACY ==========
-  "enable_pii_detection": false,
-  "pii_types": ["email", "ssn", "credit_card", "phone"],
-  "enable_content_filtering": false,
-  "content_filter_level": "medium",  // "none" | "low" | "medium" | "high"
-  "redact_pii": false,              // Whether to redact detected PII
+  "enable_security_filter": false,
+  "detect_pii": false,
+  "redact_pii": false,
+  "sensitivity_level": "public",    // "public" | "internal" | "confidential" | "restricted"
+  "content_filter": false,
   
   // ========== ANALYTICS & FEEDBACK ==========
-  "enable_analytics": true,
-  "enable_feedback_collection": true,
+  "collect_feedback": false,
+  "feedback_user_id": "string (optional)",
+  "apply_feedback_boost": false,
   "user_id": "string (optional)",
   "session_id": "string (optional)",
   
   // ========== PERFORMANCE ==========
-  "enable_connection_pooling": true,
-  "enable_embedding_cache": true,
   "enable_monitoring": false,
-  "enable_debug_mode": false,
+  "enable_observability": false,
+  "trace_id": "string (optional)",
+  "enable_performance_analysis": false,
+  "timeout_seconds": 10.0,
+  "debug_mode": false,
   
   // ========== RESILIENCE ==========
   "enable_resilience": false,
-  "resilience": {
-    "retry": {
-      "enabled": true,
-      "max_attempts": 3,
-      "initial_delay": 0.5,
-      "backoff_multiplier": 2.0
-    },
-    "circuit_breaker": {
-      "enabled": true,
-      "failure_threshold": 5,
-      "timeout": 60
-    }
-  },
+  "retry_attempts": 3,
+  "circuit_breaker": false,
   
   // ========== OUTPUT CONFIGURATION ==========
-  "include_metadata": true,
-  "include_embeddings": false,
-  "include_scores": true,
-  "enable_result_highlighting": false
+  "highlight_results": false,
+  "highlight_query_terms": false,
+  "track_cost": false
 }
 ```
 
@@ -220,16 +199,15 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "query": "Explain neural networks in detail",
     "sources": ["media_db", "notes"],
     "search_mode": "hybrid",
-    "enable_query_expansion": true,
+    "expand_query": true,
     "expansion_strategies": ["acronym", "synonym", "domain"],
     "enable_reranking": true,
     "reranking_strategy": "hybrid",
     "enable_citations": true,
     "citation_style": "apa",
     "enable_chunk_citations": true,
-    "enable_answer_generation": true,
-    "llm_provider": "openai",
-    "model": "gpt-4o",
+    "enable_generation": true,
+    "generation_model": "gpt-4o",
     "top_k": 15
   }'
 ```

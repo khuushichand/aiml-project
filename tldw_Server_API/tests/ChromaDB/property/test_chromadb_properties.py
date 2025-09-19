@@ -42,6 +42,28 @@ def _get_shared_state_manager():
         return _state_mgr_singleton
 
 
+# Ensure the shared state manager is properly closed at session end
+@pytest.fixture(scope="session", autouse=True)
+def _state_mgr_cleanup():
+    yield
+    try:
+        mgr = globals().get("_state_mgr_singleton")
+        if mgr is not None:
+            try:
+                mgr.close()
+            except Exception:
+                pass
+    finally:
+        base_dir = globals().get("_state_mgr_base_dir")
+        if base_dir:
+            try:
+                shutil.rmtree(base_dir, ignore_errors=True)
+            except Exception:
+                pass
+        globals()["_state_mgr_singleton"] = None
+        globals()["_state_mgr_base_dir"] = None
+
+
 # =====================================================================
 # Hypothesis Strategies
 # =====================================================================
@@ -576,7 +598,7 @@ class TestEmbeddingProperties:
     @given(
         embeddings=embeddings_strategy()
     )
-    @settings(max_examples=5)
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
     def test_embedding_normalization(self, embeddings):
         """Embeddings should be normalized (unit vectors)."""
         for embedding in embeddings:

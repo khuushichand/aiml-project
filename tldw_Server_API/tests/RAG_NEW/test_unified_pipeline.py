@@ -65,6 +65,61 @@ class TestUnifiedPipelineUnit:
             
             assert isinstance(result, UnifiedRAGResponse)
             assert result.query == "Explain machine learning"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_citations_generation(self):
+        """Citations should populate academic and chunk-level fields when enabled."""
+        # Create two simple documents with metadata sufficient for academic formatting
+        from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+        docs = [
+            Document(
+                id="doc1",
+                content="Machine learning is a subset of AI. It learns from data.",
+                metadata={
+                    "author": "Smith, J.",
+                    "title": "Introduction to Machine Learning",
+                    "publication": "Tech Publications",
+                    "date": "2024",
+                    "pages": "12-34",
+                },
+                source=DataSource.MEDIA_DB,
+                score=0.9,
+            ),
+            Document(
+                id="doc2",
+                content="Neural networks are models used in machine learning.",
+                metadata={
+                    "author": "Doe, A.",
+                    "title": "Neural Networks Basics",
+                    "publication": "AI Journal",
+                    "date": "2023",
+                    "pages": "101-110",
+                },
+                source=DataSource.MEDIA_DB,
+                score=0.8,
+            ),
+        ]
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=docs)
+            mock_retriever.return_value = mock_retriever_instance
+
+            result = await unified_rag_pipeline(
+                query="machine learning",
+                top_k=2,
+                enable_citations=True,
+                citation_style="apa",
+            )
+
+            assert isinstance(result, UnifiedRAGResponse)
+            # Academic citations should be present
+            assert isinstance(result.academic_citations, list)
+            assert len(result.academic_citations) >= 1
+            # Chunk citations should also be present by default
+            assert isinstance(result.chunk_citations, list)
+            assert len(result.chunk_citations) >= 1
     
     @pytest.mark.unit
     @pytest.mark.asyncio 
