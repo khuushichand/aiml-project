@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from loguru import logger
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 # Prefer importing Document from RAG types to keep consistency in pipelines
 try:
@@ -133,12 +134,15 @@ class LLMBasedClaimExtractor:
     async def extract(self, answer: str, max_claims: int = 25) -> List[Claim]:
         if not answer:
             return []
-        system = "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
-        prompt = (
+        system = load_prompt("ingestion", "claims_extractor_system") or (
+            "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
+        )
+        base = load_prompt("ingestion", "claims_extractor_prompt") or (
             "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
             "Each proposition should stand alone without the surrounding context, be specific and checkable. "
             "Return JSON: {\"claims\":[{\"text\":str}]}. Do not include explanations.\n\nANSWER:\n{answer}"
-        ).format(max_claims=max_claims, answer=answer)
+        )
+        prompt = base.format(max_claims=max_claims, answer=answer)
 
         try:
             raw = await asyncio.to_thread(self._analyze, "openai", answer, prompt, None, system, 0.1)
@@ -381,4 +385,3 @@ class ClaimsEngine:
                 "coverage": coverage,
             },
         }
-

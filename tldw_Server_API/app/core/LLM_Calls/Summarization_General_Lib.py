@@ -233,7 +233,8 @@ def _dispatch_to_api(
     api_key: Optional[str],
     temp: Optional[float],
     system_message: Optional[str],
-    streaming: bool
+    streaming: bool,
+    model_override: Optional[str] = None,
 ) -> Union[str, Generator[str, None, None], None]:
     """
     Internal function to call the appropriate API-specific summarization function.
@@ -252,14 +253,14 @@ def _dispatch_to_api(
         # We just pass the parameters along.
 
         if api_name_lower == "openai":
-            return summarize_with_openai(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
+            return summarize_with_openai(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming, model_override=model_override)
         elif api_name_lower == "anthropic":
             # Anthropic might need model passed explicitly or loaded in its func
             return summarize_with_anthropic(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
         elif api_name_lower == "cohere":
             return summarize_with_cohere(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
         elif api_name_lower == "google":
-            return summarize_with_google(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
+            return summarize_with_google(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming, model_override=model_override)
         elif api_name_lower == "groq":
             return summarize_with_groq(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
         elif api_name_lower == "huggingface":
@@ -273,7 +274,7 @@ def _dispatch_to_api(
             return summarize_with_mistral(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
         # --- Local LLM Calls ---
         elif api_name_lower == "llama.cpp":
-            return summarize_with_llama(text_to_summarize, custom_prompt_arg, api_key, temp, system_message, streaming)
+            return summarize_with_llama(text_to_summarize, custom_prompt_arg, api_key, temp, system_message, streaming, model_override=model_override)
         elif api_name_lower == "kobold":
             return summarize_with_kobold(text_to_summarize, api_key, custom_prompt_arg, temp, system_message, streaming)
         elif api_name_lower == "ooba":
@@ -318,7 +319,8 @@ def analyze(
     streaming: bool = False,
     recursive_summarization: bool = False,
     chunked_summarization: bool = False, # Summarize chunks separately & combine
-    chunk_options: Optional[dict] = None
+    chunk_options: Optional[dict] = None,
+    model_override: Optional[str] = None,
 ) -> Union[str, Generator[str, None, None]]:
     """
     Performs analysis(summarization by default) using a specified API, with optional chunking strategies. Provide a system prompt to avoid summarization.
@@ -479,7 +481,8 @@ def analyze(
                 # Summarize each chunk - force non-streaming for API call
                 chunk_summary_result = _dispatch_to_api(
                     chunk['text'], custom_prompt_arg, api_name, api_key,
-                    temp, system_message, streaming=False # Force non-streaming
+                    temp, system_message, streaming=False, # Force non-streaming
+                    model_override=model_override,
                 )
                 # Consume generator immediately
                 processed_chunk_summary = consume_generator(chunk_summary_result)
@@ -501,7 +504,8 @@ def analyze(
             effective_streaming_for_api_call = streaming
             final_result = _dispatch_to_api(
                  text_content, custom_prompt_arg, api_name, api_key,
-                 temp, system_message, streaming=effective_streaming_for_api_call
+                 temp, system_message, streaming=effective_streaming_for_api_call,
+                 model_override=model_override,
             )
 
         # --- Post-processing and Return ---
@@ -544,7 +548,7 @@ def analyze(
 #
 # API Calls
 
-def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False):
+def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False, model_override: Optional[str] = None):
     try:
         # API key validation
         if not api_key or api_key.strip() == "":
@@ -568,8 +572,8 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
             logging.error("OpenAI: API key not found or is empty (checked param and config).")
             return "Error: OpenAI API Key Not Provided/Found or is empty."
 
-        # Model handling: load from config
-        openai_model = loaded_config_data.get('openai_api', {}).get('model') or "gpt-4o" # Default model
+        # Model handling: load from config, allow explicit override
+        openai_model = (model_override or loaded_config_data.get('openai_api', {}).get('model') or "gpt-4o")
         logging.debug(f"OpenAI: Using model: {openai_model}")
 
         # NOTE: input_data passed to this function should *already be the extracted text*
@@ -1999,7 +2003,7 @@ def summarize_with_mistral(api_key, input_data, custom_prompt_arg, temp=None, sy
         return f"Mistral: Error occurred while processing summary: {str(e)}"
 
 
-def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False,):
+def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False, model_override: Optional[str] = None,):
     loaded_config_data = load_and_log_configs()
     try:
         # API key validation
@@ -2056,7 +2060,7 @@ def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, sys
         logging.debug(f"Google: Extracted text (first 500 chars): {text[:500]}...")
         logging.debug(f"Google: Custom prompt: {custom_prompt_arg}")
 
-        google_model = loaded_config_data['google_api']['model'] or "gemini-1.5-pro"
+        google_model = (model_override or loaded_config_data['google_api']['model'] or "gemini-1.5-pro")
         logging.debug(f"Google: Using model: {google_model}")
 
         headers = {

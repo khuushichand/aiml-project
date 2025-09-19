@@ -25,6 +25,7 @@ Notes:
 from typing import List, Any, Dict, Optional
 import re
 from loguru import logger
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 from ..base import BaseChunkingStrategy
 
@@ -230,6 +231,9 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
     def _build_llm_prompt(self, text: str, profile: str = "generic") -> str:
         text = text.strip()
         if profile == "claimify":
+            override = load_prompt("chunking", "proposition_claimify")
+            if override:
+                return f"{override}\n\nText:\n{text}\n\nClaims (JSON array):"
             return (
                 "You extract high-quality factual claims. "
                 "Given the input, identify atomic, verifiable claims expressed explicitly. "
@@ -240,6 +244,9 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 f"Text:\n{text}\n\nClaims (JSON array):"
             )
         elif profile == "gemma_aps":
+            override = load_prompt("chunking", "proposition_gemma_aps")
+            if override:
+                return f"{override}\n\nText:\n{text}\n\nAtomic propositions (JSON array):"
             return (
                 "Perform Atomic Proposition Simplification (APS). "
                 "Decompose the text into minimal propositions that preserve entailment and meaning. "
@@ -250,6 +257,9 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 f"Text:\n{text}\n\nAtomic propositions (JSON array):"
             )
         else:
+            override = load_prompt("chunking", "proposition_generic")
+            if override:
+                return f"{override}\n\nText:\n{text}\n\nOutput JSON array:"
             return (
                 "Extract the minimal factual propositions from the text below. "
                 "Return ONLY a JSON array of strings (no commentary). "

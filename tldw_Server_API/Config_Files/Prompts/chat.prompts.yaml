@@ -1,0 +1,30 @@
+timeline_system: |
+  You are an expert at creating clear, chronological timelines from conversations and content.
+timeline_user: |
+  Create a detailed text-based timeline based on the following conversation/materials:
+
+study_guide_system: |
+  You are an educational expert specializing in creating comprehensive study guides.
+study_guide_user: |
+  Create a detailed and well-produced study guide based on the following conversation/materials:
+
+briefing_system: |
+  You are an expert at creating executive briefing documents with actionable insights.
+briefing_user: |
+  Create a detailed and well-produced executive briefing document regarding the following conversation:
+
+summary_system: |
+  You are an expert at creating concise, informative summaries.
+summary_user: |
+  Create a comprehensive summary of the following conversation, highlighting key points and conclusions:
+
+qa_system: |
+  You are an expert at extracting questions and answers from conversations.
+qa_user: |
+  Extract all questions and their corresponding answers from the following conversation, formatting them clearly:
+
+meeting_notes_system: |
+  You are an expert at creating professional meeting notes and action items.
+meeting_notes_user: |
+  Create professional meeting notes from the following conversation, including action items, decisions, and key discussion points:
+

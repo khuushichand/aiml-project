@@ -486,12 +486,68 @@ def load_settings():
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
         "EPHEMERAL_CLEANUP_INTERVAL_SEC": int(os.getenv("EPHEMERAL_CLEANUP_INTERVAL_SEC", "1800")),
 
-        # Ingestion-time claims (factual statements) - default off for safety
-        "ENABLE_INGESTION_CLAIMS": os.getenv("ENABLE_INGESTION_CLAIMS", "false").lower() == "true",
-        "CLAIM_EXTRACTOR_MODE": os.getenv("CLAIM_EXTRACTOR_MODE", "heuristic"),
-        "CLAIMS_MAX_PER_CHUNK": int(os.getenv("CLAIMS_MAX_PER_CHUNK", "3")),
-        "CLAIMS_EMBED": os.getenv("CLAIMS_EMBED", "false").lower() == "true",
-        "CLAIMS_EMBED_MODEL_ID": os.getenv("CLAIMS_EMBED_MODEL_ID", ""),
+        # Ingestion-time claims (factual statements) - env overrides config.txt [Claims]
+        **(lambda: (
+            (lambda _cp: (
+                (lambda _env: (
+                    {
+                        "ENABLE_INGESTION_CLAIMS": (
+                            (_env.get("ENABLE_INGESTION_CLAIMS").lower() == "true") if _env.get("ENABLE_INGESTION_CLAIMS") is not None else (
+                                (_cp.getboolean('Claims', 'ENABLE_INGESTION_CLAIMS', fallback=False) if _cp else False)
+                            )
+                        ),
+                        "CLAIM_EXTRACTOR_MODE": (
+                            _env.get("CLAIM_EXTRACTOR_MODE") if _env.get("CLAIM_EXTRACTOR_MODE") is not None else (
+                                _cp.get('Claims', 'CLAIM_EXTRACTOR_MODE', fallback='heuristic') if _cp else 'heuristic'
+                            )
+                        ),
+                        "CLAIMS_MAX_PER_CHUNK": (
+                            int(_env.get("CLAIMS_MAX_PER_CHUNK")) if _env.get("CLAIMS_MAX_PER_CHUNK") is not None else (
+                                _cp.getint('Claims', 'CLAIMS_MAX_PER_CHUNK', fallback=3) if _cp else 3
+                            )
+                        ),
+                        "CLAIMS_EMBED": (
+                            (_env.get("CLAIMS_EMBED").lower() == "true") if _env.get("CLAIMS_EMBED") is not None else (
+                                _cp.getboolean('Claims', 'CLAIMS_EMBED', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_EMBED_MODEL_ID": (
+                            _env.get("CLAIMS_EMBED_MODEL_ID") if _env.get("CLAIMS_EMBED_MODEL_ID") is not None else (
+                                _cp.get('Claims', 'CLAIMS_EMBED_MODEL_ID', fallback='') if _cp else ''
+                            )
+                        ),
+                        # Claims LLM selection (provider + optional knobs)
+                        "CLAIMS_LLM_PROVIDER": (
+                            _env.get("CLAIMS_LLM_PROVIDER") if _env.get("CLAIMS_LLM_PROVIDER") is not None else (
+                                _cp.get('Claims', 'CLAIMS_LLM_PROVIDER', fallback='') if _cp else ''
+                            )
+                        ),
+                        "CLAIMS_LLM_MODEL": (
+                            _env.get("CLAIMS_LLM_MODEL") if _env.get("CLAIMS_LLM_MODEL") is not None else (
+                                _cp.get('Claims', 'CLAIMS_LLM_MODEL', fallback='') if _cp else ''
+                            )
+                        ),
+                        "CLAIMS_LLM_TEMPERATURE": (
+                            (float(_env.get("CLAIMS_LLM_TEMPERATURE")) if _env.get("CLAIMS_LLM_TEMPERATURE") is not None else (
+                                float(_cp.get('Claims', 'CLAIMS_LLM_TEMPERATURE', fallback='0.1')) if _cp else 0.1
+                            ))
+                        ),
+                        # Optional: allow local NER model name in config for users who want NER
+                        "CLAIMS_LOCAL_NER_MODEL": (
+                            _env.get("CLAIMS_LOCAL_NER_MODEL") if _env.get("CLAIMS_LOCAL_NER_MODEL") is not None else (
+                                _cp.get('Claims', 'CLAIMS_LOCAL_NER_MODEL', fallback='en_core_web_sm') if _cp else 'en_core_web_sm'
+                            )
+                        ),
+                    }
+                ))({
+                    k: os.getenv(k) for k in [
+                        "ENABLE_INGESTION_CLAIMS", "CLAIM_EXTRACTOR_MODE", "CLAIMS_MAX_PER_CHUNK",
+                        "CLAIMS_EMBED", "CLAIMS_EMBED_MODEL_ID", "CLAIMS_LLM_PROVIDER",
+                        "CLAIMS_LLM_TEMPERATURE", "CLAIMS_LOCAL_NER_MODEL"
+                    ]
+                })
+            ))(load_comprehensive_config())
+        ))(),
 
         # Claims periodic rebuild worker
         "CLAIMS_REBUILD_ENABLED": os.getenv("CLAIMS_REBUILD_ENABLED", "false").lower() == "true",
@@ -535,6 +591,18 @@ def load_settings():
                 ))(load_comprehensive_config())
             )
         ))(),
+
+        # RAG LLM reranker configuration (provider/model)
+        "RAG_LLM_RERANKER_PROVIDER": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llm_reranker_provider', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLM_RERANKER_PROVIDER'), load_comprehensive_config()),
+        "RAG_LLM_RERANKER_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llm_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLM_RERANKER_MODEL'), load_comprehensive_config()),
     }
 
     # --- Warnings ---
@@ -1068,6 +1136,40 @@ def load_and_log_configs():
         auto_generate_embeddings = config_parser_object.get('Embeddings', 'auto_generate_on_upload', fallback='false').lower() == 'true'
         chunk_size = config_parser_object.get('Embeddings', 'chunk_size', fallback=400)
         overlap = config_parser_object.get('Embeddings', 'overlap', fallback=200)
+        # Contextual chunking defaults for embeddings
+        enable_contextual_chunking_cfg = config_parser_object.get('Embeddings', 'enable_contextual_chunking', fallback='false')
+        try:
+            enable_contextual_chunking_flag = str(enable_contextual_chunking_cfg).strip().lower() in {"true","1","yes","on"}
+        except Exception:
+            enable_contextual_chunking_flag = False
+        # Allow contextual LLM model in Embeddings (fallback to Claims section for backward compat)
+        contextual_llm_model_cfg = config_parser_object.get('Embeddings', 'contextual_llm_model', fallback=None)
+        if not contextual_llm_model_cfg:
+            contextual_llm_model_cfg = config_parser_object.get('Claims', 'contextual_llm_model', fallback=None)
+        # Window size: allow None to lock full-doc behavior
+        context_window_size_cfg = config_parser_object.get('Embeddings', 'context_window_size', fallback=None)
+        if context_window_size_cfg is None:
+            # Fallback to chunking section if not specified under Embeddings
+            context_window_size_cfg = config_parser_object.get('Chunking', 'context_window_size', fallback=None)
+        def _parse_optional_int(val):
+            if val is None:
+                return None
+            s = str(val).strip().lower()
+            if s in {"", "none", "null"}:
+                return None
+            try:
+                return int(s)
+            except Exception:
+                return None
+        context_window_size_val = _parse_optional_int(context_window_size_cfg)
+        # Strategy/budget
+        context_strategy_cfg = config_parser_object.get('Embeddings', 'context_strategy', fallback='auto')
+        context_strategy_val = str(context_strategy_cfg).strip().lower() if context_strategy_cfg else 'auto'
+        context_token_budget_cfg = config_parser_object.get('Embeddings', 'context_token_budget', fallback='6000')
+        try:
+            context_token_budget_val = int(str(context_token_budget_cfg).strip())
+        except Exception:
+            context_token_budget_val = 6000
 
         # Prompts - FIXME
         prompt_path = config_parser_object.get('Prompts', 'prompt_path', fallback='Databases/prompts.db')
@@ -1589,7 +1691,13 @@ def load_and_log_configs():
                 'embedding_api_url': embedding_api_url,
                 'embedding_api_key': embedding_api_key,
                 'chunk_size': chunk_size,
-                'chunk_overlap': overlap
+                'chunk_overlap': overlap,
+                # Contextual chunking defaults for embeddings
+                'enable_contextual_chunking': enable_contextual_chunking_flag,
+                'contextual_llm_model': contextual_llm_model_cfg,
+                'context_window_size': context_window_size_val,  # None means full-doc by default
+                'context_strategy': context_strategy_val,        # auto|full|window|outline_window
+                'context_token_budget': context_token_budget_val,
             },
             'auto-save': {
                 'save_character_chats': save_character_chats,

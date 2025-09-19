@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 async def process_documents(
     doc_urls: Optional[List[str]],
@@ -134,6 +135,12 @@ async def process_documents(
         if not api_name or api_name.lower() == "none":
             return ""  # no summarization
         try:
+            # Load defaults if none provided
+            nonlocal custom_prompt_input, system_prompt_input
+            if not custom_prompt_input:
+                custom_prompt_input = load_prompt("document", "document_summary_user") or custom_prompt_input
+            if not system_prompt_input:
+                system_prompt_input = load_prompt("document", "document_summary_system") or system_prompt_input
             # Prepare chunk options
             chunk_opts = {
                 'method': chunk_method,

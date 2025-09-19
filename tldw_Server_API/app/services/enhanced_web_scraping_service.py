@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
 # Import existing components
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
@@ -344,13 +345,16 @@ class WebScrapingService:
     ) -> str:
         """Summarize content using LLM"""
         try:
+            # Provide default prompts from Prompts/webscraping if not supplied
+            custom_prompt = custom_prompt or load_prompt("webscraping", "article_summary_user") or "Summarize this article concisely."
+            system_prompt = system_prompt or load_prompt("webscraping", "article_summary_system") or "You are a professional summarizer."
             summary = analyze(
                 input_data=content,
-                custom_prompt_arg=custom_prompt or "Summarize this article concisely.",
+                custom_prompt_arg=custom_prompt,
                 api_name=api_name or "openai",
                 api_key=api_key,
                 temp=temperature,
-                system_message=system_prompt or "You are a professional summarizer."
+                system_message=system_prompt
             )
             return summary
         except Exception as e:

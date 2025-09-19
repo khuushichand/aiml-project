@@ -1,0 +1,6 @@
+article_summary_user: |
+  Summarize this article concisely. Focus on the main points, facts, and any actionable insights.
+
+article_summary_system: |
+  You are a professional summarizer who produces accurate, concise summaries of web content.
+

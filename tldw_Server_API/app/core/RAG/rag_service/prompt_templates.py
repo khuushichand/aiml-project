@@ -12,6 +12,7 @@ from enum import Enum
 import json
 
 from loguru import logger
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 
 class TemplateType(Enum):
@@ -246,6 +247,35 @@ Please base your answer on the provided context and indicate if additional infor
             description="Structured answer format",
             variables=["summary", "details", "key_points", "considerations"]
         ))
+
+        # External overrides/extensions from Prompts/rag (YAML/JSON/MD)
+        self._load_external_templates()
+
+    def _load_external_templates(self) -> None:
+        """Override or extend templates using Prompts/rag if available.
+
+        Recognized keys:
+        - default_system, with_citations, retrieval_guidance, reranking_instruction
+        """
+        key_map = {
+            "default_system": ("default_system", TemplateType.SYSTEM),
+            "with_citations": ("with_citations", TemplateType.FULL),
+            "retrieval_guidance": ("retrieval_guidance", TemplateType.SYSTEM),
+            "reranking_instruction": ("reranking_instruction", TemplateType.SYSTEM),
+        }
+        for ext_key, (name, ttype) in key_map.items():
+            content = load_prompt("rag", ext_key)
+            if isinstance(content, str) and content.strip():
+                if name in self.templates:
+                    self.templates[name].template = content
+                    self.templates[name].type = ttype
+                else:
+                    self.add_template(PromptTemplate(
+                        name=name,
+                        template=content,
+                        type=ttype,
+                        description=f"Loaded from Prompts/rag: {ext_key}"
+                    ))
     
     def add_template(self, template: PromptTemplate) -> None:
         """Add a template to the library."""

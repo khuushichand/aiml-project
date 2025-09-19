@@ -720,9 +720,36 @@
                                 <label for="addMedia_chunk_overlap">Chunk Overlap:</label>
                                 <input type="number" id="addMedia_chunk_overlap" name="chunk_overlap" value="200">
                             </div>
-                             <div class="form-group">
+                            <div class="form-group">
                                 <label for="addMedia_custom_chapter_pattern">Custom Chapter Pattern (Regex):</label>
                                 <input type="text" id="addMedia_custom_chapter_pattern" name="custom_chapter_pattern">
+                            </div>
+                            <h3>Contextual Chunking</h3>
+                            <div class="form-group checkbox-group" style="display:flex; gap:12px; align-items:center;">
+                                <input type="checkbox" id="addMedia_enable_contextual_chunking" name="enable_contextual_chunking">
+                                <label for="addMedia_enable_contextual_chunking">Enable Contextual Chunking</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="addMedia_contextual_llm_model">Contextual LLM Model:</label>
+                                <input type="text" id="addMedia_contextual_llm_model" name="contextual_llm_model" placeholder="e.g., gpt-3.5-turbo">
+                            </div>
+                            <div class="form-group">
+                                <label for="addMedia_context_window_size">Context Window Size (chars):</label>
+                                <input type="number" id="addMedia_context_window_size" name="context_window_size" placeholder="e.g., 1200">
+                            </div>
+                            <div class="form-group">
+                                <label for="addMedia_context_strategy">Context Strategy:</label>
+                                <select id="addMedia_context_strategy" name="context_strategy">
+                                    <option value="">(default: auto)</option>
+                                    <option value="auto">auto</option>
+                                    <option value="full">full</option>
+                                    <option value="window">window</option>
+                                    <option value="outline_window">outline_window</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="addMedia_context_token_budget">Context Token Budget (auto):</label>
+                                <input type="number" id="addMedia_context_token_budget" name="context_token_budget" placeholder="e.g., 6000">
                             </div>
                         </div>
                     </div>
@@ -1038,9 +1065,36 @@
                                 <label for="processAudios_chunk_overlap">Chunk Overlap:</label>
                                 <input type="number" id="processAudios_chunk_overlap" name="chunk_overlap" value="200">
                             </div>
-                             <div class="form-group">
+                            <div class="form-group">
                                 <label for="processAudios_custom_chapter_pattern">Custom Chapter Pattern (Regex):</label>
                                 <input type="text" id="processAudios_custom_chapter_pattern" name="custom_chapter_pattern">
+                            </div>
+                            <h3>Contextual Chunking</h3>
+                            <div class="form-group checkbox-group" style="display:flex; gap:12px; align-items:center;">
+                                <input type="checkbox" id="processAudios_enable_contextual_chunking" name="enable_contextual_chunking">
+                                <label for="processAudios_enable_contextual_chunking">Enable Contextual Chunking</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="processAudios_contextual_llm_model">Contextual LLM Model:</label>
+                                <input type="text" id="processAudios_contextual_llm_model" name="contextual_llm_model" placeholder="e.g., gpt-3.5-turbo">
+                            </div>
+                            <div class="form-group">
+                                <label for="processAudios_context_window_size">Context Window Size (chars):</label>
+                                <input type="number" id="processAudios_context_window_size" name="context_window_size" placeholder="e.g., 1200">
+                            </div>
+                            <div class="form-group">
+                                <label for="processAudios_context_strategy">Context Strategy:</label>
+                                <select id="processAudios_context_strategy" name="context_strategy">
+                                    <option value="">(default: auto)</option>
+                                    <option value="auto">auto</option>
+                                    <option value="full">full</option>
+                                    <option value="window">window</option>
+                                    <option value="outline_window">outline_window</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="processAudios_context_token_budget">Context Token Budget (auto):</label>
+                                <input type="number" id="processAudios_context_token_budget" name="context_token_budget" placeholder="e.g., 6000">
                             </div>
                         </div>
                     </div>
@@ -1114,9 +1168,36 @@
                                 <label for="processEbooks_chunk_overlap">Chunk Overlap (for non-chapter):</label>
                                 <input type="number" id="processEbooks_chunk_overlap" name="chunk_overlap" value="200">
                             </div>
-                             <div class="form-group">
+                            <div class="form-group">
                                 <label for="processEbooks_custom_chapter_pattern">Custom Chapter Pattern (Regex):</label>
                                 <input type="text" id="processEbooks_custom_chapter_pattern" name="custom_chapter_pattern">
+                            </div>
+                            <h3>Contextual Chunking</h3>
+                            <div class="form-group checkbox-group" style="display:flex; gap:12px; align-items:center;">
+                                <input type="checkbox" id="processEbooks_enable_contextual_chunking" name="enable_contextual_chunking">
+                                <label for="processEbooks_enable_contextual_chunking">Enable Contextual Chunking</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="processEbooks_contextual_llm_model">Contextual LLM Model:</label>
+                                <input type="text" id="processEbooks_contextual_llm_model" name="contextual_llm_model" placeholder="e.g., gpt-3.5-turbo">
+                            </div>
+                            <div class="form-group">
+                                <label for="processEbooks_context_window_size">Context Window Size (chars):</label>
+                                <input type="number" id="processEbooks_context_window_size" name="context_window_size" placeholder="e.g., 1200">
+                            </div>
+                            <div class="form-group">
+                                <label for="processEbooks_context_strategy">Context Strategy:</label>
+                                <select id="processEbooks_context_strategy" name="context_strategy">
+                                    <option value="">(default: auto)</option>
+                                    <option value="auto">auto</option>
+                                    <option value="full">full</option>
+                                    <option value="window">window</option>
+                                    <option value="outline_window">outline_window</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="processEbooks_context_token_budget">Context Token Budget (auto):</label>
+                                <input type="number" id="processEbooks_context_token_budget" name="context_token_budget" placeholder="e.g., 6000">
                             </div>
                         </div>
                     </div>
@@ -1205,6 +1286,33 @@
                             <div class="form-group">
                                 <label for="processDocuments_custom_chapter_pattern">Custom Chapter Pattern (Regex):</label>
                                 <input type="text" id="processDocuments_custom_chapter_pattern" name="custom_chapter_pattern">
+                            </div>
+                            <h3>Contextual Chunking</h3>
+                            <div class="form-group checkbox-group" style="display:flex; gap:12px; align-items:center;">
+                                <input type="checkbox" id="processDocuments_enable_contextual_chunking" name="enable_contextual_chunking">
+                                <label for="processDocuments_enable_contextual_chunking">Enable Contextual Chunking</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="processDocuments_contextual_llm_model">Contextual LLM Model:</label>
+                                <input type="text" id="processDocuments_contextual_llm_model" name="contextual_llm_model" placeholder="e.g., gpt-3.5-turbo">
+                            </div>
+                            <div class="form-group">
+                                <label for="processDocuments_context_window_size">Context Window Size (chars):</label>
+                                <input type="number" id="processDocuments_context_window_size" name="context_window_size" placeholder="e.g., 1200">
+                            </div>
+                            <div class="form-group">
+                                <label for="processDocuments_context_strategy">Context Strategy:</label>
+                                <select id="processDocuments_context_strategy" name="context_strategy">
+                                    <option value="">(default: auto)</option>
+                                    <option value="auto">auto</option>
+                                    <option value="full">full</option>
+                                    <option value="window">window</option>
+                                    <option value="outline_window">outline_window</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="processDocuments_context_token_budget">Context Token Budget (auto):</label>
+                                <input type="number" id="processDocuments_context_token_budget" name="context_token_budget" placeholder="e.g., 6000">
                             </div>
                         </div>
                     </div>

@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create imp
 from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 #
 #######################################################################################################################
 #
@@ -379,13 +380,15 @@ class ChromaDBManager:
         Returns:
             A short, succinct context string (may be empty string on failure)
         """
-        # Prompts could be made configurable
+        # Prompts loaded from Prompts/embeddings.prompts.md with safe fallback
         doc_content_prompt = f"<document>\n{doc_content}\n</document>"
-        chunk_context_prompt = (
-            f"\n\n\n\n\nHere is the chunk we want to situate within the whole document\n<chunk>\n{chunk_content}\n</chunk>\n\n"
-            "Please give a short succinct context to situate this chunk within the overall document "
+        situate_base_prompt = load_prompt("embeddings", "Situate Context Prompt") or (
+            "Please give a short succinct context to situate this chunk within the overall document\n"
             "for the purposes of improving search retrieval of the chunk.\n"
             "Answer only with the succinct context and nothing else."
+        )
+        chunk_context_prompt = (
+            f"\n\n\n\n\nHere is the chunk we want to situate within the whole document\n<chunk>\n{chunk_content}\n</chunk>\n\n" + situate_base_prompt
         )
         try:
             # Assuming `analyze` handles its own LLM config (API key, model selection via api_name)
@@ -406,6 +409,39 @@ class ChromaDBManager:
                          exc_info=True)
             # Depending on desired behavior, either return empty string or raise
             return ""  # Fail gracefully for contextualization
+
+    def _estimate_token_count(self, text: str) -> int:
+        """Rough token estimate without external tokenizer.
+
+        Uses a simple heuristic: tokens ~= max(words, chars/4).
+        """
+        if not text:
+            return 0
+        words = text.split()
+        return max(len(words), len(text) // 4)
+
+    def _build_document_outline(self, api_name_for_context: str, doc_content: str) -> str:
+        """Create a concise, high-level outline of the document using an LLM.
+
+        Returns an outline as bullet points or short titled sections. On failure, returns empty string.
+        """
+        try:
+            prompt = load_prompt("embeddings", "Document Outline Prompt") or (
+                "Produce a brief outline of the document with 5-10 bullets. "
+                "Each bullet should have a short section title and a one-line summary."
+            )
+            context = f"<document>\n{doc_content}\n</document>"
+            resp = analyze(
+                api_name=api_name_for_context,
+                input_data="",  # content is provided as context
+                prompt=prompt,
+                context=context,
+                user_embedding_config=self.user_embedding_config,
+            )
+            return (resp or "").strip()
+        except Exception as e:
+            logger.warning(f"User '{self.user_id}': Outline generation failed: {e}")
+            return ""
 
     def process_and_store_content(self,
                                   content: str,
@@ -494,7 +530,14 @@ class ChromaDBManager:
                                 logger.warning(f"Claims disabled for non-integer media_id: {media_id}")
                             else:
                                 db = MediaDatabase(db_path=db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-                                inserted = store_claims(db, media_id=mid, chunk_texts_by_index=chunk_text_map, claims=claims)
+                                inserted = store_claims(
+                                    db,
+                                    media_id=mid,
+                                    chunk_texts_by_index=chunk_text_map,
+                                    claims=claims,
+                                    extractor=mode,
+                                    extractor_version="v1",
+                                )
                                 try:
                                     db.close_connection()
                                 except Exception:
@@ -543,7 +586,10 @@ class ChromaDBManager:
                 logger.warning(f"User '{self.user_id}': Ingestion-time claims step failed (non-fatal): {e}")
             # End TODO MediaDatabase
 
-            # Determine optional context-window size and storage preferences
+            # Determine strategy, budgets, and window size defaults
+            # Strategy: 'auto' (default), 'full', 'window', 'outline_window'
+            context_strategy = 'auto'
+            token_budget: int = 6000
             context_window_size: Optional[int] = None
             store_context_header_in_docs: bool = False
             prepend_header_to_embedding: bool = True
@@ -563,6 +609,64 @@ class ChromaDBManager:
                 phe = chunk_options.get("prepend_header_to_embedding")
                 if isinstance(phe, bool):
                     prepend_header_to_embedding = phe
+                # Strategy and budget from request
+                strat = chunk_options.get("context_strategy")
+                if isinstance(strat, str):
+                    context_strategy = strat.lower().strip() or context_strategy
+                tb = chunk_options.get("context_token_budget")
+                try:
+                    if isinstance(tb, str):
+                        tb = int(tb)
+                    if isinstance(tb, int) and tb > 0:
+                        token_budget = tb
+                except Exception:
+                    pass
+
+            # Fall back to embedding_config defaults if provided
+            try:
+                emb_cfg = self.embedding_config or {}
+                strat_cfg = emb_cfg.get("context_strategy")
+                if isinstance(strat_cfg, str) and context_strategy == 'auto':
+                    context_strategy = strat_cfg.lower().strip() or context_strategy
+                tb_cfg = emb_cfg.get("context_token_budget")
+                if token_budget == 6000 and isinstance(tb_cfg, int) and tb_cfg > 0:
+                    token_budget = tb_cfg
+                # Global window size default
+                if context_window_size is None:
+                    cfg_cws = emb_cfg.get("context_window_size", None)
+                    if isinstance(cfg_cws, int) and cfg_cws > 0:
+                        context_window_size = cfg_cws
+                # Detect explicit global full-doc lock-in: key present with None value
+                force_full_doc_context = ('context_window_size' in emb_cfg and emb_cfg.get('context_window_size') is None)
+            except Exception:
+                force_full_doc_context = False
+
+            # Decide whether to use full document or a window per chunk
+            doc_tokens = self._estimate_token_count(content)
+            use_full_doc_context = True
+            include_outline = False
+            if force_full_doc_context and context_strategy in ('auto', 'full'):
+                use_full_doc_context = True
+                include_outline = False
+            else:
+                if context_strategy == 'full':
+                    use_full_doc_context = True
+                elif context_strategy == 'window':
+                    use_full_doc_context = False
+                elif context_strategy == 'outline_window':
+                    use_full_doc_context = False
+                    include_outline = True
+                else:  # auto
+                    if doc_tokens <= token_budget:
+                        use_full_doc_context = True
+                    else:
+                        use_full_doc_context = False
+                        include_outline = True  # auto: add outline when falling back to window
+
+            # Build document outline once if needed
+            doc_outline = ""
+            if create_contextualized and not use_full_doc_context and include_outline:
+                doc_outline = self._build_document_outline(effective_llm_model_for_context, content)
 
             if create_embeddings:
                 docs_for_chroma = []  # This will hold the text that's actually stored in Chroma
@@ -573,28 +677,38 @@ class ChromaDBManager:
                     docs_for_chroma.append(chunk_text)  # Store original chunk text in Chroma document
 
                     if create_contextualized:
-                        # Compute an optional document window around this chunk using start/end metadata
+                        # Compute document context per chosen strategy
                         meta = chunk.get('metadata', {}) or {}
                         start_idx = meta.get('start_char', meta.get('start_index'))
                         end_idx = meta.get('end_char', meta.get('end_index'))
-                        windowed_doc = content
-                        if (
-                            isinstance(context_window_size, int) and context_window_size > 0 and
-                            isinstance(start_idx, (int, float)) and isinstance(end_idx, (int, float))
-                        ):
-                            try:
-                                s = max(0, int(start_idx) - int(context_window_size))
-                                e = min(len(content), int(end_idx) + int(context_window_size))
-                                windowed_doc = content[s:e]
-                                meta['context_window_start'] = s
-                                meta['context_window_end'] = e
-                                meta['context_window_size_used'] = int(context_window_size)
-                            except Exception:
-                                windowed_doc = content
+                        # Default window size if needed
+                        default_window_chars = 1200
+                        effective_cws = context_window_size if isinstance(context_window_size, int) and context_window_size > 0 else default_window_chars
+
+                        if use_full_doc_context:
+                            combined_context_doc = content
+                        else:
+                            # Build a window slice
+                            windowed_doc = content
+                            if isinstance(start_idx, (int, float)) and isinstance(end_idx, (int, float)):
+                                try:
+                                    s = max(0, int(start_idx) - int(effective_cws))
+                                    e = min(len(content), int(end_idx) + int(effective_cws))
+                                    windowed_doc = content[s:e]
+                                    meta['context_window_start'] = s
+                                    meta['context_window_end'] = e
+                                    meta['context_window_size_used'] = int(effective_cws)
+                                except Exception:
+                                    windowed_doc = content
+                            # Combine outline with window when available
+                            if include_outline and doc_outline:
+                                combined_context_doc = f"Outline:\n{doc_outline}\n\nWindow:\n{windowed_doc}"
+                            else:
+                                combined_context_doc = windowed_doc
 
                         context_summary = self.situate_context(
                             effective_llm_model_for_context,
-                            windowed_doc,
+                            combined_context_doc,
                             chunk_text
                         )
 

@@ -90,6 +90,12 @@ except ImportError:
     RerankingStrategy = None
     RerankingConfig = None
 
+try:
+    from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+except ImportError:
+    def load_prompt(*args, **kwargs):  # type: ignore
+        return None
+
 # Chunking support
 try:
     from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
@@ -544,6 +550,13 @@ async def unified_rag_pipeline(
                         )
                         
                     result.documents = documents
+                    # Attach retrieval guidance prompt in metadata for downstream awareness/debugging
+                    try:
+                        _rg = load_prompt("rag", "retrieval_guidance")
+                        if _rg:
+                            result.metadata["retrieval_guidance"] = _rg
+                    except Exception:
+                        pass
                     result.metadata["sources_searched"] = sources
                     result.metadata["documents_retrieved"] = len(documents)
                     
@@ -655,15 +668,50 @@ async def unified_rag_pipeline(
                     strategy_map = {
                         "flashrank": RerankingStrategy.FLASHRANK,
                         "cross_encoder": RerankingStrategy.CROSS_ENCODER,
-                        "hybrid": RerankingStrategy.HYBRID
+                        "hybrid": RerankingStrategy.HYBRID,
+                        "diversity": RerankingStrategy.DIVERSITY,
+                        "llm_scoring": RerankingStrategy.LLM_SCORING,
                     }
                     
+                    # Determine LLM reranker provider/model from config when requested
+                    selected_strategy = strategy_map[reranking_strategy]
+                    llm_client = None
+                    if selected_strategy == RerankingStrategy.LLM_SCORING:
+                        try:
+                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+                            cfg = load_and_log_configs() or {}
+                            prov = (cfg.get('RAG_LLM_RERANKER_PROVIDER') or '').strip()
+                            model = (cfg.get('RAG_LLM_RERANKER_MODEL') or '').strip()
+                            if not model:
+                                # No model set -> fallback to FlashRank
+                                selected_strategy = RerankingStrategy.FLASHRANK
+                            else:
+                                class _LLMClient:
+                                    def __init__(self, provider: str, model_name: str):
+                                        self.provider = provider or 'openai'
+                                        self.model_name = model_name
+                                    def analyze(self, prompt_text: str):
+                                        # Use analyze with prompt as custom_prompt_arg
+                                        return sgl.analyze(
+                                            api_name=self.provider,
+                                            input_data="",
+                                            custom_prompt_arg=prompt_text,
+                                            api_key=None,
+                                            system_message=None,
+                                            temp=None,
+                                            model_override=self.model_name,
+                                        )
+                                llm_client = _LLMClient(prov, model)
+                        except Exception:
+                            selected_strategy = RerankingStrategy.FLASHRANK
+
                     rerank_config = RerankingConfig(
-                        strategy=strategy_map[reranking_strategy],
+                        strategy=selected_strategy,
                         top_k=rerank_top_k or top_k,
                         model_name=None
                     )
-                    reranker = create_reranker(strategy_map[reranking_strategy], rerank_config)
+                    reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                     reranked = await reranker.rerank(query, result.documents)
                     if reranked and hasattr(reranked[0], 'document'):
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]

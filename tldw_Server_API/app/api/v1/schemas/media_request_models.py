@@ -119,6 +119,12 @@ class ChunkingOptions(BaseModel):
     enable_contextual_chunking: bool = Field(False, description="Add LLM-generated context to chunks for better retrieval")
     contextual_llm_model: Optional[str] = Field(None, description="LLM model to use for generating contextual summaries (e.g., 'gpt-3.5-turbo')")
     context_window_size: Optional[int] = Field(None, ge=100, le=2000, description="Size of context window around chunks in characters")
+    context_strategy: Optional[Literal['auto','full','window','outline_window']] = Field(
+        None, description="Context selection strategy: 'auto' (default), 'full', 'window', or 'outline_window'"
+    )
+    context_token_budget: Optional[int] = Field(
+        None, ge=1000, le=200000, description="Approximate token budget for 'auto' strategy (len(text)/4 heuristic)"
+    )
 
     @field_validator('chunk_method', mode='before')
     @classmethod

@@ -9,6 +9,7 @@ building a rolling context that maintains continuity across chunk boundaries.
 from typing import List, Dict, Any, Optional, Callable
 from loguru import logger
 from ..base import BaseChunkingStrategy
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 
 class RollingSummarizeStrategy(BaseChunkingStrategy):
@@ -165,7 +166,11 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
                                     detail_level: float,
                                     preserve_structure: bool,
                                     is_first: bool) -> str:
-        """Create prompt for LLM summarization."""
+        """Create prompt for LLM summarization.
+
+        If a custom instruction is defined in Prompts/chunking (key: 'Rolling Summarization'),
+        it will be used as the base instruction.
+        """
         
         # Determine target length based on detail level
         if detail_level < 0.3:
@@ -177,12 +182,13 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
         else:
             length_instruction = "comprehensive summary (8-10 sentences)"
         
+        base_instruction = load_prompt("chunking", "Rolling Summarization") or ""
         # Build prompt
         if is_first:
-            prompt = f"""Please provide a {length_instruction} of the following text.
+            prompt = f"""{base_instruction}\nPlease provide a {length_instruction} of the following text.
 Focus on the main points and key information."""
         else:
-            prompt = f"""Continue summarizing the document. Provide a {length_instruction} of the following text.
+            prompt = f"""{base_instruction}\nContinue summarizing the document. Provide a {length_instruction} of the following text.
 Maintain continuity with the previous context."""
         
         if context:
@@ -190,7 +196,7 @@ Maintain continuity with the previous context."""
             
         if preserve_structure:
             prompt += "\nPreserve any important structural elements (headings, lists, etc.) in the summary."
-            
+        
         prompt += f"\n\nText to summarize:\n{segment}\n\nSummary:"
         
         return prompt

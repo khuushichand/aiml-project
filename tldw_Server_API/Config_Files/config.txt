@@ -136,7 +136,8 @@ language = english
 enable_contextual_retrieval = false
 # When enabled, adds LLM-generated context to chunks for better retrieval
 context_window_size = 500
-# Size of context window around chunks (in characters)
+# Size of context window around chunks (in characters). The [Embeddings] section can
+# override this or force full-document context by default.
 include_parent_context = false
 # Include parent document context when retrieving chunks
 #
@@ -238,6 +239,22 @@ overlap = 200
 # Contextual Chunking Settings
 enable_contextual_chunking = false
 # When enabled, uses LLM to add contextual information to each chunk before embedding
+contextual_llm_model = gpt-3.5-turbo
+# LLM model to use for generating contextual summaries (overrides Claims.contextual_llm_model)
+context_window_size = None
+# Default context window size (characters). Set to None to use full document by default.
+context_strategy = auto
+# Context selection strategy for situating chunks:
+#   auto           -> full document for short docs; window + outline for long docs (based on token budget)
+#   full           -> always use full document context
+#   window         -> always use local window around each chunk
+#   outline_window -> always use per-chunk window and prepend a one-time document outline
+context_token_budget = 6000
+# Approximate token budget used by 'auto' strategy (heuristic len(text)/4)
+
+# Note: The prompts used for contextualization and outline generation are stored in
+#       tldw_Server_API/Config_Files/Prompts/embeddings.prompts.yaml (or .md). You can
+#       edit them without changing code.
 
 [Claims]
 # Ingestion-time claim extraction and optional embeddings (default off)
@@ -246,6 +263,19 @@ CLAIM_EXTRACTOR_MODE = heuristic
 CLAIMS_MAX_PER_CHUNK = 3
 CLAIMS_EMBED = false
 CLAIMS_EMBED_MODEL_ID = ""
+
+# Claims extraction via LLM: choose a provider for local or remote use
+# Set CLAIM_EXTRACTOR_MODE to 'llm' or directly to a provider name below
+# Supported providers include: openai, anthropic, cohere, google, groq, huggingface,
+# openrouter, deepseek, mistral, ollama, kobold, ooba, tabbyapi, vllm,
+# custom-openai-api, custom-openai-api-2, local-llm, llama.cpp
+# For a local setup, a common choice is 'ollama'
+CLAIMS_LLM_PROVIDER = ollama
+# Optional temperature for the LLM claim extractor (float)
+CLAIMS_LLM_TEMPERATURE = 0.1
+# Optional specific model override for claims extraction (per provider)
+# Examples: openai: gpt-4o-mini, google: gemini-2.0-pro-exp, llama.cpp: your-model
+CLAIMS_LLM_MODEL = 
 
 # Background claims rebuild worker (default off)
 CLAIMS_REBUILD_ENABLED = false
@@ -300,6 +330,12 @@ enable_reranking = true
 # Enable document reranking for better relevance
 rerank_top_k = 10
 # Number of documents to keep after reranking
+
+# LLM-Based Reranking (LLM_SCORING)
+# Configure the provider and model to use if you select reranking strategy 'llm_scoring'.
+# If no model is set here, the pipeline will automatically fall back to 'flashrank'.
+llm_reranker_provider = openai
+llm_reranker_model =
 
 
 [API]

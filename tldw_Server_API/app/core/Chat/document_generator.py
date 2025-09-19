@@ -118,6 +118,24 @@ class DocumentGeneratorService:
             user_id: Optional user identifier for logging and tracking
         """
         self.db = db
+        # Load external overrides from Prompts/chat if available
+        try:
+            from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt  # local import to avoid cycles
+            overrides = {
+                DocumentType.TIMELINE: (load_prompt("chat", "timeline_system"), load_prompt("chat", "timeline_user")),
+                DocumentType.STUDY_GUIDE: (load_prompt("chat", "study_guide_system"), load_prompt("chat", "study_guide_user")),
+                DocumentType.BRIEFING: (load_prompt("chat", "briefing_system"), load_prompt("chat", "briefing_user")),
+                DocumentType.SUMMARY: (load_prompt("chat", "summary_system"), load_prompt("chat", "summary_user")),
+                DocumentType.QA: (load_prompt("chat", "qa_system"), load_prompt("chat", "qa_user")),
+                DocumentType.MEETING_NOTES: (load_prompt("chat", "meeting_notes_system"), load_prompt("chat", "meeting_notes_user")),
+            }
+            for dtype, (sys_p, usr_p) in overrides.items():
+                if sys_p and isinstance(sys_p, str):
+                    self.DEFAULT_PROMPTS[dtype]["system"] = sys_p
+                if usr_p and isinstance(usr_p, str):
+                    self.DEFAULT_PROMPTS[dtype]["user"] = usr_p
+        except Exception:
+            pass
         self.user_id = user_id or "unknown"
         self._init_tables()
         

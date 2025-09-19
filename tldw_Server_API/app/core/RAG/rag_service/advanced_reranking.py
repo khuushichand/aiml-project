@@ -19,6 +19,7 @@ import numpy as np
 from functools import lru_cache
 
 from loguru import logger
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 from .types import Document, DataSource
 
@@ -559,15 +560,71 @@ class LLMReranker(BaseReranker):
         return scored_docs[:self.config.top_k]
     
     async def _score_batch(self, query: str, documents: List[Document]) -> List[float]:
-        """Score a batch of documents using LLM."""
-        # This is a placeholder - actual implementation would use the LLM
-        # to score relevance on a scale of 0-1
-        
-        # For now, return mock scores
-        return [0.5 + 0.1 * i for i in range(len(documents))]
+        """Score a batch of documents using LLM.
+
+        Attempts to call the shared analyze() function with a reranking instruction
+        loaded from Prompts/rag. Falls back to naive scores on error.
+        """
+        try:
+            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+        except Exception:
+            sgl = None
+
+        instruction = load_prompt("rag", "reranking_instruction") or (
+            "Rerank by how well the passage answers the query. Output a number between 0 and 1."
+        )
+
+        scores: List[float] = []
+        for doc in documents:
+            passage = getattr(doc, 'content', '') or ''
+            # Build a compact prompt for scoring
+            prompt = (
+                f"Query:\n{query}\n\nPassage:\n{passage[:1500]}\n\n"
+                f"Instruction:\n{instruction}\n\nOnly output a number between 0 and 1 with up to 3 decimals."
+            )
+
+            score_val: float = 0.5
+            if self.llm_client and hasattr(self.llm_client, 'analyze'):
+                try:
+                    out = self.llm_client.analyze(prompt)
+                    score_val = _parse_float_score(out, default=0.5)
+                except Exception:
+                    score_val = 0.5
+            elif sgl is not None:
+                try:
+                    # Use default provider from env/config inside analyze
+                    out = sgl.analyze(api_name='openai', input_data=passage, prompt=prompt, context=None, user_embedding_config=None)
+                    score_val = _parse_float_score(out, default=0.5)
+                except Exception:
+                    score_val = 0.5
+            scores.append(score_val)
+
+        # Normalize to [0,1]
+        try:
+            mn, mx = min(scores), max(scores)
+            if mx > mn:
+                scores = [(s - mn) / (mx - mn) for s in scores]
+        except Exception:
+            pass
+        return scores
 
 
-def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfig] = None) -> BaseReranker:
+def _parse_float_score(text: Any, default: float = 0.5) -> float:
+    try:
+        s = str(text).strip()
+        # Extract first float-like token
+        import re
+        m = re.search(r"([01](?:\.\d+)?|0?\.\d+)", s)
+        if m:
+            val = float(m.group(1))
+            # Clamp to [0,1]
+            return max(0.0, min(1.0, val))
+        return default
+    except Exception:
+        return default
+
+
+def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfig] = None, llm_client=None) -> BaseReranker:
     """
     Factory function to create a reranker.
     
@@ -590,7 +647,7 @@ def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfi
     elif strategy == RerankingStrategy.HYBRID:
         return HybridReranker(config)
     elif strategy == RerankingStrategy.LLM_SCORING:
-        return LLMReranker(config)
+        return LLMReranker(config, llm_client=llm_client)
     else:
         # Default to FlashRank
         return FlashRankReranker(config)

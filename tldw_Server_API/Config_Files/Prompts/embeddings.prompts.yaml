@@ -1,0 +1,21 @@
+situate_context: |
+  Write a single-line contextual chunk header that situates this chunk within the overall
+  document. Include document-level and section-level context (e.g., topic and section path)
+  so the meaning of the chunk is clear when read alone. Keep it under 20 words. Output only
+  the header.
+
+# Alternate key for loader compatibility
+situate_context_prompt: |
+  Write a single-line contextual chunk header that situates this chunk within the overall
+  document. Include document-level and section-level context (e.g., topic and section path)
+  so the meaning of the chunk is clear when read alone. Keep it under 20 words. Output only
+  the header.
+
+document_outline: |
+  Create a concise outline of the document with 5–10 bullets. Each bullet should have a
+  short section title followed by a one-sentence summary of that section’s content.
+
+# Alternate key for loader compatibility
+document_outline_prompt: |
+  Create a concise outline of the document with 5–10 bullets. Each bullet should have a
+  short section title followed by a one-sentence summary of that section’s content.

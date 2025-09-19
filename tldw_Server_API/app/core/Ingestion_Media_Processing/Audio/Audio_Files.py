@@ -707,6 +707,15 @@ def process_audio_files(
                 if perform_analysis and api_name and api_name.lower() != "none" and text_to_process_for_analysis:
                     update_progress(f"Starting analysis using API: {api_name}")
                     try:
+                        # Load default prompts if none provided
+                        try:
+                            from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt as _load_prompt
+                            if not custom_prompt_input:
+                                custom_prompt_input = _load_prompt("audio", "Transcription Analysis Summary") or custom_prompt_input
+                            if not system_prompt_input:
+                                system_prompt_input = _load_prompt("audio", "System Prompt") or system_prompt_input
+                        except Exception:
+                            pass
                         analysis_result = analyze(
                             api_name=api_name,
                             input_data=text_to_process_for_analysis,

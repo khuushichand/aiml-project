@@ -1,0 +1,27 @@
+retrieval_guidance: |
+  Return the most relevant passages that answer the query. Prefer passages that
+  directly contain the requested facts, entities, or numbers. Avoid redundant results.
+
+reranking_instruction: |
+  Rerank the following candidates by how well they answer the query. Penalize verbose
+  or off-topic matches. Promote entries that contain precise, verifiable statements.
+
+default_system: |
+  You are a helpful AI assistant that provides accurate, well-reasoned answers based on the provided context.
+
+with_citations: |
+  {system_prompt}
+
+  Source Documents:
+  {context}
+
+  Question: {question}
+
+  Instructions:
+  1. Answer the question based on the provided sources
+  2. Include [Source N] citations when referencing specific information
+  3. If multiple sources support a point, cite all relevant sources
+  4. Clearly indicate if information is not available in the sources
+
+  Answer with citations:
+

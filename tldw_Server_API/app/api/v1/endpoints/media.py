@@ -305,6 +305,8 @@ def get_add_media_form(
     enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
     contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
     context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
+    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
+    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
     summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
     # Embedding options
     generate_embeddings: bool = Form(False, description="Generate embeddings after media processing"),
@@ -356,6 +358,14 @@ def get_add_media_form(
                 context_window_size = int(context_window_size)
         except Exception:
             pass
+        # Normalize optional context strategy/token budget
+        if isinstance(context_strategy, str):
+            context_strategy = context_strategy.strip().lower() or None
+        try:
+            if isinstance(context_token_budget, str):
+                context_token_budget = int(context_token_budget)
+        except Exception:
+            context_token_budget = None
 
         # Create the Pydantic model instance using the parsed form data.
         # Pass the received Form(...) parameters to the model constructor
@@ -397,6 +407,8 @@ def get_add_media_form(
             enable_contextual_chunking=enable_contextual_chunking,
             contextual_llm_model=contextual_llm_model,
             context_window_size=context_window_size,
+            context_strategy=context_strategy,  # pydantic will validate allowed values
+            context_token_budget=context_token_budget,
             generate_embeddings=generate_embeddings,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
@@ -1686,7 +1698,9 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
         # Add contextual chunking options
         'enable_contextual_chunking': form_data.enable_contextual_chunking or inferred_enable_contextual,
         'contextual_llm_model': form_data.contextual_llm_model,
-        'context_window_size': form_data.context_window_size
+        'context_window_size': form_data.context_window_size,
+        'context_strategy': form_data.context_strategy,
+        'context_token_budget': form_data.context_token_budget,
     }
     # Inject proposition defaults from config when applicable
     if final_chunk_method == 'propositions':
@@ -2771,6 +2785,8 @@ def get_process_videos_form(
     enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
     contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
     context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
+    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
+    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
     # --- Keep Token and Files separate ---
     #token: str = Header(..., description="Authentication token"),  # Auth handled by get_media_db_for_user
     db=Depends(get_media_db_for_user)
@@ -2825,6 +2841,8 @@ def get_process_videos_form(
             enable_contextual_chunking=enable_contextual_chunking,
             contextual_llm_model=contextual_llm_model,
             context_window_size=context_window_size,
+            context_strategy=(context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            context_token_budget=(int(context_token_budget) if isinstance(context_token_budget, str) and context_token_budget.isdigit() else context_token_budget),
         )
         return form_instance
     except ValidationError as e:
@@ -3185,6 +3203,12 @@ def get_process_audios_form(
     # Audio/Video specific timing (Not applicable to audio-only usually, but keep for model compatibility if needed)
     start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
     end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
+    # Contextual chunking
+    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
+    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextualization"),
+    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
+    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
+    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
 
 ) -> ProcessAudiosForm:
     """
@@ -3234,6 +3258,11 @@ def get_process_audios_form(
             custom_chapter_pattern=custom_chapter_pattern,
             start_time=start_time,
             end_time=end_time,
+            enable_contextual_chunking=enable_contextual_chunking,
+            contextual_llm_model=contextual_llm_model,
+            context_window_size=context_window_size,
+            context_strategy=(context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            context_token_budget=(int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
         )
         return form_instance
     except ValidationError as e:
@@ -3668,6 +3697,12 @@ def get_process_ebooks_form(
     # --- Fields from ChunkingOptions - NOT used explicitly by ebooks but part of AddMediaForm ---
     use_adaptive_chunking: bool = Form(False, description="Enable adaptive chunking (Not applicable)"),
     use_multi_level_chunking: bool = Form(False, description="Enable multi-level chunking (Not applicable)"),
+    # Contextual chunking (ebooks)
+    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
+    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextualization"),
+    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
+    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
+    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
 ) -> ProcessEbooksForm:
     """
     Dependency function to parse form data and validate it
@@ -3701,6 +3736,12 @@ def get_process_ebooks_form(
             "custom_chapter_pattern": custom_chapter_pattern,
             # Ebook specific
             "extraction_method": extraction_method,
+            # Contextual chunking
+            "enable_contextual_chunking": enable_contextual_chunking,
+            "contextual_llm_model": contextual_llm_model,
+            "context_window_size": context_window_size,
+            "context_strategy": (context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            "context_token_budget": (int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
 
             # --- EXPLICITLY OMITTING irrelevant fields like: ---
             # "start_time": start_time,
@@ -4084,6 +4125,12 @@ def get_process_documents_form(
     vad_use: Optional[bool] = Form(None), perform_confabulation_check_of_analysis: Optional[bool] = Form(None),
     pdf_parsing_engine: Optional[Any] = Form(None), # Use Any if PdfEngine not imported/needed
     extraction_method: Optional[Any] = Form(None), # Keep placeholder
+    # Contextual chunking (documents)
+    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
+    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextualization"),
+    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
+    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
+    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
 
 ) -> ProcessDocumentsForm:
     """
@@ -4118,6 +4165,12 @@ def get_process_documents_form(
             "custom_chapter_pattern": custom_chapter_pattern,
             "use_adaptive_chunking": use_adaptive_chunking, # Keep if part of base ChunkingOptions
             "use_multi_level_chunking": use_multi_level_chunking, # Keep if part of base ChunkingOptions
+            # Contextual
+            "enable_contextual_chunking": enable_contextual_chunking,
+            "contextual_llm_model": contextual_llm_model,
+            "context_window_size": context_window_size,
+            "context_strategy": (context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            "context_token_budget": (int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
             # Omit: start/end_time, transcription_*, diarize, timestamp_option, vad_use, pdf_*, ebook_*
         }
 
