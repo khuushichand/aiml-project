@@ -488,7 +488,8 @@ app = FastAPI(
 
 # Global SlowAPI rate limiting (skip in test mode)
 import os as _os_mod
-if _os_mod.getenv("TESTING", "").lower() != "true":
+# Skip global rate limiter when running tests: honor either TESTING=true or TEST_MODE=true
+if _os_mod.getenv("TESTING", "").lower() != "true" and _os_mod.getenv("TEST_MODE", "").lower() != "true":
     try:
         from slowapi import Limiter, _rate_limit_exceeded_handler
         from slowapi.util import get_remote_address
@@ -501,7 +502,7 @@ if _os_mod.getenv("TESTING", "").lower() != "true":
     except Exception as _e:
         logger.warning(f"Global rate limiter not initialized: {_e}")
 else:
-    logger.info("TESTING mode detected: Skipping global rate limiter initialization")
+    logger.info("Test mode detected: Skipping global rate limiter initialization (TESTING/TEST_MODE)")
 
 # Display API key information on startup for single user mode
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode

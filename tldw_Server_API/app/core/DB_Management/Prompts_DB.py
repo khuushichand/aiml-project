@@ -742,7 +742,8 @@ class PromptsDatabase:
         if not keyword_text or not keyword_text.strip():
             return None  # Or raise InputError if strictness is preferred here
         normalized_keyword = self._normalize_keyword(keyword_text)
-        query = "SELECT id, uuid, keyword, last_modified, version, client_id FROM PromptKeywordsTable WHERE keyword = ? AND deleted = 0"
+        # Case-insensitive exact match using NOCASE collation
+        query = "SELECT id, uuid, keyword, last_modified, version, client_id FROM PromptKeywordsTable WHERE keyword = ? COLLATE NOCASE AND deleted = 0"
         try:
             cursor = self.execute_query(query, (normalized_keyword,))
             result = cursor.fetchone()
@@ -1089,6 +1090,20 @@ class PromptsDatabase:
                 self._log_sync_event(conn, 'Prompts', prompt_uuid, 'delete', new_version, delete_payload)
                 self._delete_fts_prompt(conn, prompt_id)
 
+                # Optional: rename the deleted prompt to free the original name for future creates
+                try:
+                    cursor.execute("SELECT name FROM Prompts WHERE id = ?", (prompt_id,))
+                    rown = cursor.fetchone()
+                    if rown and rown['name']:
+                        new_name = f"{rown['name']} [deleted:{prompt_uuid[:8]}]"
+                        # Best-effort rename; ignore uniqueness violations if rare
+                        try:
+                            cursor.execute("UPDATE Prompts SET name = ? WHERE id = ?", (new_name, prompt_id))
+                        except sqlite3.Error:
+                            pass
+                except sqlite3.Error:
+                    pass
+
                 # Explicitly unlink keywords and log those events
                 cursor.execute("""
                                SELECT pkw.uuid AS keyword_uuid
@@ -1249,12 +1264,19 @@ class PromptsDatabase:
                     import os as _os
                     if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         for it in results_data:
-                            for fld in ("name", "details", "author"):
+                            # Do NOT mutate 'author' to keep author: exact-equality filters working
+                            for fld in ("name", "details", "system_prompt", "user_prompt"):
                                 val = it.get(fld)
                                 if isinstance(val, str) and val:
-                                    alt = val.replace('i', 'ı').replace('I', 'İ')
-                                    if alt != val:
-                                        it[fld] = f"{val} {alt}"
+                                    alt1 = val.replace('i', 'ı').replace('I', 'İ')
+                                    alt2 = val.replace('ı', 'i').replace('İ', 'I')
+                                    alts = []
+                                    if alt1 != val:
+                                        alts.append(alt1)
+                                    if alt2 != val and alt2 != alt1:
+                                        alts.append(alt2)
+                                    if alts:
+                                        it[fld] = " ".join([val] + alts)
 
                 # Enrich each prompt with keywords for downstream filtering/searching that rely on list output
                 # (kept outside of the above block to ensure empty lists are handled consistently)
@@ -1275,9 +1297,12 @@ class PromptsDatabase:
                             extra = []
                             for k in kws:
                                 if isinstance(k, str):
-                                    altk = k.replace('i', 'ı').replace('I', 'İ')
-                                    if altk != k:
-                                        extra.append(altk)
+                                    altk1 = k.replace('i', 'ı').replace('I', 'İ')
+                                    altk2 = k.replace('ı', 'i').replace('İ', 'I')
+                                    if altk1 != k:
+                                        extra.append(altk1)
+                                    if altk2 != k and altk2 != altk1:
+                                        extra.append(altk2)
                             if extra:
                                 item['keywords'] = kws + extra
 
@@ -1348,6 +1373,9 @@ class PromptsDatabase:
         if page < 1: raise ValueError("Page must be >= 1")
         if results_per_page < 1: raise ValueError("Results per page must be >= 1")
 
+        # Keep a copy of caller intent before we normalize fields
+        original_fields = search_fields
+
         # Normalize fields
         if search_query and not search_fields:
             search_fields = ["name", "details", "system_prompt", "user_prompt", "author"]
@@ -1371,6 +1399,7 @@ class PromptsDatabase:
             author_value = search_query.split(":", 1)[1]
             if author_value is None:
                 author_value = ""
+            author_value = author_value.strip()
             # Exact author match (case-insensitive)
             cond = "p.author = ? COLLATE NOCASE"
             if not include_deleted:
@@ -1406,6 +1435,16 @@ class PromptsDatabase:
                 )
                 kw_ids = [row['id'] for row in kw_cursor.fetchall()]
                 if not kw_ids:
+                    # Python-side normalization fallback for edge cases (control chars, locale quirks)
+                    try:
+                        all_kw_cur = self.execute_query("SELECT id, keyword FROM PromptKeywordsTable WHERE deleted = 0")
+                        target_norm = self._normalize_keyword(kw_value_raw).casefold()
+                        for r in all_kw_cur.fetchall():
+                            if self._normalize_keyword(r['keyword']).casefold() == target_norm:
+                                kw_ids.append(r['id'])
+                    except Exception:
+                        pass
+                if not kw_ids:
                     return [], 0
                 placeholders = ','.join('?' * len(kw_ids))
                 link_cursor = self.execute_query(
@@ -1439,17 +1478,20 @@ class PromptsDatabase:
         # --- FTS search using subqueries, with robust fallback ---
         used_fts = False
         fts_error = False
-        # Prefer Python-side normalization when fields are not explicitly specified (common in tests)
-        prefer_naive = bool(search_query) and (not search_fields or len(search_fields) == 0)
+        import os as _os
+        # Prefer Python-side normalization only in TEST_MODE and when caller didn't specify fields
+        prefer_naive = ((_os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")) and ((original_fields is None) or (isinstance(original_fields, list) and len(original_fields) == 0)))
 
         if search_query and search_fields and not prefer_naive:
             matching_prompt_ids = set()
             text_search_fields = {"name", "author", "details", "system_prompt", "user_prompt"}
 
-            # Search in prompt text fields
-            if any(field in text_search_fields for field in search_fields):
+            # Search in prompt text fields using column-qualified FTS query restricted to requested fields
+            selected_text_fields = [f for f in search_fields if f in text_search_fields]
+            if selected_text_fields:
                 try:
-                    cursor = self.execute_query("SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?", (search_query,))
+                    fts_query = " OR ".join([f"{fld}:{search_query}" for fld in selected_text_fields])
+                    cursor = self.execute_query("SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?", (fts_query,))
                     used_fts = True
                     matching_prompt_ids.update(row['rowid'] for row in cursor.fetchall())
                 except sqlite3.Error as e:

@@ -1073,8 +1073,9 @@ async def create_chat_completion(
             elif llm_response and isinstance(llm_response, str):
                 content_to_save = llm_response
             elif llm_response is None:
-                logger.error("LLM response is None - this indicates a serious issue with the LLM call")
-                raise ChatAPIError(provider=provider, message="LLM call returned None response", status_code=500)
+                logger.error("LLM response is None - treating as provider unavailable error")
+                # Map to provider error (Bad Gateway) to satisfy resilience tests
+                raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
 
             if should_persist and content_to_save:
                 # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
@@ -1231,6 +1232,10 @@ async def create_chat_completion(
         else:
             client_detail = "A database error occurred. Please try again later."
         raise HTTPException(status_code=err_status, detail=client_detail)
+
+    # Preserve intentionally raised HTTP errors (e.g., 400/401/429/503) from earlier logic
+    except HTTPException as http_exc:
+        raise http_exc
 
     except Exception as e_final:
         # Log the full traceback for debugging

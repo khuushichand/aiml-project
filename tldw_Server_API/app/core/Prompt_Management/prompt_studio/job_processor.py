@@ -194,6 +194,10 @@ class JobProcessor:
             # Update evaluation status (but first ensure prompt exists for FKs)
             conn = self.db.get_connection()
             cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA defer_foreign_keys=ON")
+            except Exception:
+                pass
 
             try:
                 cursor.execute(
@@ -206,12 +210,32 @@ class JobProcessor:
             except Exception:
                 pass
             
-            cursor.execute("""
-                UPDATE prompt_studio_evaluations
-                SET status = 'running', started_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (evaluation_id,))
-            conn.commit()
+            # Update evaluation status with FK-safe retry
+            try:
+                cursor.execute("""
+                    UPDATE prompt_studio_evaluations
+                    SET status = 'running', started_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (evaluation_id,))
+                conn.commit()
+            except Exception as e:
+                # Ensure prompt exists then retry once
+                try:
+                    cursor.execute(
+                        "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
+                        (evaluation_id,)
+                    )
+                    rowx = cursor.fetchone()
+                    if rowx:
+                        self._ensure_ps_prompt_exists(rowx["prompt_id"], rowx["project_id"])
+                except Exception:
+                    pass
+                cursor.execute("""
+                    UPDATE prompt_studio_evaluations
+                    SET status = 'running', started_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (evaluation_id,))
+                conn.commit()
             
             # Process test cases
             test_runs = []
@@ -234,24 +258,66 @@ class JobProcessor:
             # Calculate aggregate metrics
             aggregate_metrics = self._calculate_aggregate_metrics(test_runs)
             
+            # Ensure prompt still exists before final update (avoid FK issues on commit)
+            try:
+                cursor.execute(
+                    "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
+                    (evaluation_id,)
+                )
+                row2 = cursor.fetchone()
+                if row2:
+                    self._ensure_ps_prompt_exists(row2["prompt_id"], row2["project_id"])
+            except Exception:
+                pass
+
             # Update evaluation with results
-            cursor.execute("""
-                UPDATE prompt_studio_evaluations
-                SET status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP,
-                    test_run_ids = ?,
-                    aggregate_metrics = ?,
-                    total_tokens = ?,
-                    total_cost = ?
-                WHERE id = ?
-            """, (
-                json.dumps([tr["id"] for tr in test_runs]),
-                json.dumps(aggregate_metrics),
-                total_tokens,
-                total_cost,
-                evaluation_id
-            ))
-            conn.commit()
+            try:
+                cursor.execute("""
+                    UPDATE prompt_studio_evaluations
+                    SET status = 'completed',
+                        completed_at = CURRENT_TIMESTAMP,
+                        test_run_ids = ?,
+                        aggregate_metrics = ?,
+                        total_tokens = ?,
+                        total_cost = ?
+                    WHERE id = ?
+                """, (
+                    json.dumps([tr["id"] for tr in test_runs]),
+                    json.dumps(aggregate_metrics),
+                    total_tokens,
+                    total_cost,
+                    evaluation_id
+                ))
+                conn.commit()
+            except Exception:
+                # Re-ensure then retry once
+                try:
+                    cursor.execute(
+                        "SELECT project_id, prompt_id FROM prompt_studio_evaluations WHERE id = ?",
+                        (evaluation_id,)
+                    )
+                    row3 = cursor.fetchone()
+                    if row3:
+                        self._ensure_ps_prompt_exists(row3["prompt_id"], row3["project_id"])
+                except Exception:
+                    pass
+                cursor.execute("""
+                    UPDATE prompt_studio_evaluations
+                    SET status = 'completed',
+                        completed_at = CURRENT_TIMESTAMP,
+                        test_run_ids = ?,
+                        aggregate_metrics = ?,
+                        total_tokens = ?,
+                        total_cost = ?
+                    WHERE id = ?
+                """, (
+                    json.dumps([tr["id"] for tr in test_runs]),
+                    json.dumps(aggregate_metrics),
+                    total_tokens,
+                    total_cost,
+                    evaluation_id
+                ))
+                conn.commit()
             
             result = {
                 "evaluation_id": evaluation_id,
@@ -322,6 +388,10 @@ class JobProcessor:
         # Store test run in database
         conn = self.db.get_connection()
         cursor = conn.cursor()
+        try:
+            cursor.execute("PRAGMA defer_foreign_keys=ON")
+        except Exception:
+            pass
 
         # Safety: ensure referenced prompt exists to satisfy FK constraints
         try:
@@ -406,6 +476,10 @@ class JobProcessor:
             # Update optimization status (but first ensure initial prompt exists for FKs)
             conn = self.db.get_connection()
             cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA defer_foreign_keys=ON")
+            except Exception:
+                pass
 
             try:
                 cursor.execute(
@@ -418,12 +492,30 @@ class JobProcessor:
             except Exception:
                 pass
             
-            cursor.execute("""
-                UPDATE prompt_studio_optimizations
-                SET status = 'running', started_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (optimization_id,))
-            conn.commit()
+            try:
+                cursor.execute("""
+                    UPDATE prompt_studio_optimizations
+                    SET status = 'running', started_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (optimization_id,))
+                conn.commit()
+            except Exception:
+                try:
+                    cursor.execute(
+                        "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
+                        (optimization_id,)
+                    )
+                    rowx = cursor.fetchone()
+                    project_idx = rowx["project_id"] if rowx else None
+                    self._ensure_ps_prompt_exists(initial_prompt_id, project_idx)
+                except Exception:
+                    pass
+                cursor.execute("""
+                    UPDATE prompt_studio_optimizations
+                    SET status = 'running', started_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (optimization_id,))
+                conn.commit()
             
             # Simulate optimization iterations
             best_prompt_id = initial_prompt_id
@@ -452,26 +544,69 @@ class JobProcessor:
             initial_metric = 0.5  # Simulated initial metric
             improvement = ((best_metric - initial_metric) / initial_metric) * 100
             
+            # Ensure prompt exists before final update
+            try:
+                cursor.execute(
+                    "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
+                    (optimization_id,)
+                )
+                row2 = cursor.fetchone()
+                project_id2 = row2["project_id"] if row2 else None
+                self._ensure_ps_prompt_exists(best_prompt_id, project_id2)
+            except Exception:
+                pass
+
             # Update optimization with results
-            cursor.execute("""
-                UPDATE prompt_studio_optimizations
-                SET status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP,
-                    optimized_prompt_id = ?,
-                    iterations_completed = ?,
-                    initial_metrics = ?,
-                    final_metrics = ?,
-                    improvement_percentage = ?
-                WHERE id = ?
-            """, (
-                best_prompt_id,
-                len(iterations),
-                json.dumps({"accuracy": initial_metric}),
-                json.dumps({"accuracy": best_metric}),
-                improvement,
-                optimization_id
-            ))
-            conn.commit()
+            try:
+                cursor.execute("""
+                    UPDATE prompt_studio_optimizations
+                    SET status = 'completed',
+                        completed_at = CURRENT_TIMESTAMP,
+                        optimized_prompt_id = ?,
+                        iterations_completed = ?,
+                        initial_metrics = ?,
+                        final_metrics = ?,
+                        improvement_percentage = ?
+                    WHERE id = ?
+                """, (
+                    best_prompt_id,
+                    len(iterations),
+                    json.dumps({"accuracy": initial_metric}),
+                    json.dumps({"accuracy": best_metric}),
+                    improvement,
+                    optimization_id
+                ))
+                conn.commit()
+            except Exception:
+                try:
+                    cursor.execute(
+                        "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
+                        (optimization_id,)
+                    )
+                    rowy = cursor.fetchone()
+                    project_idy = rowy["project_id"] if rowy else None
+                    self._ensure_ps_prompt_exists(best_prompt_id, project_idy)
+                except Exception:
+                    pass
+                cursor.execute("""
+                    UPDATE prompt_studio_optimizations
+                    SET status = 'completed',
+                        completed_at = CURRENT_TIMESTAMP,
+                        optimized_prompt_id = ?,
+                        iterations_completed = ?,
+                        initial_metrics = ?,
+                        final_metrics = ?,
+                        improvement_percentage = ?
+                    WHERE id = ?
+                """, (
+                    best_prompt_id,
+                    len(iterations),
+                    json.dumps({"accuracy": initial_metric}),
+                    json.dumps({"accuracy": best_metric}),
+                    improvement,
+                    optimization_id
+                ))
+                conn.commit()
             
             result = {
                 "optimization_id": optimization_id,

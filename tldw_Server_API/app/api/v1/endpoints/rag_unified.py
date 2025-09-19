@@ -65,17 +65,68 @@ except Exception:
 
 
 def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGResponse:
-    """Convert internal result to API response."""
+    """Convert internal result to API response.
+
+    Be robust to different document shapes:
+    - dataclass-like objects with attributes (id, content, metadata, score)
+    - wrapper objects with a `.document` attribute that is an object or dict
+    - plain dictionaries (e.g., from caches or patched test doubles)
+    """
+
+    def _extract_field(obj, key, default=None):
+        """Safely extract a field from obj supporting attr, nested .document, or dict."""
+        # Direct attribute
+        if hasattr(obj, key):
+            try:
+                return getattr(obj, key)
+            except Exception:
+                pass
+        # Nested `.document` attribute that may itself be an object
+        if hasattr(obj, 'document'):
+            doc_obj = getattr(obj, 'document')
+            if isinstance(doc_obj, dict):
+                if key in doc_obj:
+                    return doc_obj.get(key, default)
+            else:
+                if hasattr(doc_obj, key):
+                    try:
+                        return getattr(doc_obj, key)
+                    except Exception:
+                        pass
+        # Dict access (obj may be a dict)
+        if isinstance(obj, dict):
+            # Direct
+            if key in obj:
+                return obj.get(key, default)
+            # Nested under 'document'
+            doc_dict = obj.get('document') if isinstance(obj.get('document'), dict) else None
+            if doc_dict and key in doc_dict:
+                return doc_dict.get(key, default)
+        return default
+
+    documents = []
+    for doc in (result.documents or []):
+        doc_id = _extract_field(doc, 'id')
+        content = _extract_field(doc, 'content')
+        metadata = _extract_field(doc, 'metadata', {}) or {}
+        score = _extract_field(doc, 'score', 0.0)
+
+        # Ensure types are JSON-serializable
+        if not isinstance(metadata, dict):
+            try:
+                metadata = dict(metadata)  # best effort
+            except Exception:
+                metadata = {"value": str(metadata)}
+
+        documents.append({
+            "id": doc_id if doc_id is not None else str(_extract_field(doc, 'chunk_id', 'unknown')),
+            "content": content if isinstance(content, str) else (str(content) if content is not None else ""),
+            "metadata": metadata,
+            "score": float(score) if isinstance(score, (int, float)) else 0.0,
+        })
+
     return UnifiedRAGResponse(
-        documents=[
-            {
-                "id": doc.document.id if hasattr(doc, 'document') else doc.id,
-                "content": doc.document.content if hasattr(doc, 'document') else doc.content,
-                "metadata": doc.document.metadata if hasattr(doc, 'document') else doc.metadata,
-                "score": getattr(doc, 'score', 0.0)
-            }
-            for doc in result.documents
-        ],
+        documents=documents,
         query=result.query,
         expanded_queries=result.expanded_queries,
         metadata=result.metadata,

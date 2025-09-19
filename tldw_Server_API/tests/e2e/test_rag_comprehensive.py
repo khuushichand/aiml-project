@@ -11,6 +11,11 @@ Tests the complete flow including:
 """
 
 import pytest
+try:
+    import pytest_benchmark  # noqa: F401
+    _HAS_BENCHMARK = True
+except Exception:
+    _HAS_BENCHMARK = False
 import asyncio
 import time
 import tempfile
@@ -178,6 +183,7 @@ class TestRAGComprehensive:
         print("\n✅ All RAG pipeline tests passed!")
     
     @pytest.mark.benchmark
+    @pytest.mark.skipif(not _HAS_BENCHMARK, reason="pytest-benchmark plugin not installed")
     def test_search_performance(self, api_client, benchmark):
         """Benchmark search performance."""
         

@@ -214,7 +214,8 @@ class TestEvaluationWorkflow:
             if response.status_code == 202:  # Accepted for async processing
                 result = response.json()
                 assert "id" in result
-                assert result["object"] == "evaluation.run"
+                # Unified evaluations return 'run' as object type
+                assert result["object"] == "run"
                 assert result["status"] in ["pending", "running"]
                 
                 # Track run ID for later tests
@@ -360,13 +361,14 @@ class TestEvaluationWorkflow:
             
             if response.status_code == 200:
                 result = response.json()
-                assert "overall_score" in result
-                assert "criteria_scores" in result
+                # Unified endpoint fields
+                assert "overall_quality" in result
+                assert "metrics" in result
                 
                 for criterion in quality_data["criteria"]:
-                    assert criterion in result["criteria_scores"]
+                    assert criterion in result["metrics"]
                 
-                print(f"✓ Response quality score: {result['overall_score']:.2f}")
+                print(f"✓ Response quality score: {result['overall_quality']:.2f}")
             elif response.status_code in [503, 422]:
                 print(f"Response quality evaluation skipped: {response.status_code}")
             else:
@@ -403,14 +405,13 @@ class TestEvaluationWorkflow:
             
             if response.status_code == 200:
                 result = response.json()
-                assert "batch_id" in result
-                assert "status" in result
-                assert "results" in result or "message" in result
+                # Unified batch response
+                assert result.get("total_items") == len(batch_data["items"])
+                assert "successful" in result
+                assert "results" in result
+                assert len(result["results"]) <= len(batch_data["items"])
                 
-                if "results" in result:
-                    assert len(result["results"]) <= len(batch_data["items"])
-                
-                print(f"✓ Batch evaluation submitted: {result.get('batch_id', 'N/A')}")
+                print(f"✓ Batch evaluation submitted: {result['successful']}/{result['total_items']} succeeded")
             elif response.status_code in [503, 422]:
                 print(f"Batch evaluation skipped: {response.status_code}")
             else:
@@ -528,7 +529,8 @@ class TestEvaluationWorkflow:
                 result = response.json()
                 assert "items" in result
                 assert "total_count" in result
-                assert "average_scores" in result
+                # Unified endpoint uses 'aggregations' instead of 'average_scores'
+                assert "aggregations" in result
                 
                 print(f"✓ Retrieved {result['total_count']} historical evaluations")
             else:

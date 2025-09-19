@@ -212,7 +212,7 @@ class TestEmbeddingsE2E:
             status = status_response.json()
             assert status.get("has_embeddings") == False, "Embeddings should not exist yet"
             
-            # Manually generate embeddings
+            # Manually generate embeddings (async accepted)
             gen_response = api_client.client.post(
                 f"{api_client.base_url}/api/v1/media/{media_id}/embeddings",
                 json={
@@ -225,13 +225,41 @@ class TestEmbeddingsE2E:
             assert gen_response.status_code == 200, f"Failed to generate embeddings: {gen_response.text}"
             
             gen_result = gen_response.json()
-            assert gen_result.get("status") == "success"
-            assert gen_result.get("embedding_count", 0) > 0
+            # Endpoint is asynchronous: expect 'accepted' and a job_id
+            assert gen_result.get("status") == "accepted"
+            job_id = gen_result.get("job_id")
+            assert job_id, f"Expected job_id in response, got: {gen_result}"
+
+            # Poll for completion via job endpoint, fall back to status check
+            import time
+            max_wait_s = 15
+            start = time.time()
+            embedding_count = 0
+            while time.time() - start < max_wait_s:
+                # Try job endpoint first
+                job_resp = api_client.client.get(f"{api_client.base_url}/api/v1/media/embeddings/jobs/{job_id}")
+                if job_resp.status_code == 200:
+                    job = job_resp.json()
+                    if job.get("status") == "completed":
+                        embedding_count = int(job.get("embedding_count") or 0)
+                        break
+                    if job.get("status") == "failed":
+                        raise AssertionError(f"Embedding job failed: {job}")
+                # Check direct status as a fallback
+                status_resp = api_client.client.get(
+                    f"{api_client.base_url}/api/v1/media/{media_id}/embeddings/status"
+                )
+                if status_resp.status_code == 200 and status_resp.json().get("has_embeddings"):
+                    embedding_count = int(status_resp.json().get("embedding_count") or 1)
+                    break
+                time.sleep(0.5)
+
+            assert embedding_count > 0, "Embeddings were not generated within timeout"
             
             # Mark in workflow state
             test_workflow_state.mark_embeddings_generated(media_id)
             
-            print(f"✓ Manually generated {gen_result.get('embedding_count')} embeddings for media {media_id}")
+            print(f"✓ Manually generated {embedding_count} embeddings for media {media_id}")
             
         finally:
             # Clean up temp file

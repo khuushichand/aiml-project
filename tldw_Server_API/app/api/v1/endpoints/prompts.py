@@ -213,7 +213,8 @@ async def create_keyword(
         # Fetch the full details of the (potentially newly created or undeleted) keyword for the response.
         # To do this properly, we might need a get_keyword_by_id or get_keyword_by_uuid
         # For now, constructing from what we have. Prompts_DB.add_keyword normalizes.
-        final_keyword_text = db._normalize_keyword(keyword_data.keyword_text)
+        # API contract: return normalized, lowercased keyword text while DB preserves original casing
+        final_keyword_text = db._normalize_keyword(keyword_data.keyword_text).lower()
 
         return schemas.KeywordResponse(
             id=kw_id,
@@ -242,7 +243,12 @@ async def list_all_keywords(
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
-        return db.fetch_all_keywords(include_deleted=False)
+        # API contract: return lowercased normalized keyword strings
+        try:
+            kws = db.fetch_all_keywords(include_deleted=False)
+            return [db._normalize_keyword(k).lower() for k in kws]
+        except Exception:
+            return db.fetch_all_keywords(include_deleted=False)
     except DatabaseError as e:
         logger.error(f"Database error listing keywords: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")

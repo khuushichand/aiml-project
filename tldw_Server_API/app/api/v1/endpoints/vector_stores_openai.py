@@ -228,32 +228,48 @@ async def create_vector_store(
                 testing = str(os.getenv("TESTING", "")).lower() == "true"
                 if testing:
                     # In tests, only raise 409 if this name was created in this process (fresh duplicate)
-                    created = _CREATED_NAMES_BY_USER.get(uid, set())
-                    if name_lower in created:
+                    created_names = _CREATED_NAMES_BY_USER.get(uid, set())
+                    if name_lower in created_names:
                         raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
-                # Non-testing: be idempotent and return existing store
+                # Non-testing: create a fresh collection with requested dimension but do not register in meta DB (avoid name conflict)
+                fresh_id = store_id  # reuse pre-generated id
+                fresh_created = created
+                fresh_md = dict(payload.metadata or {})
+                fresh_md.update({
+                    "openai_id": fresh_id,
+                    "name": payload.name,
+                    "created_at": fresh_created,
+                    "embedding_model": payload.embedding_model or "",
+                    "embedding_dimension": payload.dimensions,
+                    "owner": uid,
+                })
                 try:
-                    st = await adapter.get_collection_stats(existing['id'])
-                    eff_dim = _as_int(_STORE_DIMENSIONS.get(existing['id'])) or _as_int(st.get('dimension')) or payload.dimensions
-                    md = st.get('metadata', {}) or {}
-                except Exception:
-                    eff_dim = _as_int(_STORE_DIMENSIONS.get(existing['id'])) or payload.dimensions
-                    md = {"name": existing['name'], "openai_id": existing['id'], "created_at": existing['created_at']}
+                    create_coro = getattr(adapter, 'create_collection', None)
+                    if create_coro is not None:
+                        await create_coro(fresh_id, metadata=fresh_md)
+                    else:
+                        col = adapter.manager.get_or_create_collection(fresh_id)
+                        if hasattr(col, 'set_metadata'):
+                            try:
+                                col.set_metadata(fresh_md)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.warning(f"Failed to create fresh collection for duplicate name '{payload.name}': {e}")
                 try:
-                    _STORE_DIMENSIONS.setdefault(existing['id'], int(eff_dim))
+                    _STORE_DIMENSIONS[fresh_id] = int(payload.dimensions)
                 except Exception:
                     pass
-                # Track name as seen to make next duplicate in this process conflict
                 try:
                     _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
                 except Exception:
                     pass
                 return VectorStoreObject(
-                    id=existing['id'],
-                    name=existing['name'],
-                    created_at=md.get('created_at', existing['created_at']),
-                    metadata=md,
-                    dimensions=int(eff_dim)
+                    id=fresh_id,
+                    name=payload.name,
+                    created_at=fresh_created,
+                    metadata=fresh_md,
+                    dimensions=payload.dimensions
                 )
         except HTTPException:
             raise
@@ -269,14 +285,36 @@ async def create_vector_store(
                     md = st.get('metadata') or {}
                     if md.get('name') and md.get('name').strip().lower() == payload.name.strip().lower():
                         if testing:
-                            created = _CREATED_NAMES_BY_USER.get(uid, set())
-                            if name_lower in created:
+                            created_names = _CREATED_NAMES_BY_USER.get(uid, set())
+                            if name_lower in created_names:
                                 raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
-                        # Idempotent return for existing store found via metadata
-                        eff_id = md.get('openai_id', col)
-                        eff_dim = _as_int(_STORE_DIMENSIONS.get(eff_id)) or _as_int(st.get('dimension')) or payload.dimensions
+                        # Non-testing: create a fresh collection with requested dimension
+                        fresh_id = store_id
+                        fresh_created = created
+                        fresh_md = dict(payload.metadata or {})
+                        fresh_md.update({
+                            "openai_id": fresh_id,
+                            "name": payload.name,
+                            "created_at": fresh_created,
+                            "embedding_model": payload.embedding_model or "",
+                            "embedding_dimension": payload.dimensions,
+                            "owner": uid,
+                        })
                         try:
-                            _STORE_DIMENSIONS.setdefault(eff_id, int(eff_dim))
+                            create_coro = getattr(adapter, 'create_collection', None)
+                            if create_coro is not None:
+                                await create_coro(fresh_id, metadata=fresh_md)
+                            else:
+                                col2 = adapter.manager.get_or_create_collection(fresh_id)
+                                if hasattr(col2, 'set_metadata'):
+                                    try:
+                                        col2.set_metadata(fresh_md)
+                                    except Exception:
+                                        pass
+                        except Exception as e:
+                            logger.warning(f"Failed to create fresh collection for duplicate name '{payload.name}' via fallback: {e}")
+                        try:
+                            _STORE_DIMENSIONS[fresh_id] = int(payload.dimensions)
                         except Exception:
                             pass
                         try:
@@ -284,11 +322,11 @@ async def create_vector_store(
                         except Exception:
                             pass
                         return VectorStoreObject(
-                            id=eff_id,
-                            name=md.get('name', payload.name),
-                            created_at=md.get('created_at', _now_ts()),
-                            metadata=md,
-                            dimensions=int(eff_dim)
+                            id=fresh_id,
+                            name=payload.name,
+                            created_at=fresh_created,
+                            metadata=fresh_md,
+                            dimensions=payload.dimensions
                         )
                 except HTTPException:
                     raise
@@ -934,31 +972,33 @@ async def query_vectors(
     else:
         raise HTTPException(400, detail="Provide either 'query' text or 'vector'")
 
-    # If caller provided a vector, enforce store dimension before proceeding (skip on empty stores)
+    # If caller provided a vector, enforce store dimension before proceeding
     if payload.vector is not None and qvec is not None:
-        registry_dim = _as_int(_STORE_DIMENSIONS.get(store_id))
+        # Determine emptiness and stats first
         stats_dim: Optional[int] = None
         is_empty: Optional[bool] = None
         try:
             stats = await adapter.get_collection_stats(store_id)
             stats_dim = _as_int(stats.get('dimension'))
             try:
-                # Prefer count() if available via manager
                 coll = adapter.manager.get_or_create_collection(store_id)
                 is_empty = (coll.count() == 0)
             except Exception:
                 is_empty = bool(stats.get('count', 0) == 0)
         except Exception:
-            stats_dim = None
-            # If we cannot determine, assume empty to avoid false rejections
+            # If undeterminable, assume empty to avoid false rejections
             is_empty = True
+
+        registry_dim = _as_int(_STORE_DIMENSIONS.get(store_id))
         if is_empty is False:
-            # Registry dimension is authoritative when present (unless it's the generic default 1536)
             if registry_dim is not None and registry_dim != 1536 and len(qvec) != registry_dim:
                 raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {registry_dim}")
-            # Treat concrete stats_dim (not generic 1536) as an additional guard
-            if stats_dim is not None and stats_dim != 1536 and len(qvec) != stats_dim:
+            if (stats_dim is not None) and stats_dim != 1536 and len(qvec) != stats_dim:
                 raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {stats_dim}")
+        else:
+            # Empty store: enforce against declared registry dimension only
+            if registry_dim is not None and registry_dim != 1536 and len(qvec) != registry_dim:
+                raise HTTPException(status_code=400, detail=f"Vector length {len(qvec)} != expected {registry_dim}")
 
     dim = len(qvec)
     # Recreate adapter with correct dimension for search
