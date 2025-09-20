@@ -224,53 +224,8 @@ async def create_vector_store(
             init_meta_db(uid)
             existing = meta_find_store_by_name(uid, payload.name)
             if existing:
-                import os
-                testing = str(os.getenv("TESTING", "")).lower() == "true"
-                if testing:
-                    # In tests, only raise 409 if this name was created in this process (fresh duplicate)
-                    created_names = _CREATED_NAMES_BY_USER.get(uid, set())
-                    if name_lower in created_names:
-                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
-                # Non-testing: create a fresh collection with requested dimension but do not register in meta DB (avoid name conflict)
-                fresh_id = store_id  # reuse pre-generated id
-                fresh_created = created
-                fresh_md = dict(payload.metadata or {})
-                fresh_md.update({
-                    "openai_id": fresh_id,
-                    "name": payload.name,
-                    "created_at": fresh_created,
-                    "embedding_model": payload.embedding_model or "",
-                    "embedding_dimension": payload.dimensions,
-                    "owner": uid,
-                })
-                try:
-                    create_coro = getattr(adapter, 'create_collection', None)
-                    if create_coro is not None:
-                        await create_coro(fresh_id, metadata=fresh_md)
-                    else:
-                        col = adapter.manager.get_or_create_collection(fresh_id)
-                        if hasattr(col, 'set_metadata'):
-                            try:
-                                col.set_metadata(fresh_md)
-                            except Exception:
-                                pass
-                except Exception as e:
-                    logger.warning(f"Failed to create fresh collection for duplicate name '{payload.name}': {e}")
-                try:
-                    _STORE_DIMENSIONS[fresh_id] = int(payload.dimensions)
-                except Exception:
-                    pass
-                try:
-                    _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
-                except Exception:
-                    pass
-                return VectorStoreObject(
-                    id=fresh_id,
-                    name=payload.name,
-                    created_at=fresh_created,
-                    metadata=fresh_md,
-                    dimensions=payload.dimensions
-                )
+                # Strict duplicate policy: return 409 on name conflict
+                raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
         except HTTPException:
             raise
         except Exception as _e:
@@ -284,50 +239,8 @@ async def create_vector_store(
                     st = await adapter.get_collection_stats(col)
                     md = st.get('metadata') or {}
                     if md.get('name') and md.get('name').strip().lower() == payload.name.strip().lower():
-                        if testing:
-                            created_names = _CREATED_NAMES_BY_USER.get(uid, set())
-                            if name_lower in created_names:
-                                raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
-                        # Non-testing: create a fresh collection with requested dimension
-                        fresh_id = store_id
-                        fresh_created = created
-                        fresh_md = dict(payload.metadata or {})
-                        fresh_md.update({
-                            "openai_id": fresh_id,
-                            "name": payload.name,
-                            "created_at": fresh_created,
-                            "embedding_model": payload.embedding_model or "",
-                            "embedding_dimension": payload.dimensions,
-                            "owner": uid,
-                        })
-                        try:
-                            create_coro = getattr(adapter, 'create_collection', None)
-                            if create_coro is not None:
-                                await create_coro(fresh_id, metadata=fresh_md)
-                            else:
-                                col2 = adapter.manager.get_or_create_collection(fresh_id)
-                                if hasattr(col2, 'set_metadata'):
-                                    try:
-                                        col2.set_metadata(fresh_md)
-                                    except Exception:
-                                        pass
-                        except Exception as e:
-                            logger.warning(f"Failed to create fresh collection for duplicate name '{payload.name}' via fallback: {e}")
-                        try:
-                            _STORE_DIMENSIONS[fresh_id] = int(payload.dimensions)
-                        except Exception:
-                            pass
-                        try:
-                            _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
-                        except Exception:
-                            pass
-                        return VectorStoreObject(
-                            id=fresh_id,
-                            name=payload.name,
-                            created_at=fresh_created,
-                            metadata=fresh_md,
-                            dimensions=payload.dimensions
-                        )
+                        # Strict duplicate policy: return 409 on name conflict found via scan
+                        raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
                 except HTTPException:
                     raise
                 except Exception:
@@ -514,18 +427,6 @@ async def update_vector_store(
     payload: VectorStoreUpdate = Body(...),
     current_user: User = Depends(get_request_user)
 ):
-    # Validate via meta DB
-    uid = str(getattr(current_user,'id','1'))
-    try:
-        init_meta_db(uid)
-        rows = meta_list_stores(uid)
-        if not any(r.get('id') == store_id for r in rows):
-            raise HTTPException(status_code=404, detail="Vector store not found")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=404, detail="Vector store not found")
-
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
     try:
@@ -574,12 +475,19 @@ async def update_vector_store(
 
     stats = await adapter.get_collection_stats(store_id)
     md = stats.get("metadata", {}) or {}
-    # Update meta DB on rename
+    # Update meta DB on rename: if not present, register; else rename
     try:
         if payload.name and payload.name.strip():
-            meta_rename_store(str(getattr(current_user,'id','1')), store_id, payload.name)
+            uid_str = str(getattr(current_user,'id','1'))
+            init_meta_db(uid_str)
+            rows = meta_list_stores(uid_str)
+            if any(r.get('id') == store_id for r in rows):
+                meta_rename_store(uid_str, store_id, payload.name)
+            else:
+                # Not present: register with the new name
+                meta_register_store(uid_str, store_id, payload.name)
     except Exception as _e:
-        logger.warning(f"Failed to update vector store meta name: {_e}")
+        logger.warning(f"Failed to update/register vector store meta name: {_e}")
 
     return VectorStoreObject(
         id=md.get("openai_id", store_id),
@@ -1354,18 +1262,7 @@ async def get_vector_store(
 
     Placed after batch/admin routes to avoid path shadowing of '/vector_stores/batches'.
     """
-    # Validate via meta DB to avoid returning stray Chroma collections
-    uid = str(getattr(current_user,'id','1'))
-    try:
-        init_meta_db(uid)
-        rows = meta_list_stores(uid)
-        if not any(r.get('id') == store_id for r in rows):
-            raise HTTPException(status_code=404, detail="Vector store not found")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=404, detail="Vector store not found")
-
+    # Get stats directly from adapter; fall back to meta DB only for friendly name override
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
     try:
@@ -1373,13 +1270,15 @@ async def get_vector_store(
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
     md = stats.get("metadata", {}) or {}
-    # Prefer meta DB name if available
+    # Prefer meta DB name if available (do not gate existence on meta DB)
     try:
         uid = str(getattr(current_user, 'id', '1'))
         init_meta_db(uid)
-        row = meta_find_store_by_name(uid, md.get('name', '')) if md.get('name') else None
-        if row:
-            md['name'] = row['name']
+        rows = meta_list_stores(uid)
+        for r in rows:
+            if r.get('id') == store_id:
+                md['name'] = r.get('name', md.get('name', store_id))
+                break
     except Exception:
         pass
     return {

@@ -874,15 +874,15 @@ class WorldBookService:
     ) -> Dict[str, Any]:
         """
         Attach a world book to a character.
-        
+
         Args:
-            character_id: Character ID
             world_book_id: World book ID
+            character_id: Character ID
             enabled: Whether the attachment is active
             priority: Priority for this character (higher = more important)
             
         Returns:
-            True if attached successfully
+            OpResult with 'success' indicating attachment status
         """
         try:
             with self.db.get_connection() as conn:

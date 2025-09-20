@@ -458,7 +458,47 @@ class PromptStudioDatabase(PromptsDatabase):
                 conn.commit()
         except Exception as e:
             logger.debug(f"Could not log sync event: {e}")
-    
+
+    # Public convenience alias matching some endpoint call sites
+    def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> Dict[str, Any]:
+        """
+        Convert a (row, cursor) pair to a dict. Wrapper around _row_to_dict,
+        provided to match call sites that pass (row, cursor) in that order.
+        """
+        return self._row_to_dict(cursor, row)
+
+    ####################################################################################################################
+    # Prompt Accessors (Prompt Studio tables)
+
+    def get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a prompt-studio prompt by id from the prompt_studio_prompts table.
+
+        Args:
+            prompt_id: ID of the prompt (prompt_studio_prompts.id)
+
+        Returns:
+            A dictionary representing the prompt or None if not found.
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT *
+                FROM prompt_studio_prompts
+                WHERE id = ? AND deleted = 0
+                """,
+                (prompt_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_dict(cursor, row)
+        except Exception as e:
+            logger.error(f"Failed to get prompt {prompt_id}: {e}")
+            return None
+
     ####################################################################################################################
     # Test Case Methods
     

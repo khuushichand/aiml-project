@@ -199,10 +199,12 @@ class ChromaDBManager:
                 _is_test_mode() and os.getenv("CHROMADB_FORCE_STUB", "") == ""
             ):
                 # If CHROMADB_FORCE_STUB not set explicitly, default to True in test mode
-                cli = _TEST_STUB_CLIENTS.get(self.user_id)
+                # Scope the stub client key by user and base dir to avoid cross-test leakage.
+                stub_key = f"{self.user_id}::{str(user_db_base_path)}"
+                cli = _TEST_STUB_CLIENTS.get(stub_key)
                 if cli is None:
                     cli = _InMemoryChromaClient()
-                    _TEST_STUB_CLIENTS[self.user_id] = cli
+                    _TEST_STUB_CLIENTS[stub_key] = cli
                 self.client = cli
                 logger.warning(
                     f"CHROMADB_FORCE_STUB enabled; using internal in-memory client for user '{self.user_id}'."

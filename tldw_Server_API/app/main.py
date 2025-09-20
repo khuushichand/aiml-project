@@ -107,6 +107,8 @@ from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_r
 # LLM Providers Endpoint
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
 from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router
+# Web Scraping Management Endpoints
+from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
 #
 # Metrics and Telemetry
 from tldw_Server_API.app.core.Metrics import (
@@ -844,6 +846,11 @@ app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"]
 
 # Router for Llama.cpp (LLM inference helper)
 app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
+
+# Web Scraping management endpoints
+# Include both root-level (back-compat) and versioned paths (used by WebUI)
+app.include_router(web_scraping_router, tags=["web-scraping"])
+app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
 
 # Router for trash endpoints - deletion of media items / trash file handling (FIXME: Secure delete vs lag on delete?)
 #app.include_router(trash_router, prefix=f"{API_V1_PREFIX}/trash", tags=["trash"])
