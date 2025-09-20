@@ -4,9 +4,11 @@ API endpoints for managing chunking templates.
 """
 
 import json
+import re
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
     ChunkingTemplateCreate,
@@ -20,7 +22,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
     TemplateValidationError
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
+from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage, TemplateClassifier, TemplateLearner
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -302,6 +304,7 @@ async def delete_template(
 @router.post("/apply", response_model=ApplyTemplateResponse)
 async def apply_template(
     request: ApplyTemplateRequest,
+    include_metadata: bool = Query(False, description="Return chunk metadata; if false, return only text list"),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user)
 ) -> ApplyTemplateResponse:
@@ -375,10 +378,15 @@ async def apply_template(
             template=template,
             **options
         )
-        
+        # Format according to include_metadata
+        if include_metadata:
+            out_chunks = chunks  # already List[Dict]
+        else:
+            out_chunks = [c.get('text', '') if isinstance(c, dict) else str(c) for c in chunks]
+
         return ApplyTemplateResponse(
             template_name=request.template_name,
-            chunks=chunks,
+            chunks=out_chunks,  # type: ignore[arg-type]
             metadata={
                 'chunk_count': len(chunks),
                 'template_version': template_data['version']
@@ -434,6 +442,89 @@ async def validate_template(
                         message=f"Unknown chunking method '{chunking['method']}'. Valid methods: {', '.join(sorted(available_methods))}"
                     ))
         
+        # Validate hierarchical options (either top-level or inside chunking.config)
+        def _get_cfg_path(cfg: Dict[str, Any], path: List[str]) -> Optional[Any]:
+            cur = cfg
+            for key in path:
+                if not isinstance(cur, dict) or key not in cur:
+                    return None
+                cur = cur[key]
+            return cur
+
+        hier_flag = _get_cfg_path(template_config, ['chunking', 'config', 'hierarchical'])
+        hier_tpl = _get_cfg_path(template_config, ['chunking', 'config', 'hierarchical_template'])
+        if hier_flag is not None and not isinstance(hier_flag, bool):
+            errors.append(TemplateValidationError(
+                field='chunking.config.hierarchical',
+                message='hierarchical must be a boolean'
+            ))
+        # Validate boundaries with limits
+        if isinstance(hier_tpl, dict) and 'boundaries' in hier_tpl:
+            boundaries = hier_tpl.get('boundaries')
+            if not isinstance(boundaries, list):
+                errors.append(TemplateValidationError(
+                    field='chunking.config.hierarchical_template.boundaries',
+                    message='boundaries must be a list'
+                ))
+            else:
+                if len(boundaries) > 20:
+                    errors.append(TemplateValidationError(
+                        field='chunking.config.hierarchical_template.boundaries',
+                        message='Too many boundary rules (max 20)'
+                    ))
+                for i, rule in enumerate(boundaries[:20]):
+                    if not isinstance(rule, dict) or 'pattern' not in rule:
+                        errors.append(TemplateValidationError(
+                            field=f'chunking.config.hierarchical_template.boundaries[{i}]',
+                            message='Each boundary must include a pattern'
+                        ))
+                        continue
+                    pat = str(rule.get('pattern') or '')
+                    if len(pat) > 256:
+                        errors.append(TemplateValidationError(
+                            field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
+                            message='Pattern too long (max 256)'
+                        ))
+                    flags_str = str(rule.get('flags') or '').lower()
+                    if any(f not in {'i','m',''} for f in list(flags_str)):
+                        errors.append(TemplateValidationError(
+                            field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
+                            message="Only 'i' and 'm' flags are allowed"
+                        ))
+                    # Compile test (basic catastrophic heuristic: bounded quantifiers only)
+                    try:
+                        re_flags = 0
+                        if 'i' in flags_str:
+                            re_flags |= re.IGNORECASE
+                        if 'm' in flags_str:
+                            re_flags |= re.MULTILINE
+                        re.compile(pat, re_flags)
+                    except Exception as e:
+                        errors.append(TemplateValidationError(
+                            field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
+                            message=f'Invalid regex: {e}'
+                        ))
+
+        # Validate classifier
+        classifier = template_config.get('classifier') or _get_cfg_path(template_config, ['chunking', 'config', 'classifier'])
+        if classifier is not None and not isinstance(classifier, dict):
+            errors.append(TemplateValidationError(
+                field='classifier',
+                message='classifier must be an object'
+            ))
+        elif isinstance(classifier, dict):
+            ms = classifier.get('min_score')
+            if ms is not None:
+                try:
+                    f = float(ms)
+                    if f < 0 or f > 1:
+                        raise ValueError
+                except Exception:
+                    errors.append(TemplateValidationError(field='classifier.min_score', message='min_score must be in [0,1]'))
+            pr = classifier.get('priority')
+            if pr is not None and not isinstance(pr, int):
+                errors.append(TemplateValidationError(field='classifier.priority', message='priority must be integer'))
+
         # Validate preprocessing operations
         if 'preprocessing' in template_config:
             if not isinstance(template_config['preprocessing'], list):
@@ -488,3 +579,67 @@ async def validate_template(
                 message=f'Validation error: {str(e)}'
             )]
         )
+
+
+@router.post("/match")
+async def match_templates(
+    media_type: Optional[str] = Query(None),
+    title: Optional[str] = Query(None),
+    url: Optional[str] = Query(None),
+    filename: Optional[str] = Query(None),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user)
+):
+    """Return templates ranked by a simple metadata-based score for auto-apply."""
+    try:
+        templates = db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False)
+        ranked = []
+        for t in templates:
+            try:
+                cfg = json.loads(t['template_json']) if isinstance(t.get('template_json'), str) else (t.get('template_json') or {})
+            except Exception:
+                cfg = {}
+            s = TemplateClassifier.score(cfg, media_type=media_type, title=title, url=url, filename=filename)
+            if s > 0:
+                ranked.append({"name": t['name'], "score": s, "priority": (cfg.get('classifier') or {}).get('priority', 0)})
+        # sort by score desc then priority desc
+        ranked.sort(key=lambda x: (x['score'], x.get('priority', 0)), reverse=True)
+        return {"matches": ranked}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class LearnTemplateRequest(BaseModel):
+    name: str
+    example_text: Optional[str] = None
+    description: Optional[str] = None
+    save: bool = False
+    classifier: Optional[Dict[str, Any]] = None
+
+
+@router.post("/learn")
+async def learn_template(
+    req: LearnTemplateRequest,
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user)
+):
+    """Learn a basic hierarchical boundary template from an example text and optionally save it."""
+    try:
+        boundaries = TemplateLearner.learn_boundaries(req.example_text or "")
+        tmpl = {
+            "name": req.name,
+            "description": req.description or "Learned template",
+            "chunking": {
+                "method": "sentences",
+                "config": {
+                    "hierarchical": True,
+                    "hierarchical_template": boundaries,
+                    "classifier": req.classifier or {},
+                }
+            }
+        }
+        if req.save:
+            db.create_chunking_template(name=req.name, template_json=json.dumps(tmpl), description=req.description or "Learned", is_builtin=False, tags=["learned"], user_id=str(getattr(current_user, 'id', '')))
+        return {"template": tmpl, "saved": req.save}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

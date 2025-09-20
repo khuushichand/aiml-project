@@ -1,0 +1,42 @@
+# docker-compose.postgres.yml
+# Standalone PostgreSQL service for tldw_server in production or development.
+# Runs Postgres in a separate container so the DB is cleanly separated from the app infra.
+
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: tldw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
+      POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Optional: configure performance parameters via a custom postgres.conf
+    # volumes:
+    #   - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    # command: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+volumes:
+  postgres_data:
+    driver: local
+
+# Usage:
+#   1) Export matching DATABASE_URL for the app:
+#      export DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users
+#   2) Start Postgres:
+#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml up -d
+#   3) Check health:
+#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml ps
+#   4) Stop:
+#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml down

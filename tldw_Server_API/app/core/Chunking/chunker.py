@@ -4,7 +4,11 @@ Main Chunker class that provides a unified interface for all chunking strategies
 This is the primary entry point for the chunking module.
 """
 
-from typing import List, Dict, Any, Optional, Union, Generator
+from typing import List, Dict, Any, Optional, Union, Generator, Tuple
+import re
+import json
+import hashlib
+import time
 from pathlib import Path
 import unicodedata
 import ast
@@ -26,6 +30,38 @@ from .strategies.tokens import TokenChunkingStrategy
 from .strategies.structure_aware import StructureAwareChunkingStrategy
 from .strategies.rolling_summarize import RollingSummarizeStrategy
 from .security_logger import get_security_logger, SecurityEventType
+
+# Metrics / Telemetry (graceful on import failures)
+try:
+    from tldw_Server_API.app.core.Metrics import (
+        observe_histogram,
+        set_gauge,
+        increment_counter,
+        start_span,
+        add_span_event,
+        set_span_attribute,
+        record_span_exception,
+    )
+except Exception:  # pragma: no cover - safety fallback
+    def observe_histogram(*args, **kwargs):
+        return None
+    def set_gauge(*args, **kwargs):
+        return None
+    def increment_counter(*args, **kwargs):
+        return None
+    class _NullSpan:
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+    def start_span(*args, **kwargs):
+        return _NullSpan()
+    def add_span_event(*args, **kwargs):
+        return None
+    def set_span_attribute(*args, **kwargs):
+        return None
+    def record_span_exception(*args, **kwargs):
+        return None
 
 
 class LRUCache:
@@ -177,6 +213,230 @@ class Chunker:
             ),
         }
         logger.debug(f"Registered {len(self._strategy_factories)} strategy factories (lazy)")
+
+    # ---------------- Hierarchical chunking (integrated) -----------------
+    def _compute_paragraph_spans(self, text: str, template: Optional[Dict[str, Any]] = None) -> List[Tuple[int, int, str]]:
+        """Compute paragraph/block spans with kinds and optional template boundaries.
+
+        Lightweight port of the structure detection used by the legacy utility to
+        avoid maintaining two libraries. Recognizes blank lines, ATX headers, hrules,
+        simple lists, code fences, markdown tables, and optional custom boundary rules.
+        """
+        spans: List[Tuple[int, int, str]] = []
+        if not text:
+            return spans
+
+        # Compile template boundary patterns if provided
+        template_patterns: List[Tuple[str, re.Pattern]] = []
+        try:
+            boundaries = (template or {}).get('boundaries') or []
+            for rule in boundaries:
+                kind = str(rule.get('kind') or 'template')
+                pattern = str(rule.get('pattern') or '')
+                flags_str = str(rule.get('flags') or '').lower()
+                flags = 0
+                if 'i' in flags_str:
+                    flags |= re.IGNORECASE
+                if 'm' in flags_str:
+                    flags |= re.MULTILINE
+                template_patterns.append((kind, re.compile(pattern, flags)))
+        except Exception:
+            template_patterns = []
+
+        lines = text.splitlines(keepends=True)
+        offsets: List[Tuple[int, int, str]] = []
+        pos = 0
+        for line in lines:
+            start, end = pos, pos + len(line)
+            offsets.append((start, end, line))
+            pos = end
+        if pos < len(text):
+            offsets.append((pos, len(text), text[pos:len(text)]))
+
+        def match_template(s: str) -> Optional[str]:
+            for kind, pat in template_patterns:
+                if pat.search(s):
+                    return kind
+            return None
+
+        def classify_line(s: str) -> Optional[str]:
+            k = match_template(s)
+            if k:
+                return k
+            if re.match(r'^\s*$', s):
+                return 'blank'
+            if re.match(r'^\s*#{1,6}\s', s):
+                return 'header_atx'
+            if re.match(r'^\s*(\*{3,}|-{3,}|_{3,})\s*$', s):
+                return 'hr'
+            if re.match(r'^\s*(```|~~~)', s):
+                return 'code_fence'
+            if re.match(r'^\s*([-+*])\s+\S', s):
+                return 'list_unordered'
+            if re.match(r'^\s*\d+[\.)]\s+\S', s):
+                return 'list_ordered'
+            if re.match(r'^\s*\|.*\|\s*$', s):
+                return 'table_md'
+            return None
+
+        buf_start: Optional[int] = None
+        for (start, end, content) in offsets:
+            kind = classify_line(content)
+            if kind == 'blank':
+                if buf_start is not None:
+                    spans.append((buf_start, start, 'paragraph'))
+                    buf_start = None
+                spans.append((start, end, 'blank'))
+            elif kind is not None:
+                if buf_start is not None:
+                    spans.append((buf_start, start, 'paragraph'))
+                    buf_start = None
+                spans.append((start, end, kind))
+            else:
+                if buf_start is None:
+                    buf_start = start
+        if buf_start is not None:
+            spans.append((buf_start, len(text), 'paragraph'))
+        return spans
+
+    def _extract_header_title(self, s: str) -> str:
+        if s.lstrip().startswith('#'):
+            return re.sub(r'^\s*#{1,6}\s+', '', s).strip()
+        return s.strip()
+
+    def chunk_text_hierarchical_tree(
+        self,
+        text: str,
+        method: Optional[str] = None,
+        max_size: Optional[int] = None,
+        overlap: Optional[int] = None,
+        language: Optional[str] = None,
+        template: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a simple hierarchical tree (sections + blocks) and chunk leaves.
+
+        Returns a dict with a root node and nested children, each child holding "chunks"
+        with exact offsets. Designed to be flattened downstream.
+        """
+        if not isinstance(text, str) or not text:
+            return {'type': 'hierarchical', 'schema_version': 1, 'root': {'kind': 'root', 'children': []}}
+        method = method or self.config.default_method.value
+        max_size = max_size if max_size is not None else self.config.default_max_size
+        overlap = overlap if overlap is not None else self.config.default_overlap
+        language = language or self.config.language
+
+        # Build blocks from spans
+        spans = self._compute_paragraph_spans(text, template)
+        root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
+        current_section = {'kind': 'section', 'level': 1, 'title': None, 'start_offset': 0, 'end_offset': None, 'children': []}
+        root['children'].append(current_section)
+
+        # Helper to add a leaf block with chunks
+        def _add_block(parent: Dict[str, Any], start: int, end: int, kind: str):
+            if start >= end:
+                return
+            segment = text[start:end]
+            # Temporarily call the existing strategy with local sizes
+            chunks = self.chunk_text(segment, method=method, max_size=max_size, overlap=overlap, language=language)
+            # Normalize to dict chunks with offsets
+            # Estimate offsets by naive string find window (best-effort for now)
+            out_chunks: List[Dict[str, Any]] = []
+            cursor = start
+            for ch in chunks:
+                if not isinstance(ch, str):
+                    ch_text = str(ch)
+                else:
+                    ch_text = ch
+                idx = text.find(ch_text, cursor, end)
+                if idx == -1:
+                    idx = cursor
+                out_chunks.append({
+                    'type': 'text',
+                    'text': ch_text,
+                    'metadata': {
+                        'method': method,
+                        'start_offset': idx,
+                        'end_offset': idx + len(ch_text),
+                        'language': language,
+                        'paragraph_kind': kind,
+                    }
+                })
+                cursor = idx + len(ch_text)
+
+            parent.setdefault('children', []).append({
+                'kind': kind,
+                'start_offset': start,
+                'end_offset': end,
+                'chunks': out_chunks,
+                'children': []
+            })
+
+        for (bstart, bend, bkind) in spans:
+            # New section on header
+            if bkind == 'header_atx':
+                # Close previous
+                current_section['end_offset'] = bstart
+                current_section = {'kind': 'section', 'level': 1, 'title': self._extract_header_title(text[bstart:bend]), 'start_offset': bstart, 'end_offset': None, 'children': []}
+                root['children'].append(current_section)
+            elif bkind != 'blank':
+                _add_block(current_section, bstart, bend, bkind)
+
+        # Close tail
+        if current_section and current_section.get('end_offset') is None:
+            current_section['end_offset'] = len(text)
+
+        return {'type': 'hierarchical', 'schema_version': 1, 'method': method, 'language': language, 'root': root}
+
+    def flatten_hierarchical(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Flatten a hierarchical tree into a list of dict chunks with ancestry info."""
+        if not isinstance(tree, dict):
+            return []
+        root = tree.get('root') or {'children': tree.get('blocks', [])}
+        out: List[Dict[str, Any]] = []
+
+        def walk(node: Dict[str, Any], titles: List[str]):
+            kind = node.get('kind')
+            if kind == 'section':
+                title = str(node.get('title') or '').strip()
+                titles = titles + ([title] if title else [])
+            for ch in node.get('chunks') or []:
+                txt = ch.get('text') if isinstance(ch, dict) else str(ch)
+                md = dict(ch.get('metadata') or {}) if isinstance(ch, dict) else {}
+                md['ancestry_titles'] = titles
+                if titles:
+                    md['section_path'] = ' > '.join(titles)
+                out.append({'text': txt, 'metadata': md})
+            for child in node.get('children') or []:
+                if isinstance(child, dict):
+                    walk(child, titles)
+
+        walk(root, [])
+        # Normalize chunk_index/total
+        for i, item in enumerate(out):
+            md = item.setdefault('metadata', {})
+            md.setdefault('chunk_index', i)
+            md.setdefault('total_chunks', len(out))
+        return out
+
+    def chunk_text_hierarchical_flat(
+        self,
+        text: str,
+        method: Optional[str] = None,
+        max_size: Optional[int] = None,
+        overlap: Optional[int] = None,
+        language: Optional[str] = None,
+        template: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Convenience wrapper returning flattened hierarchical chunks with metadata."""
+        tree = self.chunk_text_hierarchical_tree(
+            text=text,
+            method=method,
+            max_size=max_size,
+            overlap=overlap,
+            language=language,
+            template=template,
+        )
+        return self.flatten_hierarchical(tree)
     
     def _sanitize_input(self, text: str) -> str:
         """
@@ -499,6 +759,258 @@ class Chunker:
         if self._cache is not None:
             return self._cache.get_stats()
         return None
+
+    # ---------------- Unified processing entrypoint -----------------
+    def process_text(
+        self,
+        text: str,
+        options: Optional[Dict[str, Any]] = None,
+        *,
+        tokenizer_name_or_path: Optional[str] = None,
+        llm_call_func: Optional[Any] = None,
+        llm_config: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """End-to-end processing: optional frontmatter extraction, chunking, normalization.
+
+        Returns a list of chunks as dicts with consistent metadata fields.
+        """
+        overall_start = time.perf_counter()
+        labels = {"component": "chunker", "op": "process_text"}
+        increment_counter("chunker_process_total", labels=labels)
+        if text is None or not isinstance(text, str):
+            return []
+        # Shallow copy of options
+        opts = dict(options or {})
+
+        # Attempt to parse JSON frontmatter at the start (best-effort)
+        fm_start = time.perf_counter()
+        json_meta: Dict[str, Any] = {}
+        processed_text = text
+        try:
+            stripped = processed_text.lstrip()
+            if stripped.startswith("{"):
+                # Heuristic: until first \}\n boundary
+                close = re.search(r"\}\s*\n", stripped)
+                if close:
+                    candidate = stripped[: close.end()].strip()
+                    # Hard limit 1MB
+                    if len(candidate) <= 1_000_000:
+                        try:
+                            json_meta = json.loads(candidate)
+                            processed_text = stripped[close.end():].lstrip("\n")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        observe_histogram("chunker_frontmatter_duration_seconds", time.perf_counter() - fm_start, labels=labels)
+
+        # Optional header text extraction (legacy heuristic)
+        hdr_start = time.perf_counter()
+        header_text = ""
+        try:
+            header_re = re.compile(r"^ (This[ ]text[ ]was[ ]transcribed[ ]using (?:[^\n]*\n)*?\n) ", re.MULTILINE | re.VERBOSE)
+            m = header_re.match(processed_text)
+            if m:
+                header_text = m.group(1)
+                processed_text = processed_text[len(header_text):].lstrip()
+        except Exception:
+            pass
+        observe_histogram("chunker_header_extract_seconds", time.perf_counter() - hdr_start, labels=labels)
+
+        # Resolve main parameters
+        method = opts.get('method') or self.config.default_method.value
+        max_size = int(opts.get('max_size') or self.config.default_max_size)
+        overlap = int(opts.get('overlap') or self.config.default_overlap)
+        language = opts.get('language')
+        if not language:
+            # Lightweight language detection similar to templates module
+            try:
+                if re.search(r'[\u4e00-\u9fff]', processed_text):
+                    language = 'zh'
+                elif re.search(r'[\u3040-\u309f\u30a0-\u30ff]', processed_text):
+                    language = 'ja'
+                elif re.search(r'[\uac00-\ud7af]', processed_text):
+                    language = 'ko'
+                elif re.search(r'[\u0600-\u06ff]', processed_text):
+                    language = 'ar'
+                else:
+                    language = self.config.language
+            except Exception:
+                language = self.config.language
+
+        # Adaptive sizing (simple heuristic parity)
+        if bool(opts.get('adaptive', False)) and method not in ('semantic', 'json', 'xml', 'ebook_chapters', 'rolling_summarize'):
+            try:
+                base_adaptive = int(opts.get('base_adaptive_chunk_size') or max_size)
+                min_adaptive = int(opts.get('min_adaptive_chunk_size') or max_size)
+                max_adaptive_hi = int(opts.get('max_adaptive_chunk_size') or max_size)
+                # Very rough heuristic: scale with document size
+                density = max(0.0, min(3.0, len(processed_text) / 10000.0))
+                scaled = int(base_adaptive * (1.0 + 0.2 * density))
+                max_size = max(min_adaptive, min(max_adaptive_hi, scaled))
+            except Exception:
+                pass
+
+        # Choose hierarchical vs normal
+        hierarchical = bool(opts.get('hierarchical'))
+        hier_template = opts.get('hierarchical_template') if isinstance(opts.get('hierarchical_template'), dict) else None
+
+        # Temporarily set LLM hooks for strategies that need them
+        prev_llm_call = getattr(self, 'llm_call_func', None)
+        prev_llm_cfg = getattr(self, 'llm_config', None)
+        if llm_call_func is not None:
+            self.llm_call_func = llm_call_func
+        if llm_config is not None:
+            self.llm_config = llm_config
+
+        # Multi-level paragraph-aware chunking for words/sentences (parity with legacy)
+        multi_level = bool(opts.get('multi_level', False)) and method in ('words', 'sentences') and not (hierarchical or hier_template)
+
+        chunk_start = time.perf_counter()
+        if hierarchical or hier_template:
+            raw_chunks = self.chunk_text_hierarchical_flat(
+                text=processed_text,
+                method=method,
+                max_size=max_size,
+                overlap=overlap,
+                language=language,
+                template=hier_template,
+            )
+            # Already dicts with offsets/metadata
+            norm_chunks = raw_chunks
+        elif multi_level:
+            spans = self._compute_paragraph_spans(processed_text, template=None)
+            norm_chunks = []
+            pidx = 0
+            for (start, end, kind) in spans:
+                if kind != 'paragraph':
+                    continue
+                segment = processed_text[start:end]
+                base_chunks = self.chunk_text(
+                    segment,
+                    method=method,
+                    max_size=max_size,
+                    overlap=overlap,
+                    language=language,
+                )
+                cursor = start
+                for c in (base_chunks or []):
+                    txt = c if isinstance(c, str) else (c.get('text') if isinstance(c, dict) else str(c))
+                    pos = processed_text.find(txt, cursor, end)
+                    if pos == -1:
+                        pos = cursor
+                    md = {}
+                    if isinstance(c, dict):
+                        md.update(c.get('metadata') or {})
+                    md.update({
+                        'method': method,
+                        'start_offset': pos,
+                        'end_offset': pos + len(txt),
+                        'language': language,
+                        'paragraph_index': pidx,
+                        'paragraph_kind': kind,
+                        'multi_level': True,
+                    })
+                    norm_chunks.append({'text': txt, 'metadata': md})
+                    cursor = pos + len(txt)
+                pidx += 1
+        else:
+            base_chunks = self.chunk_text(
+                processed_text,
+                method=method,
+                max_size=max_size,
+                overlap=overlap,
+                language=language,
+            )
+            # Normalize and handle JSON-chunk structures
+            norm_chunks: List[Dict[str, Any]] = []
+            for c in (base_chunks or []):
+                if isinstance(c, dict) and 'json' in c and 'metadata' in c:
+                    try:
+                        txt = json.dumps(c['json'], ensure_ascii=False)
+                    except Exception:
+                        txt = str(c['json'])
+                    norm_chunks.append({'text': txt, 'metadata': dict(c.get('metadata') or {})})
+                elif isinstance(c, dict) and 'text' in c:
+                    norm_chunks.append({'text': c['text'], 'metadata': dict(c.get('metadata') or {})})
+                elif isinstance(c, str):
+                    norm_chunks.append({'text': c, 'metadata': {}})
+                else:
+                    norm_chunks.append({'text': str(c), 'metadata': {}})
+        observe_histogram("chunker_chunking_duration_seconds", time.perf_counter() - chunk_start, labels=labels)
+
+        # Restore previous LLM hooks
+        self.llm_call_func = prev_llm_call
+        self.llm_config = prev_llm_cfg
+
+        total = len(norm_chunks)
+        out: List[Dict[str, Any]] = []
+        norm_start = time.perf_counter()
+        for i, item in enumerate(norm_chunks):
+            # Normalize
+            txt = item.get('text') if isinstance(item, dict) else str(item)
+            md = dict(item.get('metadata') or {}) if isinstance(item, dict) else {}
+
+            # Base metadata
+            md.setdefault('chunk_index', i + 1)
+            md.setdefault('total_chunks', total)
+            md.setdefault('chunk_method', method)
+            md.setdefault('max_size_setting', max_size)
+            md.setdefault('overlap_setting', overlap)
+            md.setdefault('language', language)
+            md.setdefault('adaptive_chunking_used', bool(opts.get('adaptive', False)))
+
+            # Relative position using offsets when present
+            try:
+                start = md.get('start_offset'); end = md.get('end_offset')
+                if isinstance(start, int) and isinstance(end, int) and end > start:
+                    mid = 0.5 * (float(start) + float(end))
+                    rel = mid / max(1.0, float(len(processed_text)))
+                else:
+                    rel = (i + 1) / total if total > 0 else 0.0
+            except Exception:
+                rel = (i + 1) / total if total > 0 else 0.0
+            md.setdefault('relative_position', rel)
+
+            # Document-level metadata if we extracted any
+            if json_meta:
+                md.setdefault('initial_document_json_metadata', json_meta)
+            if header_text:
+                md.setdefault('initial_document_header_text', header_text)
+
+            # Content hash
+            try:
+                md.setdefault('chunk_content_hash', hashlib.md5(txt.encode('utf-8')).hexdigest())
+            except Exception:
+                pass
+
+            # Mark origin
+            md.setdefault('origin', 'unified_chunker')
+
+            out.append({'text': txt, 'metadata': md})
+        observe_histogram("chunker_normalization_seconds", time.perf_counter() - norm_start, labels=labels)
+        # Output metrics
+        total_bytes = sum(len(c['text']) for c in out)
+        set_gauge("chunker_last_chunk_count", float(len(out)), labels=labels)
+        observe_histogram("chunker_output_bytes", float(total_bytes), labels=labels)
+        observe_histogram("chunker_input_bytes", float(len(text)), labels=labels)
+        observe_histogram("chunker_process_total_seconds", time.perf_counter() - overall_start, labels={**labels, "method": method, "hierarchical": str(bool(hierarchical or hier_template)).lower()})
+        try:
+            with start_span("chunker.process_text") as span:
+                set_span_attribute(span, "chunk.method", method)
+                set_span_attribute(span, "chunk.lang", language)
+                set_span_attribute(span, "chunk.hierarchical", bool(hierarchical or hier_template))
+                set_span_attribute(span, "chunk.multi_level", multi_level)
+                set_span_attribute(span, "chunk.count", len(out))
+                add_span_event(span, "chunker.completed")
+        except Exception as e:
+            record_span_exception(None, e)
+        
+        return out
+
+    # Backwards-compatible alias to tolerate triple-s typo in requests
+    def processs_text(self, *args, **kwargs):
+        return self.process_text(*args, **kwargs)
     
     def chunk_file_stream(self,
                          file_path: Union[str, Path],

@@ -961,7 +961,21 @@ async def shutdown_audit_service():
     New: from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
          await shutdown_all_audit_services()
     """
-    raise DeprecationWarning(
+    import warnings
+    # Emit deprecation as a warning (not an exception) for backward-compat in tests
+    warnings.warn(
         "Global shutdown is deprecated. "
-        "Use: from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services"
+        "Use: from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services",
+        DeprecationWarning,
+        stacklevel=2,
     )
+    # For compatibility, delegate to the new shutdown for all audit services if available
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            shutdown_all_audit_services,
+        )
+    except Exception:
+        # If import not available in this context, just return
+        return
+    # Run actual shutdown to ensure clean state in tests
+    await shutdown_all_audit_services()

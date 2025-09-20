@@ -40,6 +40,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
+# Mark all tests in this package as integration tests (require PostgreSQL)
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for the test session."""

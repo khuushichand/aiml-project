@@ -30,6 +30,12 @@ class TemplateConfig(BaseModel):
         default_factory=list,
         description="List of postprocessing operations"
     )
+    # Optional hierarchical + classifier directives
+    # Backwards-compatible: these can live inside chunking.config too; validator will accept either
+    classifier: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional classifier for auto-apply (media_types, filename_regex, title_regex, url_regex, min_score, priority)"
+    )
     
     @validator('chunking')
     def validate_chunking(cls, v):
@@ -38,6 +44,30 @@ class TemplateConfig(BaseModel):
             raise ValueError("Chunking configuration must include 'method'")
         if 'config' not in v:
             v['config'] = {}
+        return v
+
+    @validator('classifier')
+    def validate_classifier(cls, v):
+        if v is None:
+            return v
+        # Allowed keys and constraints
+        allowed = {'media_types', 'filename_regex', 'title_regex', 'url_regex', 'tags', 'min_score', 'priority'}
+        extra = set(v.keys()) - allowed
+        if extra:
+            raise ValueError(f"Unknown classifier fields: {', '.join(sorted(extra))}")
+        if 'min_score' in v:
+            ms = v['min_score']
+            if not isinstance(ms, (int, float)) or not (0.0 <= float(ms) <= 1.0):
+                raise ValueError("classifier.min_score must be in [0,1]")
+        if 'priority' in v and not isinstance(v['priority'], int):
+            raise ValueError("classifier.priority must be an integer")
+        if 'media_types' in v and not isinstance(v['media_types'], list):
+            raise ValueError("classifier.media_types must be a list of strings")
+        # Basic regex sanity (length limits enforced in endpoint validator)
+        for k in ('filename_regex', 'title_regex', 'url_regex'):
+            val = v.get(k)
+            if val is not None and not isinstance(val, str):
+                raise ValueError(f"classifier.{k} must be a string")
         return v
 
 
@@ -112,7 +142,7 @@ class ApplyTemplateRequest(BaseModel):
 class ApplyTemplateResponse(BaseModel):
     """Response schema for template application."""
     template_name: str = Field(..., description="Applied template name")
-    chunks: List[str] = Field(..., description="Resulting text chunks")
+    chunks: List[Any] = Field(..., description="Resulting chunks (text or {text, metadata} when include_metadata=true)")
     metadata: Optional[Dict[str, Any]] = Field(
         None,
         description="Additional metadata from processing"

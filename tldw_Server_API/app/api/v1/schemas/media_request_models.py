@@ -115,6 +115,9 @@ class ChunkingOptions(BaseModel):
     chunk_size: int = Field(500, gt=0, description="Target size of each chunk (positive integer)")
     chunk_overlap: int = Field(200, ge=0, description="Overlap size between chunks (non-negative integer)")
     custom_chapter_pattern: Optional[str] = Field(None, description="Optional regex pattern for custom chapter splitting (ebook/docs)")
+    # Template auto-apply options
+    auto_apply_template: bool = Field(False, description="Automatically select and apply a matching chunking template by metadata")
+    chunking_template_name: Optional[str] = Field(None, description="Explicit template name to apply for chunking")
     # Contextual Chunking Options
     enable_contextual_chunking: bool = Field(False, description="Add LLM-generated context to chunks for better retrieval")
     contextual_llm_model: Optional[str] = Field(None, description="LLM model to use for generating contextual summaries (e.g., 'gpt-3.5-turbo')")

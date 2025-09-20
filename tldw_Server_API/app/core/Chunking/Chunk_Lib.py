@@ -831,6 +831,18 @@ class Chunker:
 
         return result
 
+    def get_available_methods(self) -> List[str]:
+        """Return a list of supported chunking methods.
+
+        Exposed for validators and UIs; mirrors the other Chunker implementation
+        so callers have a uniform capability surface.
+        """
+        return [
+            'words', 'sentences', 'paragraphs', 'tokens', 'semantic',
+            'json', 'xml', 'ebook_chapters', 'rolling_summarize',
+            'structure_aware', 'propositions'
+        ]
+
 
     def _chunk_text_by_words(self, text: str, max_words: int, overlap: int, language: str) -> List[str]:
         logging.debug(f"Chunking by words: max_words={max_words}, overlap={overlap}, language='{language}'")
@@ -2942,6 +2954,34 @@ def process_document_with_metadata(text: str,
 # or make them static methods / helper functions that instantiate and use the Chunker.
 # For now, let's adapt improved_chunking_process to use the Chunker class.
 
+# --- Shim override: prefer unified Chunker.process_text ---
+def improved_chunking_process(text: str,
+                              chunk_options_dict: Optional[Dict[str, Any]] = None,
+                              tokenizer_name_or_path: str = "gpt2",
+                              llm_call_function_for_chunker: Optional[Callable] = None,
+                              llm_api_config_for_chunker: Optional[Dict[str, Any]] = None
+                              ) -> List[Dict[str, Any]]:
+    """Shim to unified chunker.
+
+    NOTE: Replace call sites with Chunker.process_text(text, options) for direct use.
+    This wrapper will be removed once all call sites are migrated.
+    """
+    try:
+        from tldw_Server_API.app.core.Chunking.chunker import Chunker as UnifiedChunker
+        unified = UnifiedChunker()
+        return unified.process_text(
+            text,
+            options=chunk_options_dict,
+            tokenizer_name_or_path=tokenizer_name_or_path,
+            llm_call_func=llm_call_function_for_chunker,
+            llm_config=llm_api_config_for_chunker,
+        )
+    except Exception as e:
+        logging.error(f"Unified chunker shim failed: {e}")
+        if isinstance(text, str) and text.strip():
+            return [{'text': text, 'metadata': {'chunk_index': 0, 'total_chunks': 1}}]
+        return []
+
 def improved_chunking_process(text: str,
                               chunk_options_dict: Optional[Dict[str, Any]] = None,
                               tokenizer_name_or_path: str = "gpt2",
@@ -3071,6 +3111,8 @@ def improved_chunking_process(text: str,
                 'adaptive_chunking_used': effective_options.get('adaptive', False),
             }
             current_chunk_metadata.update(chunk_specific_metadata) # Merge method-specific metadata
+            # Mark origin for downstream consumers
+            current_chunk_metadata.setdefault('origin', 'chunk_lib')
 
             if json_content_metadata:
                 current_chunk_metadata['initial_document_json_metadata'] = json_content_metadata

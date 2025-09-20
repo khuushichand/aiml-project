@@ -87,18 +87,9 @@ async def create_evaluation(
             eval_id = cursor.lastrowid
             conn.commit()
 
-            # Schedule the async runner immediately on the current event loop for prompt execution
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(run_evaluation_async(eval_id, db))
-            except RuntimeError:
-                # As a fallback when no loop is running, add via BackgroundTasks which will run after response
-                def _schedule_eval(eid: int, db_ref: PromptStudioDatabase):
-                    try:
-                        asyncio.run(run_evaluation_async(eid, db_ref))
-                    except Exception as _e:
-                        logger.error(f"Failed to execute async evaluation runner: {_e}")
-                background_tasks.add_task(_schedule_eval, eval_id, db)
+            # Always schedule via FastAPI BackgroundTasks to ensure execution under TestClient.
+            # Starlette will await the coroutine if the function returns an awaitable.
+            background_tasks.add_task(run_evaluation_async, eval_id, db)
 
             return EvaluationResponse(
                 id=eval_id,

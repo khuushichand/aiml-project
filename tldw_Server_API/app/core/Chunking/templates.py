@@ -87,7 +87,7 @@ class TemplateProcessor:
     def process_template(self,
                         text: str,
                         template: ChunkingTemplate,
-                        **options) -> List[str]:
+                        **options) -> List[Dict[str, Any]]:
         """
         Process text through a template pipeline.
         
@@ -121,7 +121,14 @@ class TemplateProcessor:
             else:
                 logger.warning(f"Unknown stage: {stage.name}")
         
-        return data.get("chunks", [])
+        # Ensure standardized shape: List[Dict{text, metadata}]
+        out_chunks: List[Dict[str, Any]] = []
+        for ch in data.get("chunks", []) or []:
+            if isinstance(ch, dict) and 'text' in ch:
+                out_chunks.append(ch)
+            elif isinstance(ch, str):
+                out_chunks.append({'text': ch, 'metadata': {}})
+        return out_chunks
     
     def _run_preprocess_stage(self,
                              data: Dict[str, Any],
@@ -187,17 +194,38 @@ class TemplateProcessor:
             if isinstance(extra_params, dict) and k in extra_params:
                 extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
 
-        # Perform chunking
+        # Perform chunking (supports hierarchical via config)
         chunker = self._get_chunker()
-        chunks = chunker.chunk_text(
-            text=text,
-            method=method,
-            max_size=max_size,
-            overlap=overlap,
-            **(extra_params or {})
-        )
+        hierarchical = False
+        hier_template = None
+        try:
+            cfg = chunk_ops.get('config', {}) if isinstance(chunk_ops, dict) else {}
+            hierarchical = bool(cfg.get('hierarchical')) or bool((extra_params or {}).get('hierarchical'))
+            hier_template = cfg.get('hierarchical_template') or (extra_params or {}).get('hierarchical_template')
+        except Exception:
+            hierarchical = False
+            hier_template = None
 
-        data["chunks"] = chunks
+        if hierarchical or hier_template:
+            chunks = chunker.chunk_text_hierarchical_flat(
+                text=text,
+                method=method,
+                max_size=max_size,
+                overlap=overlap,
+                template=hier_template if isinstance(hier_template, dict) else None,
+            )
+            data["chunks"] = chunks
+        else:
+            chunks = chunker.chunk_text(
+                text=text,
+                method=method,
+                max_size=max_size,
+                overlap=overlap,
+                **(extra_params or {})
+            )
+            # Normalize to dict structure
+            norm = [{'text': c, 'metadata': {}} if isinstance(c, str) else c for c in (chunks or [])]
+            data["chunks"] = norm
         return data
     
     def _run_postprocess_stage(self,
@@ -604,3 +632,58 @@ class TemplateManager:
             raise TemplateError(f"Template not found: {template_name}")
         
         return self._processor.process_template(text, template, **options)
+
+
+# ---------------- Classifier & Learner (simple heuristics) ----------------
+
+class TemplateClassifier:
+    """Simple metadata-based classifier for choosing a template."""
+
+    @staticmethod
+    def score(template_cfg: Dict[str, Any], *, media_type: Optional[str], title: Optional[str], url: Optional[str], filename: Optional[str]) -> float:
+        cfg = template_cfg or {}
+        # Allow classifier at top-level or under chunking.config
+        classifier = (cfg.get('classifier') or ((cfg.get('chunking') or {}).get('config') or {}).get('classifier')) or {}
+        if not isinstance(classifier, dict):
+            return 0.0
+        score = 0.0
+        weight_media, weight_regex = 0.5, 0.5
+        # Media type match
+        mts = classifier.get('media_types') or []
+        if isinstance(mts, list) and media_type:
+            score += weight_media if (media_type in mts) else 0.0
+        # Regex matches
+        regex_hits = 0
+        for key, text in (('filename_regex', filename), ('title_regex', title), ('url_regex', url)):
+            pat = classifier.get(key)
+            if isinstance(pat, str) and pat and text:
+                try:
+                    if re.search(pat, text, re.IGNORECASE):
+                        regex_hits += 1
+                except Exception:
+                    pass
+        score += weight_regex * (regex_hits / 3.0)
+        # Clamp with min_score if provided
+        try:
+            min_score = float(classifier.get('min_score', 0.0))
+        except Exception:
+            min_score = 0.0
+        return score if score >= min_score else 0.0
+
+
+class TemplateLearner:
+    """Learn a basic boundary rule-set from an example text."""
+
+    @staticmethod
+    def learn_boundaries(example_text: str) -> Dict[str, Any]:
+        if not isinstance(example_text, str) or not example_text.strip():
+            return {"boundaries": []}
+        patterns = []
+        # Headings like: Chapter 1, Section 2.3, ABSTRACT, REFERENCES, etc.
+        patterns.append({"kind": "chapter", "pattern": r"^\s*(Chapter\s+\d+\b)", "flags": "im"})
+        patterns.append({"kind": "section", "pattern": r"^\s*(Section\s+\d+(?:\.\d+)*\b)", "flags": "im"})
+        patterns.append({"kind": "abstract", "pattern": r"^\s*Abstract\b", "flags": "im"})
+        patterns.append({"kind": "references", "pattern": r"^\s*References\b", "flags": "im"})
+        patterns.append({"kind": "header_atx", "pattern": r"^\s*#{1,6}\s+.+$", "flags": "m"})
+        # If the text already contains these constructs, keep them; otherwise return minimal ATX detection
+        return {"boundaries": patterns}

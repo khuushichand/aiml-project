@@ -55,6 +55,9 @@ RAG
     https://github.com/aizip/Rag-Eval-flow
     https://huggingface.co/datasets/teilomillet/wikipeqa
     https://www.reddit.com/r/LocalLLaMA/comments/1lee4pd/wikipeqa_an_evaluation_dataset_for_both/
+    https://github.com/vectara/open-rag-bench
+        https://huggingface.co/datasets/vectara/open_ragbench
+        https://github.com/vectara/open-rag-eval
 
 
 LitBench
