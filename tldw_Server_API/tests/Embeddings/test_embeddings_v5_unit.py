@@ -56,37 +56,41 @@ def mock_metrics():
 
 @pytest.fixture
 def setup():
-    """Setup test environment fixture"""
+    """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
-        def __init__(self):
-            self.client = TestClient(app)
-            # Set CSRF token in both cookie and header for double-submit pattern
-            csrf_token = "test-csrf-token-12345"
-            self.client.cookies.set("csrf_token", csrf_token)
-            self.auth_headers = {
-                "Authorization": "Bearer test-api-key",
-                "X-CSRF-Token": csrf_token
-            }
-            
-            self.regular_user = User(
-                id=1, 
-                username="testuser", 
-                email="test@example.com", 
-                is_active=True,
-                is_admin=False
-            )
-            
-            self.admin_user = User(
-                id=2,
-                username="admin",
-                email="admin@example.com", 
-                is_active=True,
-                is_admin=True
-            )
-    
-    data = SetupData()
-    yield data
-    app.dependency_overrides.clear()
+        pass
+
+    with TestClient(app) as client:
+        data = SetupData()
+        data.client = client
+        # Set CSRF token in both cookie and header for double-submit pattern
+        csrf_token = "test-csrf-token-12345"
+        client.cookies.set("csrf_token", csrf_token)
+        data.auth_headers = {
+            "Authorization": "Bearer test-api-key",
+            "X-CSRF-Token": csrf_token
+        }
+
+        data.regular_user = User(
+            id=1,
+            username="testuser",
+            email="test@example.com",
+            is_active=True,
+            is_admin=False
+        )
+
+        data.admin_user = User(
+            id=2,
+            username="admin",
+            email="admin@example.com",
+            is_active=True,
+            is_admin=True
+        )
+
+        try:
+            yield data
+        finally:
+            app.dependency_overrides.clear()
 
 
 class TestCriticalSecurity:

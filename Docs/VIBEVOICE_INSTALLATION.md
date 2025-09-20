@@ -99,6 +99,40 @@ vibevoice_auto_download = True         # Auto download models from HuggingFace
 vibevoice_attention_type = auto        # auto, flash_attention_2, sdpa, or eager
 ```
 
+### Controlling Model Auto-Download
+
+You can control whether VibeVoice automatically downloads models when they are not present locally.
+
+- Global toggle for all local TTS providers (config.txt):
+
+```ini
+[TTS-Settings]
+auto_download_local_models = false
+```
+
+- VibeVoice-only toggle (config.txt):
+
+```ini
+[TTS-Settings]
+vibevoice_auto_download = false
+```
+
+- YAML (`tts_providers_config.yaml`):
+
+```yaml
+providers:
+  vibevoice:
+    enabled: true
+    auto_download: false
+    model_path: ./models/vibevoice  # Set to a local path if downloads are disabled
+```
+
+- Environment variables (runtime override):
+  - Global: `TTS_AUTO_DOWNLOAD=0`
+  - VibeVoice-only: `VIBEVOICE_AUTO_DOWNLOAD=0`
+
+Behavior when disabled: If models are missing locally and downloads are disabled, the adapter will not attempt to fetch from the network and will report as unavailable with a clear error. Pre-download models via `huggingface-cli download` or set `vibevoice_auto_download = true` to enable automatic fetches.
+
 ## Verify Installation
 
 Test the installation:

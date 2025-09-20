@@ -200,37 +200,36 @@ def test_sync_transcription():
     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
     
-    client = TestClient(app)
-    
-    # Create test audio
-    audio_data, sample_rate = create_test_audio()
-    
-    # Create in-memory file
-    audio_buffer = io.BytesIO()
-    sf.write(audio_buffer, audio_data, sample_rate, format='WAV')
-    audio_buffer.seek(0)
-    
-    # Upload file
-    files = {'file': ('test.wav', audio_buffer, 'audio/wav')}
-    data = {
-        'model': 'whisper-1',
-        'response_format': 'json'
-    }
-    
-    response = client.post(
-        "/api/v1/audio/transcriptions",
-        files=files,
-        data=data
-    )
-    
-    # Check response (might fail if authentication is required)
-    if response.status_code == 401:
-        print("Authentication required for transcription endpoint")
-    else:
-        assert response.status_code == 200
-        result = response.json()
-        assert 'text' in result
-        print(f"Sync transcription result: {result}")
+    with TestClient(app) as client:
+        # Create test audio
+        audio_data, sample_rate = create_test_audio()
+
+        # Create in-memory file
+        audio_buffer = io.BytesIO()
+        sf.write(audio_buffer, audio_data, sample_rate, format='WAV')
+        audio_buffer.seek(0)
+
+        # Upload file
+        files = {'file': ('test.wav', audio_buffer, 'audio/wav')}
+        data = {
+            'model': 'whisper-1',
+            'response_format': 'json'
+        }
+
+        response = client.post(
+            "/api/v1/audio/transcriptions",
+            files=files,
+            data=data
+        )
+
+        # Check response (might fail if authentication is required)
+        if response.status_code == 401:
+            print("Authentication required for transcription endpoint")
+        else:
+            assert response.status_code == 200
+            result = response.json()
+            assert 'text' in result
+            print(f"Sync transcription result: {result}")
 
 
 # Example usage with curl commands

@@ -30,7 +30,8 @@ def client_with_media_db(tmp_path):
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_media_db_for_user] = override_media_db
 
-    yield TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
     app.dependency_overrides.clear()
 
@@ -60,11 +61,11 @@ def test_cannot_modify_or_delete_builtin_template(client_with_media_db: TestClie
         pass
 
     # Attempt to update built-in template via API -> expect 400
-    upd = client.put(f"/chunking/templates/{builtin_name}", json={"description": "should fail"})
+    upd = client.put(f"/api/v1/chunking/templates/{builtin_name}", json={"description": "should fail"})
     assert upd.status_code == 400
 
     # Attempt to delete built-in template via API -> expect 400
-    dele = client.delete(f"/chunking/templates/{builtin_name}")
+    dele = client.delete(f"/api/v1/chunking/templates/{builtin_name}")
     assert dele.status_code == 400
 
 
@@ -73,7 +74,7 @@ def test_templates_crud_and_apply(client_with_media_db: TestClient):
 
     # Validate a minimal template
     valid_payload = {"chunking": {"method": "words", "size": 10, "overlap": 0}}
-    vresp = client.post("/chunking/templates/validate", json=valid_payload)
+    vresp = client.post("/api/v1/chunking/templates/validate", json=valid_payload)
     assert vresp.status_code == 200
     assert vresp.json().get("valid") is True
 
@@ -86,38 +87,38 @@ def test_templates_crud_and_apply(client_with_media_db: TestClient):
         "tags": ["test"],
         "user_id": "chunking_user"
     }
-    c = client.post("/chunking/templates", json=create_payload)
+    c = client.post("/api/v1/chunking/templates", json=create_payload)
     assert c.status_code == 201, c.text
 
     # List templates and fetch by name
-    lst = client.get("/chunking/templates")
+    lst = client.get("/api/v1/chunking/templates")
     assert lst.status_code == 200
     names = [t.get("name") for t in lst.json().get("templates", [])]
     assert tmpl_name in names
-    g = client.get(f"/chunking/templates/{tmpl_name}")
+    g = client.get(f"/api/v1/chunking/templates/{tmpl_name}")
     assert g.status_code == 200
 
     # Apply template
     apply_req = {"template_name": tmpl_name, "text": "One two three four five six."}
-    a = client.post("/chunking/templates/apply", json=apply_req)
+    a = client.post("/api/v1/chunking/templates/apply", json=apply_req)
     assert a.status_code == 200
     chunks = a.json().get("chunks", [])
     assert isinstance(chunks, list) and len(chunks) >= 1
 
     # Update template description
-    upd = client.put(f"/chunking/templates/{tmpl_name}", json={"description": "Updated desc"})
+    upd = client.put(f"/api/v1/chunking/templates/{tmpl_name}", json={"description": "Updated desc"})
     assert upd.status_code == 200
     assert upd.json().get("description") == "Updated desc"
 
     # Delete template
-    d = client.delete(f"/chunking/templates/{tmpl_name}")
+    d = client.delete(f"/api/v1/chunking/templates/{tmpl_name}")
     assert d.status_code in (200, 204)
 
 
 def test_validate_invalid_template(client_with_media_db: TestClient):
     client = client_with_media_db
     bad_payload = {"preprocessing": "should-be-list"}
-    r = client.post("/chunking/templates/validate", json=bad_payload)
+    r = client.post("/api/v1/chunking/templates/validate", json=bad_payload)
     assert r.status_code == 200
     body = r.json()
     # Should not be valid and should include errors
@@ -136,11 +137,11 @@ def test_list_templates_with_filters(client_with_media_db: TestClient):
         "tags": ["alpha", "beta"],
         "user_id": "chunking_user"
     }
-    c = client.post("/chunking/templates", json=create_payload)
+    c = client.post("/api/v1/chunking/templates", json=create_payload)
     assert c.status_code == 201
 
     # Now list with tags filter
-    lst = client.get("/chunking/templates", params={"include_builtin": True, "include_custom": True, "tags": ["beta"]})
+    lst = client.get("/api/v1/chunking/templates", params={"include_builtin": True, "include_custom": True, "tags": ["beta"]})
     assert lst.status_code == 200
     items = lst.json().get("templates", [])
     assert any(t.get("name") == tmpl_name for t in items)
@@ -157,19 +158,19 @@ def test_apply_with_override_options(client_with_media_db: TestClient):
         "tags": ["override"],
         "user_id": "chunking_user"
     }
-    c = client.post("/chunking/templates", json=create_payload)
+    c = client.post("/api/v1/chunking/templates", json=create_payload)
     assert c.status_code == 201, c.text
 
     text = "one two three four five six seven eight nine ten eleven twelve"
     # Apply default
-    a1 = client.post("/chunking/templates/apply", json={"template_name": tmpl_name, "text": text})
+    a1 = client.post("/api/v1/chunking/templates/apply", json={"template_name": tmpl_name, "text": text})
     assert a1.status_code == 200
     chunks_default = a1.json().get("chunks", [])
     assert isinstance(chunks_default, list)
 
     # Apply with override (smaller max_size -> likely more chunks)
     a2 = client.post(
-        "/chunking/templates/apply",
+        "/api/v1/chunking/templates/apply",
         json={"template_name": tmpl_name, "text": text, "override_options": {"max_size": 10, "overlap": 0}}
     )
     assert a2.status_code == 200

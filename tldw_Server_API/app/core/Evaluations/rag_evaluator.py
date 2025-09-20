@@ -97,6 +97,15 @@ class RAGEvaluator:
                     model_name_or_path=self.embedding_model,
                     api_key=self.api_key
                 )
+
+            # Ensure batch embedding call can discover the API key: provide openai_api section
+            # get_openai_embeddings_batch reads app_config['openai_api']['api_key']
+            try:
+                oa = config.setdefault("openai_api", {})
+                oa.setdefault("api_key", self.api_key)
+            except Exception:
+                # Never break initialization due to config dict shape
+                pass
         
         return config
     
@@ -193,8 +202,12 @@ class RAGEvaluator:
             # Compile results and handle exceptions
             failed_metrics = []
             explicit_metrics = caller_provided_metrics
-            # Treat presence of custom weights as a cue to provide aliases for compatibility
-            alias_by_weights = metric_weights is not None
+            # Provide aliases only when explicitly requested or when using defaults with ground truth
+            requested_aliases = set(metrics or []) & {"answer_relevance", "answer_faithfulness"}
+            alias_by_weights = (
+                isinstance(metric_weights, dict)
+                and any(k in {"answer_relevance", "answer_faithfulness"} for k in metric_weights.keys())
+            )
             for i, result in enumerate(metric_results):
                 if isinstance(result, Exception):
                     # Log the failure but continue with other metrics
@@ -207,12 +220,13 @@ class RAGEvaluator:
                     results["metrics"][metric_name] = metric_result
 
                     # Decide when to also record alias keys
-                    add_aliases = False
-                    if explicit_metrics or alias_by_weights:
-                        # For explicit metrics or when custom weights supplied, provide aliases
-                        add_aliases = True
+                    # Decide when to add alias keys alongside canonical names
+                    if explicit_metrics:
+                        # Only add aliases if explicitly requested in metrics list
+                        # or when weights reference alias keys (back-compat for weighting)
+                        add_aliases = bool(requested_aliases) or alias_by_weights
                     else:
-                        # For default metric set, only add aliases when ground truth is present
+                        # Using default metric set: add aliases only when ground truth present
                         add_aliases = bool(ground_truth)
 
                     if add_aliases:

@@ -71,6 +71,49 @@ print(result.claims)       # per-claim label, confidence, evidence
 print(result.factuality)   # supported/refuted/nei, precision, coverage
 ```
 
+## Hierarchical Chunking (Optional)
+
+The chunker supports hierarchical parsing of documents (sections, paragraphs, tables, lists) with exact offsets. You can enable hierarchical flattening at ingestion time so that leaf chunks include ancestry titles and paragraph kinds in metadata.
+
+Example: enabling hierarchical chunking during ingestion/storage
+
+```python
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+
+mgr = ChromaDBManager(user_id="u1", db_path="Databases/Media_DB_v2.db")
+mgr.process_and_store_content(
+    content=my_text,
+    media_id=42,
+    file_name="notes.md",
+    collection_name="default",
+    create_embeddings=True,
+    # New options:
+    hierarchical_chunking=True,  # turns on hierarchical parsing + flattening
+    hierarchical_template={      # optional custom boundaries
+        'boundaries': [
+            {'kind': 'my_section', 'pattern': r'^##\\s+Custom', 'flags': 'im'}
+        ]
+    },
+    # You can still pass chunk_options as before; hierarchical wins if set here
+    chunk_options={'max_size': 100, 'overlap': 10, 'method': 'sentences'}
+)
+```
+
+Each flattened chunk contains:
+- `metadata.ancestry_titles`: titles of enclosing sections
+- `metadata.section_path`: joined titles (e.g., "Title > Subsection")
+- `metadata.paragraph_kind`: block classifier (paragraph, list_unordered, header_line, table_md, ...)
+- `metadata.start_offset` / `metadata.end_offset`: exact offsets in the original text
+
+If you need a nested structure (tree), use:
+
+```python
+from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker
+ck = Chunker()
+tree = ck.chunk_text_hierarchical_deep(my_text, method='sentences')
+flat_chunks = ck.flatten_hierarchical(tree)
+```
+
 ## Streaming (NDJSON)
 
 Stream the generated answer with incremental claim overlay events:

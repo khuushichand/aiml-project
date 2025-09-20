@@ -157,6 +157,20 @@ class ChatterboxAdapter(TTSAdapter):
         # Target latency hint (progressive encoding)
         self.target_latency_ms = 200
 
+        # Auto-download toggle: config override > env overrides > default True
+        def _parse_bool(val, default=True):
+            if isinstance(val, bool):
+                return val
+            if val is None:
+                return default
+            s = str(val).strip().lower()
+            if s in ("1", "true", "yes", "on"): return True
+            if s in ("0", "false", "no", "off"): return False
+            return default
+        cfg_auto = self.config.get("chatterbox_auto_download") or self.config.get("auto_download")
+        env_auto = os.getenv("CHATTERBOX_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
+        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
+
     async def initialize(self) -> bool:
         """Initialize the Chatterbox TTS adapter (lazy model load)."""
         try:
@@ -470,6 +484,10 @@ class ChatterboxAdapter(TTSAdapter):
             if self.model_multi is None:
                 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
                 logger.info(f"{self.provider_name}: Loading multilingual model on {self.device}")
+                # If auto-download disabled, hint upstream to work offline
+                if not self.auto_download:
+                    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
                 self.model_multi = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
                 # Disable watermark if configured
                 if self.disable_watermark and hasattr(self.model_multi, 'watermarker'):
@@ -480,6 +498,9 @@ class ChatterboxAdapter(TTSAdapter):
             if self.model_en is None:
                 from chatterbox.tts import ChatterboxTTS
                 logger.info(f"{self.provider_name}: Loading English model on {self.device}")
+                if not self.auto_download:
+                    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
                 self.model_en = ChatterboxTTS.from_pretrained(device=self.device)
                 if self.disable_watermark and hasattr(self.model_en, 'watermarker'):
                     self.model_en.watermarker = _NoopWatermarker()

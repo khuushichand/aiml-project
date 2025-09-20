@@ -27,29 +27,33 @@ def disable_rate_limiting():
 # Module-level setup fixture for integration tests
 @pytest.fixture
 def setup():
-    """Setup test environment fixture"""
+    """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
-        def __init__(self):
-            self.client = TestClient(app)
-            # Set CSRF token in both cookie and header
-            csrf_token = "test-csrf-token-12345"
-            self.client.cookies.set("csrf_token", csrf_token)
-            self.auth_headers = {
-                "Authorization": "Bearer test-api-key",
-                "X-CSRF-Token": csrf_token
-            }
-            
-            self.test_user = User(
-                id=1, 
-                username="testuser", 
-                email="test@example.com", 
-                is_active=True,
-                is_admin=False
-            )
-    
-    data = SetupData()
-    yield data
-    app.dependency_overrides.clear()
+        pass
+
+    with TestClient(app) as client:
+        data = SetupData()
+        data.client = client
+        # Set CSRF token in both cookie and header
+        csrf_token = "test-csrf-token-12345"
+        client.cookies.set("csrf_token", csrf_token)
+        data.auth_headers = {
+            "Authorization": "Bearer test-api-key",
+            "X-CSRF-Token": csrf_token
+        }
+        
+        data.test_user = User(
+            id=1, 
+            username="testuser", 
+            email="test@example.com", 
+            is_active=True,
+            is_admin=False
+        )
+
+        try:
+            yield data
+        finally:
+            app.dependency_overrides.clear()
 
 
 @pytest.mark.integration

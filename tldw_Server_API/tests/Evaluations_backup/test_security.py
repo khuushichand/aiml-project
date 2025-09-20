@@ -336,12 +336,15 @@ class TestConnectionPoolThreadSafety:
                 pool_timeout=1.0  # Short timeout for testing
             )
             
-            connections = []
+            # Hold both the context manager and the connection so the
+            # connections remain checked out and are not auto-returned.
+            connections: list[tuple] = []
             try:
                 # Get all available connections
-                for i in range(3):
-                    conn = pool.get_connection().__enter__()
-                    connections.append(conn)
+                for i in range(3):  # pool_size=2, max_overflow=1
+                    ctx = pool.get_connection()
+                    conn = ctx.__enter__()
+                    connections.append((conn, ctx))
                 
                 # Try to get one more - should timeout
                 with pytest.raises(TimeoutError):
@@ -350,8 +353,9 @@ class TestConnectionPoolThreadSafety:
                 
             finally:
                 # Return connections
-                for conn in connections:
-                    pool._return_connection(conn)
+                for conn, ctx in connections:
+                    # Manually exit the context to return the connection
+                    ctx.__exit__(None, None, None)
                 
                 pool.shutdown()
                 os.unlink(tmp.name)

@@ -193,6 +193,26 @@ class RAGContext:
 
 
 @dataclass
+class RAGPipelineContext:
+    """
+    Lightweight pipeline context used by functional RAG steps and property tests.
+
+    This mirrors the minimal fields expected by tests and pipeline utilities and
+    is intentionally simple: it captures the original and current query, any
+    retrieved documents, configuration/metadata, a cache flag, timings, and a
+    mutable errors list for error accumulation.
+    """
+    query: str
+    original_query: str
+    documents: List[Document] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    config: Dict[str, Any] = field(default_factory=dict)
+    cache_hit: bool = False
+    timings: Dict[str, float] = field(default_factory=dict)
+    errors: List[Any] = field(default_factory=list)
+
+
+@dataclass
 class RAGResponse:
     """Response from the RAG pipeline."""
     answer: str
@@ -216,6 +236,14 @@ class Embedder(Protocol):
     def embed_batch(self, texts: List[str]) -> List[np.ndarray]:
         """Generate embeddings for multiple texts."""
         ...
+
+# Provide a backwards-compatible global for tests referencing the name directly
+try:  # pragma: no cover - defensive convenience for tests
+    import builtins as _builtins  # type: ignore
+    if not hasattr(_builtins, "RAGPipelineContext"):
+        _builtins.RAGPipelineContext = RAGPipelineContext  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 
 class Reranker(Protocol):

@@ -402,10 +402,40 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
     
     def __init__(self):
         super().__init__()
-        self.client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
+        # Prefer a persistent client on a temp dir for stability across versions
+        import tempfile, shutil
+        self._tmp_chroma_dir = None
+        try:
+            self._tmp_chroma_dir = tempfile.mkdtemp(prefix="chroma_state_")
+            self.client = chromadb.PersistentClient(
+                path=self._tmp_chroma_dir,
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
+        except Exception:
+            # Fallback to in-memory client
+            self.client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
         self.collections = {}
         self.stored_embeddings = {}
         self.job_queue = []
+
+    def teardown(self):
+        # Clean up client and any temp resources
+        try:
+            close_fn = getattr(self.client, "close", None)
+            if callable(close_fn):
+                close_fn()
+            else:
+                system = getattr(self.client, "_system", None)
+                stop_fn = getattr(system, "stop", None) if system is not None else None
+                if callable(stop_fn):
+                    stop_fn()
+        except Exception:
+            pass
+        if getattr(self, "_tmp_chroma_dir", None):
+            try:
+                shutil.rmtree(self._tmp_chroma_dir, ignore_errors=True)
+            except Exception:
+                pass
     
     collections = Bundle('collections')
     embeddings = Bundle('embeddings')

@@ -30,7 +30,8 @@ class TestV2Chunker:
         chunker = Chunker()
         assert chunker is not None
         assert chunker.config is not None
-        assert len(chunker._strategies) > 0
+        # Use public API to check available methods
+        assert len(chunker.get_available_methods()) > 0
     
     def test_chunker_with_custom_config(self):
         """Test Chunker with custom configuration."""
@@ -81,9 +82,10 @@ class TestV2Chunker:
             'semantic', 'json', 'xml', 'ebook_chapters', 'rolling_summarize'
         ]
         
+        available = set(chunker.get_available_methods())
         for method in expected_methods:
-            # Should not raise an error
-            assert method in chunker._strategies or method == 'structure_aware'
+            # Should be advertised by the chunker
+            assert method in available
     
     def test_empty_text_handling(self):
         """Test handling of empty text."""

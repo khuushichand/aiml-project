@@ -518,7 +518,8 @@ def chunking_templates():
 def test_client(test_env_vars):
     """Create a test client for the FastAPI app."""
     from tldw_Server_API.app.main import app
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 @pytest.fixture
 def auth_headers():

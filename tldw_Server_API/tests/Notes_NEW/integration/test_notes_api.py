@@ -35,7 +35,8 @@ def client_with_notes_db(tmp_path):
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
 
-    yield TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
     app.dependency_overrides.clear()
 

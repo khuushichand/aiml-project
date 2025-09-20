@@ -61,40 +61,44 @@ def mock_metrics():
 # Module-level setup fixture for all test classes
 @pytest.fixture
 def setup():
-    """Setup test environment fixture"""
+    """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
-        def __init__(self):
-            self.client = TestClient(app)
-            # Set CSRF token in both cookie and header for double-submit pattern
-            csrf_token = "test-csrf-token-12345"
-            self.client.cookies.set("csrf_token", csrf_token)
-            self.DEFAULT_API_KEY = "test-api-key"
-            self.auth_headers = {
-                "Authorization": f"Bearer {self.DEFAULT_API_KEY}",
-                "X-CSRF-Token": csrf_token
-            }
-            
-            # Create test users
-            self.regular_user = User(
-                id=1, 
-                username="testuser", 
-                email="test@example.com", 
-                is_active=True,
-                is_admin=False
-            )
-            
-            self.admin_user = User(
-                id=2,
-                username="admin",
-                email="admin@example.com", 
-                is_active=True,
-                is_admin=True
-            )
-    
-    data = SetupData()
-    yield data
-    # Cleanup
-    app.dependency_overrides.clear()
+        pass
+
+    with TestClient(app) as client:
+        data = SetupData()
+        data.client = client
+        # Set CSRF token in both cookie and header for double-submit pattern
+        csrf_token = "test-csrf-token-12345"
+        client.cookies.set("csrf_token", csrf_token)
+        data.DEFAULT_API_KEY = "test-api-key"
+        data.auth_headers = {
+            "Authorization": f"Bearer {data.DEFAULT_API_KEY}",
+            "X-CSRF-Token": csrf_token
+        }
+
+        # Create test users
+        data.regular_user = User(
+            id=1,
+            username="testuser",
+            email="test@example.com",
+            is_active=True,
+            is_admin=False
+        )
+
+        data.admin_user = User(
+            id=2,
+            username="admin",
+            email="admin@example.com",
+            is_active=True,
+            is_admin=True
+        )
+
+        try:
+            yield data
+        finally:
+            # Cleanup
+            app.dependency_overrides.clear()
 
 
 class TestProductionEmbeddings:
@@ -148,13 +152,12 @@ class TestCriticalSecurity:
         app.dependency_overrides[get_request_user] = override_admin_user
         
         # Need to create a new TestClient to pick up the override change
-        admin_client = TestClient(app)
-        admin_client.cookies.set("csrf_token", "test-csrf-token-12345")
-        
-        response = admin_client.delete(
-            "/api/v1/embeddings/cache",
-            headers=setup.auth_headers
-        )
+        with TestClient(app) as admin_client:
+            admin_client.cookies.set("csrf_token", "test-csrf-token-12345")
+            response = admin_client.delete(
+                "/api/v1/embeddings/cache",
+                headers=setup.auth_headers
+            )
         
         assert response.status_code == 200
         assert "Cache cleared successfully" in response.json()["message"]
@@ -515,13 +518,12 @@ class TestMonitoring:
         app.dependency_overrides[get_request_user] = override_admin
         
         # Need to create a new TestClient to pick up the override change
-        admin_client = TestClient(app)
-        admin_client.cookies.set("csrf_token", "test-csrf-token-12345")
-        
-        response = admin_client.get(
-            "/api/v1/embeddings/metrics",
-            headers=setup.auth_headers
-        )
+        with TestClient(app) as admin_client:
+            admin_client.cookies.set("csrf_token", "test-csrf-token-12345")
+            response = admin_client.get(
+                "/api/v1/embeddings/metrics",
+                headers=setup.auth_headers
+            )
         
         assert response.status_code == 200
         data = response.json()
@@ -864,19 +866,18 @@ class TestIntegration:
         def make_request(idx):
             """Make a request in a thread"""
             try:
-                # Each thread needs its own client
-                client = TestClient(app)
-                client.cookies.set("csrf_token", "test-csrf-token-12345")
-                
-                response = client.post(
-                    "/api/v1/embeddings",
-                    headers={**setup.auth_headers, "x-provider": "huggingface"},
-                    json={
-                        "input": f"Concurrent test {idx}",
-                        "model": "sentence-transformers/all-MiniLM-L6-v2"
-                    }
-                )
-                return response.status_code
+                # Each thread needs its own client; ensure proper cleanup
+                with TestClient(app) as client:
+                    client.cookies.set("csrf_token", "test-csrf-token-12345")
+                    response = client.post(
+                        "/api/v1/embeddings",
+                        headers={**setup.auth_headers, "x-provider": "huggingface"},
+                        json={
+                            "input": f"Concurrent test {idx}",
+                            "model": "sentence-transformers/all-MiniLM-L6-v2"
+                        }
+                    )
+                    return response.status_code
             except Exception as e:
                 print(f"Request {idx} failed: {e}")
                 return None

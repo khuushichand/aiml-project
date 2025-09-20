@@ -1039,13 +1039,47 @@ async def evaluate_geval(
     """
     # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Normalize user id for single-user mode to match webhook registrations
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+            _settings = _get_settings()
+            effective_user_id = str(_settings.SINGLE_USER_FIXED_ID) if user_id == "single_user" else user_id
+        except Exception:
+            effective_user_id = user_id
+
+        # Send webhook: evaluation started (await in TEST_MODE)
+        import os as _os
+        import asyncio as _asyncio
+        import time as _time
+        start_event_id = f"geval_{int(_time.time())}_{effective_user_id[:8]}"
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "geval",
+                    "api_name": request.api_name
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "geval",
+                    "api_name": request.api_name
+                }
+            ))
+
         result = await get_evaluation_service().evaluate_geval(
             source_text=request.source_text,
             summary=request.summary,
             metrics=request.metrics,
             api_name=request.api_name,
             api_key=request.api_key,
-            user_id=user_id
+            user_id=effective_user_id
         )
         
         # Format response - convert simple metrics to EvaluationMetric objects
@@ -1059,6 +1093,30 @@ async def evaluate_geval(
                 explanation=result["results"].get("explanations", {}).get(metric_name, "")
             )
         
+        # Send webhook: evaluation completed (await in TEST_MODE)
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "geval",
+                    "average_score": result["results"].get("average_score", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "geval",
+                    "average_score": result["results"].get("average_score", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            ))
+
         return GEvalResponse(
             metrics=formatted_metrics,
             average_score=result["results"].get("average_score", 0.0),
@@ -1087,6 +1145,40 @@ async def evaluate_rag(
     """
     # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Normalize user id for single-user mode to match webhook registrations
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+            _settings = _get_settings()
+            effective_user_id = str(_settings.SINGLE_USER_FIXED_ID) if user_id == "single_user" else user_id
+        except Exception:
+            effective_user_id = user_id
+
+        # Send webhook: evaluation started (await in TEST_MODE)
+        import os as _os
+        import asyncio as _asyncio
+        import time as _time
+        start_event_id = f"rag_{int(_time.time())}_{effective_user_id[:8]}"
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "rag",
+                    "api_name": request.api_name
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "rag",
+                    "api_name": request.api_name
+                }
+            ))
+
         result = await get_evaluation_service().evaluate_rag(
             query=request.query,
             contexts=request.retrieved_contexts,
@@ -1094,7 +1186,7 @@ async def evaluate_rag(
             ground_truth=request.ground_truth,
             metrics=request.metrics,
             api_name=request.api_name,
-            user_id=user_id
+            user_id=effective_user_id
         )
         
         # Extract and format metrics from results
@@ -1108,6 +1200,30 @@ async def evaluate_rag(
                 explanation=""
             )
         
+        # Send webhook: evaluation completed (await in TEST_MODE)
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "rag",
+                    "overall_score": result["results"].get("overall_score", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "rag",
+                    "overall_score": result["results"].get("overall_score", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            ))
+
         return RAGEvaluationResponse(
             metrics=formatted_metrics,
             overall_score=result["results"].get("overall_score", 0.0),
@@ -1137,13 +1253,47 @@ async def evaluate_response_quality(
     """
     # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Normalize user id for single-user mode to match webhook registrations
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+            _settings = _get_settings()
+            effective_user_id = str(_settings.SINGLE_USER_FIXED_ID) if user_id == "single_user" else user_id
+        except Exception:
+            effective_user_id = user_id
+
+        # Send webhook: evaluation started (await in TEST_MODE)
+        import os as _os
+        import asyncio as _asyncio
+        import time as _time
+        start_event_id = f"response_quality_{int(_time.time())}_{effective_user_id[:8]}"
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "response_quality",
+                    "api_name": request.api_name
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_STARTED,
+                evaluation_id=start_event_id,
+                data={
+                    "evaluation_type": "response_quality",
+                    "api_name": request.api_name
+                }
+            ))
+
         result = await get_evaluation_service().evaluate_response_quality(
             prompt=request.prompt,
             response=request.response,
             expected_format=request.expected_format,
             custom_criteria=request.evaluation_criteria,
             api_name=request.api_name,
-            user_id=user_id
+            user_id=effective_user_id
         )
 
         # Convert metrics to proper EvaluationMetric structure
@@ -1175,6 +1325,30 @@ async def evaluate_response_quality(
                 format_compliance = fc_value
             else:
                 format_compliance = None
+
+        # Send webhook: evaluation completed (await in TEST_MODE)
+        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            await webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "response_quality",
+                    "overall_quality": result["results"].get("overall_quality", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            )
+        else:
+            _asyncio.create_task(webhook_manager.send_webhook(
+                user_id=effective_user_id,
+                event=WebhookEvent.EVALUATION_COMPLETED,
+                evaluation_id=result["evaluation_id"],
+                data={
+                    "evaluation_type": "response_quality",
+                    "overall_quality": result["results"].get("overall_quality", 0.0),
+                    "processing_time": result.get("evaluation_time", 0.0)
+                }
+            ))
 
         return ResponseQualityResponse(
             metrics=metrics,

@@ -454,18 +454,25 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of text chunks
         """
+        if max_size <= 0:
+            raise InvalidInputError("max_size must be positive")
+        if overlap < 0:
+            overlap = 0
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+            overlap = max_size - 1
+
         words = text.split()
-        chunks = []
-        
-        i = 0
-        while i < len(words):
+        chunks: List[str] = []
+
+        # Ensure positive progress per iteration
+        step = max(1, (max_size - overlap) if overlap > 0 else max_size)
+        for i in range(0, len(words), step):
             end_idx = min(i + max_size, len(words))
             chunk_words = words[i:end_idx]
             chunk_text = ' '.join(chunk_words)
             chunks.append(chunk_text)
-            
-            i += max_size - overlap if overlap > 0 else max_size
-        
+
         return chunks
     
     def chunk_with_metadata(self, 
@@ -511,11 +518,19 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             except Exception as e:
                 logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split (metadata)")
                 # Return a single chunk with basic metadata if detection fails
+                if max_size <= 0:
+                    raise InvalidInputError("max_size must be positive")
+                if overlap < 0:
+                    overlap = 0
+                if overlap >= max_size:
+                    logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+                    overlap = max_size - 1
+
                 words = text.split()
-                chunks = []
-                i = 0
+                chunks: List[ChunkResult] = []
                 chunk_index = 0
-                while i < len(words):
+                step = max(1, (max_size - overlap) if overlap > 0 else max_size)
+                for i in range(0, len(words), step):
                     end_idx = min(i + max_size, len(words))
                     chunk_words = words[i:end_idx]
                     chunk_text = ' '.join(chunk_words)
@@ -530,7 +545,6 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     )
                     chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
                     chunk_index += 1
-                    i += max_size - overlap if overlap > 0 else max_size
                 return chunks
             
             chunks = []

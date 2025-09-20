@@ -28,8 +28,8 @@ def client(mock_user):
     """Create a test client for the FastAPI app with mocked authentication."""
     # Override the auth dependency
     app.dependency_overrides[get_current_active_user] = lambda: mock_user
-    client = TestClient(app)
-    yield client
+    with TestClient(app) as client:
+        yield client
     # Clear overrides after test
     app.dependency_overrides.clear()
 

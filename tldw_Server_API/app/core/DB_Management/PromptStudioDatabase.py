@@ -492,14 +492,8 @@ class PromptStudioDatabase(PromptsDatabase):
             
             test_cases = []
             for row in cursor.fetchall():
-                test_case = self.row_to_dict(row, cursor)
-                # Parse JSON fields
-                if test_case.get('inputs'):
-                    test_case['inputs'] = json.loads(test_case['inputs'])
-                if test_case.get('expected_outputs'):
-                    test_case['expected_outputs'] = json.loads(test_case['expected_outputs'])
-                if test_case.get('actual_outputs'):
-                    test_case['actual_outputs'] = json.loads(test_case['actual_outputs'])
+                # Use the internal helper which already handles JSON and datetime parsing
+                test_case = self._row_to_dict(cursor, row)
                 test_cases.append(test_case)
             
             return test_cases

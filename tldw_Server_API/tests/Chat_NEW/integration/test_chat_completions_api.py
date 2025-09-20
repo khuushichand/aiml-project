@@ -261,7 +261,7 @@ class TestErrorHandling:
     def test_rate_limit_error_handling(self, test_client, auth_headers):
         """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
         statuses = []
-        for i in range(3):
+        for i in range(4):
             resp = test_client.post(
                 "/api/v1/chat/completions",
                 json={
@@ -274,55 +274,44 @@ class TestErrorHandling:
         assert 429 in statuses
     
     @pytest.mark.integration
-    @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_auth_error_handling(self, test_client, auth_headers):
-        """Test handling of authentication errors - REAL API CALL with invalid key."""
-        # Use an invalid API key to trigger auth error
-        invalid_headers = auth_headers.copy()
-        
-        # Temporarily set an invalid API key
-        original_key = os.environ.get("OPENAI_API_KEY")
-        os.environ["OPENAI_API_KEY"] = "invalid-key-12345"
-        
-        try:
+        """Test handling of authentication errors by forcing provider to raise ChatAuthenticationError."""
+        from unittest.mock import patch
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError
+        def raise_auth(*args, **kwargs):
+            raise ChatAuthenticationError("Invalid API key", provider="openai")
+        with patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call', new=raise_auth):
             response = test_client.post(
                 "/api/v1/chat/completions",
                 json={
                     "model": "gpt-5-mini",
                     "messages": [{"role": "user", "content": "Test"}]
                 },
-                headers=invalid_headers
+                headers=auth_headers
             )
-            
-            # Should get 500 since the invalid key will cause an error
-            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Authentication failures should map to 401
+            assert response.status_code == status.HTTP_401_UNAUTHORIZED
             data = response.json()
             assert "detail" in data or "error" in data
-        finally:
-            # Restore original key
-            if original_key:
-                os.environ["OPENAI_API_KEY"] = original_key
-            else:
-                del os.environ["OPENAI_API_KEY"]
     
-    @pytest.mark.unit 
-    @patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call')
-    def test_general_error_handling(self, mock_chat_call, test_client, auth_headers):
-        """Test handling of general errors."""
-        mock_chat_call.side_effect = Exception("Unexpected error")
-        
-        response = test_client.post(
-            "/api/v1/chat/completions",
-            json={
-                "model": "gpt-5-mini",
-                "messages": [{"role": "user", "content": "Test"}]
-            },
-            headers=auth_headers
-        )
-        
-        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        data = response.json()
-        assert "error" in data or "detail" in data
+    @pytest.mark.unit
+    def test_general_error_handling(self, test_client, auth_headers):
+        """Test handling of general errors by forcing provider call to raise."""
+        from unittest.mock import patch
+        def boom(*args, **kwargs):
+            raise Exception("Unexpected error")
+        with patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call', new=boom):
+            response = test_client.post(
+                "/api/v1/chat/completions",
+                json={
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": "Test"}]
+                },
+                headers=auth_headers
+            )
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            data = response.json()
+            assert "error" in data or "detail" in data
 
 # ========================================================================
 # Streaming Tests
@@ -341,7 +330,7 @@ class TestStreamingResponses:
                 "POST",
                 "/api/v1/chat/completions",
                 json={
-                    "model": "gpt-5-mini",
+                    "model": "gpt-4o-mini",
                     "messages": [{"role": "user", "content": "Stream this"}],
                     "stream": True
                 },

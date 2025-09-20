@@ -341,7 +341,8 @@ llm_reranker_model =
 [API]
 # Note: All API keys have been moved to .env file for security
 # See .env.template for configuration instructions
-anthropic_model = claude-opus-4-20250514, claude-sonnet-4-20250514, claude-3-7-sonnet-20250219, claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-5-sonnet-20240620, claude-3-haiku-20240307, claude-3-opus-20240229, claude-3-sonnet-20240229, claude-2.1, claude-2.0
+anthropic_model = claude-opus-4-20250514
+# Model Options: claude-sonnet-4-20250514, claude-3-7-sonnet-20250219, claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-5-sonnet-20240620, claude-3-haiku-20240307, claude-3-opus-20240229, claude-3-sonnet-20240229, claude-2.1, claude-2.0
 anthropic_streaming = True
 anthropic_temperature = 0.7
 anthropic_top_p = 0.95
@@ -351,7 +352,8 @@ anthropic_api_timeout = 90
 anthropic_api_retry = 3
 anthropic_api_retry_delay = 1
 #
-cohere_model = command-a-03-2025, command-r7b-12-2024, command-r-plus-04-2024, command-r-plus, command-r-08-2024, command-r-03-2024, command, command-nightly, command-light, command-light-nightly
+cohere_model = command-a-03-2025
+# Model Options: command-r7b-12-2024, command-r-plus-04-2024, command-r-plus, command-r-08-2024, command-r-03-2024, command, command-nightly, command-light, command-light-nightly
 cohere_streaming = True
 cohere_temperature = 0.7
 cohere_max_tokens = 4096
@@ -360,7 +362,7 @@ cohere_api_retry = 3
 cohere_api_retry_delay = 1
 #
 # Options: 'deepseek-chat' or 'deepseek-reasoner'
-deepseek_model = deepseek-chat, deepseek-reasoner
+deepseek_model = deepseek-chat
 deepseek_streaming = True
 deepseek_temperature = 0.7
 deepseek_max_tokens = 4096
@@ -369,7 +371,8 @@ deepseek_api_retry = 3
 deepseek_api_retry_delay = 1
 #
 # Available Model Options:
-google_model = gemini-2.5-flash-preview-05-20, gemini-2.5-pro-preview-05-06, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro
+google_model = gemini-2.5-flash-preview-05-20
+# Model Options: gemini-2.5-pro-preview-05-06, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro
 google_streaming = True
 google_temperature = 0.7
 google_max_tokens = 4096
@@ -377,7 +380,8 @@ google_api_timeout = 90
 google_api_retry = 3
 google_api_retry_delay = 1
 #
-groq_model = gemma2-9b-it, llama-3.3-70b-versatile, llama-3.1-8b-instant, llama3-70b-8192, llama3-8b-8192
+groq_model = gemma2-9b-it
+# Model Options: llama-3.3-70b-versatile, llama-3.1-8b-instant, llama3-70b-8192, llama3-8b-8192
 groq_streaming = True
 groq_temperature = 0.7
 groq_max_tokens = 4096
@@ -390,7 +394,8 @@ huggingface_use_router_url_format = false
 # Default router base
 huggingface_router_base_url = https://router.huggingface.co/hf-inference/models
 huggingface_api_chat_path = v1/chat/completions
-huggingface_model = meta-llama/Meta-Llama-3.1-8B-Instruct, meta-llama/Meta-Llama-3.1-70B-Instruct
+huggingface_model = meta-llama/Meta-Llama-3.1-8B-Instruct
+# model options: meta-llama/Meta-Llama-3.1-70B-Instruct
 huggingface_streaming = True
 huggingface_temperature = 0.7
 huggingface_max_tokens = 4096
@@ -398,7 +403,8 @@ huggingface_api_timeout = 90
 huggingface_api_retry = 3
 huggingface_api_retry_delay = 1
 #
-mistral_model = open-mistral-nemo, mistral-medium-2505, codestral-2501, mistral-saba-2502, mistral-large-2411, ministral-3b-2410, ministral-8b-2410, mistral-moderation-2411, devstral-small-2505, mistral-small-2503, mistral-large-latest
+mistral_model = open-mistral-nemo
+# Model Options: mistral-medium-2505, codestral-2501, mistral-saba-2502, mistral-large-2411, ministral-3b-2410, ministral-8b-2410, mistral-moderation-2411, devstral-small-2505, mistral-small-2503, mistral-large-latest
 mistral_streaming = True
 mistral_temperature = 0.7
 mistral_max_tokens = 4096
@@ -406,7 +412,8 @@ mistral__api_timeout = 90
 mistral_api_retry = 3
 mistral_api_retry_delay = 1
 #
-openai_model = gpt-4.1-2025-04-14, o4-mini-2025-04-16, o3-2025-04-16, o3-mini-2025-01-31, o1-2024-12-17, chatgpt-4o-latest, gpt-4o-2024-11-20, gpt-4o-2024-08-06, gpt-4.1-mini-2025-04-14, gpt-4.1-nano-2025-04-14, gpt-4o-mini-2024-07-18, gpt-5-nano-2025-08-07
+openai_model = gpt-4.1-2025-04-14
+# Model Options: , o4-mini-2025-04-16, o3-2025-04-16, o3-mini-2025-01-31, o1-2024-12-17, chatgpt-4o-latest, gpt-4o-2024-11-20, gpt-4o-2024-08-06, gpt-4.1-mini-2025-04-14, gpt-4.1-nano-2025-04-14, gpt-4o-mini-2024-07-18, gpt-5-nano-2025-08-07
 openai_streaming = False
 openai_temperature = 0.7
 openai_top_p = 0.95
@@ -416,7 +423,8 @@ openai_api_retry = 3
 openai_api_retry_delay = 1
 model_for_summarization = gpt-4o
 #
-openrouter_model = openai/gpt-4o-mini, anthropic/claude-3.7-sonnet, google/gemini-2.0-flash-001, google/gemini-2.5-pro-preview, google/gemini-2.5-flash-preview, deepseek/deepseek-chat-v3-0324:free, deepseek/deepseek-chat-v3-0324, openai/gpt-4.1, anthropic/claude-sonnet-4, deepseek/deepseek-r1:free, anthropic/claude-3.7-sonnet:thinking, google/gemini-flash-1.5-8b, mistralai/mistral-nemo, google/gemini-2.5-flash-preview-05-20
+openrouter_model = openai/gpt-4o-mini
+# Sample Model options:  anthropic/claude-3.7-sonnet, google/gemini-2.0-flash-001, google/gemini-2.5-pro-preview, google/gemini-2.5-flash-preview, deepseek/deepseek-chat-v3-0324:free, deepseek/deepseek-chat-v3-0324, openai/gpt-4.1, anthropic/claude-sonnet-4, deepseek/deepseek-r1:free, anthropic/claude-3.7-sonnet:thinking, google/gemini-flash-1.5-8b, mistralai/mistral-nemo, google/gemini-2.5-flash-preview-05-20
 openrouter_max_tokens = 4096
 openrouter_api_timeout = 90
 openrouter_api_retry = 3

@@ -132,11 +132,42 @@ def document_metadata() -> List[Dict[str, Any]]:
 
 @pytest.fixture
 def chroma_client():
-    """Create an in-memory ChromaDB client for testing."""
-    return chromadb.Client(Settings(
-        is_persistent=False,
-        anonymized_telemetry=False
-    ))
+    """Create a robust ChromaDB client for testing and ensure cleanup.
+
+    Prefer a PersistentClient on a temp directory for stability across
+    ChromaDB versions (0.4.x vs 0.5.x). Falls back to in-memory client
+    if PersistentClient initialization fails.
+    """
+    import tempfile
+    temp_dir = tempfile.mkdtemp(prefix="chroma_prop_")
+    client = None
+    try:
+        try:
+            settings = Settings(
+                anonymized_telemetry=False,
+                allow_reset=True,
+            )
+            client = chromadb.PersistentClient(path=temp_dir, settings=settings)
+        except Exception:
+            # Fallback to in-memory client
+            client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
+        yield client
+    finally:
+        # Best-effort shutdown to release threads/resources
+        try:
+            if client is not None and hasattr(client, "close"):
+                client.close()  # type: ignore[attr-defined]
+            else:
+                system = getattr(client, "_system", None) if client is not None else None
+                stop_fn = getattr(system, "stop", None) if system is not None else None
+                if callable(stop_fn):
+                    stop_fn()
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 @pytest.fixture
 def chroma_collection(chroma_client):

@@ -14,7 +14,8 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client():
-    yield TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_rag_liveness_and_readiness(client: TestClient):

@@ -117,7 +117,20 @@ class VibeVoiceAdapter(TTSAdapter):
         # Memory optimization settings
         self.use_quantization = self.config.get("vibevoice_use_quantization", False)
         self.auto_cleanup = self.config.get("vibevoice_auto_cleanup", True)
-        self.auto_download = self.config.get("vibevoice_auto_download", True)
+        # Auto-download behavior: config override > env overrides > default True
+        def _parse_bool(val, default=True):
+            if isinstance(val, bool):
+                return val
+            if val is None:
+                return default
+            s = str(val).strip().lower()
+            if s in ("1", "true", "yes", "on"): return True
+            if s in ("0", "false", "no", "off"): return False
+            return default
+
+        cfg_auto = self.config.get("vibevoice_auto_download")
+        env_auto = os.getenv("VIBEVOICE_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
+        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
         
         # Advanced attention settings
         self.enable_sage = self.config.get("vibevoice_enable_sage", False)
@@ -281,6 +294,15 @@ class VibeVoiceAdapter(TTSAdapter):
             
             # Check for model files
             if not self._check_model_files():
+                if not self.auto_download:
+                    raise TTSModelLoadError(
+                        "VibeVoice models not found locally and auto-download is disabled",
+                        provider=self.provider_name,
+                        details={
+                            "model_path": self.model_path,
+                            "suggestion": "Enable vibevoice_auto_download or preinstall models into model_dir"
+                        }
+                    )
                 logger.info(f"{self.provider_name}: Downloading VibeVoice models...")
                 await self._download_models()
             
@@ -395,8 +417,10 @@ class VibeVoiceAdapter(TTSAdapter):
             self._status = ProviderStatus.AVAILABLE
             return True
             
-        except (TTSInsufficientMemoryError, TTSModelLoadError):
-            raise
+        except (TTSInsufficientMemoryError, TTSModelLoadError) as e:
+            logger.error(f"{self.provider_name}: Initialization failed due to model/memory error: {e}")
+            self._status = ProviderStatus.ERROR
+            return False
         except RuntimeError as e:
             if "CUDA" in str(e) or "GPU" in str(e):
                 raise TTSGPUError(

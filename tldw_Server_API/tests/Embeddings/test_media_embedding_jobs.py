@@ -17,10 +17,14 @@ class _FakeMediaDB:
         return self._items.get(media_id)
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
 def _client():
-    c = TestClient(app)
-    c.cookies.set("csrf_token", "test-csrf")
-    return c
+    with TestClient(app) as c:
+        c.cookies.set("csrf_token", "test-csrf")
+        yield c
 
 
 def test_media_embedding_job_lifecycle():
@@ -34,30 +38,30 @@ def test_media_embedding_job_lifecycle():
         # Override media DB dependency
         app.dependency_overrides[get_media_db_for_user] = lambda: _FakeMediaDB()
 
-        client = _client()
-        # Start job
-        api_key = get_settings().SINGLE_USER_API_KEY
-        r = client.post("/api/v1/media/123/embeddings", json={}, headers={"X-API-KEY": api_key})
-        assert r.status_code == 200
-        body = r.json()
-        assert body.get("status") == "accepted"
-        job_id = body.get("job_id")
-        assert job_id
+        with _client() as client:
+            # Start job
+            api_key = get_settings().SINGLE_USER_API_KEY
+            r = client.post("/api/v1/media/123/embeddings", json={}, headers={"X-API-KEY": api_key})
+            assert r.status_code == 200
+            body = r.json()
+            assert body.get("status") == "accepted"
+            job_id = body.get("job_id")
+            assert job_id
 
-        # Get job status (may be processing/completed/failed depending on environment)
-        r2 = client.get(f"/api/v1/media/embeddings/jobs/{job_id}", headers={"X-API-KEY": api_key})
-        assert r2.status_code == 200
-        data = r2.json()
-        assert data.get("id") == job_id
-        assert data.get("media_id") == 123
-        assert data.get("status") in ("processing", "completed", "failed")
+            # Get job status (may be processing/completed/failed depending on environment)
+            r2 = client.get(f"/api/v1/media/embeddings/jobs/{job_id}", headers={"X-API-KEY": api_key})
+            assert r2.status_code == 200
+            data = r2.json()
+            assert data.get("id") == job_id
+            assert data.get("media_id") == 123
+            assert data.get("status") in ("processing", "completed", "failed")
 
-        # List jobs
-        r3 = client.get("/api/v1/media/embeddings/jobs", headers={"X-API-KEY": api_key})
-        assert r3.status_code == 200
-        j = r3.json()
-        assert isinstance(j.get("data"), list)
-        assert any(row.get("id") == job_id for row in j["data"]) 
+            # List jobs
+            r3 = client.get("/api/v1/media/embeddings/jobs", headers={"X-API-KEY": api_key})
+            assert r3.status_code == 200
+            j = r3.json()
+            assert isinstance(j.get("data"), list)
+            assert any(row.get("id") == job_id for row in j["data"]) 
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_media_db_for_user, None)

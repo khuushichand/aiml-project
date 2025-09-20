@@ -344,6 +344,17 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
         
         app.dependency_overrides[get_request_user] = override_user
     
+    def __del__(self):
+        try:
+            if hasattr(self, 'client') and self.client is not None:
+                self.client.close()
+        except Exception:
+            pass
+        try:
+            app.dependency_overrides.clear()
+        except Exception:
+            pass
+    
     texts = Bundle("texts")
     
     @rule(target=texts, text=st.text(min_size=1, max_size=100))

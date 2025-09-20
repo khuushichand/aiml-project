@@ -24,6 +24,59 @@ ELEVENLABS_API_KEY=your-api-key-here
 
 ## Local Model Providers
 
+### Model Auto-Download Controls
+
+Local providers (Kokoro, Higgs, Dia, Chatterbox, VibeVoice) can auto-download models the first time you use them. You can control this behavior globally or per provider.
+
+Supported configuration sources (highest precedence last):
+- YAML: `tts_providers_config.yaml` (per-provider `auto_download` flag)
+- config.txt: `[TTS-Settings]` section (global and per-provider toggles)
+- Environment variables
+
+Defaults: auto-download is enabled unless overridden.
+
+config.txt example (recommended for self-hosted setups):
+
+```
+[TTS-Settings]
+# Global toggle for all local providers
+auto_download_local_models = false
+
+# Provider-specific overrides (optional)
+vibevoice_auto_download = false
+kokoro_auto_download = false
+dia_auto_download = false
+higgs_auto_download = false
+chatterbox_auto_download = false
+```
+
+YAML example (per provider):
+
+```yaml
+providers:
+  vibevoice:
+    enabled: true
+    auto_download: false
+    model_path: microsoft/VibeVoice-1.5B  # or a local path
+  higgs:
+    enabled: true
+    auto_download: true
+    model_path: bosonai/higgs-audio-v2-generation-3B-base
+```
+
+Environment variables (override at runtime):
+- Global: `TTS_AUTO_DOWNLOAD=0` (or `1`)
+- Per provider: `VIBEVOICE_AUTO_DOWNLOAD`, `KOKORO_AUTO_DOWNLOAD`, `DIA_AUTO_DOWNLOAD`, `HIGGS_AUTO_DOWNLOAD`, `CHATTERBOX_AUTO_DOWNLOAD` (accept `0/1`, `true/false`, `yes/no`, `on/off`).
+
+Behavior when disabled:
+- VibeVoice: initialization returns unavailable if models are missing (no download).
+- Dia: loads with `local_files_only` and fails fast if not cached.
+- Chatterbox: runs in HF offline mode and fails if models are not local.
+- Higgs: errors if a remote model path is specified while auto-download is disabled.
+- Kokoro: does not auto-download; requires local files regardless of this flag.
+
+Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during tests.
+
 ### Kokoro Setup
 
 Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX runtime.

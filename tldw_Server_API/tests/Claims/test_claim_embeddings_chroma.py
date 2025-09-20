@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from unittest.mock import MagicMock, patch
 
@@ -61,4 +62,16 @@ def test_optional_claim_embeddings_with_chroma(monkeypatch):
             app_settings["ENABLE_INGESTION_CLAIMS"] = orig_enable
         if orig_embed is not None:
             app_settings["CLAIMS_EMBED"] = orig_embed
-
+        # Cleanup temp resources
+        try:
+            db.close_connection()
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(base_dir, ignore_errors=True)
+        except Exception:
+            pass

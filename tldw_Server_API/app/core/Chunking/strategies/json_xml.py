@@ -100,9 +100,10 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         # Parse JSON
         try:
             json_data = json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON data: {e}")
-            raise InvalidInputError(f"Invalid JSON data: {e}") from e
+        except (json.JSONDecodeError, RecursionError) as e:
+            # RecursionError can occur with extremely deep nesting; surface as InvalidInputError
+            logger.error(f"Invalid or excessively nested JSON data: {e}")
+            raise InvalidInputError(f"Invalid or excessively nested JSON data: {e}") from e
         
         # Get options
         output_format = options.get('output_format', 'json')

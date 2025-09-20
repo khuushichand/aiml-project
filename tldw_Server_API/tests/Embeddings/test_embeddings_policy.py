@@ -6,10 +6,14 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
 def _client():
-    c = TestClient(app)
-    c.cookies.set("csrf_token", "test-csrf")
-    return c
+    with TestClient(app) as c:
+        c.cookies.set("csrf_token", "test-csrf")
+        yield c
 
 
 def test_embeddings_token_limit_rejected():
@@ -26,19 +30,19 @@ def test_embeddings_token_limit_rejected():
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-small"]
 
-        client = _client()
-        payload = {
-            "model": "text-embedding-3-small",
-            "input": "This sentence surely exceeds a single token."
-        }
-        # Include required API key for single-user auth
-        api_key = get_settings().SINGLE_USER_API_KEY
-        r = client.post("/api/v1/embeddings", json=payload, headers={"X-API-KEY": api_key})
-        assert r.status_code == 400
-        data = r.json()
-        assert data.get("error") == "input_too_long"
-        assert "details" in data
-        assert isinstance(data["details"], list) and len(data["details"]) >= 1
+        with _client() as client:
+            payload = {
+                "model": "text-embedding-3-small",
+                "input": "This sentence surely exceeds a single token."
+            }
+            # Include required API key for single-user auth
+            api_key = get_settings().SINGLE_USER_API_KEY
+            r = client.post("/api/v1/embeddings", json=payload, headers={"X-API-KEY": api_key})
+            assert r.status_code == 400
+            data = r.json()
+            assert data.get("error") == "input_too_long"
+            assert "details" in data
+            assert isinstance(data["details"], list) and len(data["details"]) >= 1
     finally:
         os.environ.pop("TESTING", None)
         # Restore original settings
@@ -65,15 +69,15 @@ def test_embeddings_allowlist_rejected():
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["huggingface"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["sentence-transformers/all-MiniLM-L6-v2"]
 
-        client = _client()
-        payload = {
-            "model": "text-embedding-3-small",
-            "input": "short"
-        }
-        api_key = get_settings().SINGLE_USER_API_KEY
-        r = client.post("/api/v1/embeddings", json=payload, headers={"X-API-KEY": api_key})
-        assert r.status_code == 403
-        assert "not allowed" in r.json().get("detail", "").lower()
+        with _client() as client:
+            payload = {
+                "model": "text-embedding-3-small",
+                "input": "short"
+            }
+            api_key = get_settings().SINGLE_USER_API_KEY
+            r = client.post("/api/v1/embeddings", json=payload, headers={"X-API-KEY": api_key})
+            assert r.status_code == 403
+            assert "not allowed" in r.json().get("detail", "").lower()
     finally:
         os.environ.pop("TESTING", None)
         if original_allowed_providers is None:

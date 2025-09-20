@@ -275,6 +275,20 @@ class Chunker:
         method = method or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
+        # Harden overlap to avoid non-progressing loops in strategies
+        try:
+            if isinstance(max_size, int) and isinstance(overlap, int):
+                if overlap < 0:
+                    logger.warning(f"Negative overlap ({overlap}) adjusted to 0")
+                    overlap = 0
+                if max_size <= 0:
+                    # Strategy will raise on invalid max_size; leave as-is here
+                    pass
+                elif overlap >= max_size:
+                    logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+                    overlap = max_size - 1
+        except Exception:
+            pass
         language = language or self.config.language
         
         # Check cache if enabled
@@ -340,6 +354,20 @@ class Chunker:
         method = method or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
+        # Harden overlap to avoid non-progressing loops in strategies
+        try:
+            if isinstance(max_size, int) and isinstance(overlap, int):
+                if overlap < 0:
+                    logger.warning(f"Negative overlap ({overlap}) adjusted to 0")
+                    overlap = 0
+                if max_size <= 0:
+                    # Strategy will raise on invalid max_size; leave as-is here
+                    pass
+                elif overlap >= max_size:
+                    logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+                    overlap = max_size - 1
+        except Exception:
+            pass
         language = language or self.config.language
         
         # Get strategy lazily (supports factory registration)

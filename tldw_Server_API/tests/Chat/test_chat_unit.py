@@ -305,9 +305,9 @@ class TestChatErrorHandling:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: isolated_db
         app.dependency_overrides[get_request_user] = mock_get_request_user
         
-        client = TestClient(app)
-        response = client.get("/api/v1/health")
-        csrf_token = response.cookies.get("csrf_token", "")
+        with TestClient(app) as client:
+            response = client.get("/api/v1/health")
+            csrf_token = response.cookies.get("csrf_token", "")
         
         request_data = {
             "model": "test-model",

@@ -252,6 +252,19 @@ class PromptsDatabase:
         # Initialize thread-local storage for connections
         self._local = threading.local()
 
+        # Compatibility: some tests attempt to access `db.conn.close()` during teardown.
+        # Provide a small proxy exposing a close() that delegates to close_connection().
+        class _ConnCloseProxy:
+            def __init__(self, outer):
+                self._outer = outer
+            def close(self):
+                try:
+                    self._outer.close_connection()
+                except Exception:
+                    pass
+        # Expose as attribute, not property, to satisfy hasattr checks in fixtures
+        self.conn = _ConnCloseProxy(self)
+
         # Flag to track successful initialization before logging completion
         initialization_successful = False
         try:
@@ -1266,32 +1279,12 @@ class PromptsDatabase:
                                 LIMIT ? OFFSET ?"""
                     cursor.execute(query, (per_page, offset))
                     results_data = [dict(row) for row in cursor.fetchall()]
-                    # Normalize author for search equality (trim whitespace/control at ends)
+                    # Normalize author formatting only (do not mutate other fields)
                     for it in results_data:
                         try:
                             it['author'] = (it.get('author') or '').strip()
                         except Exception:
                             pass
-                    # In TEST_MODE, broaden Unicode-insensitive search behavior by including
-                    # alternate forms of 'i'/'I' in returned text fields so that naive
-                    # case-insensitive matching (used in some property tests) treats
-                    # dotless/dotted forms equivalently across query variants.
-                    import os as _os
-                    if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                        for it in results_data:
-                            # Do NOT mutate 'author' to keep author: exact-equality filters working
-                            for fld in ("name", "details", "system_prompt", "user_prompt"):
-                                val = it.get(fld)
-                                if isinstance(val, str) and val:
-                                    alt1 = val.replace('i', 'ı').replace('I', 'İ')
-                                    alt2 = val.replace('ı', 'i').replace('İ', 'I')
-                                    alts = []
-                                    if alt1 != val:
-                                        alts.append(alt1)
-                                    if alt2 != val and alt2 != alt1:
-                                        alts.append(alt2)
-                                    if alts:
-                                        it[fld] = " ".join([val] + alts)
 
                 # Enrich each prompt with keywords for downstream filtering/searching that rely on list output
                 # (kept outside of the above block to ensure empty lists are handled consistently)
@@ -1303,23 +1296,7 @@ class PromptsDatabase:
                                 item['keywords'] = self.fetch_keywords_for_prompt(int(pid), include_deleted=False)
                     except Exception as e:
                         logging.debug(f"Could not enrich prompts with keywords: {e}")
-                # In TEST_MODE, add alternate keyword forms to improve naive case-insensitive matching
-                import os as _os
-                if results_data and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                    for item in results_data:
-                        kws = item.get('keywords')
-                        if isinstance(kws, list) and kws:
-                            extra = []
-                            for k in kws:
-                                if isinstance(k, str):
-                                    altk1 = k.replace('i', 'ı').replace('I', 'İ')
-                                    altk2 = k.replace('ı', 'i').replace('İ', 'I')
-                                    if altk1 != k:
-                                        extra.append(altk1)
-                                    if altk2 != k and altk2 != altk1:
-                                        extra.append(altk2)
-                            if extra:
-                                item['keywords'] = kws + extra
+                # Do not mutate keywords in list results; preserve exact values for export/roundtrip
 
             total_pages = ceil(total_items / per_page) if total_items > 0 else 0
             return results_data, total_pages, page, total_items
@@ -1410,8 +1387,16 @@ class PromptsDatabase:
             conditions.append("p.deleted = 0")
 
         # Handle field-prefixed query patterns
-        if isinstance(search_query, str) and search_query.startswith("author:"):
-            author_value = search_query.split(":", 1)[1]
+        # Case-insensitive prefix handling for field-specific filters
+        if isinstance(search_query, str) and ":" in search_query:
+            _sq = search_query.lstrip()
+            _pfx, _rest = _sq.split(":", 1)
+            _pfx_norm = _pfx.strip().lower()
+        else:
+            _pfx_norm, _rest = None, None
+
+        if _pfx_norm == "author":
+            author_value = _rest
             if author_value is None:
                 author_value = ""
             author_value = author_value.strip()
@@ -1439,8 +1424,8 @@ class PromptsDatabase:
                 logging.error(f"DB error during author filter search: {e}", exc_info=True)
                 return [], 0
 
-        if isinstance(search_query, str) and search_query.startswith("keyword:"):
-            kw_value_raw = search_query.split(":", 1)[1] or ""
+        if _pfx_norm == "keyword":
+            kw_value_raw = (_rest or "")
             kw_value = self._normalize_keyword(kw_value_raw)
             try:
                 # Match active keywords (case-insensitive exact match via NOCASE collation)
@@ -1544,7 +1529,7 @@ class PromptsDatabase:
                 params.extend(list(matching_prompt_ids))
 
         # If FTS was used but resulted in no matches, prevent unfiltered result set before fallback.
-        if search_query and search_fields and used_fts and not matching_prompt_ids and "author:" not in str(search_query) and "keyword:" not in str(search_query):
+        if search_query and search_fields and used_fts and not matching_prompt_ids and ("author:" not in str(search_query).lower()) and ("keyword:" not in str(search_query).lower()):
             conditions.append("1 = 0")
 
         # --- Build and Execute Final Query ---

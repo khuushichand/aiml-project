@@ -125,6 +125,9 @@ class ChunkingOptions(BaseModel):
     context_token_budget: Optional[int] = Field(
         None, ge=1000, le=200000, description="Approximate token budget for 'auto' strategy (len(text)/4 heuristic)"
     )
+    # Hierarchical options (flattened into chunks for indexing)
+    hierarchical_chunking: Optional[bool] = Field(False, description="Enable hierarchical parsing and flattening to leaf chunks")
+    hierarchical_template: Optional[Dict[str, Any]] = Field(None, description="Custom boundary rules: {'boundaries': [{'kind','pattern','flags'}]}")
 
     @field_validator('chunk_method', mode='before')
     @classmethod
@@ -461,6 +464,9 @@ class IngestWebContentRequest(BaseModel):
     chunk_language: Optional[str] = None
     chunk_size: int = 500
     chunk_overlap: int = 200
+    # Hierarchical chunking (flattened) support
+    hierarchical_chunking: Optional[bool] = False
+    hierarchical_template: Optional[Dict[str, Any]] = None
     use_cookies: bool = False
     cookies: Optional[str] = None
     perform_confabulation_check_of_analysis: bool = False

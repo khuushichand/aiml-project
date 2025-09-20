@@ -10,9 +10,8 @@ async def test_audio_health_endpoint_smoke():
 
     app = FastAPI()
     app.include_router(router, prefix="")
-    client = TestClient(app)
-
-    resp = client.get("/health")
+    with TestClient(app) as client:
+        resp = client.get("/health")
     assert resp.status_code in (200, 500)
     if resp.status_code == 200:
         data = resp.json()
@@ -62,4 +61,3 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
         # Exhaust the generator to trigger code paths
         async for _ in gen.audio_stream:
             pass
-

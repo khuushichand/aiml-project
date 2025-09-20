@@ -34,6 +34,8 @@ class ProviderConfig(BaseModel):
     use_bf16: bool = False
     use_onnx: bool = False
     batch_size: int = 1
+    # Allow providers (esp. local ones) to declare auto-download behavior
+    auto_download: bool = True
     extra_params: Dict[str, Any] = Field(default_factory=dict)
     
     @validator('api_key', pre=True)
@@ -225,6 +227,35 @@ class TTSConfigManager:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}
                         config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
+
+                # Global switch: auto download local models
+                if 'auto_download_local_models' in tts_section:
+                    val = str(tts_section['auto_download_local_models']).strip().lower()
+                    auto_dl = val in ("1", "true", "yes", "on")
+                    if 'providers' not in config_dict:
+                        config_dict['providers'] = {}
+                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice']:
+                        config_dict['providers'].setdefault(provider, {})['auto_download'] = auto_dl
+
+                # Provider-specific auto-download toggles
+                def _bool_from_section(key: str) -> Optional[bool]:
+                    if key in tts_section:
+                        v = str(tts_section[key]).strip().lower()
+                        return v in ("1", "true", "yes", "on")
+                    return None
+
+                for prov, key in (
+                    ('vibevoice', 'vibevoice_auto_download'),
+                    ('kokoro', 'kokoro_auto_download'),
+                    ('dia', 'dia_auto_download'),
+                    ('higgs', 'higgs_auto_download'),
+                    ('chatterbox', 'chatterbox_auto_download'),
+                ):
+                    bv = _bool_from_section(key)
+                    if bv is not None:
+                        if 'providers' not in config_dict:
+                            config_dict['providers'] = {}
+                        config_dict['providers'].setdefault(prov, {})['auto_download'] = bv
             
             # Check for API keys in main section
             for key in config:

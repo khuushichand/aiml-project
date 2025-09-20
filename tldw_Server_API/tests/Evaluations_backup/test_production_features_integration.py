@@ -385,7 +385,21 @@ class TestWebhookManager:
             
             # Verify the request was made
             assert len(m.requests) > 0
-            request = m.requests[('POST', url)][0]
+            # aioresponses stores keys as (method, yarl.URL). Normalize match by string.
+            req_key = None
+            for k in m.requests.keys():
+                method, recorded_url = k
+                if method == 'POST' and str(recorded_url) == url:
+                    req_key = k
+                    break
+            # If direct match not found, fall back to first POST request
+            if req_key is None:
+                for k in m.requests.keys():
+                    if k[0] == 'POST':
+                        req_key = k
+                        break
+            assert req_key is not None
+            request = m.requests[req_key][0]
             
             # Check headers
             assert "X-Webhook-Signature" in request[1]["headers"]

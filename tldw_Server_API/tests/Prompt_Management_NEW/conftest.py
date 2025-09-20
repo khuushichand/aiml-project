@@ -326,6 +326,14 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                 for it in items:
                     if 'details' in it:
                         it['content'] = it.get('details')
+                    # Attach keywords so keyword: queries work correctly
+                    try:
+                        pid = int(it.get('id'))
+                        if hasattr(self._inner, 'fetch_keywords_for_prompt'):
+                            kws = self._inner.fetch_keywords_for_prompt(pid, include_deleted=False)
+                            it['keywords'] = list(kws)
+                    except Exception:
+                        pass
                 all_items.extend(items)
                 if current_page >= total_pages or not items:
                     break
@@ -377,24 +385,41 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
             return {"success": False}
 
         def search_prompts(self, query):
-            # Property tests rely on simple, deterministic behavior
+            # Use the PromptsDatabase normalization helpers for parity with DB behavior
             items = self.list_prompts()
             if not isinstance(query, str):
                 return []
-            if query.startswith('keyword:'):
-                kw = query.split(':', 1)[1].strip().casefold()
-                return [p for p in items if kw in [str(k).casefold() for k in p.get('keywords', [])]]
-            if query.startswith('author:'):
-                author = query.split(':', 1)[1].strip()
-                return [p for p in items if str(p.get('author')) == author]
-            q = query.casefold()
-            return [
-                p for p in items
-                if q in (
-                    f"{str(p.get('name',''))} {str(p.get('content',''))} {str(p.get('author',''))} "
-                    + " ".join([str(k) for k in p.get('keywords', [])])
-                ).casefold()
-            ]
+            q_in = query.lstrip()
+            if ':' in q_in:
+                pfx, rest = q_in.split(':', 1)
+                pfx = pfx.strip().lower()
+                if pfx == 'keyword':
+                    # Exact keyword match using DB's keyword normalization + case-insensitive compare
+                    kw_norm = self._inner._normalize_keyword(rest or '').casefold()
+                    def _norm_kws(p):
+                        try:
+                            return [self._inner._normalize_keyword(str(k)).casefold() for k in p.get('keywords', [])]
+                        except Exception:
+                            return []
+                    return [p for p in items if any(k == kw_norm for k in _norm_kws(p))]
+                if pfx == 'author':
+                    # Exact author match (trim both sides to mirror DB list normalization)
+                    author_q = (rest or '').strip()
+                    return [p for p in items if str(p.get('author') or '').strip() == author_q]
+            # General search: robust normalization via DB helper
+            q_norm = self._inner._normalize_text_for_search(q_in)
+            results = []
+            for p in items:
+                hay = ' '.join([
+                    str(p.get('name', '')),
+                    str(p.get('content', '')),
+                    str(p.get('author', '')),
+                    ' '.join([str(k) for k in p.get('keywords', [])])
+                ])
+                hay_norm = self._inner._normalize_text_for_search(hay)
+                if q_norm in hay_norm:
+                    results.append(p)
+            return results
 
         def get_prompt_versions(self, prompt_id):
             try:
@@ -797,9 +822,10 @@ def performance_metrics():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app."""
+    """Create a test client for the FastAPI app, ensuring cleanup."""
     from tldw_Server_API.app.main import app
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 @pytest.fixture
 def auth_headers():

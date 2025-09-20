@@ -82,6 +82,20 @@ class DiaAdapter(TTSAdapter):
         self.model_path = self.config.get("dia_model_path", "nari-labs/dia")
         self.device = self.config.get("dia_device", "cuda" if torch.cuda.is_available() else "cpu")
         
+        # Auto-download toggle: config override > env overrides > default True
+        def _parse_bool(val, default=True):
+            if isinstance(val, bool):
+                return val
+            if val is None:
+                return default
+            s = str(val).strip().lower()
+            if s in ("1", "true", "yes", "on"): return True
+            if s in ("0", "false", "no", "off"): return False
+            return default
+        cfg_auto = self.config.get("dia_auto_download")
+        env_auto = os.getenv("DIA_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
+        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
+        
         # Audio configuration
         self.sample_rate = self.config.get("dia_sample_rate", 24000)
         
@@ -122,7 +136,8 @@ class DiaAdapter(TTSAdapter):
             logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")
             self.processor = AutoProcessor.from_pretrained(
                 self.model_path,
-                trust_remote_code=True
+                trust_remote_code=True,
+                local_files_only=(not self.auto_download)
             )
             
             # Load model with appropriate dtype
@@ -137,6 +152,7 @@ class DiaAdapter(TTSAdapter):
             
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
+                local_files_only=(not self.auto_download),
                 **model_kwargs
             )
             

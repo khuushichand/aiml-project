@@ -27,7 +27,7 @@ if _test_config and 'openai_api' in _test_config:
         os.environ["OPENAI_API_KEY"] = _openai_key
 
 # Add dummy API keys for other providers used in tests
-os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key-for-testing"
+# Note: Do NOT set ANTHROPIC_API_KEY unless a real key is present, to allow skips
 os.environ["GROQ_API_KEY"] = "test-groq-key-for-testing"
 os.environ["MISTRAL_API_KEY"] = "test-mistral-key-for-testing"
 
@@ -276,9 +276,10 @@ def invalid_messages() -> List[Any]:
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app."""
+    """Create a test client for the FastAPI app with cleanup."""
     from tldw_Server_API.app.main import app
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 @pytest.fixture
 async def async_client(test_env_vars):

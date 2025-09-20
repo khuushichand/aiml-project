@@ -22,6 +22,19 @@ def _connect(user_id: str) -> sqlite3.Connection:
     return sqlite3.connect(get_db_path(user_id), check_same_thread=False)
 
 
+def _ensure_initialized(user_id: str) -> None:
+    """Ensure the batches table exists for the given user.
+
+    This guards against cases where the base directory changes during tests
+    after module import time, so the original init_db path no longer applies.
+    """
+    try:
+        init_db(user_id)
+    except Exception:
+        # Best effort; callers will raise if operations still fail
+        pass
+
+
 def init_db(user_id: str) -> None:
     with _connect(user_id) as conn:
         conn.execute(
@@ -46,6 +59,7 @@ def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: s
                  upserted: int = 0, error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
     ts = int(time.time())
     uid = str(user_id) if user_id is not None else '1'
+    _ensure_initialized(uid)
     with _connect(uid) as conn:
         conn.execute(
             """
@@ -63,6 +77,7 @@ def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: s
 
 def update_batch(batch_id: str, user_id: str, status: Optional[str] = None, upserted: Optional[int] = None,
                  error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
+    _ensure_initialized(str(user_id))
     fields = []
     values = []
     if status is not None:
@@ -91,6 +106,7 @@ def update_batch(batch_id: str, user_id: str, status: Optional[str] = None, upse
 
 
 def get_batch(batch_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    _ensure_initialized(str(user_id))
     with _connect(str(user_id)) as conn:
         cur = conn.execute(
             "SELECT id, store_id, user_id, status, upserted, error, meta_json, created_at, updated_at\n             FROM vector_store_batches WHERE id = ?",
@@ -113,6 +129,7 @@ def get_batch(batch_id: str, user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def list_batches(user_id: str, status: Optional[str] = None, limit: int = 50, offset: int = 0):
+    _ensure_initialized(str(user_id))
     query = "SELECT id, store_id, user_id, status, upserted, error, meta_json, created_at, updated_at FROM vector_store_batches"
     params = []
     if status:

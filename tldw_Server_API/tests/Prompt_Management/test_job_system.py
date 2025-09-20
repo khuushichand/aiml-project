@@ -295,16 +295,28 @@ class TestJobProcessor:
             expected_outputs={"result": "expected"}
         )
         
-        # Create evaluation
+        # Ensure a prompt exists to satisfy FK constraints and use its ID
         conn = job_processor.db.get_connection()
         cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO prompt_studio_prompts (
+                project_id, version_number, name, client_id
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (test_project["id"], 1, "Test Prompt", job_processor.db.client_id)
+        )
+        prompt_id = cursor.lastrowid
+        conn.commit()
+
+        # Create evaluation
         cursor.execute("""
             INSERT INTO prompt_studio_evaluations (
                 uuid, project_id, name, prompt_id, test_case_ids,
                 model_configs, status, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            "eval-uuid", test_project["id"], "Test Eval", 1,
+            "eval-uuid", test_project["id"], "Test Eval", prompt_id,
             json.dumps([test_case["id"]]),
             json.dumps([{"model": "gpt-3.5-turbo"}]),
             "pending", job_processor.db.client_id
@@ -314,7 +326,7 @@ class TestJobProcessor:
         
         # Process evaluation job
         payload = {
-            "prompt_id": 1,
+            "prompt_id": prompt_id,
             "test_case_ids": [test_case["id"]],
             "model_configs": [{"model": "gpt-3.5-turbo"}]
         }
@@ -332,16 +344,28 @@ class TestJobProcessor:
     @pytest.mark.asyncio
     async def test_process_optimization_job(self, job_processor, test_project):
         """Test processing an optimization job."""
-        # Create optimization
+        # Ensure a prompt exists to satisfy FK constraints
         conn = job_processor.db.get_connection()
         cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO prompt_studio_prompts (
+                project_id, version_number, name, client_id
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (test_project["id"], 1, "Initial Prompt", job_processor.db.client_id)
+        )
+        initial_prompt_id = cursor.lastrowid
+        conn.commit()
+
+        # Create optimization referencing the existing prompt
         cursor.execute("""
             INSERT INTO prompt_studio_optimizations (
                 uuid, project_id, name, initial_prompt_id,
                 optimizer_type, max_iterations, status, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            "opt-uuid", test_project["id"], "Test Opt", 1,
+            "opt-uuid", test_project["id"], "Test Opt", initial_prompt_id,
             "basic", 5, "pending", job_processor.db.client_id
         ))
         optimization_id = cursor.lastrowid
@@ -349,7 +373,7 @@ class TestJobProcessor:
         
         # Process optimization job
         payload = {
-            "initial_prompt_id": 1,
+            "initial_prompt_id": initial_prompt_id,
             "optimizer_type": "basic",
             "max_iterations": 5
         }

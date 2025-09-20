@@ -392,13 +392,44 @@ class ChatbookService:
         
         # Convert tuple result to dict for tests
         if isinstance(result, tuple):
+            success = result[0]
+            message = result[1] if len(result) > 1 else ""
+            payload = result[2] if len(result) > 2 else None
+            is_async = bool(kwargs.get('async_mode'))
+            file_path = None if is_async else payload
+            job_id = payload if is_async else None
+            content_summary: Dict[str, int] = {}
+            
+            # If we have a file path (sync export), read manifest to populate summary
+            if file_path:
+                try:
+                    from zipfile import ZipFile
+                    with ZipFile(file_path, 'r') as zf:
+                        if 'manifest.json' in zf.namelist():
+                            import json as _json
+                            manifest_data = _json.loads(zf.read('manifest.json'))
+                            # Pull totals if available
+                            totals = {
+                                'conversations': manifest_data.get('total_conversations', 0),
+                                'notes': manifest_data.get('total_notes', 0),
+                                'characters': manifest_data.get('total_characters', 0),
+                                'world_books': manifest_data.get('total_world_books', 0),
+                                'dictionaries': manifest_data.get('total_dictionaries', 0),
+                                'documents': manifest_data.get('total_documents', 0),
+                            }
+                            # Only include non-zero entries to keep it tidy
+                            content_summary = {k: v for k, v in totals.items() if isinstance(v, int) and v >= 0}
+                except Exception as _e:
+                    # Fallback to empty summary on any error
+                    logger.debug(f"Could not read manifest for content summary: {_e}")
+            
             return {
-                "success": result[0],
-                "message": result[1] if len(result) > 1 else "",
-                "file_path": result[2] if len(result) > 2 else None,
-                "job_id": result[2] if len(result) > 2 and kwargs.get('async_mode') else None,
-                "status": "pending" if kwargs.get('async_mode') else "completed",
-                "content_summary": result[3] if len(result) > 3 else {}
+                "success": success,
+                "message": message,
+                "file_path": file_path,
+                "job_id": job_id,
+                "status": "pending" if is_async else "completed",
+                "content_summary": content_summary,
             }
         return result
     
@@ -415,7 +446,7 @@ class ChatbookService:
         tags: List[str] = None,
         categories: List[str] = None,
         async_mode: bool = False
-    ) -> Tuple[bool, str, Optional[str], Dict[str, int]]:
+    ) -> Tuple[bool, str, Optional[str]]:
         """
         Create a chatbook from selected content.
         
@@ -433,7 +464,7 @@ class ChatbookService:
             async_mode: Run as background job
             
         Returns:
-            Tuple of (success, message, job_id or file_path, content_summary)
+            Tuple of (success, message, job_id or file_path)
         """
         if async_mode:
             # Create job and run asynchronously
@@ -455,7 +486,7 @@ class ChatbookService:
                 include_generated_content, tags, categories
             ))
             
-            return True, f"Export job started: {job_id}", job_id, {}
+            return True, f"Export job started: {job_id}", job_id
         else:
             # Run synchronously (wrapped in async)
             return await self._create_chatbook_sync_wrapper(
@@ -612,21 +643,11 @@ class ChatbookService:
             # No direct filename access for security
             download_url = None  # Will be generated from job_id
             
-            # Create content summary
-            content_summary = {
-                "conversations": manifest.total_conversations,
-                "notes": manifest.total_notes,
-                "characters": manifest.total_characters,
-                "world_books": manifest.total_world_books,
-                "dictionaries": manifest.total_dictionaries,
-                "documents": manifest.total_documents
-            }
-            
-            return True, f"Chatbook created successfully", str(output_path), content_summary
+            return True, f"Chatbook created successfully", str(output_path)
             
         except Exception as e:
             logger.error(f"Error creating chatbook: {e}")
-            return False, f"Error creating chatbook: {str(e)}", None, {}
+            return False, f"Error creating chatbook: {str(e)}", None
     
     async def _create_chatbook_job_async(
         self,

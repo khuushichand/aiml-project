@@ -210,12 +210,18 @@ class TestUnifiedPipeline:
             ])
             mock_retriever.return_value = mock_retriever_instance
             
-            with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.DualCitationGenerator') as mock_citation:
+            # Patch the actual generator used by the pipeline
+            with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.CitationGenerator') as mock_citation:
+                from types import SimpleNamespace
                 mock_citation_instance = MagicMock()
-                mock_citation_instance.generate_citations = AsyncMock(return_value={
-                    "inline_citations": "[1] Reference to document 1",
-                    "bibliography": ["[1] Document 1 - Author (2024)"]
-                })
+                # Pipeline expects attributes: academic_citations, chunk_citations, inline_markers, citation_map
+                dual_result = SimpleNamespace(
+                    academic_citations=["[1] Document 1 - Author (2024)"],
+                    chunk_citations=[],
+                    inline_markers={"[1]": "1"},
+                    citation_map={"1": ["1"]}
+                )
+                mock_citation_instance.generate_citations = AsyncMock(return_value=dual_result)
                 mock_citation.return_value = mock_citation_instance
                 
                 with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_generator:

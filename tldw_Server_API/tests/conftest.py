@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 
 
 # Establish writable temp/cache/log dirs inside the repo to satisfy sandboxed runs
@@ -27,3 +28,30 @@ os.environ.setdefault("TLDB_DISABLE_FILE_LOGS", "1")
 # Speed up embeddings auto-unload during tests to reduce idle timer waits
 # Default in code is 300s; use 15s for test runs
 os.environ.setdefault("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS", "15")
+
+# Disable auto-download of large models during tests to avoid network/hangs
+os.environ.setdefault("TTS_AUTO_DOWNLOAD", "0")
+
+# Increase per-process file descriptor limit to avoid EMFILE during large suites
+try:
+    import resource  # type: ignore
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    # Aim for at least 4096, without exceeding the hard limit (unless it's RLIM_INFINITY)
+    desired = 4096
+    if hard == resource.RLIM_INFINITY:
+        new_soft = max(soft, desired)
+    else:
+        new_soft = min(hard, max(soft, desired))
+    if new_soft > soft:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+except Exception:
+    # Not all platforms allow raising limits (e.g., Windows). Best-effort only.
+    pass
+
+# Ensure the temp/cache/log directories exist
+for _p in (TEST_TEMP, TEST_CACHE, TEST_LOGS):
+    try:
+        _p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass

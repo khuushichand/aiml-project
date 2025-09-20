@@ -214,14 +214,15 @@ class TestInputSanitization:
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
         strategy = JSONChunkingStrategy()
         
-        # Create deeply nested JSON
-        def create_nested_json(depth):
-            if depth == 0:
-                return {"value": "leaf"}
-            return {"nested": create_nested_json(depth - 1)}
+        # Create deeply nested JSON string iteratively to avoid Python recursion limits
+        def build_nested_json_string(depth: int) -> str:
+            s = '{"value":"leaf"}'
+            for _ in range(depth):
+                s = '{"nested":' + s + '}'
+            return s
         
-        # Very deep nesting could cause stack overflow
-        deep_json = json.dumps(create_nested_json(10000))
+        # Very deep nesting could cause stack overflow or be rejected by strategy
+        deep_json = build_nested_json_string(10000)
         
         # Should either handle gracefully or reject
         with pytest.raises((InvalidInputError, RecursionError, json.JSONDecodeError)):

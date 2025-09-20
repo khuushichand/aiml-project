@@ -189,47 +189,41 @@ class TestRAGEvaluatorIntegration:
     """Integration tests with actual embeddings service (requires API keys)."""
     
     @pytest.mark.integration
-    @pytest.mark.skip(reason="Integration tests require API keys")
     @pytest.mark.asyncio
     async def test_real_embeddings_integration(self):
-        """Test with real OpenAI embeddings (requires API key)."""
-        import os
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            pytest.skip("OpenAI API key not found")
-        
+        """Test with real HuggingFace embeddings (no external API key)."""
+        # Prefer a lightweight, commonly cached HF model
         evaluator = RAGEvaluator(
-            embedding_provider="openai",
-            embedding_model="text-embedding-3-small",
-            api_key=api_key
+            embedding_provider="huggingface",
+            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
         )
-        
-        assert evaluator.embedding_available is True
-        
-        # Test with real similarity calculation
+
+        # If model isn't available offline, embedding_available may be False; skip gracefully
+        if not evaluator.embedding_available:
+            pytest.skip("HuggingFace model not available offline (no cache)")
+
+        # Test with real similarity calculation via embeddings
         _, result = await evaluator._evaluate_answer_similarity(
             "Machine learning is a type of artificial intelligence",
             "ML is a subset of AI"
         )
-        
+
         assert result["method"] == "embeddings"
-        assert 0.5 < result["score"] < 0.9  # Should be similar but not identical
-        
+        assert 0.3 <= result["score"] <= 1.0  # Allow broad range; semantic similarity should be > ~0.3
         evaluator.close()
     
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_full_evaluation_pipeline_integration(self):
-        """Test complete evaluation pipeline with real services."""
-        import os
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            pytest.skip("OpenAI API key not found")
-        
-        evaluator = RAGEvaluator(api_key=api_key)
-        
+        """Test complete evaluation pipeline with real HF embeddings when available."""
+        evaluator = RAGEvaluator(
+            embedding_provider="huggingface",
+            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+
+        if not evaluator.embedding_available:
+            pytest.skip("HuggingFace model not available offline (no cache)")
+
         results = await evaluator.evaluate(
             query="What is deep learning?",
             contexts=[

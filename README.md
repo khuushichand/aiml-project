@@ -35,8 +35,43 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 # Start server
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs: http://127.0.0.1:8000/docs
+# Web UI:   http://127.0.0.1:8000/webui/
 # Your API key will be shown in console (single-user mode)
 ```
+
+## Auth Quickstart
+
+- Single-user mode:
+  - Use the API key printed at startup in the `X-API-KEY` header.
+  - Example: `curl -H "X-API-KEY: <your_key>" http://127.0.0.1:8000/api/v1/media/search`
+
+- Multi-user mode:
+  - Login with form-encoded credentials to get JWTs:
+    ```bash
+    curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "username=<user>&password=<pass>"
+    ```
+  - Use the access token: `Authorization: Bearer <token>`
+  - Get current user: `GET /api/v1/auth/me`
+
+More details: see `Docs/API-related/AuthNZ-API-Guide.md` and `tldw_Server_API/app/core/AuthNZ/API_INTEGRATION_GUIDE.md`.
+
+## Web UI
+
+- Navigate to `http://127.0.0.1:8000/webui/` for the integrated Web UI.
+- Use the tabs to explore API features, run requests, and view responses.
+
+### Chat Dictionaries UI
+- Location: Chat → Dictionaries
+- Capabilities:
+  - Create/activate/deactivate/delete dictionaries
+  - Add entries (pattern, replacement, type literal/regex, probability 0.0–1.0, enabled, case sensitivity, group, max replacements)
+  - Inline edit entries and toggle enabled state
+  - Filter entries by pattern and type
+  - Process sample text through a dictionary with optional token budget and group filter
+  - Import dictionaries from markdown content and export the current dictionary to markdown
+- API Reference: see `Docs/API-related/Chatbook_Features_API_Documentation.md` → Chat Dictionary API
 
 <details>
 <summary>What is this? - Click-here</summary>
@@ -208,6 +243,50 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 
+### HuggingFace Remote Code Allowlist (trust_remote_code)
+
+Some HuggingFace embedding models (e.g., the Stella v5 family) require executing repository code to load correctly. For security, the server enables `trust_remote_code=True` only for models matching a configurable allowlist.
+
+- Variable: `TRUSTED_HF_REMOTE_CODE_MODELS`
+- Type: Comma‑separated list of patterns (wildcards supported via fnmatch)
+- Default: `*stella*` (enables Stella models such as `NovaSearch/stella_en_400M_v5`)
+- Applied in: Embeddings v5 endpoint and the background embedding worker
+- Logging: When enabled for a model, logs
+  `HF trust_remote_code enabled for model '<model>' (matched '<pattern>')`
+
+Examples
+
+```bash
+# Enable only Stella models (default)
+export TRUSTED_HF_REMOTE_CODE_MODELS="*stella*"
+
+# Enable a specific repo
+export TRUSTED_HF_REMOTE_CODE_MODELS="NovaSearch/stella_en_400M_v5"
+
+# Multiple entries (comma-separated)
+export TRUSTED_HF_REMOTE_CODE_MODELS="NovaSearch/stella_en_400M_v5,thenlper/*-instructor*"
+
+# Docker Compose (environment: section)
+TRUSTED_HF_REMOTE_CODE_MODELS: "NovaSearch/stella_en_400M_v5,BAAI/*bge*"
+```
+
+Using config.txt
+
+You can also set this in `Config_Files/config.txt` under the `[Embeddings]` section:
+
+```
+[Embeddings]
+# ...other embedding settings...
+trusted_hf_remote_code_models = NovaSearch/stella_en_400M_v5, BAAI/*bge*
+```
+
+Environment variables take precedence over config.txt.
+
+Security Notes
+
+- Enabling `trust_remote_code` executes code from the model repository. Only allow models you trust.
+- The allowlist is case-insensitive and supports wildcards. Non‑matching models keep `trust_remote_code=False` by default.
+
 ### Docker Installation
 
 ```bash
@@ -367,6 +446,23 @@ Key settings in `.env`:
 
 ---
 
+## OCR Support
+
+- Overview: Optional OCR for scanned/low-text PDFs via a pluggable adapter. Default backend uses the system `tesseract` CLI.
+- Install Tesseract:
+  - macOS: `brew install tesseract`
+  - Debian/Ubuntu: `sudo apt-get install tesseract-ocr`
+  - Windows: Install Tesseract and ensure `tesseract.exe` is on PATH
+- API options (PDF endpoints):
+  - `enable_ocr`: boolean (default: false)
+  - `ocr_backend`: string (e.g., `tesseract` or `auto`)
+  - `ocr_lang`: string (e.g., `eng`)
+  - `ocr_dpi`: integer (72–600, default 300)
+  - `ocr_mode`: `always` or `fallback` (default `fallback`)
+  - `ocr_min_page_text_chars`: int threshold per page to trigger fallback (default 40)
+
+---
+
 ## API Documentation
 
 Full API documentation is available at `http://localhost:8000/docs` when the server is running.
@@ -390,6 +486,7 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 
 #### RAG (Retrieval-Augmented Generation)
 - `POST /api/v1/rag/search` - Unified search with all features accessible
+- `POST /api/v1/rag/search/stream` - Streamed answer with incremental claim overlay (NDJSON)
 - `POST /api/v1/rag/batch` - Batch processing for multiple queries
 - `GET /api/v1/rag/simple` - Simplified search interface
 - `GET /api/v1/rag/advanced` - Advanced search with common features
@@ -414,6 +511,7 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 - `POST /api/v1/chunking/chunk` - Chunk text content
 - `POST /api/v1/research/arxiv` - Search arXiv papers
 - `POST /api/v1/evaluations/geval` - Run G-Eval
+- `POST /api/v1/evaluations/propositions` - Proposition extraction evaluation (precision/recall/F1)
 - `GET /api/v1/mcp/status` - MCP server status
 
 ### Example Usage
@@ -440,6 +538,32 @@ curl -X POST "http://localhost:8000/api/v1/chat/completions" \
   }'
 ```
 
+Ephemeral by default: By default, new chats are not saved to the database. To persist a chat, set `save_to_db: true` in the request body:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "save_to_db": true
+  }'
+```
+
+Server-wide default: You can change the default persistence behavior without modifying clients.
+
+- Environment (highest precedence): `CHAT_SAVE_DEFAULT=true`
+- Config file (`tldw_Server_API/Config_Files/config.txt`):
+
+```
+[Chat-Module]
+# Save new chats by default (True/False)
+chat_save_default = False
+```
+
+If neither is set, the server falls back to `[Auto-Save] save_character_chats` for legacy configs. The WebUI exposes a “Save to DB” checkbox and defaults it based on server config.
+
 #### Search Media
 ```bash
 curl -X GET "http://localhost:8000/api/v1/media/search?query=machine+learning&limit=10"
@@ -459,6 +583,39 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "citation_style": "apa",
     "top_k": 10
   }'
+
+# Enable factual claims and summary
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -d '{
+    "query": "What is CRISPR?",
+    "enable_generation": true,
+    "enable_claims": true,
+    "claim_extractor": "auto",
+    "claim_verifier": "hybrid",
+    "claims_top_k": 5,
+    "claims_conf_threshold": 0.7,
+    "claims_max": 20
+  }'
+
+# Streaming with NDJSON (emits text deltas and claims_overlay events)
+curl -X POST "http://localhost:8000/api/v1/rag/search/stream" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -N \
+  -d '{
+    "query": "What is CRISPR?",
+    "enable_generation": true,
+    "enable_claims": true
+  }'
+## Events:
+# {"type":"delta","text":"..."}
+# {"type":"claims_overlay", ...}
+# {"type":"final_claims", ...}
+
+# Optional: Set a local NLI model for offline verification
+# export RAG_NLI_MODEL=/models/roberta-large-mnli
 
 # Simple search interface
 curl -X GET "http://localhost:8000/api/v1/rag/simple?q=machine%20learning&limit=5" \
@@ -575,7 +732,7 @@ Override config.txt with environment variables:
    ```bash
    python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate
    ```
-
+ 
 4. **API endpoints have changed**:
    - Gradio routes → FastAPI routes
    - See API documentation for new endpoints
@@ -606,6 +763,31 @@ python -m pytest tests/Media_Ingestion_Modification/ -v
 # With coverage
 python -m pytest --cov=tldw_Server_API --cov-report=html
 ```
+
+### Pytest Markers
+Use markers to target the right slice of the suite:
+
+- unit: Fast, isolated tests. May mock external services or internal adapters. Example: TTS/Chat adapter mock tests.
+- integration: Real flows with no mocking of internal components. Use real local fixtures (e.g., aiohttp webhook receiver, temp SQLite DBs).
+- property: Hypothesis-based property tests that generate data and verify invariants.
+- slow: Long-running tests; exclude by default in quick runs.
+- requires_llm / requires_embeddings: Tests that need API keys or network; skipped in CI without credentials.
+
+Examples
+```bash
+# Only unit tests
+python -m pytest -m "unit" -v
+
+# Only integration tests
+python -m pytest -m "integration" -v
+
+# Property tests for a specific area
+python -m pytest -m "property" tldw_Server_API/tests/Embeddings_NEW/property -v
+```
+
+Notes
+- Legacy RAG tests under `tldw_Server_API/tests/RAG` are deprecated and skipped by default. The unified pipeline lives under `tldw_Server_API/tests/RAG_NEW`.
+- Integration tests should not mock internal components; prefer local, real fixtures (e.g., a local HTTP webhook server) for deterministic behavior.
 </details>
 
 
@@ -735,8 +917,6 @@ None of these companies exist to provide AI services in 2024. They’re only doi
       * https://github.com/SYSTRAN/faster-whisper
 
 </details>
-
-
 
 
 ### Project Guidelines

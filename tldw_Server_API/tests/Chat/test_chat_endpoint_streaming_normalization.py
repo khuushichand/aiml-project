@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import pytest
+from typing import Any
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
@@ -27,14 +28,27 @@ def _make_test_db():
     return db, db_path
 
 
+from contextlib import contextmanager
+
+
+def _post_with_csrf(client: TestClient, url: str, **kwargs):
+    """Helper to POST with CSRF header from client state.
+
+    Avoids adding dynamic attributes to TestClient to keep type-checkers happy.
+    """
+    headers = kwargs.pop("headers", {}) or {}
+    csrf = getattr(client, "csrf_token", "")
+    return client.post(url, headers={"X-CSRF-Token": csrf, **headers}, **kwargs)
+
+
+@contextmanager
 def _make_test_client(db):
-    client = TestClient(app)
-    # CSRF token for POST
-    resp = client.get("/api/v1/health")
-    csrf = resp.cookies.get("csrf_token", "")
-    client.csrf_token = csrf
-    client.post_with_csrf = lambda url, **kwargs: client.post(url, headers={"X-CSRF-Token": csrf, **kwargs.pop("headers", {})}, **kwargs)
-    return client
+    with TestClient(app) as client:
+        # CSRF token for POST
+        resp = client.get("/api/v1/health")
+        csrf = resp.cookies.get("csrf_token", "")
+        client.csrf_token = csrf
+        yield client
 
 
 def _auth_headers(client):
@@ -48,50 +62,52 @@ def _auth_headers(client):
 def test_endpoint_streaming_normalizes_openai_sse_frames():
     db, db_path = _make_test_db()
     try:
-        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        # Cast to Any to avoid static analyzer complaints about dependency_overrides typing
+        _app: Any = app
+        _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
 
-        client = _make_test_client(db)
+        with _make_test_client(db) as client:
 
-        # Upstream SSE frames (OpenAI-like)
-        chunk1 = {"choices": [{"delta": {"content": "Hello"}}]}
-        chunk2 = {"choices": [{"delta": {"content": " world"}}]}
+            # Upstream SSE frames (OpenAI-like)
+            chunk1 = {"choices": [{"delta": {"content": "Hello"}}]}
+            chunk2 = {"choices": [{"delta": {"content": " world"}}]}
 
-        def upstream_stream():
-            yield f"data: {json.dumps(chunk1)}\n\n"
-            yield f"data: {json.dumps(chunk2)}\n\n"
-            yield "data: [DONE]\n\n"
+            def upstream_stream():
+                yield f"data: {json.dumps(chunk1)}\n\n"
+                yield f"data: {json.dumps(chunk2)}\n\n"
+                yield "data: [DONE]\n\n"
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False), \
-             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
-            body = {
-                "api_provider": "openai",
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": True
-            }
-            r = client.post_with_csrf("/api/v1/chat/completions", json=body, headers=_auth_headers(client))
-            assert r.status_code == 200
-            assert 'text/event-stream' in r.headers.get('content-type', '').lower()
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False), \
+                 patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                assert 'text/event-stream' in r.headers.get('content-type', '').lower()
 
-            # TestClient buffers entire SSE; parse normalized lines
-            content = r.text.splitlines()
-            normalized_chunks = []
-            for line in content:
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    obj = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict) and obj.get("choices"):
-                    delta = obj["choices"][0].get("delta", {})
-                    text = delta.get("content")
-                    if text:
-                        normalized_chunks.append(text)
-            assert normalized_chunks == ["Hello", " world"]
+                # TestClient buffers entire SSE; parse normalized lines
+                content = r.text.splitlines()
+                normalized_chunks = []
+                for line in content:
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("choices"):
+                        delta = obj["choices"][0].get("delta", {})
+                        text = delta.get("content")
+                        if text:
+                            normalized_chunks.append(text)
+                assert normalized_chunks == ["Hello", " world"]
 
     finally:
         # cleanup db files
@@ -101,60 +117,65 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
             pass
-        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+        _app = app  # type: ignore[assignment]
+        try:
+            getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass
 
 
 @pytest.mark.unit
 def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
     db, db_path = _make_test_db()
     try:
-        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        _app: Any = app
+        _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
 
-        client = _make_test_client(db)
+        with _make_test_client(db) as client:
 
-        part_a = {"choices": [{"delta": {"content": "Part"}}]}
-        part_b = {"choices": [{"delta": {"content": " A"}}]}
-        multiline = (
-            "event: chunk\n"
-            f"data: {json.dumps(part_a)}\n"
-            f"data: {json.dumps(part_b)}\n"
-            "data: [DONE]\n\n"
-        )
+            part_a = {"choices": [{"delta": {"content": "Part"}}]}
+            part_b = {"choices": [{"delta": {"content": " A"}}]}
+            multiline = (
+                "event: chunk\n"
+                f"data: {json.dumps(part_a)}\n"
+                f"data: {json.dumps(part_b)}\n"
+                "data: [DONE]\n\n"
+            )
 
-        def upstream_stream():
-            # A single upstream chunk containing multiple frames
-            yield multiline
+            def upstream_stream():
+                # A single upstream chunk containing multiple frames
+                yield multiline
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False), \
-             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
-            body = {
-                "api_provider": "openai",
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": True
-            }
-            r = client.post_with_csrf("/api/v1/chat/completions", json=body, headers=_auth_headers(client))
-            assert r.status_code == 200
-            assert 'text/event-stream' in r.headers.get('content-type', '').lower()
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False), \
+                 patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                assert 'text/event-stream' in r.headers.get('content-type', '').lower()
 
-            content = r.text.splitlines()
-            normalized_chunks = []
-            for line in content:
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    obj = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict) and obj.get("choices"):
-                    delta = obj["choices"][0].get("delta", {})
-                    text = delta.get("content")
-                    if text:
-                        normalized_chunks.append(text)
-            assert normalized_chunks == ["Part", " A"]
+                content = r.text.splitlines()
+                normalized_chunks = []
+                for line in content:
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("choices"):
+                        delta = obj["choices"][0].get("delta", {})
+                        text = delta.get("content")
+                        if text:
+                            normalized_chunks.append(text)
+                assert normalized_chunks == ["Part", " A"]
 
     finally:
         try:
@@ -163,4 +184,8 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
             pass
-        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+        _app = app  # type: ignore[assignment]
+        try:
+            getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass

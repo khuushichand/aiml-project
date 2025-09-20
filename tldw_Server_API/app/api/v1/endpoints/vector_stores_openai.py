@@ -1147,6 +1147,11 @@ async def create_store_from_media(
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
+    # Validate chunk method early to return 400/422 on invalid value before DB lookups
+    valid_methods = {m.value for m in ChunkingMethod}
+    if payload.chunk_method and payload.chunk_method not in valid_methods:
+        raise HTTPException(status_code=400, detail=f"Invalid chunk_method: {payload.chunk_method}")
+
     # Resolve items
     items: List[Dict[str, Any]] = []
     if payload.media_ids:
@@ -1169,6 +1174,9 @@ async def create_store_from_media(
         if payload.use_existing_embeddings and payload.media_ids:
             items = [{'id': mid} for mid in payload.media_ids]
         else:
+            # If chunk method is invalid, prefer 400/422 over 404 to match tests (redundant safety)
+            if payload.chunk_method and payload.chunk_method not in valid_methods:
+                raise HTTPException(status_code=400, detail=f"Invalid chunk_method: {payload.chunk_method}")
             raise HTTPException(404, detail="No media found for the provided selection")
 
     # Determine dimension: use configured model if not given
@@ -1374,10 +1382,11 @@ async def get_vector_store(
             md['name'] = row['name']
     except Exception:
         pass
-    return VectorStoreObject(
-        id=md.get("openai_id", store_id),
-        name=md.get("name", store_id),
-        created_at=md.get("created_at", _now_ts()),
-        metadata=md,
-        dimensions=stats.get("dimension", 1536)
-    )
+    return {
+        "id": md.get("openai_id", store_id),
+        "object": "vector_store",
+        "name": md.get("name", store_id),
+        "created_at": md.get("created_at", _now_ts()),
+        "metadata": md,
+        "dimensions": stats.get("dimension", 1536)
+    }

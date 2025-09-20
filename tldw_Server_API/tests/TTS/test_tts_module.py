@@ -190,13 +190,14 @@ class TestTTSEndpoint:
     
     @pytest.fixture
     def client(self):
-        """Create test client"""
+        """Create test client and ensure cleanup"""
         from fastapi import FastAPI
         from tldw_Server_API.app.api.v1.endpoints.audio import router
-        
+
         app = FastAPI()
         app.include_router(router)
-        return TestClient(app)
+        with TestClient(app) as c:
+            yield c
     
     async def test_endpoint_without_auth(self, client):
         """Test endpoint rejects requests without auth"""

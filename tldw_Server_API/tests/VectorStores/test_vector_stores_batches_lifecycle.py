@@ -22,7 +22,8 @@ def client():
     async def override_user():
         return User(id=1, username='tester', email='e', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_batch_lifecycle_success(client):

@@ -896,33 +896,33 @@ class CharacterCardsRetriever(BaseRetriever):
 
 class MultiDatabaseRetriever:
     """Orchestrates retrieval across multiple databases."""
-    
+
     def __init__(self, db_paths: Dict[str, str], user_id: str = "0"):
         """
         Initialize multi-database retriever.
-        
+
         Args:
             db_paths: Mapping of database names to paths
             user_id: User ID for vector store access
         """
-        self.retrievers = {}
-        
+        self.retrievers: Dict[DataSource, BaseRetriever] = {}
+
         # Initialize retrievers for available databases
         if "media_db" in db_paths:
             self.retrievers[DataSource.MEDIA_DB] = MediaDBRetriever(
                 db_paths["media_db"], user_id=user_id
             )
-        
+
         if "notes_db" in db_paths:
             self.retrievers[DataSource.NOTES] = NotesDBRetriever(
                 db_paths["notes_db"]
             )
-        
+
         if "prompts_db" in db_paths:
             self.retrievers[DataSource.PROMPTS] = PromptsDBRetriever(
                 db_paths["prompts_db"]
             )
-        
+
         if "character_cards_db" in db_paths:
             self.retrievers[DataSource.CHARACTER_CARDS] = CharacterCardsRetriever(
                 db_paths["character_cards_db"]
@@ -933,6 +933,208 @@ class MultiDatabaseRetriever:
                 self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
             except Exception as e:
                 logger.debug(f"ClaimsRetriever init skipped: {e}")
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        sources: Optional[List[DataSource]] = None,
+        config: Optional[RetrievalConfig] = None,
+        index_namespace: Optional[str] = None,
+    ) -> List[Document]:
+        """
+        Retrieve documents from one or more configured data sources.
+
+        Args:
+            query: The search query
+            sources: Optional explicit list of `DataSource` to query. Defaults to all configured.
+            config: Optional `RetrievalConfig` to apply to each retriever
+            index_namespace: Optional namespace for vector stores
+
+        Returns:
+            A list of `Document` objects sorted by score (desc), capped by config.max_results if provided.
+        """
+        # Normalize the sources list
+        ds_list: List[DataSource]
+        if sources is None:
+            ds_list = list(self.retrievers.keys())
+        else:
+            # Allow callers to pass strings; normalize to DataSource
+            ds_list = []
+            for s in sources:
+                if isinstance(s, DataSource):
+                    ds_list.append(s)
+                else:
+                    try:
+                        ds_list.append(DataSource(str(s)))
+                    except Exception:
+                        continue
+
+        documents: List[Document] = []
+        tasks: List[Any] = []
+
+        # Prepare async tasks for each source
+        for src in ds_list:
+            retr = self.retrievers.get(src)
+            if retr is None:
+                continue
+            # Apply per-call config if provided
+            if config is not None:
+                retr.config = config
+
+            # Prefer hybrid/vector when requested and available for Media DB
+            if (
+                isinstance(retr, MediaDBRetriever)
+                and config is not None
+                and getattr(config, "use_vector", False)
+                and getattr(config, "use_fts", False)
+                and hasattr(retr, "retrieve_hybrid")
+            ):
+                tasks.append(retr.retrieve_hybrid(query=query, index_namespace=index_namespace))
+            elif (
+                isinstance(retr, MediaDBRetriever)
+                and config is not None
+                and getattr(config, "use_vector", False)
+                and hasattr(retr, "_retrieve_vector")
+            ):
+                tasks.append(retr._retrieve_vector(query, index_namespace=index_namespace))
+            elif (
+                isinstance(retr, MediaDBRetriever)
+                and config is not None
+                and getattr(config, "use_fts", True)
+                and hasattr(retr, "_retrieve_fts")
+            ):
+                tasks.append(retr._retrieve_fts(query))
+            else:
+                tasks.append(retr.retrieve(query))
+
+        # Execute all retrievals concurrently
+        if tasks:
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.error(f"Multi-database retrieval failed: {e}")
+                results = []
+        else:
+            results = []
+
+        # Flatten and filter out failures
+        for res in results:
+            if isinstance(res, Exception):
+                # Skip failed sources (partial success expected)
+                continue
+            if isinstance(res, list):
+                documents.extend(res)
+
+        # Sort globally by score desc and cap by max_results
+        documents.sort(key=lambda d: getattr(d, "score", 0.0), reverse=True)
+        if config is not None and getattr(config, "max_results", None):
+            documents = documents[: int(config.max_results)]
+
+        return documents
+
+    async def retrieve_with_fusion(
+        self,
+        query: str,
+        *,
+        sources: Optional[List[DataSource]] = None,
+        fusion_method: str = "rrf",
+    ) -> List[Document]:
+        """Retrieve from multiple sources and fuse results."""
+        # Collect per-source results
+        source_results: Dict[DataSource, List[Document]] = {}
+        ds_list = list(self.retrievers.keys()) if sources is None else sources
+        for src in ds_list:
+            retr = self.retrievers.get(src)
+            if retr is None:
+                continue
+            try:
+                docs = await retr.retrieve(query)
+            except Exception:
+                docs = []
+            source_results[src] = docs
+
+        # Apply fusion
+        if fusion_method == "rrf":
+            return self._reciprocal_rank_fusion(source_results)
+        if fusion_method == "weighted":
+            return self._weighted_fusion(source_results)
+        if fusion_method == "max":
+            return self._max_fusion(source_results)
+
+        # Default: simple concatenation
+        all_docs: List[Document] = []
+        for docs in source_results.values():
+            all_docs.extend(docs)
+        return sorted(all_docs, key=lambda x: getattr(x, "score", 0.0), reverse=True)
+
+    def _reciprocal_rank_fusion(
+        self,
+        source_results: Dict[DataSource, List[Document]],
+        k: int = 60,
+    ) -> List[Document]:
+        doc_scores: Dict[str, Dict[str, Any]] = {}
+        for _source, docs in source_results.items():
+            for rank, doc in enumerate(docs, 1):
+                if doc.id not in doc_scores:
+                    doc_scores[doc.id] = {"doc": doc, "score": 0.0}
+                doc_scores[doc.id]["score"] += 1.0 / (k + rank)
+
+        fused_docs: List[Document] = [
+            Document(
+                id=item["doc"].id,
+                content=item["doc"].content,
+                source=item["doc"].source,
+                metadata=item["doc"].metadata,
+                score=float(item["score"]),
+            )
+            for item in sorted(doc_scores.values(), key=lambda x: x["score"], reverse=True)
+        ]
+        return fused_docs
+
+    def _weighted_fusion(
+        self,
+        source_results: Dict[DataSource, List[Document]],
+        weights: Optional[Dict[DataSource, float]] = None,
+    ) -> List[Document]:
+        weights = weights or {
+            DataSource.MEDIA_DB: 1.0,
+            DataSource.NOTES: 0.8,
+            DataSource.PROMPTS: 0.6,
+            DataSource.CHARACTER_CARDS: 0.5,
+        }
+        doc_scores: Dict[str, Dict[str, Any]] = {}
+        for source, docs in source_results.items():
+            w = weights.get(source, 1.0)
+            for doc in docs:
+                if doc.id not in doc_scores:
+                    doc_scores[doc.id] = {"doc": doc, "score": 0.0}
+                doc_scores[doc.id]["score"] += float(getattr(doc, "score", 0.0)) * w
+        fused_docs: List[Document] = [
+            Document(
+                id=item["doc"].id,
+                content=item["doc"].content,
+                source=item["doc"].source,
+                metadata=item["doc"].metadata,
+                score=float(item["score"]),
+            )
+            for item in sorted(doc_scores.values(), key=lambda x: x["score"], reverse=True)
+        ]
+        return fused_docs
+
+    def _max_fusion(
+        self,
+        source_results: Dict[DataSource, List[Document]],
+    ) -> List[Document]:
+        doc_map: Dict[str, Document] = {}
+        for _source, docs in source_results.items():
+            for doc in docs:
+                existing = doc_map.get(doc.id)
+                if existing is None or float(getattr(doc, "score", 0.0)) > float(
+                    getattr(existing, "score", 0.0)
+                ):
+                    doc_map[doc.id] = doc
+        return sorted(list(doc_map.values()), key=lambda d: getattr(d, "score", 0.0), reverse=True)
 
 class ClaimsRetriever(BaseRetriever):
     """Retriever for Claims table (ingestion-time factual statements)."""

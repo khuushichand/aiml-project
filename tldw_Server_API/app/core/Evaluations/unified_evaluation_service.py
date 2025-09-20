@@ -529,6 +529,43 @@ class UnifiedEvaluationService:
                 }
             )
             
+            # Emit webhook for completion (await in TEST_MODE for deterministic tests)
+            try:
+                import os as _os, asyncio as _asyncio
+                # Normalize single-user id to fixed numeric id when appropriate
+                effective_user_id = user_id
+                if user_id == "single_user":
+                    try:
+                        from tldw_Server_API.app.core.config import settings as _app_settings
+                        effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                    except Exception:
+                        effective_user_id = "1"
+                if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    await webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "geval",
+                            "average_score": result.get("average_score", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    )
+                else:
+                    _asyncio.create_task(webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "geval",
+                            "average_score": result.get("average_score", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    ))
+            except Exception:
+                # Never fail the evaluation due to webhook issues
+                pass
+
             return {
                 "evaluation_id": eval_id,
                 "results": result,
@@ -595,6 +632,41 @@ class UnifiedEvaluationService:
                 }
             )
             
+            # Emit webhook for completion (await in TEST_MODE for deterministic tests)
+            try:
+                import os as _os, asyncio as _asyncio
+                effective_user_id = user_id
+                if user_id == "single_user":
+                    try:
+                        from tldw_Server_API.app.core.config import settings as _app_settings
+                        effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                    except Exception:
+                        effective_user_id = "1"
+                if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    await webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "rag",
+                            "overall_score": results.get("overall_score", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    )
+                else:
+                    _asyncio.create_task(webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "rag",
+                            "overall_score": results.get("overall_score", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    ))
+            except Exception:
+                pass
+
             return {
                 "evaluation_id": eval_id,
                 "results": results,
@@ -658,6 +730,41 @@ class UnifiedEvaluationService:
                 }
             )
             
+            # Emit webhook for completion (await in TEST_MODE for deterministic tests)
+            try:
+                import os as _os, asyncio as _asyncio
+                effective_user_id = user_id
+                if user_id == "single_user":
+                    try:
+                        from tldw_Server_API.app.core.config import settings as _app_settings
+                        effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                    except Exception:
+                        effective_user_id = "1"
+                if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    await webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "response_quality",
+                            "overall_quality": results.get("overall_quality", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    )
+                else:
+                    _asyncio.create_task(webhook_manager.send_webhook(
+                        user_id=effective_user_id,
+                        event=WebhookEvent.EVALUATION_COMPLETED,
+                        evaluation_id=eval_id,
+                        data={
+                            "evaluation_type": "response_quality",
+                            "overall_quality": results.get("overall_quality", 0.0),
+                            "processing_time": evaluation_time
+                        }
+                    ))
+            except Exception:
+                pass
+
             return {
                 "evaluation_id": eval_id,
                 "results": results,

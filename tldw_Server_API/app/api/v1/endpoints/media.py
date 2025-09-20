@@ -1702,6 +1702,18 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
         'context_strategy': form_data.context_strategy,
         'context_token_budget': form_data.context_token_budget,
     }
+    # Optional hierarchical support (simple flag at API level)
+    try:
+        hier_flag = getattr(form_data, 'hierarchical_chunking', None)
+        hier_template = getattr(form_data, 'hierarchical_template', None)
+        if hier_flag is True or (hier_template and isinstance(hier_template, dict)):
+            chunk_options['hierarchical'] = True
+            if isinstance(hier_template, dict):
+                chunk_options['hierarchical_template'] = hier_template
+            # Prefer sentences when hierarchical is on for better structure, if not specified by client
+            chunk_options.setdefault('method', 'sentences')
+    except Exception:
+        pass
     # Inject proposition defaults from config when applicable
     if final_chunk_method == 'propositions':
         try:
@@ -2530,6 +2542,11 @@ async def add_media(
     and **persists** the results and metadata to the database.
 
     Use this endpoint for adding new content to the system permanently.
+
+    Hierarchical chunking (optional):
+    - Set `hierarchical_chunking=true` to enable structure-aware parsing and flattened chunks.
+    - Optionally pass `hierarchical_template` with custom boundary rules:
+      `{"boundaries": [{"kind":"my_section","pattern":"^##\\s+Custom","flags":"im"}]}`
     """
     # --- 1. Validation (Now handled by get_add_media_form dependency) ---
     # Basic check for presence of inputs still useful here

@@ -18,7 +18,8 @@ def client_with_user():
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
-    yield TestClient(app)
+    with TestClient(app) as client:
+        yield client
     app.dependency_overrides.clear()
 
 

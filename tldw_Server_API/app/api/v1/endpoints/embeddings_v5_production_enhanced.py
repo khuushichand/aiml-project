@@ -509,6 +509,12 @@ def cleanup_on_exit():
     try:
         loop = asyncio.get_event_loop()
         if not loop.is_closed():
+            # Stop TTL cache cleanup task if running
+            try:
+                loop.run_until_complete(embedding_cache.stop_cleanup_task())
+            except Exception:
+                pass
+            # Close provider connection pools
             loop.run_until_complete(connection_manager.close_all())
     except Exception as e:
         logger.error(f"Error during exit cleanup: {e}")

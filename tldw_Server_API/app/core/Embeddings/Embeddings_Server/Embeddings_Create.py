@@ -1151,14 +1151,15 @@ def get_embedding_config() -> Dict[str, Any]:
     # Build the configuration in the expected format
     config = {
         "embedding_config": {
-            "default_model_id": embedding_settings.get('embedding_model', 'text-embedding-3-small'),
+            # Default to a lightweight, widely available HF model
+            "default_model_id": embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2'),
             "models": {}
         }
     }
     
     # Add model configurations based on provider
-    provider = embedding_settings.get('embedding_provider', 'openai')
-    model = embedding_settings.get('embedding_model', 'text-embedding-3-small')
+    provider = embedding_settings.get('embedding_provider', 'huggingface')
+    model = embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2')
     
     # Add default configurations for common models - create proper instances
     if provider == 'openai':

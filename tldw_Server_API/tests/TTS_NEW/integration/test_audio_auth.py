@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_speech_requires_auth_401():
-    client = TestClient(app)
+    with TestClient(app) as client:
     payload = {
         "model": "kokoro",
         "input": "Hello",
@@ -28,7 +28,7 @@ def test_speech_requires_auth_401():
 
 
 def test_speech_ok_with_override(monkeypatch):
-    client = TestClient(app)
+    with TestClient(app) as client:
 
     # Override user dependency to simulate authenticated user
     async def _override_user():

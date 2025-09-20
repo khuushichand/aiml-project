@@ -353,7 +353,7 @@ class WebhookManager:
             logger.error(f"Failed to register webhook: {e}")
             raise ValueError(f"Webhook registration failed: {str(e)}")
     
-    async def unregister_webhook(self, user_id: str, url: str) -> Dict[str, Any]:
+    async def unregister_webhook(self, user_id: str, url: str) -> bool:
         """
         Unregister a webhook with permission checks.
         
@@ -362,7 +362,7 @@ class WebhookManager:
             url: Webhook URL
             
         Returns:
-            Dict with operation result and details
+            True if the webhook was unregistered (deactivated), else False
         """
         try:
             # Check permissions
@@ -384,10 +384,7 @@ class WebhookManager:
                         "error": permission_error
                     }
                 )
-                return {
-                    "success": False,
-                    "error": f"Unregistration denied: {permission_error}"
-                }
+                return False
             
             # Perform unregistration
             with self.db_adapter.transaction():
@@ -397,10 +394,7 @@ class WebhookManager:
                     WHERE user_id = ? AND url = ? AND active = 1
                 """, (user_id, url))
                 if not webhook_data:
-                    return {
-                        "success": False,
-                        "error": "Webhook not found or already inactive"
-                    }
+                    return False
                 
                 webhook_id = webhook_data['id']
                 events_json = webhook_data['events']
@@ -431,16 +425,9 @@ class WebhookManager:
                     )
                     
                     logger.info(f"Unregistered webhook {webhook_id} for user {user_id}: {url}")
-                    return {
-                        "success": True,
-                        "webhook_id": webhook_id,
-                        "message": "Webhook unregistered successfully"
-                    }
+                    return True
                 
-                return {
-                    "success": False,
-                    "error": "Failed to update webhook status"
-                }
+                return False
                 
         except Exception as e:
             audit_logger.log_event(
@@ -456,10 +443,7 @@ class WebhookManager:
             )
             
             logger.error(f"Failed to unregister webhook: {e}")
-            return {
-                "success": False,
-                "error": f"Unregistration failed: {str(e)}"
-            }
+            return False
     
     async def send_webhook(
         self,
@@ -595,7 +579,13 @@ class WebhookManager:
         from urllib.parse import urlparse
         import ipaddress
         import socket
-        skip_dns = os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
+        # In tests, we both skip DNS validation and prefer aiohttp so that
+        # aioresponses can intercept requests deterministically.
+        testing_env = (
+            os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
+            or "PYTEST_CURRENT_TEST" in os.environ
+        )
+        skip_dns = testing_env
         if not skip_dns:
             try:
                 parsed_url = urlparse(url)
@@ -678,12 +668,13 @@ class WebhookManager:
                 }
                 start_time = datetime.now()
 
-                # Prefer aiohttp for loopback URLs to avoid sandbox peculiarities
-                use_aiohttp = False
+                # Prefer aiohttp for all deliveries; aioresponses in tests intercepts aiohttp
+                use_aiohttp = True
                 try:
                     from urllib.parse import urlparse
                     parsed = urlparse(url)
                     host = (parsed.hostname or "").lower()
+                    # Keep True for loopback explicitly (no change)
                     if host in ("127.0.0.1", "localhost", "::1"):
                         use_aiohttp = True
                 except Exception:

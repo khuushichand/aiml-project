@@ -55,18 +55,17 @@ def mock_prometheus_metrics():
 
 @pytest.fixture
 def test_client(mock_prometheus_metrics):
-    """Create test client with proper CSRF setup"""
-    client = TestClient(app)
-    
-    # Set CSRF token in cookie and get it for headers
-    csrf_token = "test-csrf-token-12345"
-    client.cookies.set("csrf_token", csrf_token)
-    
-    # Add CSRF token to default headers
-    client.headers["X-CSRF-Token"] = csrf_token
-    client.headers["Authorization"] = "Bearer test-api-key"
-    
-    return client
+    """Create test client with proper CSRF setup and ensure cleanup."""
+    with TestClient(app) as client:
+        # Set CSRF token in cookie and get it for headers
+        csrf_token = "test-csrf-token-12345"
+        client.cookies.set("csrf_token", csrf_token)
+        
+        # Add CSRF token to default headers
+        client.headers["X-CSRF-Token"] = csrf_token
+        client.headers["Authorization"] = "Bearer test-api-key"
+        
+        yield client
 
 
 @pytest.fixture

@@ -8,6 +8,7 @@ import json
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from pathlib import Path
 import httpx
+import requests
 
 # Import the modules to test
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
@@ -49,7 +50,7 @@ class TestMoonshotProvider:
     
     def test_moonshot_basic_chat(self, mock_response):
         """Test basic chat functionality."""
-        with patch('requests.post') as mock_post:
+        with patch('requests.Session.post') as mock_post:
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = mock_response
@@ -62,16 +63,16 @@ class TestMoonshotProvider:
                 model="moonshot-v1-8k"
             )
             
-            assert result == "Hello from Moonshot AI!"
+            assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
             mock_post.assert_called_once()
             
             # Check request payload
             call_args = mock_post.call_args
-            payload = json.loads(call_args[1]['data'])
+            payload = call_args[1]['json']
             assert payload['model'] == "moonshot-v1-8k"
             assert len(payload['messages']) == 1
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_moonshot_with_system_message(self, mock_post, mock_response):
         """Test chat with system message."""
         mock_response_obj = Mock()
@@ -87,11 +88,11 @@ class TestMoonshotProvider:
         )
         
         call_args = mock_post.call_args
-        payload = json.loads(call_args[1]['data'])
+        payload = call_args[1]['json']
         assert payload['messages'][0]['role'] == "system"
         assert payload['messages'][0]['content'] == "You are a helpful assistant."
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_moonshot_vision_model(self, mock_post, mock_response):
         """Test vision model with image content."""
         mock_response['model'] = "moonshot-v1-8k-vision-preview"
@@ -115,12 +116,12 @@ class TestMoonshotProvider:
             model="moonshot-v1-8k-vision-preview"
         )
         
-        assert result == "Hello from Moonshot AI!"
+        assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
         call_args = mock_post.call_args
-        payload = json.loads(call_args[1]['data'])
+        payload = call_args[1]['json']
         assert payload['model'] == "moonshot-v1-8k-vision-preview"
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_moonshot_streaming(self, mock_post):
         """Test streaming response."""
         # Mock SSE streaming response
@@ -128,10 +129,10 @@ class TestMoonshotProvider:
         mock_response.status_code = 200
         mock_response.headers = {'content-type': 'text/event-stream'}
         mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            b'data: {"choices":[{"delta":{"content":" from"}}]}',
-            b'data: {"choices":[{"delta":{"content":" Moonshot!"}}]}',
-            b'data: [DONE]'
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+            'data: {"choices":[{"delta":{"content":" from"}}]}',
+            'data: {"choices":[{"delta":{"content":" Moonshot!"}}]}',
+            'data: [DONE]'
         ])
         mock_post.return_value = mock_response
         
@@ -146,23 +147,22 @@ class TestMoonshotProvider:
             chunks.append(chunk)
         
         assert len(chunks) == 4  # 3 content chunks + [DONE]
-        assert chunks[-1] == "[DONE]"
+        assert "[DONE]" in chunks[-1]
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_moonshot_error_handling(self, mock_post):
         """Test error handling."""
         mock_response_obj = Mock()
         mock_response_obj.status_code = 401
         mock_response_obj.text = "Unauthorized"
-        mock_response_obj.raise_for_status.side_effect = Exception("401 Unauthorized")
+        mock_response_obj.raise_for_status.side_effect = requests.exceptions.HTTPError("401 Unauthorized", response=Mock(status_code=401))
         mock_post.return_value = mock_response_obj
         
-        result = chat_with_moonshot(
-            input_data=[{"role": "user", "content": "Hello"}],
-            api_key="invalid_key"
-        )
-        
-        assert "Moonshot API error" in result
+        with pytest.raises(requests.exceptions.HTTPError):
+            _ = chat_with_moonshot(
+                input_data=[{"role": "user", "content": "Hello"}],
+                api_key="invalid_key"
+            )
 
 
 class TestZAIProvider:
@@ -192,7 +192,7 @@ class TestZAIProvider:
             }
         }
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_zai_basic_chat(self, mock_post, mock_response):
         """Test basic chat functionality."""
         mock_response_obj = Mock()
@@ -207,15 +207,15 @@ class TestZAIProvider:
             model="glm-4.5"
         )
         
-        assert result == "Hello from Z.AI GLM!"
+        assert result["choices"][0]["message"]["content"] == "Hello from Z.AI GLM!"
         mock_post.assert_called_once()
         
         # Check request payload
         call_args = mock_post.call_args
-        payload = json.loads(call_args[1]['data'])
+        payload = call_args[1]['json']
         assert payload['model'] == "glm-4.5"
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_zai_with_request_id(self, mock_post, mock_response):
         """Test chat with request_id."""
         mock_response_obj = Mock()
@@ -231,10 +231,10 @@ class TestZAIProvider:
         )
         
         call_args = mock_post.call_args
-        payload = json.loads(call_args[1]['data'])
+        payload = call_args[1]['json']
         assert payload.get('request_id') == "custom_req_123"
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_zai_model_variants(self, mock_post, mock_response):
         """Test different model variants."""
         models = ["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4-32b-0414-128k"]
@@ -254,19 +254,19 @@ class TestZAIProvider:
             )
             
             call_args = mock_post.call_args
-            payload = json.loads(call_args[1]['data'])
+            payload = call_args[1]['json']
             assert payload['model'] == model
     
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_zai_streaming(self, mock_post):
         """Test streaming response."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.headers = {'content-type': 'text/event-stream'}
         mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            b'data: {"choices":[{"delta":{"content":" GLM"}}]}',
-            b'data: [DONE]'
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+            'data: {"choices":[{"delta":{"content":" GLM"}}]}',
+            'data: [DONE]'
         ])
         mock_post.return_value = mock_response
         
@@ -281,7 +281,7 @@ class TestZAIProvider:
             chunks.append(chunk)
         
         assert len(chunks) == 3
-        assert chunks[-1] == "[DONE]"
+        assert "[DONE]" in chunks[-1]
 
 
 class TestHuggingFaceAPI:
@@ -315,9 +315,9 @@ class TestHuggingFaceAPI:
     @pytest.mark.asyncio
     async def test_search_models(self, api_client, mock_model_response):
         """Test model search functionality."""
-        with patch('httpx.AsyncClient.get') as mock_get:
-            mock_response = AsyncMock()
-            mock_response.json.return_value = mock_model_response
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_response = Mock()
+            mock_response.json = Mock(return_value=mock_model_response)
             mock_response.raise_for_status = Mock()
             mock_get.return_value = mock_response
             
@@ -340,9 +340,9 @@ class TestHuggingFaceAPI:
             "description": "Llama 2 7B model in GGUF format"
         }
         
-        with patch('httpx.AsyncClient.get') as mock_get:
-            mock_response = AsyncMock()
-            mock_response.json.return_value = mock_info
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_response = Mock()
+            mock_response.json = Mock(return_value=mock_info)
             mock_response.raise_for_status = Mock()
             mock_get.return_value = mock_response
             
@@ -360,9 +360,9 @@ class TestHuggingFaceAPI:
             {"path": "README.md", "size": 5000}
         ]
         
-        with patch('httpx.AsyncClient.get') as mock_get:
-            mock_response = AsyncMock()
-            mock_response.json.return_value = mock_files
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_response = Mock()
+            mock_response.json = Mock(return_value=mock_files)
             mock_response.raise_for_status = Mock()
             mock_get.return_value = mock_response
             
@@ -377,18 +377,22 @@ class TestHuggingFaceAPI:
         """Test file download functionality."""
         test_content = b"This is a test GGUF file content"
         
-        with patch('httpx.AsyncClient.head') as mock_head:
-            with patch('httpx.AsyncClient.stream') as mock_stream:
+        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head:
+            with patch('httpx.AsyncClient.stream', new_callable=Mock) as mock_stream:
                 # Mock HEAD request for file size
-                mock_head_response = AsyncMock()
+                mock_head_response = Mock()
                 mock_head_response.headers = {"content-length": str(len(test_content))}
                 mock_head.return_value = mock_head_response
                 
                 # Mock streaming download
-                mock_stream_response = AsyncMock()
+                mock_stream_response = Mock()
                 mock_stream_response.raise_for_status = Mock()
-                mock_stream_response.aiter_bytes = AsyncMock(return_value=[test_content])
-                mock_stream.return_value.__aenter__.return_value = mock_stream_response
+                async def _aiter_bytes(chunk_size=65536):
+                    yield test_content
+                mock_stream_response.aiter_bytes = Mock(return_value=_aiter_bytes())
+                # Configure async context manager behavior
+                mock_stream.return_value.__aenter__ = AsyncMock(return_value=mock_stream_response)
+                mock_stream.return_value.__aexit__ = AsyncMock(return_value=None)
                 
                 destination = tmp_path / "test_model.gguf"
                 success = await api_client.download_file(
@@ -410,19 +414,22 @@ class TestHuggingFaceAPI:
         def progress_callback(downloaded, total):
             progress_calls.append((downloaded, total))
         
-        with patch('httpx.AsyncClient.head') as mock_head:
-            with patch('httpx.AsyncClient.stream') as mock_stream:
-                mock_head_response = AsyncMock()
+        with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head:
+            with patch('httpx.AsyncClient.stream', new_callable=Mock) as mock_stream:
+                mock_head_response = Mock()
                 mock_head_response.headers = {"content-length": "1000"}
                 mock_head.return_value = mock_head_response
                 
-                mock_stream_response = AsyncMock()
+                mock_stream_response = Mock()
                 mock_stream_response.raise_for_status = Mock()
                 # Simulate chunked download
-                mock_stream_response.aiter_bytes = AsyncMock(
-                    return_value=[test_content[:500], test_content[500:]]
-                )
-                mock_stream.return_value.__aenter__.return_value = mock_stream_response
+                async def _aiter_bytes2(chunk_size=65536):
+                    yield test_content[:500]
+                    yield test_content[500:]
+                mock_stream_response.aiter_bytes = Mock(return_value=_aiter_bytes2())
+                # Configure async context manager behavior
+                mock_stream.return_value.__aenter__ = AsyncMock(return_value=mock_stream_response)
+                mock_stream.return_value.__aexit__ = AsyncMock(return_value=None)
                 
                 destination = tmp_path / "test_model.gguf"
                 success = await api_client.download_file(
@@ -462,7 +469,7 @@ class TestHuggingFaceAPI:
     @pytest.mark.asyncio
     async def test_error_handling(self, api_client):
         """Test error handling in API calls."""
-        with patch('httpx.AsyncClient.get') as mock_get:
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
             mock_get.side_effect = httpx.HTTPError("Connection error")
             
             results = await api_client.search_models(query="test")
@@ -476,7 +483,7 @@ class TestIntegration:
     """Integration tests for provider interactions."""
     
     @pytest.mark.asyncio
-    @patch('requests.post')
+    @patch('requests.Session.post')
     async def test_provider_switching(self, mock_post):
         """Test switching between different providers."""
         # Mock responses for different providers
@@ -498,7 +505,7 @@ class TestIntegration:
             input_data=[{"role": "user", "content": "Test"}],
             api_key="key1"
         )
-        assert result1 == "Moonshot response"
+        assert result1["choices"][0]["message"]["content"] == "Moonshot response"
         
         # Test Z.AI
         mock_response_obj.json.return_value = zai_response
@@ -506,12 +513,12 @@ class TestIntegration:
             input_data=[{"role": "user", "content": "Test"}],
             api_key="key2"
         )
-        assert result2 == "Z.AI response"
+        assert result2["choices"][0]["message"]["content"] == "Z.AI response"
     
     @pytest.mark.asyncio
     async def test_concurrent_requests(self):
         """Test concurrent requests to multiple providers."""
-        with patch('requests.post') as mock_post:
+        with patch('requests.Session.post') as mock_post:
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = {
@@ -522,16 +529,19 @@ class TestIntegration:
             
             # Simulate concurrent requests
             tasks = [
-                asyncio.create_task(asyncio.to_thread(
-                    chat_with_moonshot,
-                    [{"role": "user", "content": f"Test {i}"}],
-                    "key"
-                )) for i in range(5)
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        chat_with_moonshot,
+                        [{"role": "user", "content": f"Test {i}"}],
+                        api_key="key"
+                    )
+                )
+                for i in range(5)
             ]
             
             results = await asyncio.gather(*tasks)
             assert len(results) == 5
-            assert all(r == "Response" for r in results)
+            assert all(r["choices"][0]["message"]["content"] == "Response" for r in results)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 from tldw_Server_API.app.core.RAG.rag_service.types import Document
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import RetrievalConfig
 
 # =====================================================================
@@ -586,27 +588,20 @@ class TestErrorHandlingProperties:
             st.text().filter(lambda x: "\x00" in x)  # Null bytes
         )
     )
-    def test_invalid_query_handling(self, query):
-        """Invalid queries should be handled gracefully."""
-        context = RAGPipelineContext(
-            query=query,
-            original_query=query
-        )
-        
-        # Should not crash
-        assert context.query == query
-        
-        # Validation should catch invalid queries
-        is_valid = (
-            len(query.strip()) > 0 and
-            len(query) <= 1000 and
-            "\x00" not in query
-        )
-        
-        if not is_valid:
-            # Should be marked as invalid somehow
-            context.errors.append({"error": "Invalid query"})
-            assert len(context.errors) > 0
+    @pytest.mark.asyncio
+    async def test_invalid_query_handling(self, query):
+        """Invalid queries should be handled gracefully via the public pipeline API."""
+        # Call the unified pipeline; for blank queries it should short-circuit with an error
+        result = await unified_rag_pipeline(query=query, enable_cache=False)
+        assert isinstance(result, UnifiedRAGResponse)
+
+        is_blank = len(query.strip()) == 0
+        if is_blank:
+            # Pipeline flags invalid (blank) queries
+            assert any("Invalid query" in e for e in (result.errors or []))
+        else:
+            # For other edge inputs, at minimum it should not crash and should echo the query
+            assert result.query == (query if isinstance(query, str) else "")
     
     @given(
         config=st.dictionaries(

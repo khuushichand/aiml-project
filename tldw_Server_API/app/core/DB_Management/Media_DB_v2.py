@@ -2317,6 +2317,22 @@ class MediaDatabase:
                             )
                             return media_id, media_uuid, f"Media '{title}' URL canonicalized."
 
+                        # Touch last_modified to reflect recent access so listing surfaces it
+                        try:
+                            new_ver = current_ver + 1
+                            cur.execute(
+                                "UPDATE Media SET last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
+                                (now, new_ver, client_id, media_id, current_ver),
+                            )
+                            if cur.rowcount == 1:
+                                self._log_sync_event(
+                                    conn, "Media", media_uuid, "update", new_ver, {"last_modified": now, "touched": True}
+                                )
+                            else:
+                                logging.debug(f"No rows updated when touching media {media_id}; possible version change.")
+                        except Exception as _touch_err:
+                            logging.debug(f"Non-fatal: failed to touch media {media_id}: {_touch_err}")
+
                         # Return existing record references to allow callers to treat as a non-fatal result
                         return media_id, media_uuid, f"Media '{title}' already exists. Overwrite not enabled."
 

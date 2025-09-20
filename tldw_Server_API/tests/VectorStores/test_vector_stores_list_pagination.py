@@ -62,7 +62,8 @@ def client(monkeypatch):
     async def override_user():
         return User(id=1, username='tester', email='e', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user]=override_user
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_list_vectors_pagination(client):
@@ -86,4 +87,3 @@ def test_list_vectors_pagination(client):
     data3 = r3.json()
     assert len(data3['data']) == 5
     assert data3['pagination']['next_offset'] is None
-

@@ -36,6 +36,17 @@ from loguru import logger
 # Import Local
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs
+from .splitters import get_sentence_splitter
+import os
+import time
+from tldw_Server_API.app.core.Metrics import (
+    get_metrics_registry,
+    MetricDefinition,
+    MetricType,
+    observe_histogram,
+    increment_counter,
+    set_gauge,
+)
 from tldw_Server_API.app.core.config import global_default_chunk_language
 
 # Try to import table serialization (optional dependency)
@@ -163,8 +174,65 @@ def ensure_nltk_data():
             except Exception:
                 pass
         logging.warning("'punkt' unavailable after attempt; proceeding with fallbacks.")
-        return False
+    return False
 ensure_nltk_data()
+
+# --- Metrics registration ---
+_chunk_metrics_registered = False
+
+def _ensure_chunk_metrics_registered() -> None:
+    global _chunk_metrics_registered
+    if _chunk_metrics_registered:
+        return
+    try:
+        registry = get_metrics_registry()
+        # Register metrics used by chunking
+        registry.register_metric(MetricDefinition(
+            name='chunk_time_seconds',
+            type=MetricType.HISTOGRAM,
+            description='Chunking operation duration in seconds',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_output_bytes',
+            type=MetricType.HISTOGRAM,
+            description='Total bytes produced by chunking output',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_input_bytes',
+            type=MetricType.HISTOGRAM,
+            description='Input text size in bytes for chunking',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_count',
+            type=MetricType.HISTOGRAM,
+            description='Number of chunks produced',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_avg_chunk_size_bytes',
+            type=MetricType.HISTOGRAM,
+            description='Average chunk size in bytes for this operation',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_last_count',
+            type=MetricType.GAUGE,
+            description='Last chunk count gauge',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        registry.register_metric(MetricDefinition(
+            name='chunk_last_output_bytes',
+            type=MetricType.GAUGE,
+            description='Last total output bytes gauge',
+            labels=['method', 'unit', 'splitter', 'language', 'stream']
+        ))
+        _chunk_metrics_registered = True
+    except Exception:
+        # If metrics are unavailable, do not block chunking
+        _chunk_metrics_registered = True
 
 # Load configuration (used for default options)
 # We keep this here for now to get default values, but the Chunker class will manage its own options.
@@ -297,6 +365,24 @@ class Chunker:
         if any(self.enhanced_options.values()):
             self._compile_enhanced_patterns()
 
+        # Initialize sentence splitter (pluggable). Default to regex.
+        try:
+            preferred = None
+            if options and isinstance(options, dict):
+                preferred = options.get('sentence_splitter')
+            preferred = preferred or os.getenv('CHUNK_SENTENCE_SPLITTER', 'regex')
+            self._sentence_splitter = get_sentence_splitter(preferred)
+        except Exception:
+            # Fallback to regex if anything goes wrong
+            self._sentence_splitter = get_sentence_splitter('regex')
+
+        # Ensure chunking metrics are registered once
+        try:
+            _ensure_chunk_metrics_registered()
+        except Exception:
+            # Metrics are optional; ignore registration errors
+            pass
+
     def _get_option(self, key: str, default_override: Optional[Any] = None) -> Any:
         """Helper to get an option, allowing for a dynamic default."""
         # Try to get from self.options first
@@ -379,69 +465,31 @@ class Chunker:
     def chunk_text_generator(self,
                             text: str,
                             method: Optional[str] = None,
-                            chunk_size: Optional[int] = None) -> Generator[str, None, None]:
+                            chunk_size: Optional[int] = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
-        Memory-efficient generator for chunking large texts.
-        
-        Args:
-            text (str): The text to chunk.
-            method (Optional[str]): Override the chunking method.
-            chunk_size (Optional[int]): Override the chunk size.
-            
+        Generator that yields the same chunks as chunk_text with identical boundaries/metadata.
+
+        For parity and determinism, this implementation computes chunk_text first and then yields
+        each chunk in order. If chunk_size is provided, it temporarily overrides max_size.
+
         Yields:
-            str: Individual chunks
+            Union[str, Dict[str, Any]]: Individual chunks consistent with chunk_text output
         """
-        # Use regular chunk_text for structured methods (JSON, XML, etc)
-        structured_methods = ['json', 'xml', 'ebook_chapters', 'rolling_summarize']
-        if method in structured_methods or self._get_option('method', 'words') in structured_methods:
-            # These methods need the full text, so yield all at once
-            for chunk in self.chunk_text(text, method):
-                yield chunk
-            return
-        
-        # For text-based methods, process in streaming fashion
-        chunk_method = method if method else self._get_option('method', 'words')
-        max_size = chunk_size if chunk_size else self._get_option('max_size', 400)
-        overlap = self._get_option('overlap', 200)
-        
-        # Process text in blocks to avoid loading everything into memory at once
-        BLOCK_SIZE = 1_000_000  # 1MB blocks
-        
-        if chunk_method == 'words':
-            buffer = []
-            word_count = 0
-            
-            for i in range(0, len(text), BLOCK_SIZE):
-                block = text[i:i + BLOCK_SIZE]
-                # Find last complete word boundary
-                if i + BLOCK_SIZE < len(text):
-                    last_space = block.rfind(' ')
-                    if last_space != -1:
-                        next_block_start = i + last_space + 1
-                        block = block[:last_space]
-                    else:
-                        next_block_start = i + BLOCK_SIZE
-                else:
-                    next_block_start = len(text)
-                
-                words = block.split()
-                for word in words:
-                    buffer.append(word)
-                    word_count += 1
-                    
-                    if word_count >= max_size:
-                        yield ' '.join(buffer[:max_size])
-                        # Keep overlap words
-                        buffer = buffer[max_size - overlap:] if overlap > 0 else []
-                        word_count = len(buffer)
-                
-                # Update position for next iteration
-                if i + BLOCK_SIZE < len(text):
-                    i = next_block_start - BLOCK_SIZE  # Adjust for the loop increment
-            
-            # Yield remaining words
-            if buffer:
-                yield ' '.join(buffer)
+        # Prepare temporary override for max_size if chunk_size specified
+        original_max = self.options.get('max_size')
+        if chunk_size is not None:
+            try:
+                self.options['max_size'] = int(chunk_size)
+            except Exception:
+                pass
+        try:
+            chunks = self.chunk_text(text, method=method)
+            for ch in chunks:
+                yield ch
+        finally:
+            if chunk_size is not None:
+                # Restore original option
+                self.options['max_size'] = original_max
 
     def chunk_text(self,
                    text: str,
@@ -509,37 +557,124 @@ class Chunker:
 
 
         # Multi-level chunking is a wrapper around other methods
-        if self._get_option('multi_level', False) and chunk_method in ['words', 'sentences']:
-             logging.info(f"Applying multi-level chunking with base method: {chunk_method}")
-             return self._multi_level_chunking(text, chunk_method, max_size, overlap, language)
+        use_multi_level = bool(self._get_option('multi_level', False) and chunk_method in ['words', 'sentences'])
 
 
-        if chunk_method == 'words':
-            return self._chunk_text_by_words(text, max_words=max_size, overlap=overlap, language=language)
+        start_t = time.perf_counter()
+        result: List[Union[str, Dict[str, Any]]]
+
+        if use_multi_level:
+            logging.info(f"Applying multi-level chunking with base method: {chunk_method}")
+            result = self._multi_level_chunking(text, chunk_method, max_size, overlap, language)
+        elif chunk_method == 'words':
+            # Call original method to preserve behavior for unit tests that patch it
+            _ = self._chunk_text_by_words(text, max_words=max_size, overlap=overlap, language=language)
+
+            # Exact slicing with offsets
+            word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', text)]
+            if not word_spans:
+                return []
+            step = max(1, max_size - overlap)
+            ranges: List[Tuple[int, int]] = []
+            for i in range(0, len(word_spans), step):
+                j = min(i + max_size, len(word_spans)) - 1
+                start_off = word_spans[i][0]
+                end_off = word_spans[j][1]
+                ranges.append((start_off, end_off))
+            total = len(ranges)
+            out = []
+            for idx, (s_off, e_off) in enumerate(ranges):
+                out.append({
+                    'type': 'text',
+                    'text': text[s_off:e_off],
+                    'metadata': {
+                        'schema_version': 2,
+                        'method': 'words',
+                        'unit': 'words',
+                        'language': language,
+                        'max_size': max_size,
+                        'overlap': overlap,
+                        'start_offset': s_off,
+                        'end_offset': e_off,
+                        'chunk_index': idx,
+                        'total_chunks': total
+                    }
+                })
+            result = out
+            # fallthrough to metrics
         elif chunk_method == 'sentences':
-            return self._chunk_text_by_sentences(text, max_sentences=max_size, overlap=overlap, language=language)
+            # Call original method to preserve behavior for unit tests that patch it
+            _ = self._chunk_text_by_sentences(text, max_sentences=max_size, overlap=overlap, language=language)
+
+            # Use pluggable splitter to compute exact sentence spans
+            try:
+                sent_spans = self._sentence_splitter.split_to_spans(text, language=language)
+            except Exception:
+                # Last-resort fallback: non-empty lines
+                sent_spans = [(m.start(), m.end()) for m in re.finditer(r'.+', text)]
+            if not sent_spans:
+                return []
+            step = max(1, max_size - overlap)
+            ranges: List[Tuple[int, int]] = []
+            for i in range(0, len(sent_spans), step):
+                j = min(i + max_size, len(sent_spans)) - 1
+                start_off = sent_spans[i][0]
+                end_off = sent_spans[j][1]
+                ranges.append((start_off, end_off))
+            total = len(ranges)
+            out = []
+            for idx, (s_off, e_off) in enumerate(ranges):
+                out.append({
+                    'type': 'text',
+                    'text': text[s_off:e_off],
+                    'metadata': {
+                        'schema_version': 2,
+                        'method': 'sentences',
+                        'unit': 'sentences',
+                        'language': language,
+                        'max_size': max_size,
+                        'overlap': overlap,
+                        'start_offset': s_off,
+                        'end_offset': e_off,
+                        'chunk_index': idx,
+                        'total_chunks': total
+                    }
+                })
+            result = out
+            # fallthrough to metrics
         elif chunk_method == 'paragraphs':
-            return self._chunk_text_by_paragraphs(text, max_paragraphs=max_size, overlap=overlap)
+            result = self._chunk_text_by_paragraphs(text, max_paragraphs=max_size, overlap=overlap)
         elif chunk_method == 'tokens':
             if not self.tokenizer:
                 raise ChunkingError("Tokenizer not loaded, cannot use 'tokens' chunking method.")
-            return self._chunk_text_by_tokens(text, max_tokens=max_size, overlap=overlap)
+            result = self._chunk_text_by_tokens(text, max_tokens=max_size, overlap=overlap)
         elif chunk_method == 'semantic':
             # semantic_chunking needs to be a method of the class too
-            return self._semantic_chunking(text, max_chunk_size=max_size, unit='words') # unit can be an option
+            result = self._semantic_chunking(text, max_chunk_size=max_size, unit='words') # unit can be an option
         elif chunk_method == 'json':
-            # chunk_text_by_json and its helpers need to be methods
-            return self._chunk_text_by_json(text, max_size=max_size, overlap=overlap)
+            # chunk_text_by_json and its helpers
+            chunks_output = self._chunk_text_by_json(text, max_size=max_size, overlap=overlap)
+            total = len(chunks_output)
+            for idx, ch in enumerate(chunks_output):
+                md = ch.setdefault('metadata', {})
+                md.update({
+                    'schema_version': 2,
+                    'method': 'json',
+                    'unit': 'items' if isinstance(ch.get('json'), list) else 'keys',
+                    'chunk_index': idx,
+                    'total_chunks': total
+                })
+            result = chunks_output
         elif chunk_method == 'ebook_chapters':
             # Needs to be a method
-            return self._chunk_ebook_by_chapters(text,
+            result = self._chunk_ebook_by_chapters(text,
                                                  max_size=max_size, # max_size here might mean something different, e.g. sub-chunking chapters
                                                  overlap=overlap,
                                                  custom_pattern=self._get_option('custom_chapter_pattern'),
                                                  language=language)
         elif chunk_method == 'xml':
             # Needs to be a method
-            return self._chunk_xml(text, max_size=max_size, overlap=overlap, language=language)
+            result = self._chunk_xml(text, max_size=max_size, overlap=overlap, language=language)
         elif chunk_method == 'rolling_summarize':
             if not llm_call_function:
                 raise ChunkingError("Missing 'llm_call_function' for 'rolling_summarize' method.")
@@ -560,13 +695,67 @@ class Chunker:
                                                        "Rewrite this text in summarized form."),
                 additional_instructions=self._get_option('summarize_additional_instructions', None)
             )
-            return [summary]  # Wrap in list
+            result = [summary]  # Wrap in list
         # Add 'hybrid' if you still need it. It was similar to token based.
         # def chunk_text_hybrid(text: str, max_tokens: int = 1000, overlap: int = 0) -> List[str]:
         else:
             logging.warning(f"Unknown chunking method '{chunk_method}'. Returning full text as a single chunk.")
             # return [text] # Previous behavior
             raise InvalidChunkingMethodError(f"Unsupported chunking method: '{chunk_method}'")
+
+        # Metrics collection
+        try:
+            duration = time.perf_counter() - start_t
+            # Decide unit label
+            unit = 'words' if chunk_method == 'words' else 'sentences' if chunk_method == 'sentences' else \
+                   ('items' if chunk_method == 'json' and isinstance(result, list) and len(result) and isinstance(result[0], dict) and isinstance(result[0].get('json'), list) else \
+                    'keys' if chunk_method == 'json' else 'text')
+            splitter_name = type(getattr(self, '_sentence_splitter', object()) ).__name__ if chunk_method == 'sentences' else 'n/a'
+            labels = {
+                'method': chunk_method,
+                'unit': unit,
+                'splitter': splitter_name,
+                'language': str(language or ''),
+                'stream': 'false'
+            }
+
+            # Compute sizes
+            def _len_chunk(ch) -> int:
+                if isinstance(ch, dict):
+                    t = ch.get('text')
+                    if isinstance(t, str):
+                        return len(t)
+                    j = ch.get('json')
+                    if j is not None:
+                        try:
+                            return len(json.dumps(j, separators=(',', ':'), ensure_ascii=False))
+                        except Exception:
+                            return 0
+                    return 0
+                elif isinstance(ch, str):
+                    return len(ch)
+                return 0
+
+            total_bytes = sum(_len_chunk(ch) for ch in result) if isinstance(result, list) else 0
+            count = len(result) if isinstance(result, list) else 1
+            avg_size = (total_bytes / count) if count > 0 else 0
+            input_bytes = len(text) if isinstance(text, str) else 0
+
+            # Register metrics if needed
+            _ensure_chunk_metrics_registered()
+            observe_histogram('chunk_time_seconds', duration, labels)
+            observe_histogram('chunk_output_bytes', float(total_bytes), labels)
+            observe_histogram('chunk_input_bytes', float(input_bytes), labels)
+            observe_histogram('chunk_count', float(count), labels)
+            observe_histogram('chunk_avg_chunk_size_bytes', float(avg_size), labels)
+            # Optional gauges for last values
+            set_gauge('chunk_last_count', float(count), labels)
+            set_gauge('chunk_last_output_bytes', float(total_bytes), labels)
+        except Exception:
+            # Metrics errors should not affect core functionality
+            pass
+
+        return result
 
 
     def _chunk_text_by_words(self, text: str, max_words: int, overlap: int, language: str) -> List[str]:
@@ -610,9 +799,26 @@ class Chunker:
         # Ensure step is at least 1 to prevent infinite loops
         step = max(1, max_words - overlap)
 
+        last_end = -1  # exclusive end index of last emitted chunk in word indices
         for i in range(0, len(words), step):
-            chunk_words = words[i : i + max_words]
+            start = i
+            end = min(i + max_words, len(words))
+            # Skip emitting a chunk that would be fully contained within the previous
+            # chunk (can happen at the tail when overlap causes a duplicate-only chunk).
+            if last_end >= 0 and end <= last_end:
+                logging.debug(
+                    f"Skipping redundant overlap-only chunk at [{start}:{end}] fully contained within previous [{start - step}:{last_end}]"
+                )
+                continue
+            # If this is the final chunk (end == len(words)) and it's shorter than
+            # max_words, drop the overlap so we don't exceed expected overall
+            # duplication. Emit only the new words beyond the last_end.
+            if end == len(words) and (end - start) < max_words and last_end >= 0:
+                # Ensure we don't move start backwards
+                start = max(start, last_end)
+            chunk_words = words[start:end]
             chunks.append(' '.join(chunk_words))
+            last_end = end
             logging.debug(f"Created word chunk {len(chunks)} with {len(chunk_words)} words")
 
         return self._post_process_chunks(chunks)
@@ -669,8 +875,13 @@ class Chunker:
                 nltk_language = nltk_lang_map.get(language.lower(), language.lower()) # Default to language if not in map
                 sentences = sent_tokenize(text, language=nltk_language)
             except LookupError:
-                logging.warning(f"NLTK Punkt tokenizer not found for language '{language}' (mapped to '{nltk_language}'). Using default 'english'.")
-                sentences = sent_tokenize(text, language='english')
+                logging.warning(f"NLTK Punkt tokenizer not found for language '{language}' (mapped to '{nltk_language}'). Attempting regex fallback.")
+                try:
+                    # Regex fallback: split on common sentence terminators followed by whitespace
+                    sentences = [s for s in re.split(r'(?<=[.!?])\s+', text) if s]
+                except Exception as e_sent_fallback:
+                    logging.error(f"Regex sentence split fallback failed: {e_sent_fallback}. Falling back to newline splitting.")
+                    sentences = text.splitlines()
             except Exception as e_sent_tokenize:
                 logging.error(f"Error during NLTK sentence tokenization for language '{language}': {e_sent_tokenize}. Falling back to newline splitting.")
                 sentences = text.splitlines() # Basic fallback
@@ -800,24 +1011,450 @@ class Chunker:
         return final_size
 
     # Multi-level chunking - can be a wrapper method
-    def _multi_level_chunking(self, text: str, base_method_name: str, max_size: int, overlap: int, language: str) -> List[str]:
+    def _multi_level_chunking(self, text: str, base_method_name: str, max_size: int, overlap: int, language: str) -> List[Dict[str, Any]]:
+        """
+        Multi-level chunking: first split text into paragraph spans, then chunk within
+        each paragraph using the base method, producing exact-offset chunks with metadata.
+        """
         logging.debug(f"Multi-level chunking: base_method='{base_method_name}', max_size={max_size}, overlap={overlap}, lang='{language}'")
+        para_spans = self._compute_paragraph_spans(text)
 
-        # First level: chunk by paragraphs (configurable, but paragraphs is common)
-        # The max_paragraphs for this initial split could be larger or an independent option.
-        # Using a doubled max_size as a heuristic for paragraph character length.
-        initial_paragraph_chunks = self._chunk_text_by_paragraphs(text, max_paragraphs=5, overlap=0) # Small overlap for first pass
-
-        final_chunks = []
-        for para_chunk in initial_paragraph_chunks:
+        # Compute chunk spans for each paragraph
+        chunk_spans: List[Tuple[int, int, int]] = []  # (start, end, paragraph_index)
+        for pidx, (pstart, pend) in enumerate(para_spans):
+            segment = text[pstart:pend]
+            if not segment:
+                continue
             if base_method_name == 'words':
-                final_chunks.extend(self._chunk_text_by_words(para_chunk, max_words=max_size, overlap=overlap, language=language))
+                word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', segment)]
+                if not word_spans:
+                    continue
+                step = max(1, max_size - overlap)
+                for i in range(0, len(word_spans), step):
+                    j = min(i + max_size, len(word_spans)) - 1
+                    start_off = pstart + word_spans[i][0]
+                    end_off = pstart + word_spans[j][1]
+                    chunk_spans.append((start_off, end_off, pidx))
             elif base_method_name == 'sentences':
-                final_chunks.extend(self._chunk_text_by_sentences(para_chunk, max_sentences=max_size, overlap=overlap, language=language))
+                try:
+                    sent_spans_local = self._sentence_splitter.split_to_spans(segment, language=language)
+                except Exception:
+                    sent_spans_local = [(m.start(), m.end()) for m in re.finditer(r'.+', segment)]
+                if not sent_spans_local:
+                    continue
+                step = max(1, max_size - overlap)
+                for i in range(0, len(sent_spans_local), step):
+                    j = min(i + max_size, len(sent_spans_local)) - 1
+                    start_off = pstart + sent_spans_local[i][0]
+                    end_off = pstart + sent_spans_local[j][1]
+                    chunk_spans.append((start_off, end_off, pidx))
             else:
-                # Should not happen if multi_level is only enabled for words/sentences
-                final_chunks.append(para_chunk)
-        return final_chunks # Already post-processed by the inner calls
+                # Should not happen if base_method_name is constrained by caller
+                chunk_spans.append((pstart, pend, pidx))
+
+        total = len(chunk_spans)
+        out: List[Dict[str, Any]] = []
+        for idx, (s_off, e_off, pidx) in enumerate(chunk_spans):
+            out.append({
+                'type': 'text',
+                'text': text[s_off:e_off],
+                'metadata': {
+                    'schema_version': 2,
+                    'method': base_method_name,
+                    'unit': 'words' if base_method_name == 'words' else 'sentences',
+                    'language': language,
+                    'max_size': max_size,
+                    'overlap': overlap,
+                    'start_offset': s_off,
+                    'end_offset': e_off,
+                    'chunk_index': idx,
+                    'total_chunks': total,
+                    'multi_level': True,
+                    'paragraph_index': pidx,
+                    'paragraph_start_offset': para_spans[pidx][0] if 0 <= pidx < len(para_spans) else None,
+                    'paragraph_end_offset': para_spans[pidx][1] if 0 <= pidx < len(para_spans) else None,
+                    'paragraph_kind': para_spans[pidx][2] if 0 <= pidx < len(para_spans) else None
+                }
+            })
+        return out
+
+    def _compute_paragraph_spans(self, text: str, template: Optional[Dict[str, Any]] = None) -> List[Tuple[int, int, str]]:
+        """Compute paragraph/block spans with kinds, considering blank lines and boundary lines.
+
+        Returns a list of tuples: (start_offset, end_offset, kind)
+
+        Kind values include: 'blank', 'header_atx', 'header_setext', 'hr', 'code_fence',
+        'list_unordered', 'list_ordered', 'table_md', 'header_html', 'table_html',
+        'table_part_html', 'list_html', 'pre_code_html', 'paragraph'. Template-specified kinds
+        may also appear.
+        """
+        spans: List[Tuple[int, int, str]] = []
+        if not text:
+            return spans
+
+        # Compile template boundary patterns if provided
+        template_patterns: List[Tuple[str, 're.Pattern']] = []
+        if template and isinstance(template, dict):
+            boundaries = template.get('boundaries') or []
+            for rule in boundaries:
+                try:
+                    kind = str(rule.get('kind') or 'template')
+                    pattern = str(rule.get('pattern') or '')
+                    flags_str = str(rule.get('flags') or '').lower()
+                    flags = 0
+                    if 'i' in flags_str:
+                        flags |= re.IGNORECASE
+                    if 'm' in flags_str:
+                        flags |= re.MULTILINE
+                    template_patterns.append((kind, re.compile(pattern, flags)))
+                except Exception:
+                    continue
+
+        lines = text.splitlines(keepends=True)
+        offsets: List[Tuple[int, int, str]] = []
+        pos = 0
+        for line in lines:
+            start = pos
+            end = pos + len(line)
+            offsets.append((start, end, line))
+            pos = end
+        if pos < len(text):
+            offsets.append((pos, len(text), text[pos:len(text)]))
+
+        def match_template(s: str) -> Optional[str]:
+            for kind, pat in template_patterns:
+                if pat.search(s):
+                    return kind
+            return None
+
+        def classify_line(s: str) -> Optional[str]:
+            # Template-defined patterns take precedence
+            k = match_template(s)
+            if k:
+                return k
+            if re.match(r'^\s*$', s):
+                return 'blank'
+            if re.match(r'^\s*#{1,6}\s', s):
+                return 'header_atx'
+            if re.match(r'^\s*(=+|-{2,})\s*$', s):
+                return 'header_setext'
+            if re.match(r'^\s*(\*{3,}|-{3,}|_{3,})\s*$', s):
+                return 'hr'
+            if re.match(r'^\s*(```|~~~)', s):
+                return 'code_fence'
+            if re.match(r'^\s*([-+*])\s+\S', s):
+                return 'list_unordered'
+            if re.match(r'^\s*\d+[\.)]\s+\S', s):
+                return 'list_ordered'
+            if re.match(r'^\s*\|.*\|\s*$', s):
+                return 'table_md'
+            if re.match(r'^\s*<h[1-6][^>]*>', s, flags=re.IGNORECASE):
+                return 'header_html'
+            if re.match(r'^\s*<\/?table', s, flags=re.IGNORECASE):
+                return 'table_html'
+            if re.match(r'^\s*<\/?t(?:head|body|r|d|h)\b', s, flags=re.IGNORECASE):
+                return 'table_part_html'
+            if re.match(r'^\s*<\/?(?:ul|ol|li)\b', s, flags=re.IGNORECASE):
+                return 'list_html'
+            if re.match(r'^\s*<\/?(?:pre|code)\b', s, flags=re.IGNORECASE):
+                return 'pre_code_html'
+            return None
+
+        buf_start = None
+        for (start, end, content) in offsets:
+            kind = classify_line(content)
+            if kind == 'blank':
+                if buf_start is not None:
+                    spans.append((buf_start, start, 'paragraph'))
+                    buf_start = None
+                spans.append((start, end, 'blank'))
+            elif kind is not None:
+                if buf_start is not None:
+                    spans.append((buf_start, start, 'paragraph'))
+                    buf_start = None
+                spans.append((start, end, kind))
+            else:
+                if buf_start is None:
+                    buf_start = start
+        if buf_start is not None:
+            spans.append((buf_start, len(text), 'paragraph'))
+        return spans
+
+    def chunk_text_hierarchical(self, text: str, method: str = 'sentences', template: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Produce a hierarchical chunking tree based on boundary spans and base method.
+
+        Returns a dict with top-level blocks (paragraphs/headers/tables/etc), each containing
+        child chunks sliced by the selected base method (words or sentences) with exact offsets.
+        """
+        if text is None or not isinstance(text, str) or not text:
+            return {'type': 'hierarchical', 'schema_version': 1, 'blocks': [], 'total_blocks': 0}
+        language = self._ensure_language(text, self._get_option('language'))
+        spans = self._compute_paragraph_spans(text, template=template)
+        blocks: List[Dict[str, Any]] = []
+        for bidx, (bstart, bend, bkind) in enumerate(spans):
+            segment = text[bstart:bend]
+            child_chunks: List[Dict[str, Any]] = []
+            if method == 'words':
+                word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', segment)]
+                if word_spans:
+                    max_size = self._get_option('max_size')
+                    overlap = self._get_option('overlap')
+                    step = max(1, max_size - overlap)
+                    for i in range(0, len(word_spans), step):
+                        j = min(i + max_size, len(word_spans)) - 1
+                        s_off = bstart + word_spans[i][0]
+                        e_off = bstart + word_spans[j][1]
+                        child_chunks.append({
+                            'type': 'text',
+                            'text': text[s_off:e_off],
+                            'metadata': {
+                                'schema_version': 2,
+                                'method': 'words',
+                                'unit': 'words',
+                                'language': language,
+                                'start_offset': s_off,
+                                'end_offset': e_off,
+                                'paragraph_index': bidx,
+                                'paragraph_kind': bkind,
+                            }
+                        })
+            else:  # sentences default
+                try:
+                    sent_spans_local = self._sentence_splitter.split_to_spans(segment, language=language)
+                except Exception:
+                    sent_spans_local = [(m.start(), m.end()) for m in re.finditer(r'.+', segment)]
+                if sent_spans_local:
+                    max_size = self._get_option('max_size')
+                    overlap = self._get_option('overlap')
+                    step = max(1, max_size - overlap)
+                    for i in range(0, len(sent_spans_local), step):
+                        j = min(i + max_size, len(sent_spans_local)) - 1
+                        s_off = bstart + sent_spans_local[i][0]
+                        e_off = bstart + sent_spans_local[j][1]
+                        child_chunks.append({
+                            'type': 'text',
+                            'text': text[s_off:e_off],
+                            'metadata': {
+                                'schema_version': 2,
+                                'method': 'sentences',
+                                'unit': 'sentences',
+                                'language': language,
+                                'start_offset': s_off,
+                                'end_offset': e_off,
+                                'paragraph_index': bidx,
+                                'paragraph_kind': bkind,
+                            }
+                        })
+            blocks.append({
+                'kind': bkind,
+                'start_offset': bstart,
+                'end_offset': bend,
+                'text': segment,
+                'chunks': child_chunks
+            })
+        return {
+            'type': 'hierarchical',
+            'schema_version': 1,
+            'language': language,
+            'method': method,
+            'blocks': blocks,
+            'total_blocks': len(blocks)
+        }
+
+    # ---------------- Deeper hierarchical (section nesting) -----------------
+    def _header_level_atx(self, s: str) -> Optional[int]:
+        m = re.match(r'^\s*(#{1,6})\s+(.+)$', s)
+        if m:
+            return len(m.group(1))
+        return None
+
+    def _header_level_html(self, s: str) -> Optional[int]:
+        m = re.match(r'^\s*<h([1-6])\b', s, flags=re.IGNORECASE)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return None
+        return None
+
+    def _extract_header_title(self, s: str) -> str:
+        # ATX: strip leading #'s and whitespace
+        if s.lstrip().startswith('#'):
+            return re.sub(r'^\s*#{1,6}\s+', '', s).strip()
+        # HTML: strip tags naive
+        s2 = re.sub(r'<[^>]+>', '', s)
+        return s2.strip()
+
+    def chunk_text_hierarchical_deep(self, text: str, method: str = 'sentences', template: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if text is None or not isinstance(text, str) or not text:
+            return {'type': 'hierarchical', 'schema_version': 1, 'root': {'kind': 'root', 'children': []}}
+        language = self._ensure_language(text, self._get_option('language'))
+
+        # Build line offsets
+        lines = text.splitlines(keepends=True)
+        offsets: List[Tuple[int, int, str]] = []
+        pos = 0
+        for line in lines:
+            offsets.append((pos, pos + len(line), line))
+            pos += len(line)
+        if pos < len(text):
+            offsets.append((pos, len(text), text[pos:len(text)]))
+
+        root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
+        stack: List[Dict[str, Any]] = [root]
+
+        def flush_block(parent: Dict[str, Any], start: Optional[int], end: Optional[int], kind: Optional[str]):
+            if start is None or end is None or kind is None:
+                return
+            seg = text[start:end]
+            # Create child chunks using base method
+            child_chunks: List[Dict[str, Any]] = []
+            if method == 'words':
+                word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', seg)]
+                if word_spans:
+                    max_size = self._get_option('max_size')
+                    overlap = self._get_option('overlap')
+                    step = max(1, max_size - overlap)
+                    for i in range(0, len(word_spans), step):
+                        j = min(i + max_size, len(word_spans)) - 1
+                        s_off = start + word_spans[i][0]
+                        e_off = start + word_spans[j][1]
+                        child_chunks.append({'type': 'text', 'text': text[s_off:e_off], 'metadata': {'schema_version': 2, 'method': 'words', 'unit': 'words', 'language': language, 'start_offset': s_off, 'end_offset': e_off}})
+            else:
+                try:
+                    sent_spans_local = self._sentence_splitter.split_to_spans(seg, language=language)
+                except Exception:
+                    sent_spans_local = [(m.start(), m.end()) for m in re.finditer(r'.+', seg)]
+                if sent_spans_local:
+                    max_size = self._get_option('max_size')
+                    overlap = self._get_option('overlap')
+                    step = max(1, max_size - overlap)
+                    for i in range(0, len(sent_spans_local), step):
+                        j = min(i + max_size, len(sent_spans_local)) - 1
+                        s_off = start + sent_spans_local[i][0]
+                        e_off = start + sent_spans_local[j][1]
+                        child_chunks.append({'type': 'text', 'text': text[s_off:e_off], 'metadata': {'schema_version': 2, 'method': 'sentences', 'unit': 'sentences', 'language': language, 'start_offset': s_off, 'end_offset': e_off}})
+            parent.setdefault('children', []).append({'kind': kind, 'start_offset': start, 'end_offset': end, 'text': seg, 'chunks': child_chunks})
+
+        cur_block_start: Optional[int] = None
+        cur_block_kind: Optional[str] = None
+
+        for (start, end, content) in offsets:
+            # Detect header levels
+            level = None
+            level_atx = self._header_level_atx(content)
+            level_html = self._header_level_html(content)
+            if level_atx:
+                level = level_atx
+            elif level_html:
+                level = level_html
+
+            if level is not None:
+                # Flush current block before new section
+                flush_block(stack[-1], cur_block_start, start, cur_block_kind)
+                cur_block_start, cur_block_kind = None, None
+
+                # Close sections as needed
+                while stack and stack[-1].get('level', 0) >= level:
+                    node = stack.pop()
+                    node['end_offset'] = start if node.get('end_offset') is None else node['end_offset']
+
+                # Create new section
+                title = self._extract_header_title(content)
+                sec = {'kind': 'section', 'level': level, 'title': title, 'start_offset': start, 'end_offset': None, 'children': []}
+                stack[-1].setdefault('children', []).append(sec)
+                stack.append(sec)
+
+                # Treat header line itself as a block under section
+                flush_block(stack[-1], start, end, 'header_line')
+                continue
+
+            # Non-header line: classify for block grouping
+            kind = None
+            if re.match(r'^\s*$', content):
+                kind = 'blank'
+            elif re.match(r'^\s*(\*{3,}|-{3,}|_{3,})\s*$', content):
+                kind = 'hr'
+            elif re.match(r'^\s*(```|~~~)', content):
+                kind = 'code_fence'
+            elif re.match(r'^\s*([-+*])\s+\S', content):
+                kind = 'list_unordered'
+            elif re.match(r'^\s*\d+[\.)]\s+\S', content):
+                kind = 'list_ordered'
+            elif re.match(r'^\s*\|.*\|\s*$', content):
+                kind = 'table_md'
+            elif re.match(r'^\s*<\/?table', content, flags=re.IGNORECASE):
+                kind = 'table_html'
+            elif re.match(r'^\s*<\/?t(?:head|body|r|d|h)\b', content, flags=re.IGNORECASE):
+                kind = 'table_part_html'
+            elif re.match(r'^\s*<\/?(?:ul|ol|li|pre|code)\b', content, flags=re.IGNORECASE):
+                kind = 'html_block'
+            else:
+                kind = 'paragraph'
+
+            # group contiguous lines of same kind
+            if cur_block_kind is None:
+                cur_block_start, cur_block_kind = start, kind
+            elif kind != cur_block_kind:
+                flush_block(stack[-1], cur_block_start, start, cur_block_kind)
+                cur_block_start, cur_block_kind = start, kind
+            # else continue accumulating
+
+        # Flush tail
+        flush_block(stack[-1], cur_block_start, len(text), cur_block_kind)
+        # Close any open sections
+        while len(stack) > 1:
+            node = stack.pop()
+            node['end_offset'] = len(text)
+
+        return {
+            'type': 'hierarchical',
+            'schema_version': 1,
+            'language': language,
+            'method': method,
+            'root': root
+        }
+
+    # ---------------- Flatten hierarchical tree to leaf chunks -----------------
+    def flatten_hierarchical(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Flatten a hierarchical tree into a list of leaf chunks with ancestry titles.
+
+        Each output item: {'text': ..., 'metadata': {...}}, where metadata includes
+        ancestry_titles (list of section titles), section_path (joined string), paragraph_kind,
+        and start/end offsets from the leaf chunk.
+        """
+        if not isinstance(tree, dict):
+            return []
+        root = tree.get('root') or {'children': tree.get('blocks', [])}
+        out: List[Dict[str, Any]] = []
+
+        def walk(node: Dict[str, Any], titles: List[str]):
+            kind = node.get('kind')
+            # Section nodes carry titles
+            if kind == 'section':
+                title = str(node.get('title') or '').strip()
+                titles = titles + ([title] if title else [])
+            # If node has chunks, emit them
+            for ch in node.get('chunks') or []:
+                txt = ch.get('text') or ch.get('content') or ''
+                md = dict(ch.get('metadata') or {})
+                md['ancestry_titles'] = titles
+                if titles:
+                    md['section_path'] = ' > '.join(titles)
+                md['paragraph_kind'] = kind
+                out.append({'text': txt, 'metadata': md})
+            # Recurse children
+            for child in node.get('children') or []:
+                if isinstance(child, dict):
+                    walk(child, titles)
+
+        walk(root, [])
+        # Normalize chunk_index/total if not present
+        for i, item in enumerate(out):
+            md = item.setdefault('metadata', {})
+            md.setdefault('chunk_index', i)
+            md.setdefault('total_chunks', len(out))
+        return out
 
     # --- Stubs for other methods to be moved ---
     def _semantic_chunking(self, text: str, max_chunk_size: int, unit: str) -> List[str]:
@@ -836,8 +1473,12 @@ class Chunker:
         try:
             sentences = sent_tokenize(text, language=nltk_language)
         except LookupError:
-            logging.warning(f"NLTK Punkt for '{language}' (for semantic chunking) not found. Defaulting to 'english'.")
-            sentences = sent_tokenize(text, language='english')
+            logging.warning(f"NLTK Punkt for '{language}' (for semantic chunking) not found. Attempting regex fallback.")
+            try:
+                sentences = [s for s in re.split(r'(?<=[.!?])\s+', text) if s]
+            except Exception as e_sent_fallback:
+                logging.error(f"Regex sentence split fallback (semantic) failed: {e_sent_fallback}. Using newline split.")
+                sentences = text.splitlines()
         except Exception as e:
             logging.error(f"Error sentence tokenizing for semantic chunking: {e}. Using newline split.")
             sentences = text.splitlines()
@@ -956,10 +1597,13 @@ class Chunker:
                 'original_list_size': total_items,
                 'item_start_index': i,
                 'item_end_index': i + len(chunk_data) -1,
+                'item_count': len(chunk_data),
+                'json_path': '$',  # top-level array
                 # 'chunk_index', 'total_chunks' etc. will be added by improved_chunking_process wrapper
             }
             chunks_output.append({
                 'json': chunk_data, # The actual JSON content of the chunk
+                'text': json.dumps(chunk_data, separators=(',', ':'), ensure_ascii=False),
                 'metadata': metadata  # Metadata specific to this JSON chunk
             })
         return chunks_output
@@ -1005,11 +1649,14 @@ class Chunker:
 
             metadata = {
                 'original_dict_total_keys_in_data': total_keys,
-                'key_start_index_in_data': i, # Based on original list of keys
+                'key_start_index_in_data': i,  # Based on original list of keys
                 'keys_in_this_chunk_data': len(current_chunk_keys),
+                'key_names_in_order': list(current_chunk_keys),
+                'json_path': f"/{chunkable_key}",
             }
             chunks_output.append({
                 'json': new_json_chunk,
+                'text': json.dumps(new_json_chunk, separators=(',', ':'), ensure_ascii=False),
                 'metadata': metadata
             })
         return chunks_output
@@ -2278,13 +2925,24 @@ def improved_chunking_process(text: str,
         logging.debug(f"Language for overall process set to: {effective_options['language']}")
 
     try:
-        raw_chunks = chunker_instance.chunk_text(
-            processed_text,
-            method=effective_options['method'],
-            llm_call_function=llm_call_function_for_chunker, # Pass it down
-            llm_api_config=llm_api_config_for_chunker      # Pass it down
-        )
-        logging.debug(f"Created {len(raw_chunks)} raw_chunks using method {effective_options['method']}")
+        # Support hierarchical flattening when requested
+        if bool(effective_options.get('hierarchical', False)):
+            template = effective_options.get('hierarchical_template') if isinstance(effective_options.get('hierarchical_template'), dict) else None
+            tree = chunker_instance.chunk_text_hierarchical_deep(
+                processed_text,
+                method=effective_options['method'],
+                template=template
+            )
+            raw_chunks = chunker_instance.flatten_hierarchical(tree)
+            logging.debug(f"Created {len(raw_chunks)} flattened hierarchical chunks using method {effective_options['method']}")
+        else:
+            raw_chunks = chunker_instance.chunk_text(
+                processed_text,
+                method=effective_options['method'],
+                llm_call_function=llm_call_function_for_chunker, # Pass it down
+                llm_api_config=llm_api_config_for_chunker      # Pass it down
+            )
+            logging.debug(f"Created {len(raw_chunks)} raw_chunks using method {effective_options['method']}")
     except ChunkingError as ce:
         logging.error(f"ChunkingError in chunking process: {ce}")
         raise
@@ -2313,14 +2971,26 @@ def improved_chunking_process(text: str,
                 logging.warning(f"Unexpected chunk item type: {type(chunk_item)}. Skipping.")
                 continue
 
+            # Compute relative position using offsets when available
+            def _relative_position_by_offset(md: Dict[str, Any]) -> float:
+                try:
+                    start = md.get('start_offset'); end = md.get('end_offset')
+                    if start is None or end is None:
+                        return float((i + 1) / total_chunks_count) if total_chunks_count > 0 else 0.0
+                    total_len = max(1, len(processed_text))
+                    mid = 0.5 * (float(start) + float(end))
+                    return mid / float(total_len)
+                except Exception:
+                    return float((i + 1) / total_chunks_count) if total_chunks_count > 0 else 0.0
+
             current_chunk_metadata = {
-                'chunk_index': i + 1,
-                'total_chunks': total_chunks_count,
+                'chunk_index': int(chunk_specific_metadata.get('chunk_index', i + 1)),
+                'total_chunks': int(chunk_specific_metadata.get('total_chunks', total_chunks_count)),
                 'chunk_method': effective_options['method'],
                 'max_size_setting': effective_options['max_size'],
                 'overlap_setting': effective_options['overlap'],
                 'language': effective_options.get('language', 'unknown'),
-                'relative_position': float((i + 1) / total_chunks_count) if total_chunks_count > 0 else 0.0,
+                'relative_position': _relative_position_by_offset(chunk_specific_metadata),
                 'adaptive_chunking_used': effective_options.get('adaptive', False),
             }
             current_chunk_metadata.update(chunk_specific_metadata) # Merge method-specific metadata

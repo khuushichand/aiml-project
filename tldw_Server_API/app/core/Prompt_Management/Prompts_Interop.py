@@ -303,6 +303,8 @@ class PromptsInteropService:
         self._collections = {"next_id": 1, "items": {}}  # simple in-memory collections for tests
         # Preserve original-case keywords for prompts created/imported via this service
         self._orig_keywords: Dict[int, list] = {}
+        # Track user-facing names to present on reads (even if DB stored a unique variant)
+        self._name_overrides: Dict[int, str] = {}
 
     def __enter__(self):
         return self
@@ -336,19 +338,77 @@ class PromptsInteropService:
         if hasattr(db, "create_prompt"):
             # Only pass supported arguments expected by tests/mocks
             return int(db.create_prompt(name=name, content=content, author=author, keywords=keywords or []))
-        # Fallback to PromptsDatabase API
-        pid, _uuid, _msg = db.add_prompt(
-            name=name,
-            author=author,
-            details=content,
-            system_prompt=kwargs.get("system_prompt"),
-            user_prompt=kwargs.get("user_prompt"),
-            keywords=keywords or [],
-            overwrite=True,
-        )
-        if pid is not None and keywords is not None:
+        # Fallback to PromptsDatabase API with de-duplication to avoid resurrecting deleted prompts
+        # Build used name set to prevent collisions
+        try:
+            existing = self.list_prompts() or []
+            used_names = {str(it.get('name')) for it in existing if isinstance(it.get('name'), str)}
+        except Exception:
+            used_names = set()
+
+        base_name = name
+        candidate = base_name
+        if candidate in used_names:
+            # Generate a unique duplicate name
+            n = 0
+            while True:
+                n += 1
+                candidate = f"duplicate {n} - {base_name}"
+                if candidate not in used_names:
+                    break
+        # First, try strict insert without overwrite
+        try:
+            pid, _uuid, _msg = db.add_prompt(
+                name=candidate,
+                author=author,
+                details=content,
+                system_prompt=kwargs.get("system_prompt"),
+                user_prompt=kwargs.get("user_prompt"),
+                keywords=keywords or [],
+                overwrite=False,
+            )
+            # If soft-deleted existed and DB returned existing ID with message, treat as collision and retry with unique name
+            if pid is not None and _msg and isinstance(_msg, str) and 'soft-deleted' in _msg.lower():
+                used_names.add(candidate)
+                n = 0
+                while True:
+                    n += 1
+                    candidate = f"duplicate {n} - {base_name}"
+                    if candidate not in used_names:
+                        break
+                pid, _uuid, _msg = db.add_prompt(
+                    name=candidate,
+                    author=author,
+                    details=content,
+                    system_prompt=kwargs.get("system_prompt"),
+                    user_prompt=kwargs.get("user_prompt"),
+                    keywords=keywords or [],
+                    overwrite=False,
+                )
+        except Exception:
+            # As a fallback, try with a unique name
+            n = 0
+            while True:
+                n += 1
+                candidate = f"duplicate {n} - {base_name}"
+                if candidate not in used_names:
+                    break
+            pid, _uuid, _msg = db.add_prompt(
+                name=candidate,
+                author=author,
+                details=content,
+                system_prompt=kwargs.get("system_prompt"),
+                user_prompt=kwargs.get("user_prompt"),
+                keywords=keywords or [],
+                overwrite=False,
+            )
+
+        if pid is not None:
             try:
-                self._orig_keywords[int(pid)] = list(keywords)
+                # Present the original name to callers regardless of storage variant
+                self._name_overrides[int(pid)] = base_name
+                if keywords is not None:
+                    self._orig_keywords[int(pid)] = list(keywords)
             except Exception:
                 pass
         return int(pid) if pid is not None else 0
@@ -373,6 +433,13 @@ class PromptsInteropService:
                 data["keywords"] = list(self._orig_keywords[kid])
             else:
                 data["keywords"] = self._clean_keywords(data.get("keywords"))
+        # Apply name override if stored
+        try:
+            pid_int = int(prompt_id) if prompt_id is not None else int(data.get("id"))
+            if pid_int in self._name_overrides:
+                data["name"] = self._name_overrides[pid_int]
+        except Exception:
+            pass
         return data
 
     def list_prompts(self):
@@ -399,6 +466,8 @@ class PromptsInteropService:
                                 it["keywords"] = list(self._orig_keywords[pid])
                             elif "keywords" in it:
                                 it["keywords"] = self._clean_keywords(it.get("keywords"))
+                            if pid in self._name_overrides:
+                                it["name"] = self._name_overrides[pid]
                         except Exception:
                             if "keywords" in it:
                                 it["keywords"] = self._clean_keywords(it.get("keywords"))
@@ -416,6 +485,8 @@ class PromptsInteropService:
                     it["keywords"] = list(self._orig_keywords[pid])
                 elif "keywords" in it:
                     it["keywords"] = self._clean_keywords(it.get("keywords"))
+                if pid in self._name_overrides:
+                    it["name"] = self._name_overrides[pid]
             except Exception:
                 if "keywords" in it:
                     it["keywords"] = self._clean_keywords(it.get("keywords"))
@@ -563,27 +634,51 @@ class PromptsInteropService:
         return {"updated": updated, "failed": failed}
 
     def bulk_export(self, filter_criteria: Optional[Dict[str, Any]] = None, *args, **kwargs):
-        # Use filter if backend supports it
-        prompts = []
+        # Preserve order and duplicates when prompt_ids provided; present original names
         prompt_ids = kwargs.get("prompt_ids") if isinstance(kwargs, dict) else None
-        if filter_criteria and hasattr(self._ensure_db(), "filter_prompts"):
-            prompts = self._ensure_db().filter_prompts(**filter_criteria)
-        else:
-            prompts = self.list_prompts() or []
-        # If explicit prompt_ids provided, honor them
+        export_list: List[Dict[str, Any]] = []
         if prompt_ids:
+            # Build a quick lookup from list_prompts as a robust fallback
             try:
-                # Only filter when the items actually have ids; otherwise, leave as-is
-                if prompts and all(isinstance(p, dict) and ("id" in p) for p in prompts):
-                    id_set = set(int(pid) for pid in prompt_ids)
-                    prompts = [p for p in prompts if int(p.get("id", -1)) in id_set]
+                indexed = {}
+                for it in self.list_prompts() or []:
+                    try:
+                        indexed[int(it.get('id'))] = it
+                    except Exception:
+                        pass
             except Exception:
-                # Best-effort filtering; if ids can't be parsed or missing, leave list unchanged
-                pass
+                indexed = {}
+            for pid in prompt_ids:
+                try:
+                    pid_int = int(pid)
+                except Exception:
+                    continue
+                p = self.get_prompt(pid_int)
+                if not p:
+                    p = indexed.get(pid_int)
+                if p:
+                    export_list.append({
+                        'name': p.get('name'),
+                        'content': p.get('content') if 'content' in p else p.get('details'),
+                        'author': p.get('author'),
+                        'keywords': list(p.get('keywords') or []),
+                    })
+        else:
+            if filter_criteria and hasattr(self._ensure_db(), "filter_prompts"):
+                items = self._ensure_db().filter_prompts(**filter_criteria) or []
+            else:
+                items = self.list_prompts() or []
+            for it in items:
+                export_list.append({
+                    'name': it.get('name'),
+                    'content': it.get('content') if 'content' in it else it.get('details'),
+                    'author': it.get('author'),
+                    'keywords': list(it.get('keywords') or []),
+                })
         return {
             "version": "1.0",
             "exported_at": __import__("datetime").datetime.utcnow().isoformat(),
-            "prompts": prompts,
+            "prompts": export_list,
         }
 
     def export_prompts(self, *args, **kwargs):
@@ -597,27 +692,65 @@ class PromptsInteropService:
         if not isinstance(data, dict):
             raise TypeError("import data must be a dict")
         prompts = data.get("prompts") or []
+        # Build a set of existing names to avoid overwriting
+        try:
+            existing_items = self.list_prompts() or []
+        except Exception:
+            existing_items = []
+        used_names = set()
+        for it in existing_items:
+            name_val = it.get("name")
+            if isinstance(name_val, str):
+                used_names.add(name_val)
+
+        name_counts: Dict[str, int] = {}
         new_ids = []
         imported = 0
         failed = 0
         skipped = 0
+
         for p in prompts:
             try:
+                base_name = p.get("name")
+                if not isinstance(base_name, str) or not base_name.strip():
+                    raise ValueError("Prompt name must be a non-empty string")
+                candidate = base_name
+                # If the base name already exists (in DB or previous imports), generate a unique duplicate name
+                if candidate in used_names:
+                    count = name_counts.get(base_name, 0)
+                    while True:
+                        count += 1
+                        candidate = f"duplicate {count} - {base_name}"
+                        if candidate not in used_names:
+                            break
+                    name_counts[base_name] = count
+                else:
+                    # Reserve the base name if first occurrence
+                    name_counts.setdefault(base_name, 0)
+
+                # Reserve the chosen name to prevent collisions with later items
+                used_names.add(candidate)
+
                 pid = self.create_prompt(
-                    name=p.get("name"),
+                    name=candidate,
                     content=p.get("content"),
                     author=p.get("author"),
                     keywords=p.get("keywords") or [],
                 )
+                # Ensure reads present the original exported name (not the unique storage variant)
+                try:
+                    self._name_overrides[int(pid)] = base_name
+                except Exception:
+                    pass
                 new_ids.append(pid)
                 imported += 1
             except Exception:
                 failed += 1
-                # Count skipped separately when duplicates are allowed to be skipped
                 if skip_duplicates:
                     skipped += 1
                 else:
                     raise
+
         return {"imported": imported, "failed": failed, "skipped": skipped, "prompt_ids": new_ids}
 
     def validate_import_data(self, data):

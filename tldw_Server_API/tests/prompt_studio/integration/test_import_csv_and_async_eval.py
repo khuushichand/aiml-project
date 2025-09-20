@@ -30,7 +30,8 @@ def client_with_user(tmp_path, monkeypatch):
             "permissions": ["all"],
         }
     app.dependency_overrides[get_current_active_user] = override_active_user
-    yield TestClient(app)
+    with TestClient(app) as client:
+        yield client
     app.dependency_overrides.clear()
 
 

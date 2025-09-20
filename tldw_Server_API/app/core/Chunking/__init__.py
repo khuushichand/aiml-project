@@ -179,6 +179,19 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     return result
 
 
+# Public helper to flatten hierarchical trees (legacy or v2-bridged)
+def flatten_hierarchical(tree: dict) -> list:
+    """Flatten a hierarchical chunk tree to a list of {'text','metadata'}.
+
+    This helper bridges to the legacy Chunk_Lib. If unavailable, returns [].
+    """
+    try:
+        from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker as _LegacyChunker  # type: ignore
+        return _LegacyChunker().flatten_hierarchical(tree)
+    except Exception:
+        return []
+
+
 # Enhanced chunk support for RAG integration
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional

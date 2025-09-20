@@ -122,7 +122,8 @@ def client(monkeypatch):
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
 
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_create_store_and_uniqueness(client):
@@ -161,4 +162,3 @@ def test_duplicate_store(client):
     data = dup.json()
     assert data['source_id'] == src['id']
     assert data['upserted'] == 1
-

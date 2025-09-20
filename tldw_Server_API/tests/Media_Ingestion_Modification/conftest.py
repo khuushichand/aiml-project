@@ -5,6 +5,74 @@ import sqlite3
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.Utils import logging  # Ensure logging is available
 
+"""
+Provide a lightweight runtime shim for NVIDIA NeMo only for unit tests.
+
+Goal: ensure `nemo.collections.asr.models` exists so patch() targets
+resolve cleanly without installing the heavy dependency.
+"""
+import sys
+import types
+
+def _ensure_nemo_stub():  # pragma: no cover - used in tests only
+    try:
+        import nemo  # type: ignore
+    except ModuleNotFoundError:
+        nemo = types.ModuleType('nemo')
+        collections = types.ModuleType('nemo.collections')
+        asr = types.ModuleType('nemo.collections.asr')
+        models = types.ModuleType('nemo.collections.asr.models')
+        # Minimal classes for patching
+        class EncDecRNNTBPEModel:
+            @classmethod
+            def from_pretrained(cls, model_name: str):
+                return None
+        class EncDecMultiTaskModel:
+            @classmethod
+            def from_pretrained(cls, model_name: str):
+                return None
+        models.EncDecRNNTBPEModel = EncDecRNNTBPEModel
+        models.EncDecMultiTaskModel = EncDecMultiTaskModel
+        asr.models = models
+        collections.asr = asr
+        nemo.collections = collections
+        sys.modules['nemo'] = nemo
+        sys.modules['nemo.collections'] = collections
+        sys.modules['nemo.collections.asr'] = asr
+        sys.modules['nemo.collections.asr.models'] = models
+        return
+
+    # If some `nemo` is present, ensure nested asr.models exists for patching
+    # Build or attach missing submodules without disturbing real installs.
+    collections = getattr(nemo, 'collections', None)
+    if collections is None:
+        collections = types.ModuleType('nemo.collections')
+        nemo.collections = collections
+        sys.modules['nemo.collections'] = collections
+    asr = getattr(collections, 'asr', None)
+    if asr is None:
+        asr = types.ModuleType('nemo.collections.asr')
+        collections.asr = asr
+        sys.modules['nemo.collections.asr'] = asr
+    models = getattr(asr, 'models', None)
+    if models is None:
+        models = types.ModuleType('nemo.collections.asr.models')
+        # Minimal classes for patching
+        class EncDecRNNTBPEModel:
+            @classmethod
+            def from_pretrained(cls, model_name: str):
+                return None
+        class EncDecMultiTaskModel:
+            @classmethod
+            def from_pretrained(cls, model_name: str):
+                return None
+        models.EncDecRNNTBPEModel = EncDecRNNTBPEModel
+        models.EncDecMultiTaskModel = EncDecMultiTaskModel
+        asr.models = models
+        sys.modules['nemo.collections.asr.models'] = models
+
+_ensure_nemo_stub()
+
 
 @pytest.fixture(scope="session")  # The factory itself can be session-scoped for efficiency
 def memory_db_factory():

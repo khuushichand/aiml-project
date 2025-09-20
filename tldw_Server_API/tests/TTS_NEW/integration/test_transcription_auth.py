@@ -36,7 +36,7 @@ def _make_wav_bytes(duration_sec=0.1, sr=16000, freq=440.0) -> bytes:
 
 
 def test_transcriptions_requires_auth_401():
-    client = TestClient(app)
+    with TestClient(app) as client:
     wav_bytes = _make_wav_bytes()
     files = {"file": ("test.wav", wav_bytes, "audio/wav")}
     data = {"model": "whisper-1", "response_format": "json"}
@@ -45,7 +45,7 @@ def test_transcriptions_requires_auth_401():
 
 
 def test_transcriptions_ok_with_override(monkeypatch):
-    client = TestClient(app)
+    with TestClient(app) as client:
 
     # Override user dependency to simulate authenticated user
     async def _override_user():
@@ -76,7 +76,7 @@ def test_transcriptions_ok_with_override(monkeypatch):
 
 
 def test_translations_requires_auth_401():
-    client = TestClient(app)
+    with TestClient(app) as client:
     wav_bytes = _make_wav_bytes()
     files = {"file": ("test.wav", wav_bytes, "audio/wav")}
     data = {"model": "whisper-1", "response_format": "json"}
@@ -85,7 +85,7 @@ def test_translations_requires_auth_401():
 
 
 def test_translations_ok_with_override(monkeypatch):
-    client = TestClient(app)
+    with TestClient(app) as client:
 
     async def _override_user():
         return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -111,4 +111,3 @@ def test_translations_ok_with_override(monkeypatch):
         assert j.get("text") == "translated transcript"
     finally:
         app.dependency_overrides.pop(get_request_user, None)
-

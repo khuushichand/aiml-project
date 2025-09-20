@@ -104,10 +104,7 @@ def mock_user():
         id=1,
         username="test_user",
         email="test@example.com",
-        is_active=True,
-        is_admin=False,
-        created_at=datetime.datetime.now(),
-        updated_at=datetime.datetime.now()
+        is_active=True
     )
 
 @pytest.fixture(autouse=True)

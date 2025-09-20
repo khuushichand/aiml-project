@@ -60,7 +60,8 @@ def client(monkeypatch):
     async def override_user():
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user]=override_user
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_create_from_media_chunking_words_language(client, monkeypatch):

@@ -113,15 +113,13 @@ def test_client(test_db):
             # Override the database and auth dependencies
             app.dependency_overrides[get_chacha_db_for_user] = lambda: test_db
             app.dependency_overrides[get_request_user] = mock_get_request_user
-            
-            client = TestClient(app)
-            
-            # Get CSRF token
-            response = client.get("/api/v1/health")
-            csrf_token = response.cookies.get("csrf_token", "")
-            client.csrf_token = csrf_token
-            
-            yield client
+
+            with TestClient(app) as client:
+                # Get CSRF token
+                response = client.get("/api/v1/health")
+                csrf_token = response.cookies.get("csrf_token", "")
+                client.csrf_token = csrf_token
+                yield client
             
             # Cleanup - don't clear, let the autouse fixture handle it
 
