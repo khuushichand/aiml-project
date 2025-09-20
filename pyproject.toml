@@ -370,6 +370,7 @@ markers = [
     "external_api: marks tests that require external API access",
     "local_llm_service: marks tests that require local LLM service",
     "timeout: marks tests with custom timeout settings", 
+    "bench: marks benchmark tests",
     "benchmark: marks performance benchmark tests",
     "performance: marks performance tests",
     "slow: marks tests that take a long time to run",
