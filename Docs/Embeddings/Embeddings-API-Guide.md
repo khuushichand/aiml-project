@@ -161,31 +161,23 @@ Create embedding vectors for input text.
 }
 ```
 
-#### List Available Providers
+#### List Available Models
 ```http
-GET /api/v1/embeddings/providers
+GET /api/v1/embeddings/models
 ```
 
-Get list of available embedding providers and their models.
+List known models (from static table + defaults) with allowlist and default flags. Some providers listed may be planned but not fully wired in the engine yet.
 
 **Response:**
 ```json
 {
-    "providers": [
-        {
-            "id": "openai",
-            "name": "OpenAI",
-            "models": ["text-embedding-3-small", "text-embedding-3-large"],
-            "features": {
-                "dimensions_support": true,
-                "batch_support": true,
-                "max_batch_size": 100
-            },
-            "configured": true
-        }
-    ],
-    "default_provider": "openai",
-    "default_model": "text-embedding-3-small"
+  "data": [
+    { "provider": "openai", "model": "text-embedding-3-small", "allowed": true, "default": true },
+    { "provider": "openai", "model": "text-embedding-3-large", "allowed": true, "default": false },
+    { "provider": "huggingface", "model": "sentence-transformers/all-MiniLM-L6-v2", "allowed": true, "default": false }
+  ],
+  "allowed_providers": null,
+  "allowed_models": null
 }
 ```
 
@@ -199,74 +191,43 @@ Check service health status.
 **Response:**
 ```json
 {
-    "status": "healthy",
-    "service": "embeddings_v5_production",
-    "timestamp": "2024-01-01T12:00:00Z",
-    "cache_stats": {
-        "size": 150,
-        "max_size": 5000,
-        "ttl_seconds": 3600
-    },
-    "active_requests": 2
+  "status": "healthy",
+  "service": "embeddings_v5_production_enhanced",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "cache_stats": { "size": 150, "max_size": 5000, "ttl_seconds": 3600 },
+  "active_requests": 2,
+  "circuit_breakers": { "openai": { "state": "closed", "failure_count": 0 } }
 }
 ```
 
-### Job-Based API (For Large Batches)
+### Media Embeddings API (Chunk and store document vectors)
 
-#### Create Embedding Job
+Use the media-specific endpoints to generate and persist embeddings for an ingested media item’s text content.
+
+#### Start Embedding for a Media Item
 ```http
-POST /api/v1/embeddings/jobs
+POST /api/v1/media/{media_id}/embeddings
 ```
 
-Submit a job for asynchronous embedding generation.
-
-**Request Body:**
+Body (optional overrides):
 ```json
-{
-    "media_id": 123,
-    "model": "text-embedding-3-small",
-    "chunking_config": {
-        "chunk_size": 1000,
-        "overlap": 200
-    },
-    "priority": "normal",
-    "metadata": {
-        "source": "document",
-        "tags": ["important"]
-    }
-}
+{ "embedding_model": "sentence-transformers/all-MiniLM-L6-v2", "embedding_provider": "huggingface", "chunk_size": 1000, "chunk_overlap": 200 }
 ```
 
-**Response:**
+Response:
 ```json
-{
-    "job_id": "550e8400-e29b-41d4-a716-446655440000",
-    "status": "pending",
-    "created_at": "2024-01-01T12:00:00Z",
-    "media_id": 123,
-    "progress_percentage": 0,
-    "estimated_completion": "2024-01-01T12:05:00Z"
-}
+{ "media_id": 123, "status": "accepted", "message": "Embedding generation started", "job_id": "mej_..." }
 ```
 
-#### Get Job Status
+#### Check Media Embeddings Status
 ```http
-GET /api/v1/embeddings/jobs/{job_id}
+GET /api/v1/media/{media_id}/embeddings/status
 ```
 
-#### Cancel Job
+#### Media Embedding Jobs
 ```http
-DELETE /api/v1/embeddings/jobs/{job_id}
-```
-
-#### WebSocket for Real-time Updates
-```javascript
-const ws = new WebSocket('ws://localhost:8000/api/v1/embeddings/jobs/ws/{job_id}');
-
-ws.onmessage = (event) => {
-    const update = JSON.parse(event.data);
-    console.log(`Progress: ${update.progress}%`);
-};
+GET /api/v1/media/embeddings/jobs/{job_id}
+GET /api/v1/media/embeddings/jobs?status=completed&limit=50&offset=0
 ```
 
 ## Request/Response Format
@@ -293,13 +254,7 @@ ws.onmessage = (event) => {
 }
 ```
 
-#### Token Array Input (OpenAI Compatible)
-```json
-{
-    "input": [8196, 374, 264, 1296, 311, 11840],
-    "model": "text-embedding-3-small"
-}
-```
+Note: Token-array inputs are not currently accepted by the endpoint (even though the schema includes them). Send strings or list of strings. Non-string items will return HTTP 400.
 
 ### Output Formats
 
@@ -523,50 +478,12 @@ async function createEmbeddingsWithRetry(
 }
 ```
 
-## Rate Limits & Quotas
+## Rate Limiting
 
-### Rate Limiting Structure
+- Off by default. Enable with environment variable `EMBEDDINGS_RATE_LIMIT=on`.
+- When enabled, requests may receive HTTP 429 depending on configured policy.
 
-```mermaid
-graph TD
-    subgraph "Rate Limits"
-        RL1[Anonymous<br/>10 req/min]
-        RL2[Free Tier<br/>60 req/min<br/>1000 embeddings/day]
-        RL3[Premium<br/>300 req/min<br/>10000 embeddings/day]
-        RL4[Enterprise<br/>1000 req/min<br/>100000 embeddings/day]
-    end
-    
-    subgraph "Quota Tracking"
-        DAILY[Daily Quota]
-        CONCURRENT[Concurrent Jobs]
-        TOKENS[Token Usage]
-    end
-    
-    RL2 --> DAILY
-    RL3 --> DAILY
-    RL4 --> DAILY
-    
-    RL2 --> CONCURRENT
-    RL3 --> CONCURRENT
-    RL4 --> CONCURRENT
-```
-
-### Checking Quota Status
-
-```python
-# Get current quota status
-response = requests.get(
-    "http://localhost:8000/api/v1/embeddings/quota/status",
-    headers={"Authorization": f"Bearer {API_KEY}"}
-)
-
-quota = response.json()
-print(f"Daily limit: {quota['daily_limit']}")
-print(f"Used today: {quota['chunks_used_today']}")
-print(f"Remaining: {quota['chunks_remaining']}")
-```
-
-### Handling Rate Limits
+### Handling 429s (example)
 
 ```python
 class RateLimitHandler:
@@ -633,33 +550,7 @@ class EmbeddingsClient:
         
         return [item["embedding"] for item in data["data"]]
     
-    def create_batch_job(
-        self,
-        texts: List[str],
-        model: str = "text-embedding-3-small"
-    ) -> str:
-        """Create job for large batch"""
-        
-        response = self.session.post(
-            f"{self.api_url}/embeddings/jobs",
-            json={
-                "input": texts,
-                "model": model
-            }
-        )
-        
-        response.raise_for_status()
-        return response.json()["job_id"]
-    
-    def get_job_status(self, job_id: str) -> dict:
-        """Get job status"""
-        
-        response = self.session.get(
-            f"{self.api_url}/embeddings/jobs/{job_id}"
-        )
-        
-        response.raise_for_status()
-        return response.json()
+    # Media embeddings are exposed under /media, not generic /embeddings/jobs
 
 # Usage
 client = EmbeddingsClient(
@@ -677,9 +568,7 @@ embeddings = client.create_embedding([
     "Third text"
 ])
 
-# Large batch with job
-job_id = client.create_batch_job(["text"] * 1000)
-status = client.get_job_status(job_id)
+# For media/document chunk embeddings, use the /api/v1/media endpoints
 ```
 
 ### JavaScript/TypeScript SDK

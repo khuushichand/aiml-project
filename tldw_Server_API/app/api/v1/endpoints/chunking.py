@@ -48,6 +48,7 @@ from tldw_Server_API.app.core.config import load_and_log_configs as load_server_
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
 #
 #######################################################################################################################
 #
@@ -528,3 +529,23 @@ async def process_file_for_chunking(
         original_file_name=file.filename,
         applied_options=ChunkingOptionsRequest(**effective_processing_options)
     )
+
+
+# --- Capabilities Endpoint ---
+@chunking_router.get(
+    "/capabilities",
+    summary="List chunking methods and defaults",
+    tags=["Text Processing", "Chunking"],
+)
+async def get_chunking_capabilities(
+    current_user: User = Depends(get_request_user),
+):
+    methods = [m.value for m in ChunkingMethod]
+    llm_required = [m for m in ["rolling_summarize", "propositions"] if m in methods]
+    return {
+        "methods": methods,
+        "default_options": default_chunk_options_from_lib,
+        "llm_required_methods": llm_required,
+        "hierarchical_support": True,
+        "notes": "This describes text chunking capabilities; ingestion-specific chunkers are configured via templates or step config.",
+    }

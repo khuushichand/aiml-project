@@ -19,6 +19,7 @@ Key fields:
   - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`.
 - `stream` (bool): If true, returns Server-Sent Events (SSE) for streaming.
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
+- `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
 - Common sampling params (provider-dependent): `temperature`, `top_p`, `max_tokens`, `n`, `frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `logit_bias`.
 - Tools: `tools`, `tool_choice` (provider-dependent tool/function calling).
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
@@ -51,12 +52,33 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/completions \
 - If `model` includes a provider prefix (`provider/model`), that provider is used unless `api_provider` is explicitly set.
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
 - Provider API keys are sourced from environment (`.env`) or `tldw_Server_API/Config_Files/config.txt`.
+ - When provider fallback is enabled in server config, the server may automatically select a healthy provider if the requested one is unavailable.
 
 ## Streaming Behavior
 - Media type: `text/event-stream`.
 - Heartbeats: Sent periodically (default 30s) to keep connections alive.
 - Idle timeout: Default 300s of inactivity ends the stream with an error event.
 - Completion: Upstream `[DONE]` or natural stream end closes the SSE.
+
+Event shapes (examples):
+```
+event: stream_start
+data: {"conversation_id":"<id>","model":"<model>","timestamp":"<iso>"}
+
+data: {"choices":[{"delta":{"content":"Hello"}}]}
+
+: heartbeat 2025-01-01T00:00:30Z
+
+event: stream_end
+data: {"conversation_id":"<id>","success":true,"timestamp":"<iso>"}
+```
+
+Errors during streaming are emitted as SSE `data:` frames with an `{"error": {"message": "..."}}` payload.
+
+Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum client compatibility.
+
+## Responses
+- Non-streaming JSON includes the standard OpenAI `choices` structure and a `tldw_conversation_id` field to help clients track state.
 
 ## Persistence
 - Default behavior is ephemeral (no DB writes).
@@ -104,3 +126,9 @@ When exceeded, the endpoint returns `429`.
 - Chatbook features (Dictionaries, Document Generator, Import/Export): `Docs/API-related/Chatbook_Features_API_Documentation.md`
 - Character chat sessions API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
 
+## Providers API
+Supporting endpoints for discovering providers and models:
+- `GET /api/v1/llm/providers` – Configured providers and models
+- `GET /api/v1/llm/providers/{provider}` – Details for a specific provider
+- `GET /api/v1/llm/models` – Flat list of `<provider>/<model>` values
+- `GET /api/v1/llm/models/metadata` – Flattened model capability metadata

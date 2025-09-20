@@ -64,6 +64,23 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
+    EmbeddingsABTestCreateRequest,
+    EmbeddingsABTestCreateResponse,
+    EmbeddingsABTestStatusResponse,
+    EmbeddingsABTestResultsResponse,
+    EmbeddingsABTestResultSummary,
+    ArmSummary,
+)
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
+    build_collections_vector_only,
+    run_vector_search_and_score,
+    compute_significance,
+    run_abtest_full,
+)
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["Evaluations"])
@@ -209,7 +226,7 @@ async def check_evaluation_rate_limit(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded. Retry after {retry_after} seconds",
             headers={"Retry-After": str(retry_after)}
-        )
+    )
 
 
 # ============= Error Handling =============
@@ -273,6 +290,254 @@ def create_error_response(
             }
         }
     )
+
+
+def require_admin(user: User) -> None:
+    try:
+        if is_single_user_mode():
+            return
+    except Exception:
+        pass
+    # Admin-only switch override by env
+    import os as _os
+    if _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+        return
+    if not user or not getattr(user, 'is_admin', False):
+        raise HTTPException(status_code=403, detail="Admin privileges required for heavy evaluations")
+
+
+# ================= Embeddings A/B Test (stubs) =================
+
+@router.post("/embeddings/abtest", response_model=EmbeddingsABTestCreateResponse)
+async def create_embeddings_abtest(
+    payload: EmbeddingsABTestCreateRequest,
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    """Create an embeddings A/B test (stub).
+
+    Validates shape and returns a generated test_id. Persistence to DB and
+    orchestration will be added in implementation phases per plan.
+    """
+    # Simple test_id generation
+    svc = get_evaluation_service()
+    db = svc.db
+    # Persist test, arms, and queries
+    test_id = db.create_abtest(name=payload.name, config=payload.config.model_dump(), created_by=user_ctx)
+    # Insert arms
+    for idx, arm in enumerate(payload.config.arms):
+        db.upsert_abtest_arm(
+            test_id=test_id,
+            arm_index=idx,
+            provider=arm.provider,
+            model_id=arm.model,
+            dimensions=arm.dimensions,
+            status='pending',
+        )
+    # Insert queries
+    db.insert_abtest_queries(test_id, [q.model_dump() for q in payload.config.queries])
+    logger.info(f"A/B test created: {test_id} by {user_ctx}")
+    return EmbeddingsABTestCreateResponse(test_id=test_id, status='created')
+
+
+@router.post("/embeddings/abtest/{test_id}/run", response_model=EmbeddingsABTestStatusResponse)
+async def run_embeddings_abtest(
+    test_id: str,
+    payload: EmbeddingsABTestCreateRequest,
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+    media_db = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Start an embeddings A/B test (stub runner).
+
+    As a minimal integration path, embed queries for each arm using the
+    arm's provider/model to avoid retriever refactors. Returns running status.
+    """
+    # Admin gating for heavy runs
+    require_admin(current_user)
+    svc = get_evaluation_service()
+    db = svc.db
+    # Launch background job
+    asyncio.create_task(run_abtest_full(db, payload.config, test_id, str(current_user.id), media_db))
+    logger.info(f"A/B test started in background: {test_id}")
+    return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
+
+
+@router.get("/embeddings/abtest/{test_id}", response_model=EmbeddingsABTestResultSummary)
+async def get_embeddings_abtest_status(
+    test_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    svc = get_evaluation_service()
+    row = svc.db.get_abtest(test_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="abtest not found")
+    status = row.get('status', 'pending')
+    aggregates = {}
+    try:
+        stats_json = json.loads(row.get('stats_json') or '{}')
+        aggregates = stats_json.get('aggregates') or {}
+    except Exception:
+        aggregates = {}
+    arms_rows = svc.db.get_abtest_arms(test_id)
+    arms = []
+    for ar in arms_rows:
+        metrics = aggregates.get(ar['arm_id']) or {}
+        # Extract doc/chunk counts if present
+        doc_counts = {}
+        try:
+            s = ar.get('stats_json')
+            if s:
+                sj = json.loads(s)
+                if isinstance(sj, dict):
+                    if 'doc_count' in sj:
+                        doc_counts['docs'] = int(sj.get('doc_count') or 0)
+                    if 'chunk_count' in sj:
+                        doc_counts['chunks'] = int(sj.get('chunk_count') or 0)
+        except Exception:
+            doc_counts = {}
+        arms.append(ArmSummary(
+            arm_id=ar['arm_id'],
+            provider=ar['provider'],
+            model=ar['model_id'],
+            dimensions=ar.get('dimensions'),
+            metrics=metrics,
+            latency_ms={
+                "p50": metrics.get('latency_ms_p50', 0.0),
+                "p95": metrics.get('latency_ms_p95', 0.0),
+                "mean": metrics.get('latency_ms_mean', 0.0),
+            },
+            doc_counts=doc_counts
+        ))
+    return EmbeddingsABTestResultSummary(test_id=test_id, status=status, arms=arms)
+
+
+@router.get("/embeddings/abtest/{test_id}/results", response_model=EmbeddingsABTestResultsResponse)
+async def get_embeddings_abtest_results(
+    test_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    svc = get_evaluation_service()
+    rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size)
+    # Build summary
+    row = svc.db.get_abtest(test_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="abtest not found")
+    status = row.get('status', 'pending')
+    aggregates = {}
+    try:
+        stats_json = json.loads(row.get('stats_json') or '{}')
+        aggregates = stats_json.get('aggregates') or {}
+    except Exception:
+        aggregates = {}
+    arms_rows = svc.db.get_abtest_arms(test_id)
+    arms = []
+    for ar in arms_rows:
+        metrics = aggregates.get(ar['arm_id']) or {}
+        arms.append(ArmSummary(
+            arm_id=ar['arm_id'],
+            provider=ar['provider'],
+            model=ar['model_id'],
+            dimensions=ar.get('dimensions'),
+            metrics=metrics,
+            latency_ms={
+                "p50": metrics.get('latency_ms_p50', 0.0),
+                "p95": metrics.get('latency_ms_p95', 0.0),
+                "mean": metrics.get('latency_ms_mean', 0.0),
+            },
+            doc_counts={}
+        ))
+    summary = EmbeddingsABTestResultSummary(test_id=test_id, status=status, arms=arms)
+    return EmbeddingsABTestResultsResponse(summary=summary, page=page, page_size=page_size, total=total)
+
+
+@router.get("/embeddings/abtest/{test_id}/significance")
+async def get_embeddings_abtest_significance(
+    test_id: str,
+    metric: str = Query("ndcg"),
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    svc = get_evaluation_service()
+    _ = svc.db.get_abtest(test_id) or (_ for _ in ()).throw(HTTPException(404, "abtest not found"))
+    return compute_significance(svc.db, test_id, metric=metric)
+
+
+@router.get("/embeddings/abtest/{test_id}/events")
+async def stream_embeddings_abtest_events(
+    test_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    """SSE stream of progress and updates for an A/B test."""
+    from fastapi.responses import StreamingResponse
+    import asyncio as _aio
+    import json as _json
+    svc = get_evaluation_service()
+
+    async def event_generator():
+        last_payload = None
+        while True:
+            row = svc.db.get_abtest(test_id)
+            if not row:
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'not_found'})}\n\n"
+                break
+            status = row.get('status', 'pending')
+            stats = row.get('stats_json')
+            payload = {"type": "status", "status": status}
+            try:
+                payload["stats"] = _json.loads(stats) if stats else {}
+            except Exception:
+                payload["stats"] = {}
+            if payload != last_payload:
+                yield f"data: {_json.dumps(payload)}\n\n"
+                last_payload = payload
+            if status in ("completed", "failed", "canceled"):
+                break
+            await _aio.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+
+
+@router.delete("/embeddings/abtest/{test_id}")
+async def delete_embeddings_abtest(
+    test_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+):
+    """Cancel/cleanup an embeddings A/B test (stub)."""
+    logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    return {"status": "deleted", "test_id": test_id}
+
+
+@router.get("/embeddings/abtest/{test_id}/export")
+async def export_embeddings_abtest(
+    test_id: str,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    user_ctx: str = Depends(verify_api_key),
+    _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
+):
+    """Export AB test results (JSON or CSV). Admin-only."""
+    require_admin(current_user)
+    svc = get_evaluation_service()
+    rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
+    if format == 'json':
+        return {"test_id": test_id, "total": total, "results": rows}
+    # CSV
+    import csv
+    import io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["result_id", "arm_id", "query_id", "ranked_ids", "latency_ms", "metrics_json"])
+    for r in rows:
+        writer.writerow([r.get('result_id'), r.get('arm_id'), r.get('query_id'), r.get('ranked_ids'), r.get('latency_ms'), r.get('metrics_json')])
+    return Response(content=output.getvalue(), media_type='text/csv', headers={"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"})
 
 
 # ============= OpenAI-Compatible Evaluation Endpoints =============

@@ -7,6 +7,10 @@
         <!-- Basic Parameters -->
         <div class="basic-params">
             <h3>Basic Parameters</h3>
+            <div class="help-inline" style="font-size: 0.9em; color: #555; margin: 6px 0 12px;">
+                <span title="Tip: You can either select a provider or prefix the model as provider/model (e.g., anthropic/claude-3-5-sonnet). The server parses prefixed models automatically if api_provider is not set. See the Providers tab for configured providers/models. Useful endpoints: /api/v1/llm/providers, /api/v1/llm/models.">ⓘ Provider/Model help</span>
+                <a href="/docs" target="_blank" style="margin-left:8px;">Open API Docs</a>
+            </div>
             
             <div class="form-group">
                 <label for="chatCompletions_provider">API Provider:</label>
@@ -224,7 +228,7 @@
                 <div class="btn-group">
                     <button class="btn btn-primary" onclick="sendChatMessage()" aria-label="Send message" role="button">Send</button>
                     <button class="btn btn-secondary" onclick="clearChat()" aria-label="Clear chat history" role="button">Clear Chat</button>
-                    <select id="chat-provider" style="margin-left: 10px;">
+                    <select id="chat-provider" style="margin-left: 10px;" title="You can also set the model as provider/model without selecting a provider here.">
                         <option value="">All Providers</option>
                         <option value="openai">OpenAI</option>
                         <option value="anthropic">Anthropic</option>
@@ -244,7 +248,7 @@
                         <option value="local-llm">Local LLM</option>
                         <option value="custom-openai-api">Custom OpenAI API</option>
                     </select>
-                    <select id="chat-model" class="llm-model-select" style="margin-left: 10px;">
+                    <select id="chat-model" class="llm-model-select" style="margin-left: 10px;" title="Models reflect configured providers. You can paste a prefixed name like anthropic/claude-3-5-sonnet.">
                         <option value="">Loading models...</option>
                     </select>
                 </div>

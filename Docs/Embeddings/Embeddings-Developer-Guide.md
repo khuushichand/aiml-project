@@ -107,29 +107,28 @@ classDiagram
 tldw_Server_API/
 ├── app/
 │   ├── api/v1/endpoints/
-│   │   ├── embeddings_v5_production.py    # Synchronous API
-│   │   └── embeddings_jobs.py             # Job-based API
+│   │   ├── embeddings_v5_production_enhanced.py  # Synchronous API with circuit breaker
+│   │   ├── media_embeddings.py                   # Media chunking + embeddings storage
+│   │   └── vector_stores_openai.py              # Vector store ops that use embeddings
 │   │
 │   └── core/
 │       └── Embeddings/
-│           ├── queue_schemas.py           # Message schemas
-│           ├── job_manager.py             # Job management
-│           ├── worker_orchestrator.py     # Worker coordination
+│           ├── queue_schemas.py                 # Message schemas (WIP for workers)
+│           ├── job_manager.py                   # Job management (WIP)
+│           ├── worker_orchestrator.py           # Worker coordination (WIP)
 │           ├── workers/
-│           │   ├── base_worker.py         # Base worker class
-│           │   ├── chunking_worker.py     # Text chunking
-│           │   ├── embedding_worker.py    # Embedding generation
-│           │   └── storage_worker.py      # Storage operations
+│           │   ├── base_worker.py               # Base worker class (WIP)
+│           │   ├── chunking_worker.py           # Text chunking (WIP)
+│           │   ├── embedding_worker.py          # Embedding generation (WIP)
+│           │   └── storage_worker.py            # Storage operations (WIP)
 │           └── Embeddings_Server/
-│               └── Embeddings_Create.py   # Core embedding logic
+│               └── Embeddings_Create.py         # Core embedding logic (OpenAI/HF/ONNX/local)
 │
-├── tests/Embeddings/
-│   ├── test_embeddings_v5_unit.py        # Unit tests
-│   ├── test_embeddings_v5_integration.py # Integration tests
-│   └── test_embeddings_v5_property.py    # Property tests
+├── tests/Embeddings/                            # If present (naming may vary)
+│   └── ...
 │
 └── Config_Files/
-    └── embeddings_production_config.yaml  # Configuration
+    └── embeddings_production_config.yaml        # Example configuration (if used)
 ```
 
 ## Working with the Codebase
@@ -177,7 +176,7 @@ test_settings = {
 ### Using the Synchronous API
 
 ```python
-from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production import (
+from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
     create_embeddings_batch_async,
     TTLCache,
     ConnectionPoolManager
@@ -193,7 +192,7 @@ async def generate_embeddings(texts: List[str]):
         texts=texts,
         provider="openai",
         model_id="text-embedding-3-small",
-        dimensions=1536
+        dimensions=1536  # optional; applies to specific providers only
     )
     return embeddings
 ```
@@ -240,7 +239,7 @@ async def process_large_batch(texts: List[str]):
 ### Step 1: Define Provider Configuration
 
 ```python
-# In embeddings_v5_production.py
+# In embeddings_v5_production_enhanced.py
 
 class EmbeddingProvider(str, Enum):
     # ... existing providers ...
@@ -255,7 +254,7 @@ PROVIDER_MODELS = {
 }
 ```
 
-### Step 2: Implement Provider Configuration Builder
+### Step 2: Implement Provider Configuration Builder (endpoint)
 
 ```python
 def build_provider_config(
@@ -277,7 +276,7 @@ def build_provider_config(
         }
 ```
 
-### Step 3: Implement Embedding Creation
+### Step 3: Implement Embedding Creation (engine)
 
 ```python
 # In Embeddings_Create.py
@@ -300,6 +299,8 @@ class NewProviderEmbedder(BaseEmbedder):
         )
         return np.array([e.embedding for e in response.data])
 ```
+
+Also add a branch handling `provider == "newprovider"` in `create_embeddings_batch(...)`.
 
 ### Step 4: Add Tests
 

@@ -16,20 +16,19 @@
 
 ## Overview
 
-The Embeddings Module provides a unified interface for generating text embeddings across multiple providers (OpenAI, HuggingFace, Cohere, etc.) with built-in caching, rate limiting, and resource management.
+The Embeddings Module provides a unified interface for generating text embeddings across multiple providers with built-in caching, optional rate limiting, and resource management. Today the production path supports OpenAI and HuggingFace; the core engine also supports ONNX (optimum + onnxruntime) and a Local API mode. Additional providers (Cohere, Google, Mistral, Voyage) are planned but not fully integrated end-to-end yet.
 
 ### Key Features
-- **Multi-provider support** with automatic fallback
-- **TTL-based caching** for performance optimization
-- **Resource management** with LRU eviction
-- **Security hardening** with input validation and audit logging
-- **Rate limiting** per user/tier
-- **Circuit breaker** pattern for fault tolerance
-- **OpenAI-compatible API** for easy integration
+- OpenAI-compatible synchronous API with circuit breaker and resilient connection handling
+- TTL-based caching with background cleanup and Prometheus metrics
+- Resource management and model caching (LRU eviction) in the engine
+- Security hardening with input validation and audit logging
+- Optional rate limiting (disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`)
+- OpenAI-compatible API for easy integration
 
 ### Current Version
-- **Production System**: Single-user synchronous API (`embeddings_v5_production.py`)
-- **Future System**: Multi-user scale-out architecture (implemented, not yet integrated)
+- Production System: `embeddings_v5_production_enhanced.py` (circuit breaker, caching, metrics)
+- Future System: Worker-based scale-out architecture (implemented here, not yet exposed via API routes)
 
 ---
 
@@ -123,24 +122,16 @@ app/core/Embeddings/
 {
   "object": "list",
   "data": [
-    {
-      "object": "embedding",
-      "index": 0,
-      "embedding": [0.123, -0.456, ...],
-      "metadata": {
-        "model": "text-embedding-3-small",
-        "dimensions": 1536,
-        "provider": "openai"
-      }
-    }
+    { "object": "embedding", "index": 0, "embedding": [0.123, -0.456, ...] }
   ],
-  "model": "text-embedding-3-small",
-  "usage": {
-    "prompt_tokens": 8,
-    "total_tokens": 8
-  }
+  "model": "text-embedding-3-small",        // or "huggingface:sentence-transformers/all-MiniLM-L6-v2"
+  "usage": { "prompt_tokens": 8, "total_tokens": 8 }
 }
 ```
+
+Notes:
+- Inputs must be a string or list of strings (token arrays are not currently accepted).
+- Up to 2048 inputs per request; per-model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
 
 **Error Responses:**
 - `400 Bad Request`: Invalid input or parameters
@@ -156,17 +147,11 @@ app/core/Embeddings/
 ```json
 {
   "status": "healthy",
-  "providers": {
-    "openai": "available",
-    "huggingface": "available",
-    "cohere": "unavailable"
-  },
-  "cache": {
-    "size": 1234,
-    "hit_rate": 0.85
-  },
-  "models_loaded": 2,
-  "uptime_seconds": 3600
+  "service": "embeddings_v5_production_enhanced",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "cache_stats": { "size": 123, "max_size": 5000, "ttl_seconds": 3600 },
+  "active_requests": 2,
+  "circuit_breakers": { "openai": { "state": "closed", "failure_count": 0 } }
 }
 ```
 
@@ -177,6 +162,11 @@ app/core/Embeddings/
 
 #### Get Metrics (Admin Only)
 **Endpoint:** `GET /api/v1/embeddings/metrics`
+
+#### List Models
+**Endpoint:** `GET /api/v1/embeddings/models`
+
+Returns known models with allowlist/default flags.
 
 #### Reset Circuit Breaker (Admin Only)
 **Endpoint:** `POST /api/v1/embeddings/circuit-breakers/{provider}/reset`

@@ -11,18 +11,17 @@
 
 ## System Overview
 
-The tldw_server Embeddings System provides a comprehensive solution for generating text embeddings through multiple providers. The system offers two distinct architectures to accommodate different use cases:
+The tldw_server Embeddings System provides a comprehensive solution for generating text embeddings through multiple providers. The system offers two distinct paths to accommodate different use cases:
 
-1. **Synchronous API** (`embeddings_v5_production.py`) - Direct request-response model ideal for single users and small deployments
-2. **Job-Based System** (Worker Architecture) - Distributed, queue-based processing for enterprise and multi-tenant deployments
+1. **Synchronous API** (`embeddings_v5_production_enhanced.py`) - Direct request-response model with circuit breaker, ideal for single-user and small deployments
+2. **Worker Architecture** (WIP) - Distributed, queue-based processing for future enterprise/multi-tenant deployments
 
-### Key Features
-- 🌐 Multi-provider support (OpenAI, HuggingFace, Cohere, Google, Mistral, etc.)
-- ⚡ High-performance caching with TTL
-- 🔄 Automatic retry logic with circuit breakers
-- 📊 Comprehensive monitoring and metrics
-- 🔒 Security-first design with proper authorization
-- 🎯 Production-ready with extensive testing
+### Key Features (Production Path)
+- 🌐 Providers: OpenAI and HuggingFace supported today; ONNX and Local API supported by the core engine; additional providers (Cohere, Google, Mistral, Voyage) are planned but not yet wired end-to-end.
+- ⚡ High-performance TTL cache (default 3600s, size 5000) with background cleanup and metrics.
+- 🛡️ Circuit breaker and resilient connection handling around provider calls.
+- 📊 Prometheus metrics for requests, durations, cache, and active requests.
+- 🔒 Authorization integrated with existing AuthNZ; admin-only management endpoints (warmup/download/cache/metrics/circuit breakers).
 
 ## Architecture
 
@@ -118,7 +117,7 @@ graph TB
     CONFIG -.->|Configure| WORKERS
 ```
 
-### Synchronous System Architecture
+### Synchronous System Architecture (embeddings_v5_production_enhanced)
 
 ```mermaid
 sequenceDiagram
@@ -151,10 +150,17 @@ sequenceDiagram
         end
         
         API-->>Client: 200 OK
+
+    Note over API
+      - Input: strings or list[str] only
+      - Max 2048 inputs per request
+      - Enforces per-model token limits
+      - Optional base64 output; float output is L2-normalized
+    end note
     end
 ```
 
-### Job-Based System Architecture
+### Worker Architecture (WIP)
 
 ```mermaid
 graph LR
@@ -678,8 +684,8 @@ graph LR
 ## Next Steps
 
 For detailed implementation guidance, see:
-- [Developer Guide](./Embeddings-Developer-Guide.md) - For developers working on the codebase
-- [API Consumer Guide](./Embeddings-API-Guide.md) - For users consuming the API
+- [Developer Guide](./Embeddings-Developer-Guide.md) — working with the codebase
+- [API Consumer Guide](./Embeddings-API-Guide.md) — using the HTTP API and media embeddings
 
 For specific deployment scenarios, refer to:
 - [Single Server Setup](../Deployment/single-server.md)

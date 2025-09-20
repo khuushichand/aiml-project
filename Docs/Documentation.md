@@ -9,6 +9,7 @@
 - [Pieces](./pieces/Piece.md)
   - This is a link to the Pieces documentation.
   - The pieces document contains the documentation for the code flow and processing pipelines of the main function.
+- [Developer Guides](#developer-guides)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -46,6 +47,26 @@
 ------------------------------------------------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------------------------------------------------
+### <a name="developer-guides"></a> Developer Guides
+
+- Core Module Docs
+  - Chat: `Docs/Code_Documentation/Chat_Developer_Guide.md`
+  - Chunking Module: `Docs/Code_Documentation/Chunking-Module.md`
+  - Chunking Templates: `Docs/Code_Documentation/Chunking_Templates_Developer_Guide.md`
+  - Evaluations: `Docs/Code_Documentation/Evaluations_Developer_Guide.md`
+  - Chatbook: `Docs/Code_Documentation/Chatbook_Developer_Guide.md`
+  - Code Map: `Docs/Code_Documentation/Code_Map.md`
+
+- Subsystem Developer Guides
+  - AuthNZ: `Docs/Development/AuthNZ-Developer-Guide.md`
+  - RAG: `Docs/Development/RAG-Developer-Guide.md`
+  - MCP Unified: `Docs/MCP_Docs/MCP_Unified_Developer_Guide.md`
+  - Embeddings: `Docs/Embeddings/Embeddings-Developer-Guide.md`
+  - Providers API: `Docs/API-related/Providers_API_Documentation.md`
+
+------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------------------------------
 ### <a name="contributing"></a> Contributing
 - 
 
@@ -79,4 +100,3 @@
       - 3.6 Gb to 62 Mb, quality "good enough"/acceptable 👍
     - `ffmpeg -i input.mp4 -vcodec h264 -b:v 1000k -acodec mp3 output.mp4`
       * 3.6 Gb to 30 Mb, very shitty quality 💩
-

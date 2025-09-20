@@ -1,147 +1,71 @@
 # Embeddings System Architecture
 
-This directory contains both single-user and multi-user (scale-out) embeddings implementations for tldw_server.
+This directory contains both the production embeddings path (single-user friendly) and a future, scale-out worker architecture. This document reflects the current production behavior and APIs.
 
-## 🎯 Current Status
+## Current Status
 
-- **ACTIVE**: Single-user system using `embeddings_v5_production.py`
-- **FUTURE**: Multi-user scale-out system (implemented but not integrated)
+- ACTIVE: Single-user/monolithic API using `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`
+- WIP: Multi-user scale-out worker system (implemented here but not wired to public API routes)
 
-## Single-User System (Currently Active)
+## Production Embeddings API (Active)
 
-The production system uses a synchronous API with direct embedding generation:
+The production path is an OpenAI-compatible REST API with caching, connection pooling, and a circuit breaker around provider calls.
 
 ### Key Files
-- **API**: `/app/api/v1/endpoints/embeddings_v5_production.py` - OpenAI-compatible REST API
-- **Core**: `Embeddings_Server/Embeddings_Create.py` - Embedding generation logic
-- **Storage**: `ChromaDB_Library.py` - Vector database management
+- API: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`
+- Core engine: `tldw_Server_API/app/core/Embeddings/Embeddings_Server/Embeddings_Create.py`
+- Vector store helpers: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`
 
-### Features
-- ✅ Multiple provider support (OpenAI, HuggingFace, Cohere, etc.)
-- ✅ TTL-based caching for performance
-- ✅ **Security**: Fails explicitly when dependencies missing (no fake embeddings!)
-- ✅ Prometheus metrics and monitoring
-- ✅ Automatic retry with exponential backoff
+### What Works Today
+- Providers: OpenAI and HuggingFace via Transformers; ONNX (optimum + onnxruntime) and Local API supported by the core engine. Provider names like Cohere/Google/Mistral/Voyage are scaffolded in the endpoint but not fully integrated in the engine yet.
+- Caching: TTL cache (default TTL 3600s, size 5000) with metrics for hits/size.
+- Fault tolerance: Circuit breaker per provider; automatic connection cleanup and retries for transient failures.
+- Metrics: Prometheus counters/histograms/gauges (requests, duration, cache, active requests).
+- Input validation: strings or list[str] only; up to 2048 inputs; per-model token limits with clear error payload when exceeded; optional base64 encoding of vectors; L2-normalization for float outputs.
+- Rate limiting: Optional (off by default). Enable with `EMBEDDINGS_RATE_LIMIT=on`.
 
-## Multi-User Scale-Out System (Future)
+### Public Endpoints
+- `POST /api/v1/embeddings` — Create embeddings (OpenAI-compatible schema). For non-OpenAI providers, the `model` field in the response includes a `provider:model` prefix.
+- `GET /api/v1/embeddings/models` — List known/allowed models and defaults.
+- Admin-only:
+  - `POST /api/v1/embeddings/models/warmup`
+  - `POST /api/v1/embeddings/models/download`
+  - `DELETE /api/v1/embeddings/cache`
+  - `GET /api/v1/embeddings/metrics`
+  - `GET /api/v1/embeddings/circuit-breakers`
+  - `POST /api/v1/embeddings/circuit-breakers/{provider}/reset`
+- Health: `GET /api/v1/embeddings/health` (reports cache stats and circuit-breaker status)
 
-The architecture follows a fan-out pattern with specialized worker pools for each stage of the embeddings pipeline:
+### Notes and Constraints
+- Token arrays as input are not currently supported by the endpoint (even though the Pydantic schema allows them). Send strings only.
+- `dimensions` in the request is passed through but only applies to specific providers (e.g., OpenAI text-embedding-3); for HF/ONNX it does not alter output size.
+- Provider/model allowlists exist via settings but are enforced only in test mode with API key headers.
 
-1. **Chunking Workers** - Split content into embedding-ready chunks
-2. **Embedding Workers** - Generate embeddings from chunks using various models
-3. **Storage Workers** - Store embeddings in ChromaDB and update SQL database
+## Media Embeddings (Batching for uploaded media)
 
-## Key Components
+For generating and storing per-chunk embeddings of ingested media, use:
+- `tldw_Server_API/app/api/v1/endpoints/media_embeddings.py`
 
-### Job Manager (`job_manager.py`)
-- Manages job lifecycle and tracking
-- Implements user quotas and priority scheduling
-- Provides job status and monitoring APIs
+This endpoint chunks media text with the chunking module, calls the same embeddings engine, and writes to per-user ChromaDB collections. It exposes status and simple job-tracking for media embedding runs.
 
-### Worker Classes (`workers/`)
-- `base_worker.py` - Abstract base class for all workers
-- `chunking_worker.py` - Text chunking implementation
-- `embedding_worker.py` - Embedding generation with model pooling
-- `storage_worker.py` - ChromaDB and SQL storage
+## Scale-Out Worker System (WIP)
 
-### Queue Schemas (`queue_schemas.py`)
-- Pydantic models for all queue messages
-- Type-safe message passing between stages
-- Job tracking and status information
+The scale-out design (not exposed via public API routes yet) follows a fan-out pipeline:
+1. Chunking workers — prepare text chunks
+2. Embedding workers — generate vectors (model pooling, batching)
+3. Storage workers — persist to ChromaDB and SQL
 
-### Orchestration (`worker_orchestrator.py`)
-- Manages worker pools and scaling
-- Provides monitoring and metrics
-- Handles graceful shutdown and resource management
+Key components:
+- Job Manager: `job_manager.py` — job lifecycle, quotas, scheduling (WIP)
+- Workers: `workers/` — `base_worker.py`, `chunking_worker.py`, `embedding_worker.py`, `storage_worker.py`
+- Queue Schemas: `queue_schemas.py` — typed messages between stages
+- Orchestrator: `worker_orchestrator.py` — pool management, metrics, graceful shutdown
 
-## Getting Started
-
-### Prerequisites
-- Redis server running locally or accessible
-- Python dependencies installed (`redis`, `pydantic`, `loguru`, etc.)
-- GPU drivers and CUDA (for GPU-accelerated embeddings)
-
-### Basic Usage
-
-1. **Start the orchestrator with default configuration:**
-```bash
-python -m app.core.Embeddings.worker_orchestrator
-```
-
-2. **Use a custom configuration file:**
-```bash
-python -m app.core.Embeddings.worker_orchestrator --config embeddings_config.yaml
-```
-
-3. **Override worker counts:**
-```bash
-python -m app.core.Embeddings.worker_orchestrator --workers 5
-```
-
-### Integration with API
-
-```python
-from app.core.Embeddings.job_manager import EmbeddingJobManager, JobManagerConfig
-from app.core.Embeddings.queue_schemas import UserTier, ChunkingConfig
-
-# Initialize job manager
-config = JobManagerConfig()
-job_manager = EmbeddingJobManager(config)
-await job_manager.initialize()
-
-# Create a job
-job_id = await job_manager.create_job(
-    media_id=123,
-    user_id="user_456",
-    user_tier=UserTier.PREMIUM,
-    content="Large text content to embed...",
-    content_type="text",
-    chunking_config=ChunkingConfig(chunk_size=1000, overlap=200),
-    priority=50
-)
-
-# Check job status
-job_info = await job_manager.get_job_status(job_id)
-print(f"Job {job_id} status: {job_info.status}")
-```
-
-## Configuration
-
-See `embeddings_config.yaml` for a complete example. Key configuration options:
-
-- **Worker Pools**: Configure number of workers, batch sizes, and resources
-- **Redis**: Connection settings and pooling
-- **Auto-scaling**: Thresholds and limits for dynamic scaling
-- **Monitoring**: Prometheus metrics and logging
-
-## Monitoring
-
-The system exposes Prometheus metrics on port 9090 (configurable):
-
-- `embedding_worker_count` - Active workers by type
-- `embedding_queue_depth` - Current queue depths
-- `embedding_jobs_total` - Total jobs processed
-
-## Architecture Benefits
-
-1. **Horizontal Scalability** - Add workers dynamically based on load
-2. **Fault Tolerance** - Workers can fail without affecting others
-3. **Resource Optimization** - GPU pooling and batch processing
-4. **Multi-tenant Support** - User quotas and fair scheduling
-5. **Observability** - Built-in metrics and monitoring
-
-## Migration from Synchronous System
-
-The new architecture can run alongside the existing synchronous system:
-
-1. Deploy workers and Redis
-2. Route a percentage of traffic to the new system
-3. Monitor performance and errors
-4. Gradually increase traffic percentage
-5. Deprecate old system once validated
+These pieces are present for future horizontal scaling but are not hooked up to `/api/v1/embeddings` today.
 
 ## Future Enhancements
-
+- Additional first-class providers (Cohere/Google/Mistral/Voyage)
+- Policy/allowlist enforcement outside test mode
 - Multi-region deployment
 - Advanced model routing based on content
 - Real-time streaming of results

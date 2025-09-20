@@ -19,15 +19,14 @@ The Chat Dictionary API provides pattern-based text replacement functionality fo
 `/api/v1/chat/dictionaries`
 
 ### Authentication
-All endpoints require a valid JWT token in the Authorization header:
-```
-Authorization: Bearer <token>
-```
+Use the same authentication as the Chat API:
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
 
 ### Endpoints
 
 #### 1. Create Dictionary
-**POST** `/api/v1/chat/dictionaries/create`
+**POST** `/api/v1/chat/dictionaries`
 
 Creates a new chat dictionary for the authenticated user.
 
@@ -43,14 +42,18 @@ Creates a new chat dictionary for the authenticated user.
 **Response:**
 ```json
 {
-  "success": true,
-  "dictionary_id": 1,
-  "message": "Dictionary created successfully"
+  "id": 1,
+  "name": "Fantasy Terms",
+  "description": "Convert modern terms to fantasy equivalents",
+  "is_active": true,
+  "entry_count": 0,
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
 }
 ```
 
 #### 2. List Dictionaries
-**GET** `/api/v1/chat/dictionaries/list`
+**GET** `/api/v1/chat/dictionaries`
 
 Lists all dictionaries for the authenticated user.
 
@@ -67,14 +70,17 @@ Lists all dictionaries for the authenticated user.
       "description": "Convert modern terms to fantasy equivalents",
       "is_active": true,
       "entry_count": 25,
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2024-01-01T00:00:00Z"
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z"
     }
-  ]
+  ],
+  "total": 1,
+  "active_count": 1,
+  "inactive_count": 0
 }
 ```
 
-#### 3. Get Dictionary
+#### 3. Get Dictionary (with entries)
 **GET** `/api/v1/chat/dictionaries/{dictionary_id}`
 
 Retrieves a specific dictionary with all its entries.
@@ -89,11 +95,15 @@ Retrieves a specific dictionary with all its entries.
   "entries": [
     {
       "id": 1,
-      "key_pattern": "car",
+      "pattern": "car",
       "replacement": "carriage",
-      "is_regex": false,
-      "probability": 100,
-      "max_replacements": 1
+      "type": "literal",
+      "probability": 1.0,
+      "max_replacements": 0,
+      "enabled": true,
+      "case_sensitive": true,
+      "group": null,
+      "timed_effects": null
     }
   ],
   "created_at": "2024-01-01T00:00:00Z"
@@ -126,9 +136,19 @@ Notes:
 **Response:**
 ```json
 {
-  "success": true,
-  "entry_id": 2,
-  "message": "Entry added successfully"
+  "id": 2,
+  "dictionary_id": 1,
+  "pattern": "phone",
+  "replacement": "sending stone",
+  "probability": 1.0,
+  "group": null,
+  "timed_effects": null,
+  "max_replacements": 0,
+  "type": "literal",
+  "enabled": true,
+  "case_sensitive": true,
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -174,6 +194,7 @@ Processes text through active dictionaries.
 **Response:**
 ```json
 {
+  "original_text": "I'll call you on my phone from the car",
   "processed_text": "I'll call you on my sending stone from the carriage",
   "replacements": 2,
   "iterations": 1,
@@ -183,18 +204,37 @@ Processes text through active dictionaries.
 }
 ```
 
-#### 8. Bulk Add Entries
-**POST** `/api/v1/chat/dictionaries/{dictionary_id}/entries/bulk`
+#### 8. List Entries
+**GET** `/api/v1/chat/dictionaries/{dictionary_id}/entries`
 
-Adds multiple entries at once.
+List entries for a dictionary (optionally filter by `group`).
 
-**Request Body:**
+**Query Parameters:**
+- `group` (string, optional)
+
+**Response:**
 ```json
 {
   "entries": [
-    {"key_pattern": "sword", "replacement": "blade", "is_regex": false},
-    {"key_pattern": "gun", "replacement": "wand", "is_regex": false}
-  ]
+    {
+      "id": 1,
+      "dictionary_id": 1,
+      "pattern": "car",
+      "replacement": "carriage",
+      "probability": 1.0,
+      "group": null,
+      "timed_effects": null,
+      "max_replacements": 0,
+      "type": "literal",
+      "enabled": true,
+      "case_sensitive": true,
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1,
+  "dictionary_id": 1,
+  "group": null
 }
 ```
 
@@ -217,40 +257,29 @@ Imports a dictionary from markdown format.
 
 Exports a dictionary to markdown format. Response contains markdown in `content`.
 
-#### 11. Clone Dictionary
-**POST** `/api/v1/chat/dictionaries/{dictionary_id}/clone`
-
-Creates a copy of an existing dictionary.
-
-**Request Body:**
+**Response:**
 ```json
 {
-  "new_name": "Fantasy Terms Copy"
+  "name": "Fantasy Terms",
+  "content": "# Fantasy Terms\n\ncar: carriage\nphone: sending stone\n",
+  "entry_count": 25,
+  "group_count": 3
 }
 ```
 
-#### 12. Toggle Active Status
-**PUT** `/api/v1/chat/dictionaries/{dictionary_id}/toggle`
+#### 11. Update Dictionary
+**PUT** `/api/v1/chat/dictionaries/{dictionary_id}`
 
-Toggles a dictionary's active status.
+Update dictionary metadata (`name`, `description`, `is_active`).
 
-#### 13. Delete Dictionary
+#### 12. Delete Dictionary
 **DELETE** `/api/v1/chat/dictionaries/{dictionary_id}`
 
 Deletes a dictionary and all its entries.
 
-#### 14. Search Entries
-**GET** `/api/v1/chat/dictionaries/entries/search`
+---
 
-Searches for entries across all dictionaries.
-
-**Query Parameters:**
-- `query` (string): Search term
-
-#### 15. Get Statistics
-**GET** `/api/v1/chat/dictionaries/statistics`
-
-Gets dictionary usage statistics.
+Planned additions (not yet implemented): Clone dictionary, toggle active status shortcut, bulk add/update entries, search entries across dictionaries, usage statistics.
 
 ---
 

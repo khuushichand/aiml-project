@@ -2971,11 +2971,18 @@ async def process_videos_endpoint(
     # user_info: dict = Depends(verify_token), # Optional Auth
 ):
     """
-    **Process Videos Endpoint (Fixed)**
+    **Process Videos (No Persistence)**
 
     Transcribes, chunks, and analyses videos from URLs or uploaded files.
     Returns processing artifacts without saving to the database.
-    Corrected the run_in_executor call and input_ref mapping.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Video.md`
+
+    Example:
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
+    process_videos(inputs=["https://youtu.be/...", "/abs/local/video.mp4"], transcription_model="medium", perform_analysis=True, api_name="openai")
+    ```
     """
     # --- Validation and Logging ---
     logger.info("Request received for /process-videos. Form data validated via dependency.")
@@ -3382,11 +3389,18 @@ async def process_audios_endpoint(
     files: Optional[List[UploadFile]] = File(None, description="Audio file uploads"),
 ):
     """
-    **Process Audio Endpoint (Refactored)**
+    **Process Audios (No Persistence)**
 
     Transcribes, chunks, and analyses audio from URLs or uploaded files.
-    Returns processing artifacts without saving to the database. Uses dependency
-    injection for form handling, consistent with the video endpoint.
+    Returns processing artifacts without saving to the database.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`
+
+    Example:
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
+    process_audio_files(inputs=["https://soundcloud.com/...", "/abs/audio.wav"], transcription_model="large-v3", perform_analysis=True, api_name="openai")
+    ```
     """
     # --- 0) Validation and Logging ---
     # Validation happened in the dependency. Log success or handle HTTPException.
@@ -3885,12 +3899,18 @@ async def process_ebooks_endpoint(
     files: Optional[List[UploadFile]] = File(None, description="EPUB file uploads (.epub)"),
 ):
     """
-    **Process Ebooks Endpoint (No Persistence)**
+    **Process Ebooks (No Persistence)**
 
-    Processes EPUB files (from uploaded files or URLs) by extracting content
-    and metadata, optionally chunking, and optionally performing analysis
-    (summarization). Returns the processing artifacts directly without saving
-    to the database. Downloads URLs asynchronously. Accepts comma-separated keywords. Allows selection of extraction method.
+    Processes EPUB files (URLs or uploads): extract content/metadata, optional chunking and analysis.
+    Returns processing artifacts without saving to the database.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md`
+
+    Example:
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import process_epub
+    process_epub("/abs/book.epub", perform_chunking=True, perform_analysis=True, api_name="openai")
+    ```
 
     Supports `.epub` files.
     """
@@ -4301,13 +4321,18 @@ async def process_documents_endpoint(
     files: Optional[List[UploadFile]] = File(None, description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)"),
 ):
     """
-    **Process Documents Endpoint (No Persistence)**
+    **Process Documents (No Persistence)**
 
-    Processes document files (from uploaded files or URLs) by extracting content,
-    optionally chunking, and optionally performing analysis.
-    Returns the processing artifacts directly without saving to the database.
+    Extracts content from `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml` (Pandoc required for `.rtf`),
+    with optional chunking and analysis. Returns artifacts without DB writes.
 
-    Supports `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml`. Requires `pandoc` for `.rtf`.
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Documents.md`
+
+    Example:
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
+    process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
+    ```
     """
     logger.info("Request received for /process-documents (no persistence).")
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
@@ -4832,7 +4857,20 @@ async def process_pdfs_endpoint(
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: Optional[List[UploadFile]] = File(None,  description="PDF uploads"),
 ):
-    """Process PDFs (No Persistence)"""
+    """
+    **Process PDFs (No Persistence)**
+
+    Extracts text/metadata from PDFs using `pymupdf4llm`/PyMuPDF (optionally Docling/OCR),
+    with optional chunking and analysis. Returns artifacts without DB writes.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_PDF.md`
+
+    Example:
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+    await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
+    ```
+    """
     logger.info("Request received for /process-pdfs (no persistence).")
     ALLOWED_PDF_EXTENSIONS = ['.pdf']
     _validate_inputs("pdf", form_data.urls, files)
@@ -5215,6 +5253,20 @@ async def ingest_mediawiki_dump_endpoint(
         # db: Database = Depends(get_media_db_for_user), # Required by add_media_with_keywords indirectly
         # token: str = Header(..., description="Authentication token"), # Assuming auth via get_media_db_for_user
 ):
+    """
+    **MediaWiki Ingest (Streaming)**
+
+    Streams ingestion events while processing a MediaWiki XML dump and persisting results.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
+
+    Example (core iterator):
+    ```python
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import import_mediawiki_dump
+    events = import_mediawiki_dump("/abs/enwiki.xml.bz2", wiki_name="enwiki", namespaces=[0], skip_redirects=True)
+    for ev in events: print(ev.get("type"))
+    ```
+    """
     if core_import_mediawiki_dump is None:
         raise HTTPException(status_code=501, detail="MediaWiki processing module not loaded.")
 
@@ -5269,6 +5321,13 @@ async def process_mediawiki_dump_ephemeral_endpoint(
         # No db dependency, as we are not storing to the primary DB.
         # token: str = Header(..., description="Authentication token"), # Optional auth
 ):
+    """
+    **MediaWiki Process (Ephemeral, Streaming)**
+
+    Streams processed items from a MediaWiki XML dump without saving to the database.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
+    """
     if core_import_mediawiki_dump is None:
         raise HTTPException(status_code=501, detail="MediaWiki processing module not loaded.")
 

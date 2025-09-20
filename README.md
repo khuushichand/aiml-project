@@ -73,6 +73,21 @@ More details: see `Docs/API-related/AuthNZ-API-Guide.md` and `tldw_Server_API/ap
   - Import dictionaries from markdown content and export the current dictionary to markdown
 - API Reference: see `Docs/API-related/Chatbook_Features_API_Documentation.md` → Chat Dictionary API
 
+### Providers UI
+- Location: Providers tab (or Settings → Providers) in the WebUI.
+- Capabilities:
+  - List configured providers and available models with basic metadata
+  - Inspect provider health (status, circuit breaker, recent performance)
+  - View request queue status (size, workers) and rate limiter settings
+  - Copy `<provider>/<model>` names for use in Chat and RAG requests
+- Backed by the Providers API:
+  - `GET /api/v1/llm/health`
+  - `GET /api/v1/llm/providers`
+  - `GET /api/v1/llm/providers/{provider}`
+  - `GET /api/v1/llm/models`
+  - `GET /api/v1/llm/models/metadata`
+- Docs: `Docs/API-related/Providers_API_Documentation.md`
+
 <details>
 <summary>What is this? - Click-here</summary>
 
@@ -91,6 +106,25 @@ It has now been rewritten as a FastAPI python Server application, in order to su
 
 </details>
 
+
+---
+
+## Developer Guides
+
+- Documentation index: `Docs/Documentation.md` (see the "Developer Guides" section)
+- Core module guides:
+  - Chat Module: `Docs/Code_Documentation/Chat_Developer_Guide.md`
+  - Chunking Module: `Docs/Code_Documentation/Chunking-Module.md`
+
+### Ingestion & Media Processing Docs
+- Overview: `Docs/Code_Documentation/Ingestion_Media_Processing.md`
+- Pipelines:
+  - Audio: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`
+  - Video: `Docs/Code_Documentation/Ingestion_Pipeline_Video.md`
+  - PDF: `Docs/Code_Documentation/Ingestion_Pipeline_PDF.md`
+  - EPUB: `Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md`
+  - Documents: `Docs/Code_Documentation/Ingestion_Pipeline_Documents.md`
+  - MediaWiki: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
 
 ---
 
@@ -506,6 +540,15 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 - `GET /api/v1/chatbooks/export/jobs` - List export jobs
 - `GET /api/v1/chatbooks/import/jobs` - List import jobs
 - `GET /api/v1/chatbooks/download/{job_id}` - Download exported chatbook
+
+#### Providers
+- `GET /api/v1/llm/health` - LLM inference subsystem health
+- `GET /api/v1/llm/providers` - Configured providers and models
+- `GET /api/v1/llm/providers/{provider}` - Details for a specific provider
+- `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values
+- `GET /api/v1/llm/models/metadata` - Flattened model capability metadata
+
+Providers API reference: `Docs/API-related/Providers_API_Documentation.md`
 
 #### Advanced Features
 - `POST /api/v1/chunking/chunk` - Chunk text content

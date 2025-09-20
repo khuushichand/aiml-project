@@ -162,6 +162,90 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_registrations(active)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC)")
+
+            # Embeddings A/B test tables
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS embedding_abtests (
+                    test_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    config_json TEXT NOT NULL,
+                    stats_json TEXT,
+                    notes TEXT
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS embedding_abtest_arms (
+                    arm_id TEXT PRIMARY KEY,
+                    test_id TEXT NOT NULL,
+                    arm_index INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    dimensions INTEGER,
+                    collection_hash TEXT,
+                    pipeline_hash TEXT,
+                    collection_name TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    stats_json TEXT,
+                    metadata_json TEXT,
+                    FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS embedding_abtest_queries (
+                    query_id TEXT PRIMARY KEY,
+                    test_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    ground_truth_ids TEXT,
+                    metadata_json TEXT,
+                    FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS embedding_abtest_results (
+                    result_id TEXT PRIMARY KEY,
+                    test_id TEXT NOT NULL,
+                    arm_id TEXT NOT NULL,
+                    query_id TEXT NOT NULL,
+                    ranked_ids TEXT NOT NULL,
+                    scores TEXT,
+                    metrics_json TEXT,
+                    latency_ms REAL,
+                    ranked_distances TEXT,
+                    ranked_metadatas TEXT,
+                    ranked_documents TEXT,
+                    rerank_scores TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (test_id) REFERENCES embedding_abtests(test_id),
+                    FOREIGN KEY (arm_id) REFERENCES embedding_abtest_arms(arm_id),
+                    FOREIGN KEY (query_id) REFERENCES embedding_abtest_queries(query_id)
+                )
+            """)
+
+            # Best-effort ALTER TABLE for new diagnostic columns (ignore errors if already exist)
+            for col, sql in [
+                ("ranked_distances", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_distances TEXT"),
+                ("ranked_metadatas", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_metadatas TEXT"),
+                ("ranked_documents", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_documents TEXT"),
+                ("rerank_scores", "ALTER TABLE embedding_abtest_results ADD COLUMN rerank_scores TEXT"),
+            ]:
+                try:
+                    cursor.execute(sql)
+                except Exception:
+                    pass
+
+            # Indexes for A/B test tables
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtests_created ON embedding_abtests(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtests_status ON embedding_abtests(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_arms_test ON embedding_abtest_arms(test_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_test ON embedding_abtest_results(test_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_arm ON embedding_abtest_results(arm_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_query ON embedding_abtest_results(query_id)")
             
             conn.commit()
             logger.info("Evaluations database initialized")
@@ -272,6 +356,173 @@ class EvaluationsDatabase:
             evaluations = [self._row_to_eval_dict(row) for row in rows[:limit]]
             
             return evaluations, has_more
+
+    # ============= Embeddings A/B Test Operations =============
+
+    def create_abtest(self, name: str, config: Dict[str, Any], created_by: Optional[str] = None) -> str:
+        test_id = f"abtest_{uuid.uuid4().hex[:12]}"
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO embedding_abtests (test_id, name, created_by, status, config_json)
+                VALUES (?, ?, ?, 'pending', ?)
+                """,
+                (test_id, name, created_by, json.dumps(config))
+            )
+            conn.commit()
+        return test_id
+
+    def upsert_abtest_arm(
+        self,
+        test_id: str,
+        arm_index: int,
+        provider: str,
+        model_id: str,
+        dimensions: Optional[int] = None,
+        collection_hash: Optional[str] = None,
+        pipeline_hash: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        status: str = 'pending',
+        stats_json: Optional[Dict[str, Any]] = None,
+        metadata_json: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        arm_id = f"arm_{test_id}_{arm_index}"
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO embedding_abtest_arms (arm_id, test_id, arm_index, provider, model_id, dimensions,
+                    collection_hash, pipeline_hash, collection_name, status, stats_json, metadata_json)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(arm_id) DO UPDATE SET
+                    provider=excluded.provider,
+                    model_id=excluded.model_id,
+                    dimensions=excluded.dimensions,
+                    collection_hash=excluded.collection_hash,
+                    pipeline_hash=excluded.pipeline_hash,
+                    collection_name=excluded.collection_name,
+                    status=excluded.status,
+                    stats_json=excluded.stats_json,
+                    metadata_json=excluded.metadata_json
+                """,
+                (
+                    arm_id, test_id, arm_index, provider, model_id, dimensions,
+                    collection_hash, pipeline_hash, collection_name, status,
+                    json.dumps(stats_json) if stats_json else None,
+                    json.dumps(metadata_json) if metadata_json else None,
+                )
+            )
+            conn.commit()
+        return arm_id
+
+    def insert_abtest_queries(self, test_id: str, queries: List[Dict[str, Any]]) -> List[str]:
+        ids: List[str] = []
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            for q in queries:
+                qid = f"q_{uuid.uuid4().hex[:10]}"
+                ids.append(qid)
+                cursor.execute(
+                    """
+                    INSERT INTO embedding_abtest_queries (query_id, test_id, text, ground_truth_ids, metadata_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        qid, test_id, q.get('text',''),
+                        json.dumps(q.get('expected_ids')) if q.get('expected_ids') else None,
+                        json.dumps(q.get('metadata')) if q.get('metadata') else None
+                    )
+                )
+            conn.commit()
+        return ids
+
+    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE embedding_abtests SET status = ?, stats_json = COALESCE(?, stats_json) WHERE test_id = ?",
+                (status, json.dumps(stats_json) if stats_json else None, test_id)
+            )
+            conn.commit()
+
+    def insert_abtest_result(
+        self,
+        test_id: str,
+        arm_id: str,
+        query_id: str,
+        ranked_ids: List[str],
+        scores: Optional[List[float]] = None,
+        metrics: Optional[Dict[str, Any]] = None,
+        latency_ms: Optional[float] = None,
+        ranked_distances: Optional[List[float]] = None,
+        ranked_metadatas: Optional[List[Dict[str, Any]]] = None,
+        ranked_documents: Optional[List[str]] = None,
+        rerank_scores: Optional[List[float]] = None,
+    ) -> str:
+        rid = f"res_{uuid.uuid4().hex[:12]}"
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO embedding_abtest_results (
+                    result_id, test_id, arm_id, query_id, ranked_ids, scores, metrics_json, latency_ms,
+                    ranked_distances, ranked_metadatas, ranked_documents, rerank_scores
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rid, test_id, arm_id, query_id, json.dumps(ranked_ids),
+                    json.dumps(scores) if scores else None,
+                    json.dumps(metrics) if metrics else None,
+                    float(latency_ms) if latency_ms is not None else None,
+                    json.dumps(ranked_distances) if ranked_distances else None,
+                    json.dumps(ranked_metadatas) if ranked_metadatas else None,
+                    json.dumps(ranked_documents) if ranked_documents else None,
+                    json.dumps(rerank_scores) if rerank_scores else None,
+                )
+            )
+            conn.commit()
+        return rid
+
+    def get_abtest(self, test_id: str) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM embedding_abtests WHERE test_id = ?", (test_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
+
+    def get_abtest_arms(self, test_id: str) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM embedding_abtest_arms WHERE test_id = ? ORDER BY arm_index ASC", (test_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def list_abtest_results(self, test_id: str, limit: int = 100, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM embedding_abtest_results WHERE test_id = ?",
+                (test_id,)
+            )
+            total = cursor.fetchone()[0] or 0
+            cursor.execute(
+                """
+                SELECT * FROM embedding_abtest_results WHERE test_id = ?
+                ORDER BY created_at ASC LIMIT ? OFFSET ?
+                """,
+                (test_id, limit, offset)
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
+        return rows, total
     
     def update_evaluation(self, eval_id: str, updates: Dict[str, Any]) -> bool:
         """Update evaluation definition"""

@@ -88,9 +88,19 @@ async def create_speech(
 ):
     """
     Generates audio from the input text.
-    
+
     Requires authentication via Bearer token in Authorization header.
     Rate limited to 10 requests per minute per IP address.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` (context on audio pipeline)
+
+    Example (curl):
+    ```bash
+    curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
+      -H "Authorization: Bearer <TOKEN>" \
+      -H "Content-Type: application/json" \
+      -d '{"model": "tts-1", "input": "Hello world", "voice": "alloy", "response_format": "mp3", "stream": true}'
+    ```
     """
     
     # Authentication is enforced by dependency injection via get_request_user
@@ -272,10 +282,10 @@ async def create_transcription(
 ):
     """
     Transcribes audio into the input language.
-    
+
     Compatible with OpenAI's Audio API transcription endpoint.
     Supports multiple transcription models including Whisper, Parakeet, and Canary.
-    
+
     Models:
     - whisper-1: Uses faster-whisper (default)
     - parakeet: NVIDIA Parakeet model (efficient)
@@ -283,6 +293,16 @@ async def create_transcription(
     - qwen2audio: Qwen2 Audio model
     
     Rate limited to 20 requests per minute per IP address.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
+          `Docs/API-related/Audio_Transcription_API.md`
+
+    Example (curl):
+    ```bash
+    curl -X POST "http://127.0.0.1:8000/api/v1/audio/transcriptions" \
+      -H "Authorization: Bearer <TOKEN>" \
+      -F "file=@/abs/audio.wav" -F "model=whisper-1" -F "language=en" -F "response_format=json"
+    ```
     """
     
     # Authentication is enforced by dependency injection via get_request_user
@@ -450,11 +470,14 @@ async def create_translation(
 ):
     """
     Translates audio into English.
-    
+
     Compatible with OpenAI's Audio API translation endpoint.
     Currently uses Whisper for translation to English.
-    
+
     Rate limited to 20 requests per minute per IP address.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
+          `Docs/API-related/Audio_Transcription_API.md`
     """
     
     # For translation, we'll use the transcription endpoint with language detection
@@ -644,7 +667,10 @@ async def websocket_transcribe(
 ):
     """
     WebSocket endpoint for real-time audio transcription.
-    
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
+          `Docs/API-related/Audio_Transcription_API.md`
+
     Protocol:
     1. Client connects via WebSocket
     2. Client sends configuration message:

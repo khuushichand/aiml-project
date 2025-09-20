@@ -763,10 +763,25 @@
 
             <!-- Media Processing (No DB) Tab -->
             <div id="tabMediaProcessingNoDB" class="tab-content">
+                <div class="info-box" style="margin-bottom:12px;">
+                    <i class="icon-info"></i>
+                    <span>
+                        Documentation: 
+                        <a href="/docs-static/Code_Documentation/Ingestion_Media_Processing.md" target="_blank">Overview</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Video.md" target="_blank">Video</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Audio.md" target="_blank">Audio</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_PDF.md" target="_blank">PDF</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Ebooks.md" target="_blank">EPUB</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Documents.md" target="_blank">Documents</a> ·
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_MediaWiki.md" target="_blank">MediaWiki</a>
+                    </span>
+                </div>
                 <!-- POST /api/v1/media/process-videos -->
                 <div class="endpoint-section" id="processVideos">
                     <h2>POST /api/v1/media/process-videos - Process Videos (No DB)</h2>
-                    <p>Media type is fixed to "video", keep_original_file is false. Inherits many options from AddMediaForm.</p>
+                    <p>Media type is fixed to "video", keep_original_file is false. Inherits many options from AddMediaForm. 
+                       <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Video.md" target="_blank">Docs</a>
+                    </p>
                     <div class="columns">
                         <div class="column">
                             <h3>Sources & Info</h3>
@@ -928,7 +943,9 @@
                 <!-- POST /api/v1/media/process-audios -->
                 <div class="endpoint-section" id="processAudios">
                     <h2>POST /api/v1/media/process-audios - Process Audios (No DB)</h2>
-                    <p>Media type is fixed to "audio", keep_original_file is false.</p>
+                    <p>Media type is fixed to "audio", keep_original_file is false. 
+                       <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Audio.md" target="_blank">Docs</a>
+                    </p>
                      <div class="columns">
                         <div class="column">
                             <h3>Sources & Info</h3>
@@ -1108,6 +1125,9 @@
                 <!-- POST /api/v1/media/process-ebooks -->
                 <div class="endpoint-section" id="processEbooks">
                     <h2>POST /api/v1/media/process-ebooks - Process Ebooks (No DB)</h2>
+                    <p>
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Ebooks.md" target="_blank">Docs</a>
+                    </p>
                     <p>Media type is fixed to "ebook", keep_original_file is false.</p>
                     <div class="columns">
                         <div class="column">
@@ -1231,6 +1251,9 @@
                 <!-- POST /api/v1/media/process-documents -->
                 <div class="endpoint-section" id="processDocuments">
                     <h2>POST /api/v1/media/process-documents - Process Documents (No DB)</h2>
+                    <p>
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Documents.md" target="_blank">Docs</a>
+                    </p>
                     <p>Media type is fixed to "document", keep_original_file is false.</p>
                      <div class="columns">
                         <div class="column">
@@ -1346,6 +1369,9 @@
                  <!-- POST /api/v1/media/process-pdfs -->
                 <div class="endpoint-section" id="processPdfs">
                     <h2>POST /api/v1/media/process-pdfs - Process PDFs (No DB)</h2>
+                    <p>
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_PDF.md" target="_blank">Docs</a>
+                    </p>
                     <p>Media type is fixed to "pdf", keep_original_file is false.</p>
                      <div class="columns">
                         <div class="column">
@@ -1445,6 +1471,9 @@
                 <!-- POST /api/v1/media/mediawiki/ingest-dump -->
                 <div class="endpoint-section" id="ingestMediaWikiDump">
                     <h2>POST /api/v1/media/mediawiki/ingest-dump</h2>
+                    <p>
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_MediaWiki.md" target="_blank">Docs</a>
+                    </p>
                     <p>Ingest and process a MediaWiki XML dump, storing results to database and vector store. Response is streamed.</p>
                     <div class="form-group">
                         <label for="ingestMediaWikiDump_dump_file">MediaWiki XML Dump File (.xml, .xml.bz2, .xml.gz):</label>
@@ -1480,6 +1509,9 @@
                 <!-- POST /api/v1/media/mediawiki/process-dump -->
                 <div class="endpoint-section" id="processMediaWikiDump">
                     <h2>POST /api/v1/media/mediawiki/process-dump</h2>
+                    <p>
+                        <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_MediaWiki.md" target="_blank">Docs</a>
+                    </p>
                     <p>Process a MediaWiki XML dump and return structured content without database storage. Response is streamed.</p>
                      <div class="form-group">
                         <label for="processMediaWikiDump_dump_file">MediaWiki XML Dump File (.xml, .xml.bz2, .xml.gz):</label>

@@ -2,7 +2,11 @@
 
 ## Overview
 
-The tldw_server Embeddings API provides an OpenAI-compatible interface for generating text embeddings with enhanced features including token array input support, dimension reduction, batch processing, and caching.
+The tldw_server Embeddings API provides an OpenAI-compatible interface for generating text embeddings with caching, metrics, and a circuit breaker around provider calls.
+
+Status:
+- Supported today: string inputs (single or list), OpenAI and HuggingFace providers, optional base64 encoding, TTL cache, health/metrics/admin endpoints, model listing.
+- Not supported: token-array inputs, generic batch endpoint (`/embeddings/batch`), explicit cache stats endpoint, generic test endpoint. Dimension reduction is provider-specific and may be ignored by non-OpenAI providers.
 
 ## Key Concepts
 
@@ -14,7 +18,7 @@ Embeddings are dense vector representations of text that capture semantic meanin
 - Recommendation systems
 - RAG (Retrieval-Augmented Generation) systems
 
-### Token Array Inputs
+### Token Array Inputs (not currently supported)
 
 Token arrays are the numerical representation of text after tokenization. In the tokenization process:
 
@@ -22,7 +26,7 @@ Token arrays are the numerical representation of text after tokenization. In the
 2. **Tokenization**: Text is split into tokens: `["Hello", ",", " world", "!"]`
 3. **Token IDs**: Each token maps to a vocabulary ID: `[15339, 11, 1917, 0]`
 
-This API accepts token IDs directly, which is useful when:
+This API does not currently accept token IDs directly. The following content is kept for future consideration. It would be useful when:
 - You've pre-tokenized text for efficiency
 - You're working with token-level operations
 - You need to maintain exact tokenization consistency across systems
@@ -34,13 +38,13 @@ This API accepts token IDs directly, which is useful when:
 
 **Endpoint**: `POST /api/v1/embeddings`
 
-**Description**: Generate embeddings for text or token array inputs with support for dimension reduction and caching.
+**Description**: Generate embeddings for text inputs (strings or list of strings). Optional base64 encoding; dimensions affect specific providers only (e.g., OpenAI text-embedding-3).
 
 #### Request Body
 
 ```json
 {
-  "input": string | string[] | number[] | number[][],
+  "input": string | string[],
   "model": string,
   "encoding_format": "float" | "base64",  // optional, default: "float"
   "dimensions": number,  // optional, only for text-embedding-3-* models
@@ -110,9 +114,7 @@ The `input` field supports multiple formats:
 
 ### 2. Batch Embeddings
 
-**Endpoint**: `POST /api/v1/embeddings/batch`
-
-**Description**: Process multiple embedding requests in parallel for better performance.
+Not implemented. Send multiple inputs in one request to `POST /api/v1/embeddings` (max 2048 items).
 
 #### Request Body
 
@@ -141,69 +143,25 @@ Array of embedding responses corresponding to each request.
 
 **Endpoint**: `GET /api/v1/embeddings/models`
 
-**Description**: Get available embedding models and their capabilities.
+**Description**: List known models with allowlist/default flags.
 
 #### Response
 
 ```json
 {
-  "models": [
-    {
-      "id": "text-embedding-ada-002",
-      "provider": "openai",
-      "dimensions": 1536,
-      "max_tokens": 8192,
-      "supports_dimensions": false,
-      "description": "Legacy model, good balance of performance and cost"
-    },
-    {
-      "id": "text-embedding-3-small",
-      "provider": "openai",
-      "dimensions": 1536,
-      "max_tokens": 8191,
-      "supports_dimensions": true,
-      "min_dimensions": 1,
-      "description": "Newest small model, supports dimension reduction"
-    },
-    {
-      "id": "text-embedding-3-large",
-      "provider": "openai",
-      "dimensions": 3072,
-      "max_tokens": 8191,
-      "supports_dimensions": true,
-      "min_dimensions": 1,
-      "description": "Highest quality, supports dimension reduction"
-    }
+  "data": [
+    { "provider": "openai", "model": "text-embedding-3-small", "allowed": true, "default": true },
+    { "provider": "openai", "model": "text-embedding-3-large", "allowed": true, "default": false },
+    { "provider": "huggingface", "model": "sentence-transformers/all-MiniLM-L6-v2", "allowed": true, "default": false }
   ],
-  "default_model": "text-embedding-3-small",
-  "features": {
-    "batch_processing": true,
-    "dimensions_reduction": true,
-    "token_input": true,
-    "caching": true,
-    "max_batch_size": 100
-  }
+  "allowed_providers": null,
+  "allowed_models": null
 }
 ```
 
 ### 4. Cache Statistics
 
-**Endpoint**: `GET /api/v1/embeddings/cache/stats`
-
-**Description**: Get information about the embedding cache.
-
-#### Response
-
-```json
-{
-  "cache_size": 1250,
-  "max_cache_size": 10000,
-  "cache_ttl": 3600,
-  "average_age_seconds": 450.5,
-  "oldest_entry_age_seconds": 3200.1,
-  "cache_hit_rate": "Not tracked in this version"
-}
-```
+Not implemented as a dedicated endpoint. See `GET /api/v1/embeddings/health` and `GET /api/v1/embeddings/metrics` (admin) for cache/operational stats.
 
 ### 5. Clear Cache
 
@@ -222,18 +180,7 @@ Array of embedding responses corresponding to each request.
 
 ### 6. Test Endpoint
 
-**Endpoint**: `POST /api/v1/embeddings/test`
-
-**Description**: Test the embedding API with various input types.
-
-#### Query Parameters
-
-- `test_type`: One of `"text"`, `"batch"`, `"tokens"`, `"batch_tokens"`
-- `dimensions`: Optional dimension count for reduction
-
-#### Response
-
-Standard embedding response for the test data.
+**Endpoint**: `POST /api/v1/embeddings/test` (not implemented)
 
 ### 7. Health Check
 
@@ -246,14 +193,11 @@ Standard embedding response for the test data.
 ```json
 {
   "status": "healthy",
-  "service": "embeddings_v3",
-  "implementation_available": true,
-  "features": {
-    "batch_processing": true,
-    "dimensions_support": true,
-    "token_input_support": true,
-    "caching_enabled": true
-  }
+  "service": "embeddings_v5_production_enhanced",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "cache_stats": { "size": 123, "max_size": 5000, "ttl_seconds": 3600 },
+  "active_requests": 2,
+  "circuit_breakers": { "openai": { "state": "closed", "failure_count": 0 } }
 }
 ```
 
@@ -288,17 +232,16 @@ The API automatically processes large input lists in optimized batches:
 
 ### Caching
 
-The API implements an in-memory LRU cache:
-- Cache size: 10,000 entries maximum
+The API implements an in-memory TTL cache:
+- Cache size: 5,000 entries (default)
 - TTL: 1 hour (3600 seconds)
-- Cache key: Hash of (text, model, dimensions)
-- Automatic eviction of least recently used entries
+- Cache key: Hash of (text, provider, model, dimensions)
+- Background cleanup of expired entries and metrics for hit/size
 
 ### Rate Limiting
 
-- Standard endpoint: 60 requests per minute
-- Batch endpoint: 30 requests per minute
-- Per-user rate limiting based on IP address
+- Disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`.
+- When enabled, requests may receive HTTP 429 depending on configured policy.
 
 ## Working with Token Arrays
 
@@ -472,8 +415,7 @@ client = EmbeddingsClient("http://localhost:8000", "your-api-key")
 # Text input
 embeddings = client.create_embeddings("Hello, world!")
 
-# Token array input
-embeddings = client.create_embeddings([15339, 11, 1917, 0])
+# Token-array inputs are not supported by the current endpoint (strings only)
 
 # Batch with dimension reduction
 embeddings = client.create_embeddings(
@@ -494,24 +436,7 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
     "model": "text-embedding-3-small"
   }'
 
-# Token array input
-curl -X POST http://localhost:8000/api/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "input": [15339, 11, 1917, 0],
-    "model": "text-embedding-3-small",
-    "dimensions": 512
-  }'
-
-# Batch token arrays
-curl -X POST http://localhost:8000/api/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "input": [[15339, 11, 1917, 0], [1115, 374, 264, 1296]],
-    "model": "text-embedding-3-small"
-  }'
+# Token-array input examples are intentionally omitted (not supported)
 ```
 
 ## Troubleshooting
