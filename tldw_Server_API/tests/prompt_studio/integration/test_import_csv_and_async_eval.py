@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 pytestmark = pytest.mark.integration
@@ -30,7 +31,10 @@ def client_with_user(tmp_path, monkeypatch):
             "permissions": ["all"],
         }
     app.dependency_overrides[get_current_active_user] = override_active_user
-    with TestClient(app) as client:
+    # Provide X-API-KEY header to satisfy single-user mode auth in integration context
+    settings = get_settings()
+    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+    with TestClient(app, headers=headers) as client:
         yield client
     app.dependency_overrides.clear()
 

@@ -47,7 +47,8 @@ class TestCaseIO:
             project_id=project_id,
             is_golden=True if include_golden_only else None,
             tags=tag_filter,
-            per_page=10000  # Get all
+            per_page=10000,  # Get all
+            return_pagination=True
         )
         
         test_cases = result["test_cases"]
@@ -92,7 +93,8 @@ class TestCaseIO:
             project_id=project_id,
             is_golden=True if include_golden_only else None,
             tags=tag_filter,
-            per_page=10000  # Get all
+            per_page=10000,  # Get all
+            return_pagination=True
         )
         
         test_cases = result["test_cases"]

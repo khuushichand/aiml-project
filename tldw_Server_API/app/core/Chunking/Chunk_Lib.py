@@ -334,6 +334,58 @@ class Chunker:
                 if key in options:
                     self.enhanced_options[key] = options[key]
 
+        # Normalize option types (coerce booleans/ints/floats from string inputs)
+        def _to_bool(v: Any) -> bool:
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int,)):
+                return v != 0
+            if isinstance(v, str):
+                return v.strip().lower() in ("1", "true", "yes", "on")
+            return bool(v)
+
+        def _to_int(v: Any, default_val: int) -> int:
+            try:
+                return int(v)
+            except Exception:
+                return default_val
+
+        def _to_float(v: Any, default_val: float) -> float:
+            try:
+                return float(v)
+            except Exception:
+                return default_val
+
+        bool_keys_main = ["adaptive", "multi_level"]
+        int_keys_main = ["max_size", "overlap", "base_adaptive_chunk_size", "min_adaptive_chunk_size", "max_adaptive_chunk_size"]
+        float_keys_main: List[Tuple[str, float]] = []
+        for k in bool_keys_main:
+            if k in self.options:
+                self.options[k] = _to_bool(self.options[k])
+        for k in int_keys_main:
+            if k in self.options:
+                self.options[k] = _to_int(self.options[k], self.options[k] if isinstance(self.options[k], int) else DEFAULT_CHUNK_OPTIONS.get(k, 0))
+        for k, dv in float_keys_main:
+            if k in self.options:
+                self.options[k] = _to_float(self.options[k], dv)
+
+        bool_keys_enh = [
+            "clean_pdf_artifacts", "preserve_code_blocks", "preserve_tables",
+            "structure_aware", "track_positions", "preserve_headers",
+            "summarize_recursively", "summarize_verbose",
+        ]
+        int_keys_enh = ["min_code_block_size", "header_levels", "summarize_min_chunk_tokens"]
+        float_keys_enh: List[Tuple[str, float]] = [("semantic_similarity_threshold", 0.5), ("summarization_detail", 0.5), ("summarize_temperature", 0.1)]
+        for k in bool_keys_enh:
+            if k in self.enhanced_options:
+                self.enhanced_options[k] = _to_bool(self.enhanced_options[k])
+        for k in int_keys_enh:
+            if k in self.enhanced_options:
+                self.enhanced_options[k] = _to_int(self.enhanced_options[k], self.enhanced_options[k] if isinstance(self.enhanced_options[k], int) else 0)
+        for k, dv in float_keys_enh:
+            if k in self.enhanced_options:
+                self.enhanced_options[k] = _to_float(self.enhanced_options[k], dv)
+
         logging.debug(f"Chunker initialized with options: {self.options}")
         logging.debug(f"Enhanced options: {self.enhanced_options}")
 
@@ -557,7 +609,7 @@ class Chunker:
 
 
         # Multi-level chunking is a wrapper around other methods
-        use_multi_level = bool(self._get_option('multi_level', False) and chunk_method in ['words', 'sentences'])
+        use_multi_level = bool(self._get_option('multi_level', False)) and (chunk_method in ['words', 'sentences'])
 
 
         start_t = time.perf_counter()
@@ -567,40 +619,62 @@ class Chunker:
             logging.info(f"Applying multi-level chunking with base method: {chunk_method}")
             result = self._multi_level_chunking(text, chunk_method, max_size, overlap, language)
         elif chunk_method == 'words':
-            # Call original method to preserve behavior for unit tests that patch it
-            _ = self._chunk_text_by_words(text, max_words=max_size, overlap=overlap, language=language)
-
-            # Exact slicing with offsets
-            word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', text)]
-            if not word_spans:
-                return []
-            step = max(1, max_size - overlap)
-            ranges: List[Tuple[int, int]] = []
-            for i in range(0, len(word_spans), step):
-                j = min(i + max_size, len(word_spans)) - 1
-                start_off = word_spans[i][0]
-                end_off = word_spans[j][1]
-                ranges.append((start_off, end_off))
-            total = len(ranges)
-            out = []
-            for idx, (s_off, e_off) in enumerate(ranges):
-                out.append({
-                    'type': 'text',
-                    'text': text[s_off:e_off],
-                    'metadata': {
-                        'schema_version': 2,
-                        'method': 'words',
-                        'unit': 'words',
-                        'language': language,
-                        'max_size': max_size,
-                        'overlap': overlap,
-                        'start_offset': s_off,
-                        'end_offset': e_off,
-                        'chunk_index': idx,
-                        'total_chunks': total
-                    }
-                })
-            result = out
+            # Allow unit tests to patch _chunk_text_by_words and control outputs.
+            produced = self._chunk_text_by_words(text, max_words=max_size, overlap=overlap, language=language)
+            if isinstance(produced, list) and all(isinstance(c, str) for c in produced):
+                total = len(produced)
+                out2: List[Dict[str, Any]] = []
+                for idx, ch in enumerate(produced):
+                    out2.append({
+                        'type': 'text',
+                        'text': ch,
+                        'metadata': {
+                            'schema_version': 2,
+                            'method': 'words',
+                            'unit': 'words',
+                            'language': language,
+                            'max_size': max_size,
+                            'overlap': overlap,
+                            # Offsets unknown in this path; downstream computes relative position by index
+                            'start_offset': None,
+                            'end_offset': None,
+                            'chunk_index': idx,
+                            'total_chunks': total
+                        }
+                    })
+                result = out2
+            else:
+                # Exact slicing with offsets fallback
+                word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', text)]
+                if not word_spans:
+                    return []
+                step = max(1, max_size - overlap)
+                ranges: List[Tuple[int, int]] = []
+                for i in range(0, len(word_spans), step):
+                    j = min(i + max_size, len(word_spans)) - 1
+                    start_off = word_spans[i][0]
+                    end_off = word_spans[j][1]
+                    ranges.append((start_off, end_off))
+                total = len(ranges)
+                out = []
+                for idx, (s_off, e_off) in enumerate(ranges):
+                    out.append({
+                        'type': 'text',
+                        'text': text[s_off:e_off],
+                        'metadata': {
+                            'schema_version': 2,
+                            'method': 'words',
+                            'unit': 'words',
+                            'language': language,
+                            'max_size': max_size,
+                            'overlap': overlap,
+                            'start_offset': s_off,
+                            'end_offset': e_off,
+                            'chunk_index': idx,
+                            'total_chunks': total
+                        }
+                    })
+                result = out
             # fallthrough to metrics
         elif chunk_method == 'sentences':
             # Call original method to preserve behavior for unit tests that patch it
@@ -1021,7 +1095,10 @@ class Chunker:
 
         # Compute chunk spans for each paragraph
         chunk_spans: List[Tuple[int, int, int]] = []  # (start, end, paragraph_index)
-        for pidx, (pstart, pend) in enumerate(para_spans):
+        for pidx, (pstart, pend, pkind) in enumerate(para_spans):
+            # Only chunk paragraph-like spans; skip structural markers (headers, hr, etc.)
+            if pkind and pkind != 'paragraph':
+                continue
             segment = text[pstart:pend]
             if not segment:
                 continue

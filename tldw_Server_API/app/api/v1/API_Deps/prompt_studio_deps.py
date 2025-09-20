@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError, SchemaError, InputError, ConflictError
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
 
 ########################################################################################################################
@@ -99,7 +99,7 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
 
 async def get_prompt_studio_user(
     request: Request,
-    current_user: Optional[Dict] = Depends(get_current_active_user),
+    current_user: User = Depends(get_request_user),
     x_client_id: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
     """
@@ -127,23 +127,21 @@ async def get_prompt_studio_user(
         request.state.user_context = user_context
         return user_context
     
-    # Default user context
-    user_context = {
-        "user_id": "anonymous",
+    # Build user context from normalized User model
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+        single_user = is_single_user_mode()
+    except Exception:
+        single_user = False
+
+    user_context: Dict[str, Any] = {
+        "user_id": str(getattr(current_user, "id", "anonymous")),
         "client_id": x_client_id or "web",
-        "is_authenticated": False,
-        "is_admin": False,
-        "permissions": []
+        "is_authenticated": True,
+        # In single-user mode treat the sole user as admin for Prompt Studio
+        "is_admin": bool(single_user),
+        "permissions": ["all"] if single_user else []
     }
-    
-    # Update with authenticated user info if available
-    if current_user:
-        user_context.update({
-            "user_id": str(current_user.get("id", current_user.get("user_id", "anonymous"))),
-            "is_authenticated": True,
-            "is_admin": current_user.get("is_admin", False),
-            "permissions": current_user.get("permissions", [])
-        })
     
     # Store in request state for downstream use
     request.state.user_context = user_context

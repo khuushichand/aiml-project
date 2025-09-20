@@ -83,7 +83,6 @@ async def get_storage_service_dep() -> StorageQuotaService:
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool)
 ) -> Dict[str, Any]:
@@ -115,6 +114,21 @@ async def get_current_user(
         # Extract token
         token = credentials.credentials
         
+        # Single-user mode should not attempt JWT initialization
+        try:
+            if is_single_user_mode():
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required",
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
+        except Exception:
+            # If settings lookup fails, proceed to JWT path by default
+            pass
+
+        # Lazily obtain JWT service only in multi-user path
+        jwt_service = get_jwt_service()
+
         # Decode and validate JWT
         payload = jwt_service.decode_access_token(token)
         

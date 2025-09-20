@@ -85,12 +85,17 @@ async def create_evaluation(
             eval_id = cursor.lastrowid
             conn.commit()
 
-            # Defer execution which will update this record to running/completed
-            background_tasks.add_task(
-                run_evaluation_async,
-                evaluation_id=eval_id,
-                db=db,
-            )
+            # Defer execution which will update this record to running/completed.
+            # Wrap async task in a scheduler to ensure it actually runs in the event loop.
+            def _schedule_eval(eid: int, db_ref: PromptStudioDatabase):
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(run_evaluation_async(eid, db_ref))
+                except RuntimeError:
+                    # If no running loop, run synchronously (e.g., in test runner context)
+                    asyncio.run(run_evaluation_async(eid, db_ref))
+
+            background_tasks.add_task(_schedule_eval, eval_id, db)
 
             return EvaluationResponse(
                 id=eval_id,
@@ -219,7 +224,8 @@ async def get_evaluation(
         if not row:
             raise HTTPException(status_code=404, detail="Evaluation not found")
         
-        eval_dict = db.row_to_dict(row, cursor)
+        # Convert row to dict using DB helper
+        eval_dict = db._row_to_dict(cursor, row)
         
         return EvaluationResponse(
             id=eval_dict["id"],
@@ -321,7 +327,6 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
     marking failures while still completing the record.
     """
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
-    from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
     import json as _json
 
     conn = db.get_connection()
@@ -350,6 +355,12 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
             (datetime.now().isoformat(), evaluation_id),
         )
         conn.commit()
+
+        # Try to import chat function lazily; tolerate environments without it
+        try:
+            from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call as _chat_call  # type: ignore
+        except Exception:
+            _chat_call = None  # Fallback: no chat; mark errors per test case
 
         _id, project_id, prompt_id, tc_ids_json, model_cfg_json = row
         try:
@@ -416,11 +427,13 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
                 except Exception:
                     pass
 
-                # LLM call best-effort
+                # LLM call best-effort (skip if chat function unavailable)
                 actual_output = ""
                 error = None
                 try:
-                    resp = chat_api_call(
+                    if _chat_call is None:
+                        raise RuntimeError("LLM chat function not available")
+                    resp = _chat_call(
                         api_endpoint="openai",
                         model=model_name,
                         messages=[

@@ -15,7 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization_requests impo
     CompareStrategiesRequest
 )
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_write_access,
+    get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
     check_rate_limit, get_security_config, PromptStudioDatabase, SecurityConfig
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engine import OptimizationEngine
@@ -79,7 +79,7 @@ async def create_optimization(
             )
         
         project_id = row[0]
-        await require_project_write_access(project_id)
+        await require_project_write_access(project_id, user_context=user_context, db=db)
         
         # Create optimization record
         cursor.execute("""
@@ -152,7 +152,7 @@ async def list_optimizations(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     status: Optional[str] = Query(None, description="Filter by status"),
-    _: bool = Depends(lambda: require_project_access(project_id)),
+    _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> ListResponse:
     """
@@ -228,7 +228,8 @@ async def list_optimizations(
 @router.get("/get/{optimization_id}", response_model=StandardResponse)
 async def get_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get optimization details.
@@ -259,7 +260,7 @@ async def get_optimization(
         optimization = db._row_to_dict(cursor, row)
         
         # Check project access
-        await require_project_access(optimization["project_id"])
+        await require_project_access(optimization["project_id"], user_context=user_context, db=db)
         
         # Parse JSON fields
         optimization["test_case_ids"] = json.loads(optimization.get("test_case_ids", "[]"))
@@ -321,7 +322,7 @@ async def cancel_optimization(
         project_id, status = row
         
         # Check access
-        await require_project_write_access(project_id)
+        await require_project_write_access(project_id, user_context=user_context, db=db)
         
         # Check if can cancel
         if status in ["completed", "failed", "cancelled"]:
@@ -470,7 +471,7 @@ async def compare_strategies(
             )
         
         project_id = row[0]
-        await require_project_write_access(project_id)
+        await require_project_write_access(project_id, user_context=user_context, db=db)
         
         # Create optimizations for each strategy
         optimization_ids = []

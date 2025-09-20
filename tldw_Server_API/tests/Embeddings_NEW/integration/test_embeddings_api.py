@@ -48,18 +48,18 @@ class TestMediaEmbeddingsEndpoint:
     
     @pytest.mark.integration
     async def test_get_embedding_status(self, test_client, auth_headers):
-        """Test getting embedding job status."""
+        """Test getting embedding job status (non-existent job)."""
         job_id = "test-job-123"
         
         response = test_client.get(
-            f"/api/v1/media/embeddings/status/{job_id}",
+            f"/api/v1/media/embeddings/jobs/{job_id}",
             headers=auth_headers
         )
         
         # Should handle non-existent job gracefully
-        if response.status_code == status.HTTP_404_NOT_FOUND:
-            data = response.json()
-            assert "error" in data or "detail" in data
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        data = response.json()
+        assert "error" in data or "detail" in data
     
     @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
@@ -375,10 +375,17 @@ class TestErrorHandlingIntegration:
     """Test error handling in integration scenarios."""
     
     @pytest.mark.integration
-    async def test_invalid_model_error(self, test_client, auth_headers):
+    async def test_invalid_model_error(self, test_client, auth_headers, media_database):
         """Test error handling for invalid model."""
+        # Ensure a media item exists in the same DB the API uses
+        media_id, _, _ = media_database.add_media_with_keywords(
+            title="Invalid Model Test",
+            content="sample content",
+            media_type="document"
+        )
+
         response = test_client.post(
-            "/api/v1/media/1/embeddings",
+            f"/api/v1/media/{media_id}/embeddings",
             json={"embedding_model": "invalid-model-name"},
             headers=auth_headers
         )
@@ -404,13 +411,19 @@ class TestErrorHandlingIntegration:
     
     @pytest.mark.integration
     @patch('sentence_transformers.SentenceTransformer')
-    async def test_model_loading_failure(self, mock_transformer, test_client, auth_headers):
+    async def test_model_loading_failure(self, mock_transformer, test_client, auth_headers, media_database):
         """Test handling of model loading failures."""
         mock_transformer.side_effect = Exception("Model loading failed")
-        
+        # Ensure a media item exists in the same DB the API uses
+        media_id, _, _ = media_database.add_media_with_keywords(
+            title="Model Load Fail",
+            content="sample content",
+            media_type="document"
+        )
+
         response = test_client.post(
-            "/api/v1/media/1/embeddings",
-            json={"model": "sentence-transformers/all-MiniLM-L6-v2"},
+            f"/api/v1/media/{media_id}/embeddings",
+            json={"embedding_model": "sentence-transformers/all-MiniLM-L6-v2"},
             headers=auth_headers
         )
         

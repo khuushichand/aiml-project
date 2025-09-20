@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_test import (
     TestCaseImportRequest, TestCaseExportRequest, TestCaseGenerateRequest
 )
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_write_access,
+    get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
     check_rate_limit, get_security_config, PromptStudioDatabase, SecurityConfig
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
@@ -40,7 +40,6 @@ router = APIRouter(
 @router.post("/create", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
 async def create_test_case(
     test_case_data: TestCaseCreate,
-    _: bool = Depends(lambda: require_project_write_access(test_case_data.project_id)),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)
@@ -58,6 +57,9 @@ async def create_test_case(
         Created test case details
     """
     try:
+        # Enforce project write access
+        await require_project_write_access(test_case_data.project_id, user_context=user_context, db=db)
+
         # Check test case limit
         manager = TestCaseManager(db)
         current_count = manager.get_test_case_stats(test_case_data.project_id)["total"]
@@ -97,7 +99,6 @@ async def create_test_case(
 @router.post("/bulk", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
 async def create_bulk_test_cases(
     bulk_data: TestCaseBulkCreate,
-    _: bool = Depends(lambda: require_project_write_access(bulk_data.project_id)),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)
@@ -115,6 +116,9 @@ async def create_bulk_test_cases(
         List of created test cases
     """
     try:
+        # Enforce project write access
+        await require_project_write_access(bulk_data.project_id, user_context=user_context, db=db)
+
         manager = TestCaseManager(db)
         
         # Check test case limit
@@ -157,7 +161,7 @@ async def list_test_cases(
     tags: Optional[str] = Query(None, description="Comma-separated tags to filter"),
     search: Optional[str] = Query(None, description="Search in name and description"),
     signature_id: Optional[int] = Query(None, description="Filter by signature"),
-    _: bool = Depends(lambda: require_project_access(project_id)),
+    _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> ListResponse:
     """
@@ -192,7 +196,8 @@ async def list_test_cases(
             tags=tag_list,
             search=search,
             page=page,
-            per_page=per_page
+            per_page=per_page,
+            return_pagination=True
         )
         
         return ListResponse(
@@ -211,7 +216,8 @@ async def list_test_cases(
 @router.get("/get/{test_case_id}", response_model=StandardResponse)
 async def get_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get a specific test case by ID.
@@ -234,7 +240,7 @@ async def get_test_case(
             )
         
         # Check project access
-        await require_project_access(test_case["project_id"])
+        await require_project_access(test_case["project_id"], user_context=user_context, db=db)
         
         return StandardResponse(
             success=True,
@@ -279,7 +285,7 @@ async def update_test_case(
             )
         
         # Check project access
-        await require_project_write_access(test_case["project_id"])
+        await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
         
         # Update test case
         update_data = {k: v for k, v in updates.dict().items() if v is not None}
@@ -335,7 +341,7 @@ async def delete_test_case(
             )
         
         # Check project access
-        await require_project_write_access(test_case["project_id"])
+        await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
         
         # Delete test case
         success = manager.delete_test_case(test_case_id, hard_delete=permanent)
@@ -495,7 +501,6 @@ async def export_test_cases(
 @router.post("/generate", response_model=StandardResponse)
 async def generate_test_cases(
     generate_request: TestCaseGenerateRequest,
-    _: bool = Depends(lambda: require_project_write_access(generate_request.project_id)),
     _rate: bool = Depends(lambda: check_rate_limit("generate")),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
@@ -514,6 +519,9 @@ async def generate_test_cases(
         Generated test cases
     """
     try:
+        # Enforce project write access
+        await require_project_write_access(generate_request.project_id, user_context=user_context, db=db)
+
         manager = TestCaseManager(db)
         generator = TestCaseGenerator(manager)
         

@@ -62,7 +62,8 @@ async def create_project(
             name=project_data.name,
             description=project_data.description,
             status=project_data.status.value,
-            metadata=project_data.metadata
+            metadata=project_data.metadata,
+            user_id=str(user_context.get("user_id", "anonymous"))
         )
         
         logger.info(f"User {user_context['user_id']} created project: {project['name']}")

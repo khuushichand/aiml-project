@@ -106,6 +106,21 @@ class TestCaseManager:
             conn = self.db.get_connection()
             cursor = conn.cursor()
 
+            # Check for duplicate name within the same project (soft-deleted excluded)
+            try:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM prompt_studio_test_cases
+                    WHERE project_id = ? AND name = ? AND deleted = 0
+                    """,
+                    (project_id, name)
+                )
+                existing_count = cursor.fetchone()[0]
+                if existing_count and existing_count > 0:
+                    raise ConflictError(f"Test case with name '{name}' already exists")
+            except sqlite3.Error as e:
+                raise DatabaseError(f"Failed to validate test case uniqueness: {e}")
+
             # Generate UUID
             test_case_uuid = str(uuid.uuid4())
 
@@ -186,16 +201,22 @@ class TestCaseManager:
         
         if row:
             test_case = self.db._row_to_dict(cursor, row)
-            # Parse tags back to list
-            if test_case.get("tags"):
-                test_case["tags"] = test_case["tags"].split(",")
+            # Normalize tags to a list
+            if test_case is not None:
+                tags_val = test_case.get("tags") if isinstance(test_case, dict) else None
+                if isinstance(tags_val, str):
+                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
+                elif tags_val is None:
+                    test_case["tags"] = []
+                # If already a list, leave as-is
             return test_case
         return None
     
     def list_test_cases(self, project_id: int, signature_id: Optional[int] = None,
                        is_golden: Optional[bool] = None, tags: Optional[List[str]] = None,
                        search: Optional[str] = None, include_deleted: bool = False,
-                       page: int = 1, per_page: int = 20) -> Dict[str, Any]:
+                       page: int = 1, per_page: int = 20,
+                       return_pagination: bool = False) -> Dict[str, Any] | List[Dict[str, Any]]:
         """
         List test cases with filtering.
         
@@ -276,19 +297,26 @@ class TestCaseManager:
         test_cases = []
         for row in cursor.fetchall():
             test_case = self.db._row_to_dict(cursor, row)
-            if test_case.get("tags"):
-                test_case["tags"] = test_case["tags"].split(",")
+            if test_case is not None:
+                tags_val = test_case.get("tags") if isinstance(test_case, dict) else None
+                if isinstance(tags_val, str):
+                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
+                elif tags_val is None:
+                    test_case["tags"] = []
             test_cases.append(test_case)
-        
-        return {
-            "test_cases": test_cases,
-            "pagination": {
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": (total + per_page - 1) // per_page
+
+        if return_pagination:
+            return {
+                "test_cases": test_cases,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "total_pages": (total + per_page - 1) // per_page
+                }
             }
-        }
+        # Default to returning just the list (matches unit tests expectations)
+        return test_cases
     
     def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -497,8 +525,12 @@ class TestCaseManager:
         results = []
         for row in cursor.fetchall():
             test_case = self.db._row_to_dict(cursor, row)
-            if test_case.get("tags"):
-                test_case["tags"] = test_case["tags"].split(",")
+            if test_case is not None:
+                tags_val = test_case.get("tags") if isinstance(test_case, dict) else None
+                if isinstance(tags_val, str):
+                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
+                elif tags_val is None:
+                    test_case["tags"] = []
             results.append(test_case)
         
         return results
@@ -516,7 +548,8 @@ class TestCaseManager:
         result = self.list_test_cases(
             project_id=project_id,
             is_golden=True,
-            per_page=1000  # Get all golden cases
+            per_page=1000,  # Get all golden cases
+            return_pagination=True
         )
         return result["test_cases"]
     
@@ -542,8 +575,12 @@ class TestCaseManager:
         test_cases = []
         for row in cursor.fetchall():
             test_case = self.db._row_to_dict(cursor, row)
-            if test_case.get("tags"):
-                test_case["tags"] = test_case["tags"].split(",")
+            if test_case is not None:
+                tags_val = test_case.get("tags") if isinstance(test_case, dict) else None
+                if isinstance(tags_val, str):
+                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
+                elif tags_val is None:
+                    test_case["tags"] = []
             test_cases.append(test_case)
         
         return test_cases

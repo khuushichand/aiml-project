@@ -55,3 +55,20 @@ for _p in (TEST_TEMP, TEST_CACHE, TEST_LOGS):
         _p.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
+
+# ------------------------------------------------------------------
+# Fallback 'mocker' fixture when pytest-mock is not installed
+# ------------------------------------------------------------------
+try:
+    import pytest_mock  # type: ignore  # noqa: F401
+except Exception:  # pragma: no cover - only used when plugin unavailable
+    import pytest  # type: ignore
+    from unittest.mock import patch as _unittest_patch
+
+    @pytest.fixture
+    def mocker():
+        class _Mocker:
+            def patch(self, *args, **kwargs):
+                return _unittest_patch(*args, **kwargs)
+
+        return _Mocker()

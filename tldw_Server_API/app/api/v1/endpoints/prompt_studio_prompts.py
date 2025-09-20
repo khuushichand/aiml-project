@@ -163,7 +163,7 @@ async def list_prompts(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     include_deleted: bool = Query(False, description="Include deleted prompts"),
-    _: bool = Depends(lambda: require_project_access(project_id)),
+    _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> ListResponse:
     """
@@ -410,7 +410,8 @@ async def update_prompt(
 @router.get("/history/{prompt_id}", response_model=StandardResponse)
 async def get_prompt_history(
     prompt_id: int = Path(..., description="Prompt ID"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get version history for a prompt.
@@ -442,7 +443,7 @@ async def get_prompt_history(
         name, project_id = prompt_info
         
         # Check access
-        await require_project_access(project_id)
+        await require_project_access(project_id, user_context=user_context, db=db)
         
         # Get all versions of this prompt
         cursor.execute("""
@@ -509,7 +510,7 @@ async def revert_prompt(
         name, project_id = current_info
         
         # Check access
-        await require_project_write_access(project_id)
+        await require_project_write_access(project_id, user_context=user_context, db=db)
         
         # Find the version to revert to
         cursor.execute("""

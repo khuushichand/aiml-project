@@ -502,7 +502,7 @@ def mock_rate_limiter():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app."""
+    """Create a test client for the FastAPI app (no dependency overrides)."""
     from tldw_Server_API.app.main import app
     return TestClient(app, raise_server_exceptions=False)
 
