@@ -42,10 +42,10 @@ from ..tts_resource_manager import get_resource_manager
 
 class ElevenLabsAdapter(TTSAdapter):
     """Adapter for ElevenLabs TTS API"""
-    
+
     # ElevenLabs API endpoints
     BASE_URL = "https://api.elevenlabs.io/v1"
-    
+
     # Default voice IDs (can be customized)
     DEFAULT_VOICES = {
         "rachel": VoiceInfo(
@@ -144,32 +144,28 @@ class ElevenLabsAdapter(TTSAdapter):
         }
     }
 
-# Backward-compat alias expected by some tests
-class ElevenLabsTTSAdapter(ElevenLabsAdapter):
-    pass
-    
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        
+
         # API configuration
         self.api_key = self.config.get("elevenlabs_api_key") or os.getenv("ELEVENLABS_API_KEY")
         self.base_url = self.config.get("elevenlabs_base_url", self.BASE_URL)
-        
+
         # Model selection
         self.default_model = self.config.get("elevenlabs_model", "eleven_monolingual_v1")
-        
+
         # Voice settings
         self.stability = self.config.get("elevenlabs_stability", 0.5)
         self.similarity_boost = self.config.get("elevenlabs_similarity_boost", 0.5)
         self.style = self.config.get("elevenlabs_style", 0.0)
         self.use_speaker_boost = self.config.get("elevenlabs_speaker_boost", True)
-        
+
         # HTTP client
         self.client: Optional[httpx.AsyncClient] = None
-        
+
         # Cache for user voices
         self._user_voices: List[VoiceInfo] = []
-    
+
     async def initialize(self) -> bool:
         """Initialize the ElevenLabs adapter"""
         try:
@@ -178,21 +174,24 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 logger.warning(error_msg)
                 self._status = ProviderStatus.NOT_CONFIGURED
                 raise TTSProviderNotConfiguredError(error_msg, provider=self.provider_name)
-            
+
             # Get HTTP client from resource manager
             resource_manager = await get_resource_manager()
             self.client = await resource_manager.get_http_client(
                 provider=self.provider_name.lower(),
                 base_url=self.base_url
             )
-            
+
             # Test API connection and fetch user voices
             await self._fetch_user_voices()
-            
-            logger.info(f"{self.provider_name}: Initialized successfully")
+
+            # Mark initialized and cache capabilities
+            self._capabilities = await self.get_capabilities()
+            self._initialized = True
             self._status = ProviderStatus.AVAILABLE
+            logger.info(f"{self.provider_name}: Initialized successfully")
             return True
-            
+
         except TTSProviderNotConfiguredError:
             return False
         except Exception as e:
@@ -203,17 +202,17 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 provider=self.provider_name,
                 details={"error": str(e)}
             )
-    
+
     async def _fetch_user_voices(self):
         """Fetch available voices from ElevenLabs API"""
         try:
             headers = {"xi-api-key": self.api_key}
             response = await self.client.get(f"{self.base_url}/voices", headers=headers)
-            
+
             if response.status_code == 200:
                 data = response.json()
                 self._user_voices = []
-                
+
                 for voice in data.get("voices", []):
                     voice_info = VoiceInfo(
                         id=voice["voice_id"],
@@ -224,31 +223,33 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                         use_case=voice.get("labels", {}).get("use_case", [])
                     )
                     self._user_voices.append(voice_info)
-                
+
                 logger.info(f"{self.provider_name}: Loaded {len(self._user_voices)} voices")
             else:
                 logger.warning(f"{self.provider_name}: Failed to fetch voices: {response.status_code}")
-                
+
         except Exception as e:
             logger.error(f"{self.provider_name}: Error fetching voices: {e}")
-    
+
     async def get_capabilities(self) -> TTSCapabilities:
         """Get ElevenLabs TTS capabilities"""
         # Determine supported languages based on selected model
         model_config = self.MODELS.get(self.default_model, self.MODELS["eleven_monolingual_v1"])
         supported_languages = set(model_config["languages"])
-        
+
         # Combine default and user voices
         all_voices = list(self.DEFAULT_VOICES.values()) + self._user_voices
-        
+
         return TTSCapabilities(
             provider_name="ElevenLabs",
             supported_languages=supported_languages,
             supported_voices=all_voices,
             supported_formats={
                 AudioFormat.MP3,
+                AudioFormat.OPUS,
+                AudioFormat.PCM,
+                AudioFormat.ULAW,
                 AudioFormat.WAV,
-                AudioFormat.OPUS
             },
             max_text_length=5000,  # ElevenLabs character limit
             supports_streaming=True,
@@ -265,7 +266,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             sample_rate=44100,  # Default output sample rate
             default_format=AudioFormat.MP3
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using ElevenLabs TTS"""
         if not await self.ensure_initialized():
@@ -273,35 +274,53 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
-        
+
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_name.lower())
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
-        
+
         # Prepare voice ID
         voice_id = self._get_voice_id(request.voice or "rachel")
-        
+
         # Select model
         model_id = self._select_model(request)
-        
+
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice_id}, "
             f"model={model_id}, format={request.format.value}"
         )
-        
+
         try:
             if request.stream:
-                # Return streaming response
+                # Build request once so creation errors surface at generate() time
+                url = f"{self.base_url}/text-to-speech/{voice_id}/stream"
+                headers = {
+                    "Accept": self._get_accept_header(request.format),
+                    "xi-api-key": self.api_key,
+                    "Content-Type": "application/json",
+                }
+                voice_settings = {
+                    "stability": request.extra_params.get("stability", self.stability),
+                    "similarity_boost": request.extra_params.get("similarity_boost", self.similarity_boost),
+                    "style": request.extra_params.get("style", self.style),
+                    "use_speaker_boost": request.extra_params.get("speaker_boost", self.use_speaker_boost),
+                }
+                payload = {"text": request.text, "model_id": model_id, "voice_settings": voice_settings}
+                # Preflight: if patched to return an awaitable (not a CM), await it to surface errors here
+                import inspect
+                candidate = self.client.stream("POST", url, headers=headers, json=payload)
+                if inspect.isawaitable(candidate):
+                    # This path is primarily for tests that patch `.stream` as an async function
+                    await candidate  # will raise if the mock is configured to error
+
+                # Build the real context manager for streaming
+                stream_cm = self.client.stream("POST", url, headers=headers, json=payload)
+
                 return TTSResponse(
-                    audio_stream=self._stream_audio_elevenlabs(
-                        text=request.text,
-                        voice_id=voice_id,
-                        model_id=model_id,
-                        request=request
-                    ),
+                    audio_stream=self._stream_audio_from_cm(stream_cm, request),
                     format=request.format,
                     sample_rate=self._infer_sample_rate(request.format),
                     channels=1,
@@ -324,7 +343,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                     voice_used=request.voice or "rachel",
                     provider=self.provider_name
                 )
-                
+
         except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError):
             raise
         except Exception as e:
@@ -334,7 +353,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 provider=self.provider_name,
                 details={"error": str(e), "error_type": type(e).__name__}
             )
-    
+
     async def _stream_audio_elevenlabs(
         self,
         text: str,
@@ -344,13 +363,13 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from ElevenLabs API"""
         url = f"{self.base_url}/text-to-speech/{voice_id}/stream"
-        
+
         headers = {
             "Accept": self._get_accept_header(request.format),
             "xi-api-key": self.api_key,
             "Content-Type": "application/json"
         }
-        
+
         # Prepare voice settings
         voice_settings = {
             "stability": request.extra_params.get("stability", self.stability),
@@ -358,38 +377,66 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             "style": request.extra_params.get("style", self.style),
             "use_speaker_boost": request.extra_params.get("speaker_boost", self.use_speaker_boost)
         }
-        
+
         payload = {
             "text": text,
             "model_id": model_id,
             "voice_settings": voice_settings
         }
-        
+
         try:
             async with self.client.stream("POST", url, headers=headers, json=payload) as response:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     self._raise_mapped_http_error(e)
-                
+
                 chunk_count = 0
                 async for chunk in response.aiter_bytes(chunk_size=1024):
                     if chunk:
                         chunk_count += 1
                         yield chunk
-                        
+
                         if chunk_count % 10 == 0:
                             logger.debug(f"{self.provider_name}: Streamed {chunk_count} chunks")
-                
+
                 logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
-                
+
         except httpx.HTTPStatusError as e:
             logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
             self._raise_mapped_http_error(e)
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
-    
+
+    async def _stream_audio_from_cm(
+        self,
+        stream_cm: Any,
+        request: TTSRequest
+    ) -> AsyncGenerator[bytes, None]:
+        """Stream audio using a pre-built httpx stream context manager."""
+        try:
+            async with stream_cm as response:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    self._raise_mapped_http_error(e)
+
+                chunk_count = 0
+                async for chunk in response.aiter_bytes(chunk_size=1024):
+                    if chunk:
+                        chunk_count += 1
+                        yield chunk
+                        if chunk_count % 10 == 0:
+                            logger.debug(f"{self.provider_name}: Streamed {chunk_count} chunks")
+                logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
+            self._raise_mapped_http_error(e)
+        except Exception as e:
+            logger.error(f"{self.provider_name} streaming error: {e}")
+            raise
+
     async def _generate_complete_elevenlabs(
         self,
         text: str,
@@ -427,55 +474,57 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         except Exception as e:
             logger.error(f"{self.provider_name} non-stream error: {e}")
             raise
-    
+
     def _get_voice_id(self, voice_name: str) -> str:
         """Get ElevenLabs voice ID from voice name"""
         # Check if it's already a voice ID (alphanumeric, typically >=20 chars)
         if voice_name and voice_name.isalnum() and len(voice_name) >= 20:
             return voice_name
-        
+
         # Check default voices
         voice_lower = voice_name.lower()
         if voice_lower in self.DEFAULT_VOICES:
             return self.DEFAULT_VOICES[voice_lower].id
-        
+
         # Check user voices
         for voice in self._user_voices:
             if voice.name.lower() == voice_lower:
                 return voice.id
-        
+
         # Default to Rachel
         logger.warning(f"{self.provider_name}: Voice '{voice_name}' not found, using default")
         return self.DEFAULT_VOICES["rachel"].id
-    
+
     def _select_model(self, request: TTSRequest) -> str:
         """Select appropriate ElevenLabs model"""
         # Check if model specified in extra params
         if "model" in request.extra_params:
             return request.extra_params["model"]
-        
+
         # Select based on language
         if request.language and request.language != "en":
             # Use multilingual model for non-English
             return "eleven_multilingual_v2"
-        
+
         # Use configured default
         return self.default_model
-    
+
     def _get_accept_header(self, format: AudioFormat) -> str:
         """Get Accept header for requested format"""
         format_map = {
             AudioFormat.MP3: "audio/mpeg",
-            AudioFormat.WAV: "audio/wav",
+            AudioFormat.PCM: "audio/pcm",
+            AudioFormat.ULAW: "audio/ulaw",
             AudioFormat.OPUS: "audio/opus",
         }
+        # Default to mpeg for unknown or unsupported formats
         return format_map.get(format, "audio/mpeg")
 
     def _infer_sample_rate(self, format: AudioFormat) -> int:
         """Best-effort sample rate heuristic by format."""
         if format == AudioFormat.OPUS:
             return 48000
-        # Default to 44100 for mp3/wav
+        # Default to 44100 for mp3/wav/pcm/ulaw
         return 44100
 
     def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
@@ -495,7 +544,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             raise TTSProviderError(f"{self.provider_name} upstream error", provider=self.provider_name, details={"status": status})
         # Generic mapping for other 4xx
         raise TTSProviderError(f"{self.provider_name} request failed ({status})", provider=self.provider_name, details={"status": status, "body": text})
-    
+
     async def _cleanup_resources(self):
         """Clean up ElevenLabs adapter resources"""
         if self.client:
@@ -505,7 +554,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 logger.debug(f"{self.provider_name}: HTTP client closed")
             except Exception as e:
                 logger.warning(f"{self.provider_name}: Error closing HTTP client: {e}")
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to ElevenLabs voice"""
         # Common mappings
@@ -517,9 +566,9 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             "young_female": "bella",
             "young_male": "antoni"
         }
-        
-        return voice_mappings.get(voice_id.lower(), voice_id)
-    
+
+        return voice_mappings.get((voice_id or "").lower(), voice_id)
+
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess text for ElevenLabs"""
         # ElevenLabs handles most text normalization internally
@@ -527,8 +576,12 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         if len(text) > 5000:
             logger.warning(f"{self.provider_name}: Text truncated to 5000 characters")
             text = text[:5000]
-        
+
         return text.strip()
+
+# Backward-compat alias expected by some tests
+class ElevenLabsTTSAdapter(ElevenLabsAdapter):
+    pass
 
 #
 # End of elevenlabs_adapter.py

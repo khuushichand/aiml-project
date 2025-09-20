@@ -74,13 +74,29 @@ class DiaAdapter(TTSAdapter):
             description="Narration voice"
         )
     }
+    # Expose presets alias for tests and UI parity
+    VOICE_PRESETS = DEFAULT_SPEAKERS
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         
         # Model configuration
         self.model_path = self.config.get("dia_model_path", "nari-labs/dia")
-        self.device = self.config.get("dia_device", "cuda" if torch.cuda.is_available() else "cpu")
+        # Device selection: prefer explicit; fallback to CUDA if available else CPU
+        preferred = self.config.get("dia_device")
+        if preferred:
+            pref = str(preferred).lower()
+            if pref == "cuda":
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            elif pref == "cpu":
+                self.device = "cpu"
+            elif pref == "mps":
+                mps_avail = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
+                self.device = "mps" if mps_avail else ("cuda" if torch.cuda.is_available() else "cpu")
+            else:
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # Auto-download toggle: config override > env overrides > default True
         def _parse_bool(val, default=True):
@@ -119,45 +135,8 @@ class DiaAdapter(TTSAdapter):
             # Get resource manager for memory monitoring
             resource_manager = await get_resource_manager()
             
-            # Check for required libraries
-            try:
-                from transformers import AutoModelForCausalLM, AutoProcessor
-                import torch
-            except ImportError as e:
-                logger.error(f"{self.provider_name}: transformers library not installed")
-                self._status = ProviderStatus.NOT_CONFIGURED
-                raise TTSModelLoadError(
-                    "Failed to import required dependencies",
-                    provider=self.provider_name,
-                    details={"error": str(e), "suggestion": "pip install transformers torch"}
-                )
-            
-            # Load processor
-            logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_path,
-                trust_remote_code=True,
-                local_files_only=(not self.auto_download)
-            )
-            
-            # Load model with appropriate dtype
-            logger.info(f"{self.provider_name}: Loading model from {self.model_path}")
-            model_kwargs = {
-                "trust_remote_code": True,
-                "use_safetensors": self.use_safetensors
-            }
-            
-            if self.use_bf16:
-                model_kwargs["torch_dtype"] = torch.bfloat16
-            
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path,
-                local_files_only=(not self.auto_download),
-                **model_kwargs
-            )
-            
-            self.model = self.model.to(self.device)
-            self.model.eval()
+            # Load model and processor (callable for testing patching)
+            await self._load_dia_model()
             
             # Register model with resource manager
             if self.model:
@@ -192,6 +171,45 @@ class DiaAdapter(TTSAdapter):
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
             )
+
+    async def _load_dia_model(self) -> bool:
+        """Load Dia processor and model. Split out for easier testing/mocking."""
+        try:
+            from transformers import AutoModelForCausalLM, AutoProcessor  # type: ignore
+        except ImportError as e:
+            logger.error(f"{self.provider_name}: transformers library not installed")
+            self._status = ProviderStatus.NOT_CONFIGURED
+            raise TTSModelLoadError(
+                "Failed to import required dependencies",
+                provider=self.provider_name,
+                details={"error": str(e), "suggestion": "pip install transformers torch"}
+            )
+
+        # Load processor
+        logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")
+        self.processor = AutoProcessor.from_pretrained(
+            self.model_path,
+            trust_remote_code=True,
+            local_files_only=(not self.auto_download)
+        )
+
+        # Load model with appropriate dtype
+        logger.info(f"{self.provider_name}: Loading model from {self.model_path}")
+        model_kwargs = {
+            "trust_remote_code": True,
+            "use_safetensors": self.use_safetensors,
+        }
+        if self.use_bf16:
+            model_kwargs["torch_dtype"] = torch.bfloat16
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            local_files_only=(not self.auto_download),
+            **model_kwargs,
+        )
+        self.model = self.model.to(self.device)
+        self.model.eval()
+        return True
     
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Dia TTS capabilities"""
@@ -507,8 +525,8 @@ class DiaAdapter(TTSAdapter):
         self.model = None
         self.processor = None
         
-        # Clear GPU cache if using CUDA
-        if self.device == "cuda" and torch.cuda.is_available():
+        # Clear GPU cache if CUDA is available
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
         await super().close()

@@ -1082,16 +1082,46 @@ async def evaluate_geval(
             user_id=effective_user_id
         )
         
-        # Format response - convert simple metrics to EvaluationMetric objects
+        # Format response - accept either numeric or structured metric dicts
         raw_metrics = result["results"].get("metrics", {})
         formatted_metrics = {}
-        for metric_name, score in raw_metrics.items():
-            formatted_metrics[metric_name] = EvaluationMetric(
-                name=metric_name,
-                score=score / 5.0 if score > 1 else score,  # Normalize to 0-1 if needed
-                raw_score=score,
-                explanation=result["results"].get("explanations", {}).get(metric_name, "")
-            )
+        explanations_fallback = result["results"].get("explanations", {})
+        for metric_name, metric_value in raw_metrics.items():
+            if isinstance(metric_value, dict):
+                # Structured metric already provided
+                name = metric_value.get("name", metric_name)
+                score_val = metric_value.get("score", 0.0)
+                try:
+                    score_float = float(score_val) if score_val is not None else 0.0
+                except (TypeError, ValueError):
+                    score_float = 0.0
+                raw_score_val = metric_value.get("raw_score", None)
+                try:
+                    raw_score_float = float(raw_score_val) if raw_score_val is not None else None
+                except (TypeError, ValueError):
+                    raw_score_float = None
+                explanation = metric_value.get("explanation")
+                metadata = metric_value.get("metadata", {})
+                formatted_metrics[metric_name] = EvaluationMetric(
+                    name=name,
+                    score=score_float,
+                    raw_score=raw_score_float,
+                    explanation=explanation,
+                    metadata=metadata,
+                )
+            else:
+                # Backward-compat: simple numeric score; normalize if on 1-5 scale
+                try:
+                    score_num = float(metric_value)
+                except (TypeError, ValueError):
+                    score_num = 0.0
+                normalized = score_num / 5.0 if score_num > 1.0 else score_num
+                formatted_metrics[metric_name] = EvaluationMetric(
+                    name=metric_name,
+                    score=normalized,
+                    raw_score=score_num,
+                    explanation=explanations_fallback.get(metric_name, ""),
+                )
         
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):

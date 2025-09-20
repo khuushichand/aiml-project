@@ -144,12 +144,9 @@ class HiggsAdapter(TTSAdapter):
             except ImportError as e:
                 logger.error(f"{self.provider_name}: boson_multimodal library not installed")
                 logger.info("Install Higgs Audio dependencies from: https://github.com/boson-ai/higgs-audio")
+                # Gracefully indicate not configured rather than raising for integration environments
                 self._status = ProviderStatus.NOT_CONFIGURED
-                raise TTSModelLoadError(
-                    "Failed to import boson_multimodal library",
-                    provider=self.provider_name,
-                    details={"error": str(e), "suggestion": "Install from https://github.com/boson-ai/higgs-audio"}
-                )
+                return False
             
             # Initialize HiggsAudioServeEngine
             # If auto-download is disabled and a remote path is configured, abort with guidance

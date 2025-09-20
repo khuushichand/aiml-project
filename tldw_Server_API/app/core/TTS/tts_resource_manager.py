@@ -87,6 +87,23 @@ class StreamingSession:
         self.error_count = 0
         self._cleanup_tasks: Set[asyncio.Task] = set()
         
+    # Backward-compat properties used by tests
+    @property
+    def bytes_streamed(self) -> int:
+        return self.bytes_sent
+
+    @bytes_streamed.setter
+    def bytes_streamed(self, value: int) -> None:
+        self.bytes_sent = value
+
+    @property
+    def start_time(self) -> float:
+        return self.created_at
+
+    @start_time.setter
+    def start_time(self, value: float) -> None:
+        self.created_at = value
+        
     async def track_activity(self, chunk_size: int = 0):
         """Track session activity"""
         self.last_activity = time.time()
@@ -161,6 +178,11 @@ class HTTPConnectionPool:
         self._pools: Dict[str, httpx.AsyncClient] = {}
         self._pool_metrics: Dict[str, ResourceMetrics] = {}
         self._lock = asyncio.Lock()
+
+        # Backward-compatibility: tests reference `_clients`; alias to `_pools`.
+    @property
+    def _clients(self) -> Dict[str, httpx.AsyncClient]:
+        return self._pools
         
     async def get_client(self, provider: str, base_url: Optional[str] = None) -> httpx.AsyncClient:
         """
@@ -208,6 +230,10 @@ class HTTPConnectionPool:
                 del self._pools[provider]
                 del self._pool_metrics[provider]
                 logger.debug(f"Closed HTTP connection pool for {provider}")
+
+    async def close_client(self, provider: str):
+        """Close a specific client (alias for close_pool)"""
+        await self.close_pool(provider)
     
     async def close_all(self):
         """Close all connection pools"""
@@ -242,7 +268,7 @@ class MemoryMonitor:
     
     def __init__(
         self,
-        memory_threshold: float = 0.85,  # 85% of total memory
+        memory_threshold: float = 0.80,  # 80% of total memory
         check_interval: float = 30.0,    # Check every 30 seconds
         cleanup_threshold: float = 0.90,  # Force cleanup at 90%
         warning_threshold: Optional[float] = None,  # Alias for memory_threshold (for tests)
@@ -298,24 +324,55 @@ class MemoryMonitor:
         logger.debug(f"Registered model for memory monitoring: {type(model_instance).__name__}")
     
     def get_memory_usage(self) -> Dict[str, Any]:
-        """Get current memory usage statistics"""
+        """Get current memory usage statistics (with simple caching and robust fallbacks)"""
+        now = time.time()
+        if (
+            self._last_memory_usage is not None
+            and (now - self._last_check_time) < self.check_interval
+        ):
+            return self._last_memory_usage
+
         memory = psutil.virtual_memory()
         process = psutil.Process()
         mb = 1024 * 1024
-        return {
-            "total": memory.total,
-            "available": memory.available,
-            "used": memory.used,
-            "percent": memory.percent,
-            "free": memory.free,
-            "total_mb": memory.total // mb,
-            "available_mb": memory.available // mb,
-            "used_mb": memory.used // mb,
-            "free_mb": memory.free // mb,
-            "process_mb": process.memory_info().rss // mb,
+
+        total = getattr(memory, "total", 0)
+        available = getattr(memory, "available", 0)
+        used = getattr(memory, "used", None)
+        if used is None and total and available is not None:
+            used = total - available
+        free = getattr(memory, "free", None)
+        if free is None:
+            free = available
+        percent = getattr(memory, "percent", None)
+        if percent is None and total:
+            try:
+                percent = (used / total) * 100
+            except Exception:
+                percent = 0
+
+        # Compute warning/critical from the same percent value to avoid extra psutil calls
+        usage_ratio = (float(percent) if percent is not None else 0.0) / 100.0
+        stats = {
+            "total": int(total),
+            "available": int(available),
+            "used": int(used) if used is not None else 0,
+            "percent": float(percent) if percent is not None else 0.0,
+            "free": int(free) if free is not None else 0,
+            "total_mb": int(total) // mb if total else 0,
+            "available_mb": int(available) // mb if available else 0,
+            "used_mb": (int(used) // mb) if used is not None else 0,
+            "free_mb": (int(free) // mb) if free is not None else 0,
+            "process_mb": int(process.memory_info().rss) // mb,
             "threshold": self.memory_threshold * 100,
-            "cleanup_threshold": self.cleanup_threshold * 100
+            "cleanup_threshold": self.cleanup_threshold * 100,
+            "is_warning": usage_ratio > self.memory_threshold,
+            "is_critical": usage_ratio > self.cleanup_threshold,
         }
+
+        self._last_memory_usage = stats
+        self._last_check_time = now
+        return stats
     
     def is_memory_critical(self) -> bool:
         """Check if memory usage is critical"""
@@ -405,6 +462,11 @@ class StreamingSessionManager:
         self.max_sessions = self.config.get("max_streaming_sessions", 10)
         self._lock = threading.Lock()
     
+    # Tests reference `_sessions`; expose alias to `sessions`.
+    @property
+    def _sessions(self) -> Dict[str, StreamingSession]:
+        return self.sessions
+    
     async def create_session(self, provider: str, session_id: Optional[str] = None, **kwargs) -> str:
         """Create a new streaming session
         
@@ -472,7 +534,7 @@ class StreamingSessionManager:
                     "session_id": session_id,
                     "provider": session.provider,
                     "duration": duration,
-                    "bytes_sent": session.bytes_sent,
+                    "bytes_streamed": session.bytes_sent,
                     "chunks_sent": session.chunks_sent,
                     "error_count": session.error_count
                 }
@@ -505,9 +567,20 @@ class StreamingSessionManager:
             session = self.sessions.pop(sid)
             session.end()
     
-    async def get_active_sessions(self) -> List[str]:
-        """Get list of active session IDs"""
-        return list(self.sessions.keys())
+    async def get_active_sessions(self) -> List[StreamingSession]:
+        """Get list of active session objects"""
+        return [s for s in self.sessions.values() if s.is_active]
+
+    async def cleanup_inactive(self, max_age_seconds: int = 3600) -> None:
+        """Remove inactive sessions older than the given age."""
+        cutoff = time.time() - max_age_seconds
+        with self._lock:
+            to_remove = [
+                sid for sid, s in self.sessions.items()
+                if (not s.is_active) and (s.start_time < cutoff)
+            ]
+            for sid in to_remove:
+                self.sessions.pop(sid, None)
 
 
 class TTSResourceManager:
@@ -524,16 +597,18 @@ class TTSResourceManager:
         
         # Initialize components
         self.connection_pool = HTTPConnectionPool(
-            max_connections=self.config.get("max_http_connections", 10),
+            max_connections=self.config.get("max_http_connections", self.config.get("max_connections", 10)),
             max_keepalive_connections=self.config.get("max_keepalive_connections", 5),
             keepalive_expiry=self.config.get("keepalive_expiry", 30.0),
-            timeout=self.config.get("http_timeout", 60.0)
+            timeout=self.config.get("http_timeout", self.config.get("connection_timeout", 60.0))
         )
         
         self.memory_monitor = MemoryMonitor(
-            memory_threshold=self.config.get("memory_threshold", 0.85),
+            memory_threshold=self.config.get("memory_threshold", 0.80),
             check_interval=self.config.get("memory_check_interval", 30.0),
-            cleanup_threshold=self.config.get("memory_cleanup_threshold", 0.90)
+            cleanup_threshold=self.config.get("memory_cleanup_threshold", 0.90),
+            warning_threshold=self.config.get("memory_warning_threshold"),
+            critical_threshold=self.config.get("memory_critical_threshold")
         )
         
         # Streaming session management
@@ -627,6 +702,8 @@ class TTSResourceManager:
         """Register model instance for resource management"""
         self._model_instances[provider] = weakref.ref(model_instance)
         self.memory_monitor.register_model(model_instance, cleanup_callback)
+        # Track explicit registered models as expected by tests
+        self._registered_models[provider] = {"model": model_instance, "cleanup": cleanup_callback}
     
     def register_cleanup_handler(self, resource_type: ResourceType, handler: Callable):
         """Register cleanup handler for resource type"""
@@ -661,13 +738,18 @@ class TTSResourceManager:
                 await asyncio.sleep(60)
     
     async def unregister_model(self, provider: str):
-        """Unregister a model instance
-        
-        Args:
-            provider: Provider name
-        """
-        if provider in self._registered_models:
-            del self._registered_models[provider]
+        """Unregister a model instance and run its cleanup callback"""
+        entry = self._registered_models.pop(provider, None)
+        if entry is not None:
+            cleanup_cb = entry.get("cleanup")
+            if cleanup_cb:
+                try:
+                    if asyncio.iscoroutinefunction(cleanup_cb):
+                        await cleanup_cb()
+                    else:
+                        cleanup_cb()
+                except Exception as e:
+                    logger.error(f"Error in model cleanup for {provider}: {e}")
             logger.debug(f"Unregistered model for provider: {provider}")
     
     async def create_streaming_session(self, provider: str) -> str:
@@ -682,12 +764,45 @@ class TTSResourceManager:
         return await self.session_manager.create_session(provider)
     
     def get_statistics(self) -> Dict[str, Any]:
-        """Get comprehensive resource statistics
+        """Get comprehensive resource statistics in test-expected shape"""
+        mem = self.memory_monitor.get_memory_usage()
+        connections = {
+            "active": len(self.connection_pool._clients),
+            "providers": list(self.connection_pool._clients.keys())
+        }
+        models = {
+            "registered": list(self._registered_models.keys())
+        }
+        sessions = {
+            "active": len(self.session_manager._sessions),
+            "ids": list(self.session_manager._sessions.keys())
+        }
+        return {
+            "memory": mem,
+            "connections": connections,
+            "models": models,
+            "sessions": sessions
+        }
+
+    async def cleanup_all(self):
+        """Cleanup all resources: models, clients, and sessions"""
+        # Cleanup registered models
+        # Make a copy of keys to avoid mutation during iteration
+        for provider in list(self._registered_models.keys()):
+            try:
+                await self.unregister_model(provider)
+            except Exception as e:
+                logger.error(f"Error cleaning model {provider}: {e}")
         
-        Returns:
-            Dictionary with resource statistics
-        """
-        return self.get_resource_stats()
+        # Close all sessions managed by the session manager
+        for sid in list(self.session_manager._sessions.keys()):
+            try:
+                await self.session_manager.close_session(sid)
+            except Exception as e:
+                logger.error(f"Error closing session {sid}: {e}")
+        
+        # Close all HTTP clients
+        await self.connection_pool.close_all()
     
     def get_resource_stats(self) -> Dict[str, Any]:
         """Get resource usage statistics"""

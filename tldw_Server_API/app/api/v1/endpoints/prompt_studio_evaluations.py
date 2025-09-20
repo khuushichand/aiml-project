@@ -64,12 +64,13 @@ async def create_evaluation(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             })
+            started_ts = datetime.now().isoformat()
             cursor.execute(
                 """
                 INSERT INTO prompt_studio_evaluations (
                     uuid, project_id, prompt_id, name, description,
                     test_case_ids, model_configs, status, client_id, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
                     eval_uuid,
@@ -80,22 +81,24 @@ async def create_evaluation(
                     json.dumps(evaluation.test_case_ids or []),
                     model_configs,
                     user_context.get("client_id", "api"),
+                    started_ts,
                 ),
             )
             eval_id = cursor.lastrowid
             conn.commit()
 
-            # Defer execution which will update this record to running/completed.
-            # Wrap async task in a scheduler to ensure it actually runs in the event loop.
-            def _schedule_eval(eid: int, db_ref: PromptStudioDatabase):
-                try:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(run_evaluation_async(eid, db_ref))
-                except RuntimeError:
-                    # If no running loop, run synchronously (e.g., in test runner context)
-                    asyncio.run(run_evaluation_async(eid, db_ref))
-
-            background_tasks.add_task(_schedule_eval, eval_id, db)
+            # Schedule the async runner immediately on the current event loop for prompt execution
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(run_evaluation_async(eval_id, db))
+            except RuntimeError:
+                # As a fallback when no loop is running, add via BackgroundTasks which will run after response
+                def _schedule_eval(eid: int, db_ref: PromptStudioDatabase):
+                    try:
+                        asyncio.run(run_evaluation_async(eid, db_ref))
+                    except Exception as _e:
+                        logger.error(f"Failed to execute async evaluation runner: {_e}")
+                background_tasks.add_task(_schedule_eval, eval_id, db)
 
             return EvaluationResponse(
                 id=eval_id,
@@ -104,7 +107,7 @@ async def create_evaluation(
                 prompt_id=evaluation.prompt_id,
                 name=evaluation.name or "Evaluation",
                 description=evaluation.description or "",
-                status="pending",
+                status="running",
                 created_at=datetime.now().isoformat(),
             )
         else:
@@ -215,7 +218,7 @@ async def get_evaluation(
         
         cursor.execute("""
             SELECT id, uuid, project_id, prompt_id, name, description,
-                   status, created_at, completed_at, aggregate_metrics
+                   status, started_at, created_at, completed_at, aggregate_metrics
             FROM prompt_studio_evaluations
             WHERE id = ?
         """, (evaluation_id,))
@@ -223,22 +226,57 @@ async def get_evaluation(
         row = cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Evaluation not found")
-        
-        # Convert row to dict using DB helper
-        eval_dict = db._row_to_dict(cursor, row)
-        
-        return EvaluationResponse(
-            id=eval_dict["id"],
-            uuid=eval_dict["uuid"],
-            project_id=eval_dict["project_id"],
-            prompt_id=eval_dict["prompt_id"],
-            name=eval_dict.get("name", ""),
-            description=eval_dict.get("description", ""),
-            status=eval_dict.get("status", "pending"),
-            created_at=eval_dict.get("created_at", ""),
-            completed_at=eval_dict.get("completed_at"),
-            metrics=json.loads(eval_dict["aggregate_metrics"]) if eval_dict.get("aggregate_metrics") else {}
-        )
+
+        # Build a plain dict using sqlite3.Row mapping support
+        try:
+            keys = row.keys() if hasattr(row, 'keys') else [d[0] for d in cursor.description]
+            eval_dict = {k: row[k] if hasattr(row, 'keys') else row[i] for i, k in enumerate(keys)}
+        except Exception:
+            # Final fallback: zip description to row tuple
+            cols = [d[0] for d in cursor.description]
+            eval_dict = {c: row[idx] for idx, c in enumerate(cols)}
+
+        # Normalize metrics
+        agg = eval_dict.get("aggregate_metrics")
+        if isinstance(agg, str) and agg:
+            try:
+                metrics_obj = json.loads(agg)
+            except Exception:
+                metrics_obj = {}
+        elif isinstance(agg, dict):
+            metrics_obj = agg
+        else:
+            metrics_obj = {}
+
+        # Normalize timestamps to strings
+        def _ts(val):
+            try:
+                import datetime as _dt
+                if isinstance(val, (_dt.datetime, _dt.date)):
+                    return val.isoformat()
+            except Exception:
+                pass
+            return val
+
+        # Derive status fallback: if pending but started_at set, treat as running
+        status_val = eval_dict.get("status", "pending")
+        if status_val == "pending" and eval_dict.get("started_at"):
+            status_val = "running"
+
+        return {
+            "id": int(eval_dict["id"]),
+            "uuid": str(eval_dict.get("uuid", "")),
+            "project_id": int(eval_dict.get("project_id", 0)),
+            "prompt_id": int(eval_dict.get("prompt_id", 0)) if eval_dict.get("prompt_id") is not None else 0,
+            "name": eval_dict.get("name", ""),
+            "description": eval_dict.get("description", ""),
+            "status": status_val,
+            "created_at": _ts(eval_dict.get("created_at", "")),
+            "completed_at": _ts(eval_dict.get("completed_at")),
+            "metrics": metrics_obj,
+            "config": {},
+            "tags": []
+        }
         
     except HTTPException:
         raise
