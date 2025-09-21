@@ -365,6 +365,22 @@ Prebuilt configuration samples are included to speed up deployments:
 
 See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Docker Compose snippets.
 
+## Metrics Cheatsheet (Uploads & Storage)
+
+These metrics are exposed for monitoring uploads and per-user storage usage:
+
+- `uploads_total{user_id, media_type}`: Counter of uploaded files.
+- `upload_bytes_total{user_id, media_type}`: Counter of total uploaded bytes.
+- `user_storage_used_mb{user_id}`: Gauge of current storage used (MB).
+- `user_storage_quota_mb{user_id}`: Gauge of configured storage quota (MB).
+
+Example PromQL:
+- Upload throughput (bytes/s): `rate(upload_bytes_total[1m])`
+- Top users by bytes (last 1h): `sum by (user_id) (increase(upload_bytes_total[1h]))`
+- Users near quota: `user_storage_used_mb / user_storage_quota_mb > 0.9`
+
+Grafana: Import `Samples/Grafana/security-dashboard.json` for a starting dashboard with HTTP/security panels; extend with the upload metrics above.
+
 ### Platform-Specific Notes
 
 **Windows**: If you need CUDA support for transcription without full CUDA installation:

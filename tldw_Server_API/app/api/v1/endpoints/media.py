@@ -2655,7 +2655,7 @@ async def add_media(
                   })
 
 
-            # --- Quota check for uploaded files ---
+            # --- Quota check for uploaded files and upload metrics ---
             try:
                 if saved_files_info:
                     total_uploaded_bytes = 0
@@ -2675,6 +2675,13 @@ async def add_media(
                                 f"Available: {info['available_mb']}MB"
                             )
                             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=detail)
+                        # Record upload metrics
+                        try:
+                            reg = get_metrics_registry()
+                            reg.increment("uploads_total", len(saved_files_info), labels={"user_id": str(current_user.id), "media_type": form_data.media_type})
+                            reg.increment("upload_bytes_total", float(total_uploaded_bytes), labels={"user_id": str(current_user.id), "media_type": form_data.media_type})
+                        except Exception:
+                            pass
             except HTTPException:
                 raise
             except Exception as _qerr:

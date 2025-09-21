@@ -492,6 +492,16 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
+        # Validate webhook URL if provided (SSRF guard)
+        if run_request.webhook_url:
+            try:
+                from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+                from tldw_Server_API.app.core.Metrics import get_metrics_registry
+                assert_url_safe(run_request.webhook_url)
+            except HTTPException as he:
+                get_metrics_registry().increment("security_ssrf_block_total", 1)
+                raise he
+
         # Create run
         run_id = eval_db.create_run(
             eval_id=eval_id,

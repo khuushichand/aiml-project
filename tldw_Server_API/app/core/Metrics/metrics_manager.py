@@ -218,6 +218,25 @@ class MetricsRegistry:
                 labels=["provider", "model"]
             )
         )
+
+        # Upload metrics
+        self.register_metric(
+            MetricDefinition(
+                name="uploads_total",
+                type=MetricType.COUNTER,
+                description="Total number of uploaded files",
+                labels=["user_id", "media_type"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="upload_bytes_total",
+                type=MetricType.COUNTER,
+                description="Total bytes uploaded",
+                unit="bytes",
+                labels=["user_id", "media_type"]
+            )
+        )
         
         self.register_metric(
             MetricDefinition(
