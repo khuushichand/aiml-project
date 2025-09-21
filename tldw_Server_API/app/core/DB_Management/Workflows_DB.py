@@ -669,5 +669,19 @@ class WorkflowsDatabase:
             out.append(d)
         return out
 
+    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.cursor().execute(
+            "SELECT * FROM workflow_artifacts WHERE artifact_id = ?",
+            (artifact_id,),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["metadata_json"] = json.loads(d.get("metadata_json") or "{}")
+        except Exception:
+            pass
+        return d
+
 
 __all__ = ["WorkflowsDatabase", "WorkflowDefinition", "WorkflowRun", "DEFAULT_DB_PATH"]

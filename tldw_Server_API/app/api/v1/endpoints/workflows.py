@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 from loguru import logger
@@ -429,6 +430,128 @@ async def get_run_artifacts(
             "step_run_id": a.get("step_run_id"),
         })
     return results
+
+
+@router.get("/artifacts/{artifact_id}/download")
+async def download_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    art = db.get_artifact(artifact_id)
+    if not art:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    run = db.get_run(str(art.get("run_id"))) if art.get("run_id") else None
+    if not run:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    # Only support file:// URIs for direct download
+    uri = str(art.get("uri") or "")
+    if uri.startswith("file://"):
+        fpath = uri[len("file://") :]
+    else:
+        raise HTTPException(status_code=400, detail="Only file artifacts are downloadable")
+    p = Path(fpath).resolve()
+    # Basic containment check: must be under recorded workdir (if present)
+    workdir = art.get("metadata_json", {}).get("workdir") or art.get("uri", "")
+    try:
+        wd = Path(str(workdir).replace("file://", "")).resolve()
+        if wd.exists():
+            try:
+                # Python 3.9+: is_relative_to
+                rel = str(p).startswith(str(wd))
+            except Exception:
+                rel = str(p).startswith(str(wd))
+            if not rel:
+                raise HTTPException(status_code=400, detail="Invalid artifact path scope")
+    except Exception:
+        pass
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    # Guardrails: max size and allowed MIME
+    import os as _os
+    import mimetypes as _m
+    max_bytes = int(_os.getenv("WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES", "10485760"))
+    try:
+        if p.stat().st_size > max_bytes:
+            raise HTTPException(status_code=413, detail="Artifact too large to download")
+    except Exception:
+        pass
+    # MIME allowlist
+    allowed = [s.strip() for s in (_os.getenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "text/plain,text/markdown,application/json,application/pdf,image/png,image/jpeg").split(",")) if s.strip()]
+    mime = art.get("mime_type") or _m.guess_type(str(p))[0] or "application/octet-stream"
+    if allowed and not any(mime == a or (a.endswith("/*") and mime.startswith(a[:-1])) for a in allowed):
+        raise HTTPException(status_code=415, detail=f"MIME not allowed: {mime}")
+    return FileResponse(str(p), filename=p.name, media_type=mime)
+
+
+@router.get("/runs/{run_id}/artifacts/download")
+async def download_run_artifacts_zip(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    import os as _os
+    import mimetypes as _m
+    import io, zipfile
+    from pathlib import Path
+
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    arts = db.list_artifacts_for_run(run_id)
+    if not arts:
+        raise HTTPException(status_code=404, detail="No artifacts for run")
+
+    # Constraints
+    max_total = int(_os.getenv("WORKFLOWS_ARTIFACT_BULK_MAX_BYTES", "52428800"))  # 50MB
+    allowed = [s.strip() for s in (_os.getenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "text/plain,text/markdown,application/json,application/pdf,image/png,image/jpeg").split(",")) if s.strip()]
+
+    # Preselect eligible files and sum sizes
+    selected = []
+    total = 0
+    for a in arts:
+        uri = str(a.get("uri") or "")
+        if not uri.startswith("file://"):
+            continue
+        p = Path(uri[len("file://"):]).resolve()
+        if not p.exists() or not p.is_file():
+            continue
+        try:
+            size_b = p.stat().st_size
+        except Exception:
+            size_b = 0
+        mime = a.get("mime_type") or _m.guess_type(str(p))[0] or "application/octet-stream"
+        if allowed and not any(mime == m or (m.endswith("/*") and mime.startswith(m[:-1])) for m in allowed):
+            continue
+        total += size_b or 0
+        if total > max_total:
+            raise HTTPException(status_code=413, detail="Total artifact size too large for bulk download")
+        selected.append((p, mime))
+
+    if not selected:
+        raise HTTPException(status_code=404, detail="No eligible artifacts for bulk download")
+
+    # Build zip in-memory (store)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+        for p, mime in selected:
+            try:
+                zf.write(str(p), arcname=p.name)
+            except Exception:
+                continue
+    buf.seek(0)
+    filename = f"artifacts_{run_id}.zip"
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
 
 # -------------------- Options Discovery: Chunkers --------------------

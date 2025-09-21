@@ -568,6 +568,9 @@ class WorkflowEngine:
         """Dispatch to the proper adapter with cancel/heartbeat hooks in context."""
         # Inject helper hooks
         ctx = {**context, "prev": last_outputs}
+        ctx["run_id"] = run_id
+        if step_run_id:
+            ctx["step_run_id"] = step_run_id
         ctx["is_cancelled"] = lambda: self.db.is_cancel_requested(run_id)
         ctx["heartbeat"] = lambda: None  # Engine-level heartbeat already updated per attempt
         if step_run_id:
@@ -580,6 +583,26 @@ class WorkflowEngine:
                 stderr_path=str(stderr_path) if stderr_path is not None else None,
             )
             ctx["append_event"] = lambda etype, payload=None: self.db.append_event(self.config.tenant_id, run_id, etype, payload or {}, step_run_id=step_run_id)
+            # Add artifact helper
+            def _add_artifact(type: str, uri: str, size_bytes: Optional[int] = None, mime_type: Optional[str] = None, checksum_sha256: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, artifact_id: Optional[str] = None) -> None:
+                try:
+                    _run = self.db.get_run(run_id)
+                    tenant_id = _run.tenant_id if _run else self.config.tenant_id
+                    self.db.add_artifact(
+                        artifact_id=artifact_id or str(uuid.uuid4()),
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        step_run_id=step_run_id,
+                        type=type,
+                        uri=uri,
+                        size_bytes=size_bytes,
+                        mime_type=mime_type,
+                        checksum_sha256=checksum_sha256,
+                        metadata=metadata,
+                    )
+                except Exception:
+                    pass
+            ctx["add_artifact"] = _add_artifact
 
         if step_type == "prompt":
             return await run_prompt_adapter(step_cfg, ctx)
@@ -674,36 +697,4 @@ class WorkflowScheduler:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
         asyncio.get_event_loop().create_task(engine.start_run(run_id, mode))
 
-    async def _maybe_send_completion_webhook(self, definition: Dict[str, Any], run_id: str, status: str) -> None:
-        """If definition includes on_completion_webhook, dispatch it via webhook adapter."""
-        try:
-            hook = definition.get("on_completion_webhook") if isinstance(definition, dict) else None
-            if not hook:
-                return
-            run = self.db.get_run(run_id)
-            if not run:
-                return
-            import json as _json
-            payload = {
-                "run_id": run.run_id,
-                "workflow_id": run.workflow_id,
-                "status": status,
-                "inputs": _json.loads(run.inputs_json or "{}"),
-                "outputs": _json.loads(run.outputs_json or "null") if run.outputs_json else None,
-                "ended_at": run.ended_at or self._now_iso(),
-            }
-            cfg: Dict[str, Any] = {"event": "workflows.completed", "data": payload}
-            if isinstance(hook, dict):
-                if hook.get("url"):
-                    cfg["url"] = str(hook.get("url"))
-                if hook.get("event"):
-                    cfg["event"] = str(hook.get("event"))
-                if hook.get("data"):
-                    # Merge extra data under 'extra'
-                    cfg.setdefault("data", payload)
-                    cfg["data"]["extra"] = hook.get("data")
-            # Reuse webhook adapter
-            await run_webhook_adapter(cfg, {"inputs": payload.get("inputs", {})})
-        except Exception:
-            # Non-fatal
-            pass
+    

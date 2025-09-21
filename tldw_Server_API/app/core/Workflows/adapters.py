@@ -79,6 +79,24 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
 
     rendered = apply_template_to_string(template, data) or ""
     logger.debug(f"Prompt adapter rendered length={len(rendered)}")
+    # Optional artifact persistence
+    try:
+        if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
+            from pathlib import Path
+            step_run_id = str(context.get("step_run_id") or "")
+            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"prompt_{int(time.time()*1000)}")
+            art_dir.mkdir(parents=True, exist_ok=True)
+            fpath = art_dir / "prompt.txt"
+            fpath.write_text(rendered or "", encoding="utf-8")
+            context["add_artifact"](
+                type="prompt_text",
+                uri=f"file://{fpath}",
+                size_bytes=len((rendered or "").encode("utf-8")),
+                mime_type="text/plain",
+                metadata={"step": "prompt"},
+            )
+    except Exception:
+        pass
     return {"text": rendered}
 
 
@@ -529,6 +547,41 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     meta_entry["index_collection"] = str(indexing.get("collection"))
 
             out["metadata"].append(meta_entry)
+            # Persist artifacts for downloaded files
+            try:
+                if callable(context.get("add_artifact")):
+                    import mimetypes, hashlib
+                    for fp in step_dir.glob("*.*"):
+                        # Skip log files
+                        if fp.name in {"stdout.log", "stderr.log"} or fp.parent.name == "logs":
+                            continue
+                        try:
+                            size_b = fp.stat().st_size
+                        except Exception:
+                            size_b = None
+                        try:
+                            mime, _ = mimetypes.guess_type(str(fp))
+                        except Exception:
+                            mime = None
+                        sha256 = None
+                        try:
+                            h = hashlib.sha256()
+                            with fp.open("rb") as f:
+                                for chunk in iter(lambda: f.read(65536), b""):
+                                    h.update(chunk)
+                            sha256 = h.hexdigest()
+                        except Exception:
+                            pass
+                        context["add_artifact"](
+                            type="download",
+                            uri=f"file://{fp}",
+                            size_bytes=size_b,
+                            mime_type=mime,
+                            checksum_sha256=sha256,
+                            metadata={"workdir": str(step_dir)},
+                        )
+            except Exception:
+                pass
 
     return out
 
@@ -572,6 +625,24 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
             return {"result": arguments.get("message"), "module": "_fallback"}
         return {"error": "tool_not_found"}
     result = await module.execute_tool(tool_name, arguments)
+    # Optional artifact persistence of result
+    try:
+        if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
+            from pathlib import Path
+            step_run_id = str(context.get("step_run_id") or "")
+            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"mcp_{int(time.time()*1000)}")
+            art_dir.mkdir(parents=True, exist_ok=True)
+            fpath = art_dir / "mcp_result.json"
+            fpath.write_text(json.dumps(result, default=str, indent=2), encoding="utf-8")
+            context["add_artifact"](
+                type="mcp_result",
+                uri=f"file://{fpath}",
+                size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                mime_type="application/json",
+                metadata={"tool_name": tool_name, "module": module_id},
+            )
+    except Exception:
+        pass
     return {"result": result, "module": module_id}
 
 
@@ -609,6 +680,25 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, data=body, headers=headers)
                 ok = 200 <= resp.status_code < 300
+                # Optional artifact of response metadata
+                try:
+                    if callable(context.get("add_artifact")):
+                        from pathlib import Path
+                        step_run_id = str(context.get("step_run_id") or "")
+                        art_dir = Path("Databases") / "artifacts" / (step_run_id or f"webhook_{int(time.time()*1000)}")
+                        art_dir.mkdir(parents=True, exist_ok=True)
+                        fpath = art_dir / "webhook_response.json"
+                        data = {"status_code": resp.status_code, "headers": dict(resp.headers)}
+                        fpath.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                        context["add_artifact"](
+                            type="webhook_response",
+                            uri=f"file://{fpath}",
+                            size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                            mime_type="application/json",
+                            metadata={"url": url},
+                        )
+                except Exception:
+                    pass
                 return {"dispatched": ok, "status_code": resp.status_code}
         except Exception as e:
             return {"dispatched": False, "error": str(e)}
