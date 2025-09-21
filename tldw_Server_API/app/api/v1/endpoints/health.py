@@ -36,7 +36,7 @@ router = APIRouter(
 #
 # Health Check Endpoints
 
-@router.get("")
+@router.get("", openapi_extra={"security": []})
 async def health_check(
     db_pool: DatabasePool = Depends(get_db_pool),
     settings: Settings = Depends(get_settings)
@@ -159,7 +159,7 @@ async def health_check(
     )
 
 
-@router.get("/live")
+@router.get("/live", openapi_extra={"security": []})
 async def liveness_probe() -> Dict[str, str]:
     """
     Simple liveness probe for Kubernetes
@@ -176,7 +176,7 @@ async def liveness_probe() -> Dict[str, str]:
     }
 
 
-@router.get("/ready")
+@router.get("/ready", openapi_extra={"security": []})
 async def readiness_probe(
     db_pool: DatabasePool = Depends(get_db_pool),
     settings: Settings = Depends(get_settings)

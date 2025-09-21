@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/Switch';
 import { Badge } from '@/components/ui/Badge';
 import { validateWithAjv } from '@/lib/ajv';
 import { formatRelativeTime } from '@/lib/utils';
+import { useToast } from '@/components/ui/ToastProvider';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -47,6 +48,7 @@ function buildCurl(method: string, url: string, headers: Record<string, string>,
 }
 
 export default function ConfigPage() {
+  const { show } = useToast();
   const { config, setApiBaseHost, setApiVersion, setXApiKey, setApiBearer, setTheme, reloadBootstrapConfig } = useConfig();
 
   // Connection status
@@ -124,6 +126,8 @@ export default function ConfigPage() {
       try { parsed = JSON.parse(text); } catch { parsed = text; }
       setRespStatus(`${resp.status} ${resp.statusText}`);
       setRespBody(parsed);
+      setBuilderView('response');
+      show({ title: 'Request sent', description: `${resp.status} ${resp.statusText}`, variant: resp.ok ? 'success' : 'warning' });
       addRequestHistory({
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         method,
@@ -140,6 +144,7 @@ export default function ConfigPage() {
     } catch (e: any) {
       setRespStatus(`Error`);
       setRespBody({ error: e?.message || 'Request failed' });
+      show({ title: 'Request failed', description: e?.message || 'Request failed', variant: 'danger' });
     } finally {
       setSending(false);
     }
@@ -163,7 +168,7 @@ export default function ConfigPage() {
   const curl = useMemo(() => buildCurl(method, finalUrl, computedHeaders, ['POST','PUT','PATCH','DELETE'].includes(method) ? tryParseJSON(bodyText).value : undefined), [method, finalUrl, computedHeaders, bodyText]);
 
   // Helpers
-  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); } catch {} };
+  const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
 
   return (
     <Layout>
@@ -269,7 +274,7 @@ export default function ConfigPage() {
             <div className="mb-2 flex items-center justify-between text-sm">
               <div className="font-medium text-gray-800">Response: <span className="font-mono">{respStatus || '-'}</span></div>
               <div className="space-x-2">
-                <Button variant="secondary" onClick={() => copy(jsonPrettify(respBody))}>Copy JSON</Button>
+                <Button variant="secondary" onClick={() => copy(jsonPrettify(respBody), 'Response JSON copied')}>Copy JSON</Button>
               </div>
             </div>
             <JsonViewer data={respBody} />
@@ -282,7 +287,7 @@ export default function ConfigPage() {
             <div className="mb-2 flex items-center justify-between text-sm">
               <div className="font-medium text-gray-800">cURL</div>
               <div className="space-x-2">
-                <Button variant="secondary" onClick={() => copy(curl)}>Copy cURL</Button>
+                <Button variant="secondary" onClick={() => copy(curl, 'cURL copied')}>Copy cURL</Button>
               </div>
             </div>
             <pre className="overflow-auto whitespace-pre break-words font-mono text-xs text-gray-800">{curl}</pre>
@@ -404,6 +409,7 @@ function RequestHistorySection({ history, replay, reload }: { history: RequestHi
 }
 
 function QuickFormsSection() {
+  const { show } = useToast();
   const [selected, setSelected] = useState<string>(QUICK_FORMS[0]?.id || '');
   const preset = useMemo(() => QUICK_FORMS.find(p => p.id === selected) as QuickFormPreset | undefined, [selected]);
   const [state, setState] = useState<Record<string, any>>(preset?.defaults || {});
@@ -459,7 +465,7 @@ function QuickFormsSection() {
       const ajvErrs = await validateWithAjv(body, preset.schema);
       if (ajvErrs.length) errs.push(...ajvErrs);
     }
-    if (errs.length) { setErrors(errs); setSending(false); return; }
+    if (errs.length) { setErrors(errs); setSending(false); show({ title: 'Validation failed', description: errs.join('; '), variant: 'warning' }); return; }
     try {
       const url = `${getApiBaseUrl()}${preset.path.startsWith('/') ? '' : '/'}${preset.path}`;
       const method = preset.method;
@@ -470,6 +476,8 @@ function QuickFormsSection() {
       try { parsed = JSON.parse(text); } catch { parsed = text; }
       setStatus(`${respRaw.status} ${respRaw.statusText}`);
       setResp(parsed);
+      setView('response');
+      show({ title: 'Request sent', description: `${respRaw.status} ${respRaw.statusText}`, variant: respRaw.ok ? 'success' : 'warning' });
       addRequestHistory({
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         method,
@@ -486,12 +494,13 @@ function QuickFormsSection() {
     } catch (e: any) {
       setStatus('Error');
       setResp({ error: e?.message || 'Request failed' });
+      show({ title: 'Request failed', description: e?.message || 'Request failed', variant: 'danger' });
     } finally {
       setSending(false);
     }
   };
 
-  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); } catch {} };
+  const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
 
   const curl = `curl -X ${preset?.method} \\\n+  '${getApiBaseUrl()}${preset?.path || ''}' \\\n+  -H 'Accept: application/json' \\\n+  -H 'Content-Type: application/json' \\\n+  --data '${(bodyText || '').replace(/'/g, "'\\''")}'`;
 
@@ -578,7 +587,7 @@ function QuickFormsSection() {
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm text-gray-700">Edit JSON payload</div>
         <div className="space-x-2">
-          <Button variant="secondary" onClick={() => copy(bodyText)}>Copy</Button>
+              <Button variant="secondary" onClick={() => copy(bodyText, 'Payload copied')}>Copy</Button>
           <Button variant="secondary" onClick={() => { try { setBodyText(JSON.stringify(JSON.parse(bodyText), null, 2)); } catch {} }}>Format</Button>
           <Button onClick={onSend} loading={sending} disabled={sending || !preset}>Send</Button>
         </div>
@@ -598,7 +607,7 @@ function QuickFormsSection() {
             <div className="space-x-2">
               <Button variant="secondary" onClick={() => setRespView('pretty')} disabled={respView === 'pretty'}>Pretty</Button>
               <Button variant="secondary" onClick={() => setRespView('tree')} disabled={respView === 'tree'}>Tree</Button>
-              <Button variant="secondary" onClick={() => copy(JSON.stringify(resp, null, 2))}>Copy JSON</Button>
+              <Button variant="secondary" onClick={() => copy(JSON.stringify(resp, null, 2), 'Response JSON copied')}>Copy JSON</Button>
             </div>
           </div>
           <div className="rounded border bg-gray-50 p-3">
@@ -611,7 +620,7 @@ function QuickFormsSection() {
         <div className="mt-3">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-sm text-gray-700">cURL</div>
-            <div className="space-x-2"><Button variant="secondary" onClick={() => copy(curl)}>Copy</Button></div>
+            <div className="space-x-2"><Button variant="secondary" onClick={() => copy(curl, 'cURL copied')}>Copy</Button></div>
           </div>
           <pre className="overflow-auto whitespace-pre break-words rounded border bg-gray-50 p-3 font-mono text-xs text-gray-800">{curl}</pre>
         </div>

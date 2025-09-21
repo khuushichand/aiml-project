@@ -726,6 +726,53 @@ def custom_openapi():
     }
     openapi_schema.setdefault("info", {}).setdefault("x-logo", {"url": "/static/favicon.ico"})
 
+    # Default security: show lock icons by default in Swagger UI
+    # Endpoints can override with openapi_extra={"security": []} to be public
+    openapi_schema["security"] = [
+        {"ApiKeyAuth": []},
+        {"BearerAuth": []},
+    ]
+
+    # ReDoc tag grouping for better navigation in /redoc
+    openapi_schema["x-tagGroups"] = [
+        {
+            "name": "Core",
+            "tags": ["health", "authentication", "users", "admin"],
+        },
+        {
+            "name": "Media",
+            "tags": ["media", "audio", "media-embeddings", "web-scraping", "research"],
+        },
+        {
+            "name": "Chat & TTS",
+            "tags": [
+                "chat",
+                "Chat Dictionaries",
+                "Document Generator",
+                "audio-websocket",
+                "character, persona",
+                "character chat sessions",
+                "character messages",
+            ],
+        },
+        {
+            "name": "RAG & Evals",
+            "tags": ["RAG - Health", "RAG - Unified", "evaluations", "benchmarks"],
+        },
+        {
+            "name": "Embeddings & Vectors",
+            "tags": ["embeddings", "vector-stores", "claims"],
+        },
+        {
+            "name": "Studio & Knowledge",
+            "tags": ["Prompt Studio", "Prompt Studio - Test Cases", "prompts", "notes", "chatbooks", "tools"],
+        },
+        {
+            "name": "Infra",
+            "tags": ["metrics", "monitoring", "config", "sync", "llm", "llamacpp", "MCP Unified", "Workflows"],
+        },
+    ]
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -893,7 +940,7 @@ else:
 async def favicon():
     return FileResponse(FAVICON_PATH, media_type="image/x-icon")
 
-@app.get("/")
+@app.get("/", openapi_extra={"security": []})
 async def root():
     return {"message": "Welcome to the tldw API; If you're seeing this, the server is running!" + "Check out /webui , /docs or /metrics to get started!"}
 
@@ -1048,7 +1095,7 @@ app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-sc
 # The docs at http://localhost:8000/docs will show an “Authorize” button. You can log in by calling POST /api/v1/auth/login with a form that includes username and password. The docs interface is automatically aware because we used OAuth2PasswordBearer.
 
 # Health check
-@app.get("/health")
+@app.get("/health", openapi_extra={"security": []})
 async def health_check():
     return {"status": "healthy"}
 

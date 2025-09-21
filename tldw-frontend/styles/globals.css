@@ -42,3 +42,10 @@ body {
 .json-number { color: #a626a4; }
 .json-boolean { color: #b58900; }
 .json-null { color: #6c757d; font-style: italic; }
+
+/* Simple fade in up */
+@keyframes fade-in-up {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up { animation: fade-in-up 160ms ease-out; }

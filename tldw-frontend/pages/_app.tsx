@@ -3,6 +3,7 @@ import type { AppProps } from "next/app";
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/hooks/useAuth';
 import { ConfigProvider } from '@/hooks/useConfig';
+import { ToastProvider } from '@/components/ui/ToastProvider';
 import { useState } from 'react';
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -20,7 +21,9 @@ export default function App({ Component, pageProps }: AppProps) {
     <QueryClientProvider client={queryClient}>
       <ConfigProvider>
         <AuthProvider>
-          <Component {...pageProps} />
+          <ToastProvider>
+            <Component {...pageProps} />
+          </ToastProvider>
         </AuthProvider>
       </ConfigProvider>
     </QueryClientProvider>
