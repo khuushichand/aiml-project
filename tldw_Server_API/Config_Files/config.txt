@@ -318,6 +318,14 @@ include_parent_document = false
 # Approximate token threshold for including parent documents (len(text)/4 heuristic)
 parent_max_tokens = 1200
 
+# Default LLM to use for lightweight RAG tasks (query expansion, gap analysis)
+default_llm_provider = openai
+default_llm_model = gpt-4o-mini
+
+# HyDE defaults (provider/model used to generate hypothetical answers)
+hyde_provider = openai
+hyde_model = gpt-4o-mini
+
 # Enable enhanced chunking in unified pipeline (sentence-based)
 # Include adjacent chunks from the same document for continuity
 # Performance Settings

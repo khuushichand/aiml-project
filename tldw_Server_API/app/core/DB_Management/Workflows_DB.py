@@ -444,6 +444,14 @@ class WorkflowsDatabase:
         )
         self._conn.commit()
 
+    def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
+        """Persist the current attempt count for a step run."""
+        self._conn.execute(
+            "UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?",
+            (int(attempt), step_run_id),
+        )
+        self._conn.commit()
+
     def get_last_failed_step_id(self, run_id: str) -> Optional[str]:
         row = self._conn.cursor().execute(
             "SELECT step_id FROM workflow_step_runs WHERE run_id = ? AND status = 'failed' ORDER BY ended_at DESC LIMIT 1",

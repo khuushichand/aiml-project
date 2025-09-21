@@ -13,6 +13,7 @@ import types
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
+from tldw_Server_API.app.core.Security.egress import is_url_allowed
 
 
 class AdapterError(Exception):
@@ -69,14 +70,11 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 remaining -= sl
     except Exception:
         pass
-    # Robust force-error handling for tests and JSON string inputs
+    # Force-error handling (test-friendly)
     fe = config.get("force_error")
-    try:
-        if isinstance(fe, str):
-            fe = fe.strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
-        pass
-    if fe or (fe is None and str(config.get("template", "")).strip().lower() == "bad"):
+    if isinstance(fe, str):
+        fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+    if fe or str(config.get("template", "")).strip().lower() == "bad":
         raise AdapterError("forced_error")
 
     rendered = apply_template_to_string(template, data) or ""
@@ -298,12 +296,41 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
 
             if chunks_desc:
                 out.setdefault("chunks", []).extend(chunks_desc)
-            out["metadata"].append({
+            meta_local = {
                 "source": uri,
                 "media_type": src.get("media_type", "auto"),
                 "status": "local_ok",
                 "chunk_count": len(out.get("chunks", [])),
-            })
+            }
+            # Optional: persist to Media DB if indexing requested
+            try:
+                indexing = config.get("indexing") or {}
+                if isinstance(indexing, dict) and indexing.get("index_in_rag") and extracted_text:
+                    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+                    mdb = MediaDatabase("Databases/Media_DB_v2.db", client_id="workflow_engine")
+                    title = (config.get("metadata", {}) or {}).get("title") or Path(path).name
+                    keywords = (config.get("metadata", {}) or {}).get("tags") or []
+                    media_type = src.get("media_type") or "document"
+                    media_id, media_uuid, msg = mdb.add_media_with_keywords(
+                        url=uri,
+                        title=title,
+                        media_type=media_type,
+                        content=extracted_text,
+                        keywords=keywords,
+                        overwrite=False,
+                        chunk_options=None,
+                        chunks=None,
+                    )
+                    if media_id:
+                        out.setdefault("media_ids", []).append(media_id)
+                        meta_local["stored_media_id"] = media_id
+                        meta_local["db_message"] = msg
+                        # Mark as indexed at DB level (vectorization may still be pending)
+                        out["rag_indexed"] = True
+            except Exception:
+                # Non-fatal; proceed without DB write
+                pass
+            out["metadata"].append(meta_local)
             continue
 
         # HTTP(S) URIs: honor allowed_domains if provided
@@ -315,6 +342,18 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     "source": uri,
                     "status": "skipped_disallowed_domain",
                 })
+                continue
+
+            # Global egress policy: private IPs and allowlist
+            try:
+                if not is_url_allowed(uri):
+                    out["metadata"].append({
+                        "source": uri,
+                        "status": "blocked_egress",
+                    })
+                    continue
+            except Exception:
+                out["metadata"].append({"source": uri, "status": "blocked_egress_err"})
                 continue
 
             # Limits: basic max_download_mb gate if provided (prevents invoking yt-dlp for obviously large files via URL params)
@@ -389,17 +428,65 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     break
             if not exited:
                 terminate_process(task)
-                out["metadata"].append({
+                # Attach small tails for debugging
+                stdout_tail = None
+                stderr_tail = None
+                try:
+                    if task.stdout_path.exists():
+                        data = task.stdout_path.read_bytes()
+                        if len(data) > 4096:
+                            data = data[-4096:]
+                        stdout_tail = data.decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                try:
+                    if task.stderr_path.exists():
+                        data = task.stderr_path.read_bytes()
+                        if len(data) > 4096:
+                            data = data[-4096:]
+                        stderr_tail = data.decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                meta_timeout = {
                     "source": uri,
                     "status": "timeout",
-                })
+                }
+                if stdout_tail:
+                    meta_timeout["stdout_tail"] = stdout_tail
+                if stderr_tail:
+                    meta_timeout["stderr_tail"] = stderr_tail
+                out["metadata"].append(meta_timeout)
                 continue
+
+            # Build metadata including small log tails for debugging
+            stdout_tail2 = None
+            stderr_tail2 = None
+            try:
+                if task.stdout_path.exists():
+                    data = task.stdout_path.read_bytes()
+                    if len(data) > 4096:
+                        data = data[-4096:]
+                    stdout_tail2 = data.decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            try:
+                if task.stderr_path.exists():
+                    data = task.stderr_path.read_bytes()
+                    if len(data) > 4096:
+                        data = data[-4096:]
+                    stderr_tail2 = data.decode("utf-8", errors="replace")
+            except Exception:
+                pass
 
             meta_entry = {
                 "source": uri,
                 "status": "downloaded",
                 "dir": str(step_dir),
             }
+            if stdout_tail2:
+                meta_entry["stdout_tail"] = stdout_tail2
+            if stderr_tail2:
+                meta_entry["stderr_tail"] = stderr_tail2
 
             # Attach chunking/indexing metadata if requested in config
             chunking = config.get("chunking") or {}

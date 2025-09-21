@@ -32,6 +32,20 @@ except ImportError:
     highlight_func = None
     track_llm_cost = None
 
+# Query intent analysis
+try:
+    from .query_features import QueryAnalyzer, QueryIntent
+except ImportError:
+    QueryAnalyzer = None
+    QueryIntent = None
+
+# HyDE utilities
+try:
+    from .hyde import generate_hypothetical_answer, embed_text as hyde_embed_text
+except ImportError:
+    generate_hypothetical_answer = None
+    hyde_embed_text = None
+
 try:
     from .query_expansion import (
         expand_acronyms,
@@ -165,6 +179,7 @@ async def unified_rag_pipeline(
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
+    adaptive_hybrid_weights: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
     
@@ -172,6 +187,15 @@ async def unified_rag_pipeline(
     expand_query: bool = False,
     expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
+    
+    # ========== HYDE ==========
+    enable_hyde: bool = False,
+    hyde_provider: Optional[str] = None,
+    hyde_model: Optional[str] = None,
+    
+    # ========== GAP ANALYSIS / FOLLOW-UPS ==========
+    enable_gap_analysis: bool = False,
+    max_followup_searches: int = 2,
     
     # ========== CACHING ==========
     enable_cache: bool = True,
@@ -482,6 +506,53 @@ async def unified_rag_pipeline(
             if metrics:
                 metrics.cache_lookup_time = result.timings["cache_check"]
         
+        # ========== INTENT-BASED WEIGHTING (optional) ==========
+        if adaptive_hybrid_weights and search_mode == "hybrid" and QueryAnalyzer:
+            try:
+                qa = QueryAnalyzer()
+                analysis = qa.analyze_query(query)
+                # Conceptual queries favor semantic; specific factual favor keyword
+                if getattr(analysis, "intent", None) is not None:
+                    if analysis.intent in {
+                        getattr(QueryIntent, "EXPLORATORY", None),
+                        getattr(QueryIntent, "DEFINITIONAL", None),
+                        getattr(QueryIntent, "ANALYTICAL", None),
+                        getattr(QueryIntent, "PROCEDURAL", None),
+                    }:
+                        hybrid_alpha = 0.7
+                    elif analysis.intent in {
+                        getattr(QueryIntent, "FACTUAL", None),
+                        getattr(QueryIntent, "COMPARATIVE", None),
+                        getattr(QueryIntent, "TEMPORAL", None),
+                    }:
+                        hybrid_alpha = 0.4
+                    result.metadata["query_intent"] = getattr(analysis.intent, "value", str(analysis.intent))
+                result.metadata["adaptive_hybrid_alpha"] = hybrid_alpha
+            except Exception:
+                pass
+
+        # ========== HyDE PREP (optional) ==========
+        hyde_vector = None
+        if enable_hyde and generate_hypothetical_answer and hyde_embed_text:
+            try:
+                hyde_start = time.time()
+                # Read defaults if present
+                try:
+                    from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                    cfg = load_and_log_configs() or {}
+                    hyde_provider = hyde_provider or (cfg.get("RAG_HYDE_PROVIDER") or None)
+                    hyde_model = hyde_model or (cfg.get("RAG_HYDE_MODEL") or None)
+                except Exception:
+                    pass
+                hypo = generate_hypothetical_answer(query, hyde_provider, hyde_model)
+                vec = await hyde_embed_text(hypo)
+                if vec:
+                    hyde_vector = vec
+                    result.metadata["hyde_applied"] = True
+                result.timings["hyde_prep"] = time.time() - hyde_start
+            except Exception as e:
+                result.errors.append(f"HyDE prep failed: {e}")
+
         # ========== DOCUMENT RETRIEVAL ==========
         if not result.cache_hit:
             retrieval_start = time.time()
@@ -549,6 +620,27 @@ async def unified_rag_pipeline(
                             index_namespace=index_namespace
                         )
                         
+                    # Optionally run HyDE-enhanced media retrieval and merge
+                    if enable_hyde and hyde_vector and search_mode == "hybrid":
+                        try:
+                            media_retr = retriever.retrievers.get(DataSource.MEDIA_DB)
+                            if media_retr and hasattr(media_retr, "retrieve_hybrid"):
+                                hyde_docs = await media_retr.retrieve_hybrid(
+                                    query=query,
+                                    alpha=hybrid_alpha,
+                                    index_namespace=index_namespace,
+                                    query_vector=hyde_vector,
+                                )
+                                by_id: Dict[str, Document] = {d.id: d for d in documents}
+                                for d in hyde_docs:
+                                    cur = by_id.get(d.id)
+                                    if cur is None or float(getattr(d, "score", 0.0)) > float(getattr(cur, "score", 0.0)):
+                                        by_id[d.id] = d
+                                documents = sorted(by_id.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)
+                                result.metadata["hyde_merged_count"] = len(hyde_docs)
+                        except Exception as e:
+                            result.errors.append(f"HyDE retrieval merge failed: {e}")
+
                     result.documents = documents
                     # Attach retrieval guidance prompt in metadata for downstream awareness/debugging
                     try:
@@ -567,6 +659,62 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Document retrieval failed: {str(e)}")
                 logger.error(f"Retrieval error: {e}")
+        
+        # ========== GAP ANALYSIS / FOLLOW-UPS (optional) ==========
+        if enable_gap_analysis and result.documents:
+            try:
+                ga_start = time.time()
+                followups: List[str] = []
+                # Try a lightweight LLM to propose follow-ups
+                try:
+                    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as llm_analyze  # type: ignore
+                    prompt = (
+                        "You help a search system identify missing information.\n"
+                        "Given the user query and several retrieved snippets, propose up to 2 concise follow-up search queries "
+                        "that would likely fill important gaps. Return ONLY a JSON array of strings.\n\n"
+                        f"Query: {query}\n\nSnippets:\n"
+                    )
+                    for d in result.documents[:5]:
+                        snippet = (d.content or "")[:300].replace("\n", " ")
+                        prompt += f"- {snippet}\n"
+                    prompt += "\nJSON:"
+                    llm_out = llm_analyze(api_name="openai", input_data="", custom_prompt_arg=prompt, model_override="gpt-4o-mini")
+                    import json as _json
+                    if isinstance(llm_out, str):
+                        try:
+                            followups = _json.loads(llm_out)
+                        except Exception:
+                            followups = [s.strip("- ") for s in llm_out.splitlines() if s.strip()]
+                except Exception:
+                    # Fallback
+                    followups = [f"detailed {query}", f"examples {query}"]
+                followups = [q for q in followups if isinstance(q, str) and q.strip()][:max_followup_searches]
+                if followups:
+                    # Run in parallel
+                    tasks = [
+                        retriever.retrieve(
+                            query=fq,
+                            sources=data_sources,
+                            config=config,
+                            index_namespace=index_namespace,
+                        ) for fq in followups
+                    ]
+                    try:
+                        follow_results = await asyncio.gather(*tasks)
+                    except Exception:
+                        follow_results = []
+                    # Merge by id, keep higher score
+                    merged = {d.id: d for d in result.documents}
+                    for lst in follow_results:
+                        for d in (lst or []):
+                            prev = merged.get(d.id)
+                            if prev is None or float(getattr(d, "score", 0.0)) > float(getattr(prev, "score", 0.0)):
+                                merged[d.id] = d
+                    result.documents = sorted(merged.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)[:top_k]
+                    result.metadata["followups"] = followups
+                result.timings["gap_analysis"] = time.time() - ga_start
+            except Exception as e:
+                result.errors.append(f"Gap analysis failed: {e}")
         
         # ========== KEYWORD FILTERING ==========
         if keyword_filter and result.documents:

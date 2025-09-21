@@ -603,6 +603,30 @@ def load_settings():
                 _cp.get('RAG', 'llm_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
             )
         ))(os.getenv('RAG_LLM_RERANKER_MODEL'), load_comprehensive_config()),
+
+        # RAG HyDE configuration (provider/model)
+        "RAG_HYDE_PROVIDER": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'hyde_provider', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_HYDE_PROVIDER'), load_comprehensive_config()),
+        "RAG_HYDE_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'hyde_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_HYDE_MODEL'), load_comprehensive_config()),
+
+        # RAG default LLM (used for general lightweight tasks like query expansion/gap analysis)
+        "RAG_DEFAULT_LLM_PROVIDER": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'default_llm_provider', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_DEFAULT_LLM_PROVIDER'), load_comprehensive_config()),
+        "RAG_DEFAULT_LLM_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'default_llm_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_DEFAULT_LLM_MODEL'), load_comprehensive_config()),
     }
 
     # --- Warnings ---

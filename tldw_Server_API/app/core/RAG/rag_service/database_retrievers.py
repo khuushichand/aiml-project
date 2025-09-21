@@ -311,6 +311,8 @@ class MediaDBRetriever(BaseRetriever):
             return await self._retrieve_fts(query, media_type, **kwargs)
         
         try:
+            # Allow callers to provide a precomputed query vector (e.g., HyDE)
+            provided_vector = kwargs.get("query_vector")
             # Initialize vector store if needed
             if not self.vector_store._initialized:
                 await self.vector_store.initialize()
@@ -321,28 +323,30 @@ class MediaDBRetriever(BaseRetriever):
                 get_embedding_config,
             )
             
-            # Get embedding for query
-            try:
-                user_app_config = get_embedding_config()
-                embeddings = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    create_embeddings_batch,
-                    [query],  # texts
-                    user_app_config,
-                    None,
-                )
-                
-                if not embeddings or not embeddings[0]:
-                    logger.error("Failed to generate query embedding")
-                    return []
-                
-                query_vector = embeddings[0]
-                if hasattr(query_vector, 'tolist'):
-                    query_vector = query_vector.tolist()
+            # Get embedding for query (or use provided)
+            if provided_vector is not None:
+                query_vector = provided_vector
+            else:
+                try:
+                    user_app_config = get_embedding_config()
+                    embeddings = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        create_embeddings_batch,
+                        [query],  # texts
+                        user_app_config,
+                        None,
+                    )
                     
-            except Exception as e:
-                logger.error(f"Failed to generate query embedding: {e}")
-                return []
+                    if not embeddings or not embeddings[0]:
+                        logger.error("Failed to generate query embedding")
+                        return []
+                    
+                    query_vector = embeddings[0]
+                    if hasattr(query_vector, 'tolist'):
+                        query_vector = query_vector.tolist()
+                except Exception as e:
+                    logger.error(f"Failed to generate query embedding: {e}")
+                    return []
             
             # Build filter for vector search
             filter_dict = {}

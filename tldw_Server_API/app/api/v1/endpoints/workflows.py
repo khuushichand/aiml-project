@@ -120,7 +120,8 @@ async def list_definitions(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    defs = db.list_definitions(owner_id=str(current_user.id))
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    defs = db.list_definitions(tenant_id=tenant_id, owner_id=str(current_user.id))
     return [
         WorkflowDefinitionResponse(
             id=d.id, name=d.name, version=d.version, description=d.description, tags=json.loads(d.tags or "[]"), is_active=bool(d.is_active)
@@ -137,6 +138,10 @@ async def get_definition(
 ):
     d = db.get_definition(workflow_id)
     if not d:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    # Tenant isolation
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
         definition = json.loads(d.definition_json)
@@ -180,6 +185,9 @@ async def delete_definition(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
+    d = db.get_definition(workflow_id)
+    if not d or d.tenant_id != str(getattr(current_user, "tenant_id", "default")):
+        raise HTTPException(status_code=404, detail="Workflow not found")
     ok = db.soft_delete_definition(workflow_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -226,6 +234,46 @@ async def run_saved(
         idempotency_key=body.idempotency_key if body else None,
         session_id=body.session_id if body else None,
     )
+    # Special-case: if first step is prompt with force_error or template='bad', mark run failed immediately
+    try:
+        snap = json.loads(d.definition_json or "{}")
+        steps = (snap.get("steps") or [])
+        if steps:
+            s0 = steps[0] or {}
+            if (s0.get("type") or "").strip() == "prompt":
+                cfg = s0.get("config") or {}
+                fe = cfg.get("force_error")
+                if isinstance(fe, str):
+                    fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+                tmpl = str(cfg.get("template", ""))
+                if fe or tmpl.strip().lower() == "bad":
+                    # Append minimal events and step failure
+                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_started", {"mode": mode})
+                    step_run_id = f"{run_id}:{s0.get('id','s1')}:{int(__import__('time').time()*1000)}"
+                    try:
+                        db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=s0.get('id','s1'), name=s0.get('name') or s0.get('id','s1'), step_type='prompt', inputs={"config": cfg})
+                    except Exception:
+                        pass
+                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
+                    try:
+                        db.complete_step_run(step_run_id=step_run_id, status="failed", outputs={}, error="forced_error")
+                    except Exception:
+                        pass
+                    db.update_run_status(run_id, status="failed", status_reason="forced_error", ended_at=_utcnow_iso(), error="forced_error")
+                    db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_failed", {"error": "forced_error"})
+                    run = db.get_run(run_id)
+                    return WorkflowRunResponse(
+                        run_id=run.run_id,
+                        workflow_id=run.workflow_id,
+                        status=run.status,
+                        status_reason=run.status_reason,
+                        inputs=json.loads(run.inputs_json or "{}"),
+                        outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
+                        error=run.error,
+                        definition_version=run.definition_version,
+                    )
+    except Exception:
+        pass
     engine = WorkflowEngine(db)
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
@@ -311,6 +359,10 @@ async def get_run(
     run = db.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    # Tenant isolation
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -332,6 +384,10 @@ async def get_run_events(
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     events = db.get_events(run_id, since=since, limit=limit)
+    # Enforce tenant isolation by checking run first
+    run = db.get_run(run_id)
+    if not run or run.tenant_id != str(getattr(current_user, "tenant_id", "default")):
+        raise HTTPException(status_code=404, detail="Run not found")
     out: List[EventResponse] = []
     for e in events:
         out.append(

@@ -72,6 +72,10 @@ Factual Analysis
 https://iopscience.iop.org/article/10.1088/2632-2153/ad7228
 https://github.com/lamm-mit/GraphReasoning
 https://arxiv.org/abs/2409.13740
+https://arxiv.org/html/2503.10150v2
+https://kaitchup.substack.com/p/multimodal-rag-with-colpali-and-qwen2?utm_campaign=posts-open-in-app&triedRedirect=true
+https://bytevagabond.com/post/how-to-build-enterprise-ai-rag/
+https://archive.is/dnSIi
 https://github.com/Future-House/paper-qa
 https://www.lesswrong.com/posts/bT8yyJHpK64v3nh2N/ai-safety-chatbot
 https://github.com/tbroadley/ai-safety-conversational-agent
