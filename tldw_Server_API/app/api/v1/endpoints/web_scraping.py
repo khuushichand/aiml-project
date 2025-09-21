@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 
 router = APIRouter(
     prefix="/web-scraping",
-    tags=["Web Scraping Management"],
+    tags=["web-scraping"],
 )
 
 

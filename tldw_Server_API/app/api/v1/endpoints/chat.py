@@ -398,7 +398,7 @@ async def _save_message_turn_to_db(
 @router.post(
     "/completions",
     summary="Creates a model response and manages conversation state.",
-    tags=["Chat"],
+    tags=["chat"],
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "Invalid request (e.g., empty messages, text too long, bad parameters)."},
         status.HTTP_401_UNAUTHORIZED: {"description": "Invalid authentication token."},
@@ -1392,7 +1392,7 @@ import warnings
 
 
 @router.post("/dictionaries", response_model=ChatDictionaryResponse, status_code=status.HTTP_201_CREATED,
-             summary="Create a new chat dictionary", tags=["Chat Dictionaries"])
+             summary="Create a new chat dictionary", tags=["Chat Dictionaries"]) 
 async def create_chat_dictionary(
     dictionary: ChatDictionaryCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1429,7 +1429,7 @@ async def create_chat_dictionary(
 
 
 @router.get("/dictionaries", response_model=DictionaryListResponse,
-            summary="List all chat dictionaries", tags=["Chat Dictionaries"])
+            summary="List all chat dictionaries", tags=["Chat Dictionaries"]) 
 async def list_chat_dictionaries(
     include_inactive: bool = Query(False, description="Include inactive dictionaries"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1462,7 +1462,7 @@ async def list_chat_dictionaries(
 
 
 @router.get("/dictionaries/{dictionary_id}", response_model=ChatDictionaryWithEntries,
-            summary="Get dictionary with entries", tags=["Chat Dictionaries"])
+            summary="Get dictionary with entries", tags=["Chat Dictionaries"]) 
 async def get_chat_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1505,7 +1505,7 @@ async def get_chat_dictionary(
 
 
 @router.put("/dictionaries/{dictionary_id}", response_model=ChatDictionaryResponse,
-            summary="Update a dictionary", tags=["Chat Dictionaries"])
+            summary="Update a dictionary", tags=["Chat Dictionaries"]) 
 async def update_chat_dictionary(
     dictionary_id: int,
     update: ChatDictionaryUpdate,
@@ -1541,7 +1541,7 @@ async def update_chat_dictionary(
 
 
 @router.delete("/dictionaries/{dictionary_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete a dictionary", tags=["Chat Dictionaries"])
+               summary="Delete a dictionary", tags=["Chat Dictionaries"]) 
 async def delete_chat_dictionary(
     dictionary_id: int,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
@@ -1565,7 +1565,7 @@ async def delete_chat_dictionary(
 # --- Dictionary Entry Endpoints ---
 
 @router.post("/dictionaries/{dictionary_id}/entries", response_model=DictionaryEntryResponse,
-             status_code=status.HTTP_201_CREATED, summary="Add entry to dictionary", tags=["Chat Dictionaries"])
+             status_code=status.HTTP_201_CREATED, summary="Add entry to dictionary", tags=["Chat Dictionaries"]) 
 async def add_dictionary_entry(
     dictionary_id: int,
     entry: DictionaryEntryCreate,
@@ -1628,7 +1628,7 @@ async def add_dictionary_entry(
 
 
 @router.get("/dictionaries/{dictionary_id}/entries", response_model=EntryListResponse,
-            summary="List dictionary entries", tags=["Chat Dictionaries"])
+            summary="List dictionary entries", tags=["Chat Dictionaries"]) 
 async def list_dictionary_entries(
     dictionary_id: int,
     group: Optional[str] = Query(None, description="Filter by group"),
@@ -1687,7 +1687,7 @@ async def list_dictionary_entries(
 
 
 @router.put("/dictionaries/entries/{entry_id}", response_model=DictionaryEntryResponse,
-            summary="Update dictionary entry", tags=["Chat Dictionaries"])
+            summary="Update dictionary entry", tags=["Chat Dictionaries"]) 
 async def update_dictionary_entry(
     entry_id: int,
     update: DictionaryEntryUpdate,
@@ -1743,7 +1743,7 @@ async def update_dictionary_entry(
 
 
 @router.delete("/dictionaries/entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete dictionary entry", tags=["Chat Dictionaries"])
+               summary="Delete dictionary entry", tags=["Chat Dictionaries"]) 
 async def delete_dictionary_entry(
     entry_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1766,7 +1766,7 @@ async def delete_dictionary_entry(
 # --- Text Processing Endpoint ---
 
 @router.post("/dictionaries/process", response_model=ProcessTextResponse,
-             summary="Process text through dictionaries", tags=["Chat Dictionaries"])
+             summary="Process text through dictionaries", tags=["Chat Dictionaries"]) 
 async def process_text_with_dictionaries(
     request: ProcessTextRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1822,7 +1822,7 @@ async def process_text_with_dictionaries(
 
 @router.post("/dictionaries/import", response_model=ImportDictionaryResponse,
              status_code=status.HTTP_201_CREATED, summary="Import dictionary from markdown", 
-             tags=["Chat Dictionaries"])
+             tags=["Chat Dictionaries"]) 
 async def import_dictionary(
     import_request: ImportDictionaryRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1870,7 +1870,7 @@ async def import_dictionary(
 
 
 @router.get("/dictionaries/{dictionary_id}/export", response_model=ExportDictionaryResponse,
-            summary="Export dictionary to markdown", tags=["Chat Dictionaries"])
+            summary="Export dictionary to markdown", tags=["Chat Dictionaries"]) 
 async def export_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1907,7 +1907,7 @@ async def export_dictionary(
 
 
 @router.get("/dictionaries/{dictionary_id}/export/json", response_model=ExportDictionaryJSONResponse,
-            summary="Export dictionary to JSON", tags=["Chat Dictionaries"])
+            summary="Export dictionary to JSON", tags=["Chat Dictionaries"]) 
 async def export_dictionary_json(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1927,7 +1927,7 @@ async def export_dictionary_json(
 
 @router.post("/dictionaries/import/json", response_model=ImportDictionaryResponse,
              status_code=status.HTTP_201_CREATED, summary="Import dictionary from JSON",
-             tags=["Chat Dictionaries"])
+             tags=["Chat Dictionaries"]) 
 async def import_dictionary_json(
     import_request: ImportDictionaryJSONRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1955,7 +1955,7 @@ async def import_dictionary_json(
 
 
 @router.get("/dictionaries/{dictionary_id}/statistics", response_model=DictionaryStatistics,
-            summary="Get dictionary statistics", tags=["Chat Dictionaries"])
+            summary="Get dictionary statistics", tags=["Chat Dictionaries"]) 
 async def get_dictionary_statistics(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)

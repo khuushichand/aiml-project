@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { apiClient, API_BASE_URL, buildAuthHeaders } from '@/lib/api';
+import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api';
 import { streamSSE } from '@/lib/sse';
 import type { ChatMessage } from '@/types/api';
 
@@ -106,7 +106,7 @@ export default function ChatPage() {
       const body = JSON.stringify(payload);
 
       if (stream) {
-        const url = `${API_BASE_URL}/chat/completions`;
+        const url = `${getApiBaseUrl()}/chat/completions`;
         const headers = { ...buildAuthHeaders('POST', 'application/json'), Accept: 'text/event-stream' };
         const controller = new AbortController();
         abortRef.current = controller;

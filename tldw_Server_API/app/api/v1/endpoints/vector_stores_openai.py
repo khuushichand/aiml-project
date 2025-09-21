@@ -46,7 +46,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 router = APIRouter(
-    tags=["Vector Stores"],
+    tags=["vector-stores"],
 )
 
 # Ensure DB is initialized for single-user default on import; per-user init done on demand
@@ -137,43 +137,58 @@ def _count_tokens(text: str, model_name: str) -> int:
 # ==========================
 
 class VectorStoreCreate(BaseModel):
-    name: Optional[str] = Field(default=None)
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    embedding_model: Optional[str] = Field(default=None, description="Model id for embeddings metadata")
-    dimensions: int = Field(..., gt=0)
+    name: Optional[str] = Field(
+        default=None,
+        description="Human-readable store name (unique per user).",
+        examples=["docs-index"]
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Arbitrary metadata to associate with the store."
+    )
+    embedding_model: Optional[str] = Field(
+        default=None,
+        description="Embedding model identifier for reference (optional).",
+        examples=["text-embedding-3-small"]
+    )
+    dimensions: int = Field(
+        ..., gt=0,
+        description="Embedding vector dimension for this store.",
+        examples=[1536]
+    )
 
 
 class VectorStoreObject(BaseModel):
-    id: str
-    object: str = "vector_store"
-    name: Optional[str] = None
-    created_at: int
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    dimensions: int
+    id: str = Field(..., description="Unique store ID.")
+    object: str = Field("vector_store", description="Object type.")
+    name: Optional[str] = Field(None, description="Store name.")
+    created_at: int = Field(..., description="Creation timestamp (unix).")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Store metadata.")
+    dimensions: int = Field(..., description="Embedding vector dimension.")
 
 
 class VectorRecord(BaseModel):
-    id: Optional[str] = None
-    values: Optional[List[float]] = None
-    content: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    id: Optional[str] = Field(None, description="Vector identifier.")
+    values: Optional[List[float]] = Field(None, description="Embedding vector values.")
+    content: Optional[str] = Field(None, description="Raw text/content to embed (server may embed if values omitted).")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Per-vector metadata.")
 
 
 class UpsertVectorsRequest(BaseModel):
-    records: List[VectorRecord]
+    records: List[VectorRecord] = Field(..., description="Vectors to upsert.")
 
 
 class VectorItem(BaseModel):
-    id: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    content: Optional[str] = None
+    id: str = Field(..., description="Vector ID.")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata filter conditions.")
+    content: Optional[str] = Field(None, description="Optional content associated with the vector.")
 
 
 class QueryRequest(BaseModel):
-    query: Optional[str] = None
-    vector: Optional[List[float]] = None
-    top_k: int = Field(default=10, gt=0, le=100)
-    filter: Optional[Dict[str, Any]] = None
+    query: Optional[str] = Field(None, description="Natural language query to search.", examples=["vector databases in production"])
+    vector: Optional[List[float]] = Field(None, description="Raw embedding vector to search by.")
+    top_k: int = Field(default=10, gt=0, le=100, description="Number of results to return.")
+    filter: Optional[Dict[str, Any]] = Field(None, description="Metadata filter expression.")
 
 
 def _adapter_for_user(user: User, embedding_dim: int) -> ChromaDBAdapter:

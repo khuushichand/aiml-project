@@ -14,7 +14,16 @@ from pydantic import Field, BaseModel, ConfigDict
 # --- Pydantic Models (OpenAI Spec Compliant) ---
 
 class CreateEmbeddingRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(
+        extra='forbid',
+        json_schema_extra={
+            "example": {
+                "model": "text-embedding-ada-002",
+                "input": "The food was delicious and the waiter was friendly.",
+                "encoding_format": "float"
+            }
+        }
+    )
 
     input: Union[str, List[str], List[int], List[List[int]]] = Field(
         ...,

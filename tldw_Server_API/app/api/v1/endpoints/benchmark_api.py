@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationMa
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 # Create router
-router = APIRouter(prefix="/benchmarks", tags=["Benchmarks"])
+router = APIRouter(prefix="/benchmarks", tags=["benchmarks"])
 
 # Initialize components
 evaluation_manager = EvaluationManager()

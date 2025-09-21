@@ -16,6 +16,7 @@ export function Header() {
     { href: '/media', label: 'Media' },
     { href: '/chat', label: 'Chat' },
     { href: '/search', label: 'Search' },
+    { href: '/config', label: 'Config' },
   ];
   
   return (

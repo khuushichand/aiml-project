@@ -33,7 +33,7 @@ from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
     list_jobs as jobs_list,
 )
 
-router = APIRouter(prefix="/media", tags=["Media Embeddings"])
+router = APIRouter(prefix="/media", tags=["media-embeddings"])
 
 # Default embedding settings
 DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-4B-GGUF"

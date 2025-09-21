@@ -2,6 +2,7 @@ import "@/styles/globals.css";
 import type { AppProps } from "next/app";
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/hooks/useAuth';
+import { ConfigProvider } from '@/hooks/useConfig';
 import { useState } from 'react';
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -17,9 +18,11 @@ export default function App({ Component, pageProps }: AppProps) {
   
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Component {...pageProps} />
-      </AuthProvider>
+      <ConfigProvider>
+        <AuthProvider>
+          <Component {...pageProps} />
+        </AuthProvider>
+      </ConfigProvider>
     </QueryClientProvider>
   );
 }

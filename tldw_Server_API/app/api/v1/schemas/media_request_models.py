@@ -287,7 +287,24 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     # Use alias for 'keywords' field to accept 'keywords' in the form data
     # but internally work with 'keywords_str' before parsing.
     model_config = ConfigDict(
-        populate_by_name=True  # Allows using 'alias' for fields
+        populate_by_name=True,  # Allows using 'alias' for fields
+        json_schema_extra={
+            "example": {
+                "media_type": "document",
+                "urls": ["https://example.com/guide.pdf"],
+                "title": "Example Guide",
+                "author": "Jane Doe",
+                "keywords": "api,fastapi,docs",
+                "perform_analysis": True,
+                "perform_chunking": True,
+                "chunk_method": "sentences",
+                "chunk_size": 800,
+                "chunk_overlap": 150,
+                "generate_embeddings": True,
+                "embedding_provider": "huggingface",
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
+            }
+        }
     )
 
     @field_validator('start_time', 'end_time')

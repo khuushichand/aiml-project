@@ -467,7 +467,7 @@ def apply_rate_limit(limit_string: str):
     return decorator
 
 router = APIRouter(
-    tags=["Embeddings"],
+    tags=["embeddings"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},

@@ -302,7 +302,19 @@ class ChatCompletionRequest(BaseModel):
         False,
         description="[Extension] If true, persist conversation and messages to the database. Defaults to false (ephemeral)."
     )
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
+            "example": {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "user", "content": "Summarize the key points of this project."}
+                ],
+                "stream": False,
+                "api_provider": "openai"
+            }
+        }
+    )
     
     @field_validator('prompt_template_name')
     @classmethod

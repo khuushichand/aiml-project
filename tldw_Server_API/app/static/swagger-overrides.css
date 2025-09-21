@@ -1,0 +1,46 @@
+/* Swagger UI customizations for tldw_server */
+
+/* Widen the main wrapper for better readability on desktops */
+.swagger-ui .wrapper {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Wrap long code blocks and JSON payloads */
+.swagger-ui pre, .swagger-ui code {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Keep operation summaries tidy with wrapping */
+.swagger-ui .opblock-summary-path, 
+.swagger-ui .opblock-summary-description {
+  white-space: normal;
+}
+
+/* Make the Authorize button stand out a bit more */
+.swagger-ui .auth-wrapper .authorize {
+  border-color: #2b6cb0;
+}
+
+/* Reduce model section noise when expanded */
+.swagger-ui .model-box {
+  white-space: normal;
+}
+
+/* Improve table readability */
+.swagger-ui table thead tr th, 
+.swagger-ui table tbody tr td {
+  white-space: normal;
+}
+
+/* Slightly tighter topbar spacing */
+.swagger-ui .topbar-wrapper {
+  padding: 8px 0;
+}
+
+/* Better spacing in the info description */
+.swagger-ui .information-container .info .description {
+  line-height: 1.5;
+}
+

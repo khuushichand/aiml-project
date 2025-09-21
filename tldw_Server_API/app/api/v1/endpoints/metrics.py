@@ -9,7 +9,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 
-router = APIRouter(tags=["Metrics"])
+router = APIRouter(tags=["metrics"])
 
 
 @router.get("/metrics", 

@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
+import { addRequestHistory } from '@/lib/history';
 
 // Resolve API base URL with sensible defaults
 const apiHost = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
@@ -25,6 +26,8 @@ const api: AxiosInstance = axios.create({
 // Request interceptor to add auth and CSRF headers
 api.interceptors.request.use(
   (config) => {
+    // Attach metadata for timing
+    (config as any).metadata = { start: Date.now() };
     if (typeof window !== 'undefined') {
       // Bearer token (multi-user JWT auth)
       const token = localStorage.getItem('access_token');
@@ -65,8 +68,47 @@ api.interceptors.request.use(
 
 // Response interceptor for error handling
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    try {
+      const cfg: any = response.config || {};
+      const start = cfg.metadata?.start || Date.now();
+      const duration = Date.now() - start;
+      addRequestHistory({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        method: (response.config.method || 'get').toUpperCase(),
+        url: response.config.url || '',
+        baseURL: (response.config as any).baseURL || api.defaults.baseURL,
+        status: response.status,
+        ok: response.status >= 200 && response.status < 300,
+        duration_ms: duration,
+        timestamp: new Date().toISOString(),
+        requestHeaders: (response.config.headers as any) || undefined,
+        requestBody: (response.config as any).data,
+        responseBody: response.data,
+      });
+    } catch {}
+    return response;
+  },
   async (error: AxiosError) => {
+    try {
+      const cfg: any = error.config || {};
+      const start = cfg.metadata?.start || Date.now();
+      const duration = Date.now() - start;
+      addRequestHistory({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        method: (cfg.method || 'get').toUpperCase(),
+        url: cfg.url || '',
+        baseURL: (cfg as any).baseURL || api.defaults.baseURL,
+        status: error.response?.status,
+        ok: false,
+        duration_ms: duration,
+        timestamp: new Date().toISOString(),
+        requestHeaders: (cfg.headers as any) || undefined,
+        requestBody: (cfg as any).data,
+        responseBody: error.response?.data,
+        errorMessage: (error.response?.data as any)?.detail || error.message,
+      });
+    } catch {}
     if (error.response?.status === 401) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('access_token');
@@ -107,6 +149,10 @@ export default api;
 
 // Streaming helpers
 export const API_BASE_URL = baseURL;
+
+export function getApiBaseUrl(): string {
+  return api.defaults.baseURL || API_BASE_URL;
+}
 
 export function buildAuthHeaders(method: string = 'GET', contentType?: string): Record<string, string> {
   const headers: Record<string, string> = {};
