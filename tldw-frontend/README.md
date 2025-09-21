@@ -2,19 +2,28 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+1) Configure environment variables (copy `.env.local.example` to `.env.local` and edit as needed):
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+cp .env.local.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Key variables:
+
+- `NEXT_PUBLIC_API_URL`: Backend URL (default: `http://127.0.0.1:8000`)
+- `NEXT_PUBLIC_API_VERSION`: API version (default: `v1`)
+- `NEXT_PUBLIC_X_API_KEY`: Optional. Single-user mode API key (sent as `X-API-KEY`).
+- `NEXT_PUBLIC_API_BEARER`: Optional. Bearer token for chat module when server sets `API_BEARER`.
+
+2) Run the development server (use port 8080 to match server CORS defaults):
+
+```bash
+npm run dev -- -p 8080
+# or
+yarn dev -p 8080
+```
+
+Open [http://localhost:8080](http://localhost:8080) with your browser.
 
 You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
 

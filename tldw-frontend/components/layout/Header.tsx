@@ -1,15 +1,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { authService } from '@/lib/auth';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
 
 export function Header() {
   const router = useRouter();
-  const isAuthenticated = authService.isAuthenticated();
-  const user = authService.getUser();
+  const { isAuthenticated, user, logout } = useAuth();
   
   const handleLogout = () => {
-    authService.logout();
+    logout();
   };
   
   const navLinks = [
@@ -55,12 +54,15 @@ export function Header() {
                 <span className="text-sm text-gray-700">
                   {user?.username || 'User'}
                 </span>
-                <button
-                  onClick={handleLogout}
-                  className="rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
-                >
-                  Logout
-                </button>
+                {/* Only show logout when using session-based auth */}
+                {!process.env.NEXT_PUBLIC_X_API_KEY && !process.env.NEXT_PUBLIC_API_BEARER && (
+                  <button
+                    onClick={handleLogout}
+                    className="rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
+                  >
+                    Logout
+                  </button>
+                )}
               </>
             ) : (
               <Link

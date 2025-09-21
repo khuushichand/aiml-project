@@ -28,6 +28,20 @@ class AuthService {
     return AuthService.instance;
   }
   
+  private hasEnvAuth(): boolean {
+    // Either X-API-KEY or API_BEARER provided via env
+    return !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
+  }
+
+  private getEnvUser(): User {
+    // Synthetic user when using env-provided API credentials
+    return { username: this.hasApiBearer() ? 'api-bearer-auth' : 'api-key-auth' };
+  }
+
+  private hasApiBearer(): boolean {
+    return !!process.env.NEXT_PUBLIC_API_BEARER;
+  }
+
   async login(credentials: LoginCredentials): Promise<AuthToken> {
     // OAuth2 compatible login using form data
     const formData = new URLSearchParams();
@@ -73,6 +87,10 @@ class AuthService {
   
   getUser(): User | null {
     if (typeof window !== 'undefined') {
+      // Env-based auth returns a synthetic user (no local storage)
+      if (this.hasEnvAuth()) {
+        return this.getEnvUser();
+      }
       const userStr = localStorage.getItem('user');
       if (userStr) {
         try {
@@ -92,13 +110,18 @@ class AuthService {
   }
   
   isAuthenticated(): boolean {
-    return !!this.getToken();
+    // Auth when: JWT token present, or env credentials present
+    return !!this.getToken() || this.hasEnvAuth();
   }
   
   async validateToken(): Promise<boolean> {
     try {
-      // Call protected endpoint to validate token
-      await apiClient.get('/auth/protected-route');
+      // If using env-provided credentials, assume valid (connectivity can be checked separately)
+      if (this.hasEnvAuth()) {
+        return true;
+      }
+      // Validate multi-user JWT against a protected endpoint
+      await apiClient.get('/users/me');
       return true;
     } catch {
       return false;
