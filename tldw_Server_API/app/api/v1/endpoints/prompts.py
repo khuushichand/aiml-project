@@ -58,7 +58,7 @@ router = APIRouter()
 @router.get(
     "/health",
     summary="Prompts service health",
-    tags=["Prompts"]
+    tags=["prompts"]
 )
 async def prompts_health():
     """Lightweight health endpoint for the Prompts subsystem."""

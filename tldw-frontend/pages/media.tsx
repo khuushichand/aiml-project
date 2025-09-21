@@ -5,10 +5,14 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { apiClient } from '@/lib/api';
 import { debounce } from '@/lib/utils';
+import { useToast } from '@/components/ui/ToastProvider';
+import JsonEditor from '@/components/ui/JsonEditor';
+import { CardSkeleton } from '@/components/ui/Skeleton';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
 
 export default function MediaPage() {
+  const { show } = useToast();
   const router = useRouter();
   const [mediaType, setMediaType] = useState<MediaType>('document');
   const [files, setFiles] = useState<FileList | null>(null);
@@ -31,6 +35,8 @@ export default function MediaPage() {
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
   const [analysisModel, setAnalysisModel] = useState<string>('gpt-3.5-turbo');
   const [analysisPrompt, setAnalysisPrompt] = useState<string>('Summarize the following content in 5 bullet points.');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advancedJson, setAdvancedJson] = useState<string>(JSON.stringify({ perform_analysis: true, perform_chunking: true }, null, 2));
 
   const endpoint = (t: MediaType) => {
     switch (t) {
@@ -54,16 +60,22 @@ export default function MediaPage() {
       if (files) {
         Array.from(files).forEach((f) => fd.append('files', f));
       }
-      // Minimal required fields
-      fd.append('perform_analysis', 'true');
-      fd.append('perform_chunking', 'true');
+      // Advanced options JSON appended as fields
+      try {
+        const opts = JSON.parse(advancedJson || '{}');
+        Object.entries(opts).forEach(([k, v]) => {
+          if (v !== undefined && v !== null) fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
+        });
+      } catch {}
 
       const res = await apiClient.post(endpoint(mediaType), fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(res);
+      show({ title: 'Ingestion started', variant: 'success' });
     } catch (e: any) {
       setError(e.message || 'Upload failed');
+      show({ title: 'Upload failed', description: e?.message || 'Failed', variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -104,8 +116,10 @@ export default function MediaPage() {
       setPage(p);
       setTotalItems(data?.pagination?.total_items || 0);
       setTotalPages(data?.pagination?.total_pages || 1);
+      show({ title: 'Media loaded', description: `Page ${p}`, variant: 'success' });
     } catch (e) {
       setAllItems([]);
+      show({ title: 'Load failed', variant: 'warning' });
     } finally {
       setSearchLoading(false);
     }
@@ -116,8 +130,10 @@ export default function MediaPage() {
       const data = await apiClient.get<any>(`/media/${id}`);
       setSelectedItem(data);
       setAnalysisResult(null);
+      show({ title: 'Loaded details', variant: 'info' });
     } catch (e) {
       setSelectedItem(null);
+      show({ title: 'Load details failed', variant: 'warning' });
     }
   };
 
@@ -139,8 +155,10 @@ export default function MediaPage() {
       const res = await apiClient.post<any>('/chat/completions', payload);
       const textOut = res?.choices?.[0]?.message?.content || '';
       setAnalysisResult(textOut);
+      show({ title: 'Summary ready', variant: 'success' });
     } catch (e: any) {
       setAnalysisResult(`Error: ${e.message || e}`);
+      show({ title: 'Summarize failed', variant: 'danger' });
     } finally {
       setAnalyzing(false);
     }
@@ -154,6 +172,7 @@ export default function MediaPage() {
       const payload = { message: snippet, title: selectedItem?.source?.title || '' };
       localStorage.setItem('tldw-chat-prefill', JSON.stringify(payload));
       router.push('/chat');
+      show({ title: 'Sent to Chat', variant: 'success' });
     } catch {
       // no-op
     }
@@ -161,10 +180,10 @@ export default function MediaPage() {
 
   return (
     <Layout>
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-4 transition-all duration-150">
         <h1 className="text-2xl font-bold text-gray-900">Media Processing</h1>
 
-        <div className="rounded-md border bg-white p-4 space-y-4">
+        <div className="rounded-md border bg-white p-4 space-y-4 transition-all duration-150">
           {/* Search section */}
           <div className="rounded border p-3">
             <h2 className="mb-2 text-lg font-semibold">Search Media</h2>
@@ -192,7 +211,11 @@ export default function MediaPage() {
               </div>
             </div>
             <div className="mb-2 text-sm text-gray-600">Page {page} of {totalPages} ({totalItems} items)</div>
-            {allItems.length > 0 ? (
+            {searchLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 5 }).map((_, i) => (<CardSkeleton key={i} />))}
+              </div>
+            ) : allItems.length > 0 ? (
               <ul className="space-y-2">
                 {allItems.map((item, idx) => (
                   <li key={idx} className="cursor-pointer rounded border p-2 hover:bg-gray-50" onClick={() => loadDetails(item.id)}>
@@ -214,6 +237,14 @@ export default function MediaPage() {
               <Button variant="secondary" onClick={() => page < totalPages && loadAll(page + 1)} disabled={page >= totalPages}>Next</Button>
             </div>
           </div>
+
+          <details className="rounded border p-3">
+            <summary className="cursor-pointer text-sm font-medium">Advanced Options (JSON)</summary>
+            <div className="mt-2 space-y-2">
+              <div className="text-xs text-gray-600">These keys are appended as form fields. Non-string values are JSON-stringified.</div>
+              <JsonEditor value={advancedJson} onChange={setAdvancedJson} height={200} />
+            </div>
+          </details>
 
           {/* Selected item details */}
           {selectedItem && (

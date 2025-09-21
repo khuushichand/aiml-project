@@ -73,7 +73,7 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
 # --- API Endpoints ---
 
 @router.post("/import", response_model=CharacterImportResponse, 
-             summary="Import character card", tags=["Characters"], 
+             summary="Import character card", tags=["character, persona"], 
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
@@ -175,7 +175,7 @@ async def import_character_endpoint(
 
 
 
-@router.get("/", response_model=List[CharacterResponse], summary="List characters", tags=["Characters"])
+@router.get("/", response_model=List[CharacterResponse], summary="List characters", tags=["character, persona"])
 async def list_all_characters(  # Renamed from list_characters to avoid conflict with Python's list
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
@@ -194,7 +194,7 @@ async def list_all_characters(  # Renamed from list_characters to avoid conflict
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.get("/rate-limit-status", summary="Get rate limit status", tags=["Characters"])
+@router.get("/rate-limit-status", summary="Get rate limit status", tags=["character, persona"])
 async def get_rate_limit_status(
     current_user: User = Depends(get_request_user)
 ):
@@ -205,7 +205,7 @@ async def get_rate_limit_status(
 
 
 @router.post("/", response_model=CharacterResponse, status_code=status.HTTP_201_CREATED, summary="Create character",
-             tags=["Characters"])
+             tags=["character, persona"])
 async def create_new_character_endpoint(
         character_data: CharacterCreate,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -254,7 +254,7 @@ async def create_new_character_endpoint(
 
 
 @router.get("/filter", response_model=List[CharacterResponse], 
-            summary="Filter characters by tags", tags=["Characters"])
+            summary="Filter characters by tags", tags=["character, persona"])
 async def filter_characters_by_tags(
     tags: List[str] = Query([], description="List of tags to filter by"),
     match_all: bool = Query(False, description="Require all tags (AND) vs any tag (OR)"),
@@ -370,7 +370,7 @@ async def list_world_books_prioritized(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
-@router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["Characters"])
+@router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["character, persona"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
         character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -391,7 +391,7 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.put("/{character_id}", response_model=CharacterResponse, summary="Update character", tags=["Characters"])
+@router.put("/{character_id}", response_model=CharacterResponse, summary="Update character", tags=["character, persona"])
 async def update_character_endpoint(  # Renamed from update_character
         update_data: CharacterUpdate,
         character_id: int = FastAPIPath(..., description="ID of the character to update.", gt=0),
@@ -439,7 +439,7 @@ async def update_character_endpoint(  # Renamed from update_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.delete("/{character_id}", response_model=DeletionResponse, summary="Delete character", tags=["Characters"])
+@router.delete("/{character_id}", response_model=DeletionResponse, summary="Delete character", tags=["character, persona"])
 async def delete_character_endpoint(  # Renamed from delete_character
         character_id: int = FastAPIPath(..., description="ID of the character to delete.", gt=0),
         expected_version: int = Query(...,
@@ -482,7 +482,7 @@ async def delete_character_endpoint(  # Renamed from delete_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.get("/search/", response_model=List[CharacterResponse], summary="Search characters", tags=["Characters"])
+@router.get("/search/", response_model=List[CharacterResponse], summary="Search characters", tags=["character, persona"])
 async def search_characters_endpoint(
         query: str = Query(..., description="Search term for character name, description, etc."),
         limit: int = Query(10, ge=1, le=100),
@@ -1317,7 +1317,7 @@ async def bulk_entry_operations(
 
 
 @router.get("/{character_id}/export", response_model=Dict[str, Any],
-            summary="Export character in various formats", tags=["Characters"])
+            summary="Export character in various formats", tags=["character, persona"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),
     format: str = Query("v3", description="Export format (v3, v2, json)"),

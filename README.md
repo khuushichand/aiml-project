@@ -447,6 +447,23 @@ Key settings in `.env`:
 | `AUTH_MODE` | `single_user` or `multi_user` | `multi_user` |
 | `JWT_SECRET_KEY` | Secret for JWT signing (multi-user) | Required for multi-user |
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
+
+### Single-User API Key (How to obtain)
+
+- Recommended: set `SINGLE_USER_API_KEY` explicitly in your `.env` (or environment). You know the key because you set it.
+- Development logs: in dev mode (default), the server prints the full key at startup.
+- Production logs: set `ENV=production` to mask the key in logs. To briefly show it once on startup (e.g., for initial bootstrap), also set `SHOW_API_KEY_ON_STARTUP=true`, then remove it.
+- Programmatic retrieval:
+  - Python (same env as server):
+    ```bash
+    python -c "from tldw_Server_API.app.core.AuthNZ.settings import get_settings; print(get_settings().SINGLE_USER_API_KEY)"
+    ```
+  - Docker Compose:
+    ```bash
+    docker compose exec app printenv SINGLE_USER_API_KEY
+    ```
+- WebUI convenience (dev): `GET /webui/config.json` returns the key in single-user mode so the WebUI can auto-configure. Avoid relying on this in production.
+- Important: Always set a secure `SINGLE_USER_API_KEY` in production. If unset, the server may use a deterministic test key for convenience during development/testing.
 | `ENABLE_REGISTRATION` | Allow new user registration | `false` |
 | `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
 

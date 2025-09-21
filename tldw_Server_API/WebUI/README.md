@@ -118,6 +118,17 @@ This tool is designed for:
 - `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
 - `GET  /api/v1/audio/voices` — List available TTS voices (supports `?provider=elevenlabs`)
 
+### OCR Providers
+
+- The WebUI includes OCR evaluation forms under the Evaluations section (tabs: “OCR Evaluation” and “OCR PDF”).
+- You can choose the OCR backend via the form field `OCR Backend`:
+  - `tesseract` (default if installed), `dots` (dots.ocr), or `points` (POINTS-Reader).
+- Optional fields in the form map to API options:
+  - `Enable OCR`, `OCR Mode` (`fallback` or `always`), `OCR DPI`.
+- Provider setup guides:
+  - See `Docs/OCR/OCR_Providers.md` for side-by-side setup of dots.ocr and POINTS.
+  - See `Docs/OCR/POINTS-Reader.md` for detailed POINTS configuration (Transformers vs SGLang, env vars, prompts).
+
 ### Recent Improvements
 
 **v1.2.0 - Auto-Configuration Update**

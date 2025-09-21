@@ -616,7 +616,7 @@ Evaluates Retrieval-Augmented Generation systems.
 {
   "sub_type": "rag",
   "evaluator_model": "gpt-4",
-  "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision", "context_recall"],
+  "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision", "context_recall", "claim_faithfulness"],
   "threshold": 0.75
 }
 ```
@@ -641,6 +641,7 @@ Evaluates Retrieval-Augmented Generation systems.
 - `answer_similarity`: Similarity to ground truth (0-1)
 - `context_precision`: Precision of retrieved contexts (0-1)
 - `context_recall`: Recall of relevant information (0-1)
+ - `claim_faithfulness`: Fraction of extracted claims supported by contexts (0-1)
 
 #### response_quality
 General response quality evaluation with custom criteria.

@@ -122,7 +122,7 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
 @router.get(
     "/health",
     summary="Notes service health",
-    tags=["Notes"]
+    tags=["notes"]
 )
 async def notes_health() -> Dict[str, Any]:
     """Lightweight health endpoint for the Notes subsystem."""
@@ -172,7 +172,7 @@ async def notes_health() -> Dict[str, Any]:
     response_model=NoteResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new note",
-    tags=["Notes"]
+    tags=["notes"]
 )
 async def create_note(
         request: Request,
@@ -237,7 +237,7 @@ async def create_note(
     "/{note_id}",
     response_model=NoteResponse,
     summary="Get a specific note by ID",
-    tags=["Notes"],
+    tags=["notes"],
     responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}}
 )
 async def get_note(
@@ -270,7 +270,7 @@ async def get_note(
     "/",
     response_model=Any,
     summary="List all notes for the current user",
-    tags=["Notes"]
+    tags=["notes"]
 )
 async def list_notes(
         request: Request,
@@ -305,7 +305,7 @@ async def list_notes(
     "/{note_id}",
     response_model=NoteResponse,
     summary="Update an existing note",
-    tags=["Notes"],
+    tags=["notes"],
     responses={
         status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
         status.HTTP_409_CONFLICT: {"model": DetailResponse}
@@ -347,7 +347,7 @@ async def update_note(
     "/{note_id}",
     response_model=NoteResponse,
     summary="Partially update an existing note",
-    tags=["Notes"],
+    tags=["notes"],
     responses={
         status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
         status.HTTP_409_CONFLICT: {"model": DetailResponse}
@@ -395,7 +395,7 @@ async def patch_note(
     "/{note_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Soft-delete a note",
-    tags=["Notes"],
+    tags=["notes"],
     responses={
         status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
         status.HTTP_409_CONFLICT: {"model": DetailResponse}
@@ -426,7 +426,7 @@ async def delete_note(
     "/search/",
     response_model=List[NoteResponse],
     summary="Search notes for the current user",
-    tags=["Notes"]
+    tags=["notes"]
 )
 async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
         query: str = Query(..., min_length=1, description="Search term for notes"),
@@ -458,7 +458,7 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
     response_model=NoteBulkCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Bulk create notes with optional keywords",
-    tags=["Notes"]
+    tags=["notes"]
 )
 async def bulk_create_notes(
         request: NoteBulkCreateRequest,

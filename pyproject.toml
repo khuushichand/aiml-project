@@ -189,6 +189,25 @@ data-tools = [
   "python-json-logger>=2.0.0"
 ]
 
+# OCR providers (optional)
+ocr_dots = [
+  # Dots OCR from source
+  "dots-ocr @ git+https://github.com/rednote-hilab/dots.ocr.git"
+]
+
+ocr_points_transformers = [
+  # Local inference requirements for POINTS-Reader via HF Transformers
+  "transformers>=4.55.2",
+  "torch>=2.5.1",
+  # WePOINTS toolkit (installed from source)
+  "wepoints @ git+https://github.com/WePOINTS/WePOINTS.git"
+]
+
+ocr_points_sglang = [
+  # Client-side only; server runs separately
+  "requests>=2.31.0"
+]
+
 # MediaWiki processing
 media_wiki = [
   "mwparserfromhell>=0.6.0",
@@ -308,7 +327,7 @@ db_opensearch = [
 
 # All optional dependencies
 all = [
-  "tldw-server[dev,evaluation,data-tools,gradio,media_wiki,web_research,STT_All,TTS_All,TTS_higgs,TTS_vibevoice,TTS_chatterbox,backend_onnx,db_postgres]"
+  "tldw-server[dev,evaluation,data-tools,gradio,media_wiki,web_research,STT_All,TTS_All,TTS_higgs,TTS_vibevoice,TTS_chatterbox,backend_onnx,db_postgres,ocr_dots,ocr_points_transformers,ocr_points_sglang]"
 ]
 
 ###########################

@@ -1,5 +1,26 @@
-# prompt_studio_projects.py
-# API endpoints for Prompt Studio project management
+"""
+Prompt Studio Projects API
+
+Provides CRUD endpoints for managing Prompt Studio projects and basic
+project statistics. Projects group prompts, test cases, evaluations,
+and optimizations under a single workspace for a user or team.
+
+Key responsibilities
+- Create/list/get/update/delete projects
+- Archive/unarchive lifecycle operations
+- Aggregate project statistics (counts, usage metrics)
+
+Security
+- Read operations require project access
+- Write operations require project write access
+- Rate limits enforced on sensitive operations where applicable
+
+See also
+- Prompt Studio Prompts API: /api/v1/prompt-studio/prompts
+- Prompt Studio Test Cases API: /api/v1/prompt-studio/test-cases
+- Prompt Studio Optimizations API: /api/v1/prompt-studio/optimizations
+- Prompt Studio Evaluations API: /api/v1/prompt-studio/evaluations
+"""
 
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
@@ -26,7 +47,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/projects",
-    tags=["Prompt Studio - Projects"],
+    tags=["Prompt Studio"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
@@ -38,7 +59,55 @@ router = APIRouter(
 ########################################################################################################################
 # Project CRUD Endpoints
 
-@router.post("/", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=StandardResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "minimal": {
+                            "summary": "Create a project",
+                            "value": {
+                                "name": "Demo Project",
+                                "description": "Exploring prompt versions",
+                                "status": "active"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Project created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "created": {
+                                "summary": "Project created response",
+                                "value": {
+                                    "success": true,
+                                    "data": {
+                                        "id": 1,
+                                        "uuid": "f9e3...",
+                                        "name": "Demo Project",
+                                        "description": "Exploring prompt versions",
+                                        "status": "active",
+                                        "created_at": "2024-09-20T10:00:00",
+                                        "updated_at": "2024-09-20T10:00:00"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_project(
     project_data: ProjectCreate,
     user_context: Dict = Depends(get_prompt_studio_user),
@@ -85,7 +154,24 @@ async def create_project(
             detail="Failed to create project"
         )
 
-@router.get("/", response_model=ListResponse)
+@router.get("/", response_model=ListResponse, openapi_extra={
+    "responses": {
+        "200": {
+            "description": "Project list",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "list": {
+                            "summary": "List projects",
+                            "value": {"success": true, "data": [{"id": 1, "name": "Demo Project", "status": "active"}],
+                                      "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}
+                        }
+                    }
+                }
+            }
+        }
+    }
+})
 async def list_projects(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
@@ -136,7 +222,9 @@ async def list_projects(
             detail="Failed to list projects"
         )
 
-@router.get("/get/{project_id}", response_model=StandardResponse)
+@router.get("/get/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "Project details", "content": {"application/json": {"examples": {"get": {"summary": "Project", "value": {"success": true, "data": {"id": 1, "name": "Demo Project"}}}}}}}}
+})
 async def get_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_access),
@@ -173,7 +261,13 @@ async def get_project(
             detail="Failed to get project"
         )
 
-@router.put("/update/{project_id}", response_model=StandardResponse)
+@router.put("/update/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Project updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated project", "value": {"success": true, "data": {"id": 1, "name": "Demo Project", "status": "active", "updated_at": "2024-09-21T12:00:00"}}}}}}},
+        "400": {"description": "No fields to update"},
+        "404": {"description": "Not found"}
+    }
+})
 async def update_project(
     project_id: int = Path(..., description="Project ID"),
     updates: ProjectUpdate = ...,
@@ -229,7 +323,12 @@ async def update_project(
             detail="Failed to update project"
         )
 
-@router.delete("/delete/{project_id}", response_model=StandardResponse)
+@router.delete("/delete/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"summary": "Deleted project", "value": {"success": true, "data": {"message": "Project soft deleted"}}}}}}},
+        "404": {"description": "Not found"}
+    }
+})
 async def delete_project(
     project_id: int = Path(..., description="Project ID"),
     permanent: bool = Query(False, description="Permanently delete (cannot be undone)"),
@@ -275,7 +374,12 @@ async def delete_project(
             detail="Failed to delete project"
         )
 
-@router.post("/archive/{project_id}", response_model=StandardResponse)
+@router.post("/archive/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Archived", "content": {"application/json": {"examples": {"archived": {"summary": "Project archived", "value": {"success": true, "data": {"status": "archived"}}}}}}},
+        "404": {"description": "Not found"}
+    }
+})
 async def archive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
@@ -316,7 +420,12 @@ async def archive_project(
             detail="Failed to archive project"
         )
 
-@router.post("/unarchive/{project_id}", response_model=StandardResponse)
+@router.post("/unarchive/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Unarchived", "content": {"application/json": {"examples": {"unarchived": {"summary": "Project unarchived", "value": {"success": true, "data": {"status": "active"}}}}}}},
+        "404": {"description": "Not found"}
+    }
+})
 async def unarchive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
@@ -360,7 +469,9 @@ async def unarchive_project(
 ########################################################################################################################
 # Project Statistics Endpoint
 
-@router.get("/stats/{project_id}", response_model=StandardResponse)
+@router.get("/stats/{project_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "Stats", "content": {"application/json": {"examples": {"stats": {"summary": "Counts", "value": {"success": true, "data": {"prompt_count": 3, "test_case_count": 12}}}}}}}}
+})
 async def get_project_stats(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_access),

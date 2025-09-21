@@ -25,6 +25,8 @@ from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     llm_circuit_breaker,
     CircuitOpenError
 )
+from tldw_Server_API.app.core.RAG.rag_service.types import Document
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
 
 # Module-level alias and helpers
 def analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None, api_key: Optional[str] = None, system_message: Optional[str] = None, temp: Optional[float] = None, **kwargs) -> Any:
@@ -193,6 +195,11 @@ class RAGEvaluator:
         if "context_recall" in metrics and ground_truth:
             tasks.append(self._evaluate_context_recall(ground_truth, contexts, api_name))
             metric_names.append("context_recall")
+
+        # Optional: claim-level faithfulness using claim extraction + verification
+        if "claim_faithfulness" in metrics:
+            tasks.append(self._evaluate_claim_faithfulness(response, contexts, api_name))
+            metric_names.append("claim_faithfulness")
         
         # Run evaluations in parallel with error handling
         try:
@@ -251,6 +258,51 @@ class RAGEvaluator:
         results["suggestions"] = self._generate_suggestions(results["metrics"])
         
         return results
+
+    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str) -> tuple:
+        """Evaluate claim-level faithfulness by verifying extracted claims against contexts.
+
+        Uses ClaimsEngine with APS-style extraction (gemma_aps) and hybrid verification.
+        Returns a normalized score in [0,1].
+        """
+        try:
+            # Wrap contexts into lightweight Document objects
+            docs: List[Document] = []
+            for i, ctx in enumerate(contexts or []):
+                try:
+                    docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
+                except Exception:
+                    # Minimal fallback if Document import shape changes
+                    docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
+
+            engine = ClaimsEngine(analyze)
+            claims_result = await engine.run(
+                answer=response or "",
+                query="",  # not needed for direct verification against contexts
+                documents=docs,
+                claim_extractor="aps",
+                claim_verifier="hybrid",
+                claims_top_k=5,
+                claims_conf_threshold=0.7,
+                claims_max=25,
+                retrieve_fn=None,
+                nli_model=None,
+            )
+
+            summary = claims_result.get("summary", {}) if isinstance(claims_result, dict) else {}
+            supported = float(summary.get("supported", 0) or 0)
+            total = float((summary.get("supported", 0) or 0) + (summary.get("refuted", 0) or 0) + (summary.get("nei", 0) or 0))
+            score = (supported / total) if total > 0 else 0.0
+
+            return ("claim_faithfulness", {
+                "name": "claim_faithfulness",
+                "score": float(max(0.0, min(1.0, score))),
+                "raw_score": float(score * 5.0),  # map to 1-5 like other metrics if desired
+                "explanation": "Fraction of claims supported by contexts (APS extraction + hybrid verification)"
+            })
+        except Exception as e:
+            logger.error(f"Claim faithfulness evaluation failed: {e}")
+            raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
     
     async def _evaluate_relevance(self, query: str, response: str, api_name: str) -> tuple:
         """Evaluate relevance of response to query"""

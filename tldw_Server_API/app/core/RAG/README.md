@@ -61,14 +61,15 @@ result = await unified_rag_pipeline(
     query="What is CRISPR?",
     enable_generation=True,
     enable_claims=True,
-    claim_extractor="auto",
+    # Use APS-style (Abstractive Proposition Segmentation) for atomic claims
+    claim_extractor="aps",  # or "auto" / "claimify"
     claim_verifier="hybrid",
     claims_top_k=5,
     claims_conf_threshold=0.7,
 )
 
 print(result.claims)       # per-claim label, confidence, evidence
-print(result.factuality)   # supported/refuted/nei, precision, coverage
+print(result.factuality)   # supported/refuted/nei, precision, coverage, claim_faithfulness
 ```
 
 ## Hierarchical Chunking (Optional)
@@ -131,6 +132,28 @@ Events:
 - `{ "type": "delta", "text": "..." }`
 - `{ "type": "claims_overlay", ... }`
 - `{ "type": "final_claims", ... }`
+
+## RAG Evaluation (claim_faithfulness)
+
+The unified evaluations API can compute claim-level faithfulness by verifying extracted claims against your provided contexts.
+
+- Metric name: `claim_faithfulness` (0–1). Internally uses APS-style extraction + hybrid verification (NLI if available, else LLM judge).
+
+Example request:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/rag" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -d '{
+    "query": "What is CRISPR?",
+    "retrieved_contexts": ["...context chunk 1...", "...context chunk 2..."],
+    "generated_response": "...your model response...",
+    "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision", "claim_faithfulness"]
+  }'
+```
+
+Response includes `metrics.claim_faithfulness.score` along with the other metrics. To reduce cost, include this metric only when you need claim-level grounding.
 
 ## NLI Model Configuration
 

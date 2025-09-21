@@ -1,5 +1,21 @@
-# prompt_studio_prompts.py
-# API endpoints for Prompt Studio prompt management with versioning
+"""
+Prompt Studio Prompts API (with versioning)
+
+Manages prompts and their version history inside a project. Each update
+creates a new immutable version to enable evaluation, comparison, and
+reproducibility.
+
+Key responsibilities
+- Create/list/get prompts in a project
+- Update prompts (create new version)
+- View prompt version history
+- Revert to a previous version (creates new version)
+
+Security
+- Read operations require project access
+- Write operations require project write access
+- Prompt length and content validated against SecurityConfig
+"""
 
 from typing import List, Optional, Dict, Any
 import sqlite3
@@ -29,7 +45,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/prompts",
-    tags=["Prompt Studio - Prompts"],
+    tags=["Prompt Studio"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
@@ -41,7 +57,56 @@ router = APIRouter(
 ########################################################################################################################
 # Prompt CRUD Endpoints
 
-@router.post("/create", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/create",
+    response_model=StandardResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "basic": {
+                            "summary": "Create a prompt",
+                            "value": {
+                                "project_id": 1,
+                                "name": "Summarizer",
+                                "system_prompt": "Summarize the content clearly.",
+                                "user_prompt": "{{text}}"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Prompt created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "created": {
+                                "summary": "Prompt created response",
+                                "value": {
+                                    "success": true,
+                                    "data": {
+                                        "id": 12,
+                                        "project_id": 1,
+                                        "name": "Summarizer",
+                                        "version_number": 1,
+                                        "system_prompt": "Summarize the content clearly.",
+                                        "user_prompt": "{{text}}",
+                                        "created_at": "2024-09-20T10:00:00"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_prompt(
     prompt_data: PromptCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -157,7 +222,9 @@ async def create_prompt(
             detail="Failed to create prompt"
         )
 
-@router.get("/list/{project_id}", response_model=ListResponse)
+@router.get("/list/{project_id}", response_model=ListResponse, openapi_extra={
+    "responses": {"200": {"description": "Prompts", "content": {"application/json": {"examples": {"list": {"summary": "Prompt list", "value": {"success": true, "data": [{"id": 12, "name": "Summarizer", "version_number": 2}], "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}}}}}}
+})
 async def list_prompts(
     project_id: int = Path(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -229,7 +296,9 @@ async def list_prompts(
             detail="Failed to list prompts"
         )
 
-@router.get("/get/{prompt_id}", response_model=StandardResponse)
+@router.get("/get/{prompt_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "Prompt", "content": {"application/json": {"examples": {"get": {"summary": "Prompt details", "value": {"success": true, "data": {"id": 12, "name": "Summarizer", "version_number": 2}}}}}}}}
+})
 async def get_prompt(
     prompt_id: int = Path(..., description="Prompt ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
@@ -288,7 +357,52 @@ async def get_prompt(
             detail="Failed to get prompt"
         )
 
-@router.put("/update/{prompt_id}", response_model=StandardResponse)
+@router.put(
+    "/update/{prompt_id}",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "revise": {
+                            "summary": "Revise prompt (new version)",
+                            "value": {
+                                "system_prompt": "Summarize concisely.",
+                                "change_description": "Tighten style"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "New prompt version created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "versioned": {
+                                "summary": "New version response",
+                                "value": {
+                                    "success": true,
+                                    "data": {
+                                        "id": 13,
+                                        "project_id": 1,
+                                        "name": "Summarizer",
+                                        "version_number": 2,
+                                        "system_prompt": "Summarize concisely.",
+                                        "created_at": "2024-09-21T10:00:00"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def update_prompt(
     prompt_id: int = Path(..., description="Prompt ID"),
     updates: PromptUpdate = ...,
@@ -407,7 +521,9 @@ async def update_prompt(
             detail="Failed to update prompt"
         )
 
-@router.get("/history/{prompt_id}", response_model=StandardResponse)
+@router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "History", "content": {"application/json": {"examples": {"history": {"summary": "Versions", "value": {"success": true, "data": [{"id": 12, "version_number": 1}, {"id": 13, "version_number": 2}]}}}}}}}
+})
 async def get_prompt_history(
     prompt_id: int = Path(..., description="Prompt ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -471,7 +587,9 @@ async def get_prompt_history(
             detail="Failed to get prompt history"
         )
 
-@router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse)
+@router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "Reverted", "content": {"application/json": {"examples": {"reverted": {"summary": "New version", "value": {"success": true, "data": {"id": 14, "version_number": 3}}}}}}}}
+})
 async def revert_prompt(
     prompt_id: int = Path(..., description="Current prompt ID"),
     version: int = Path(..., description="Version number to revert to"),

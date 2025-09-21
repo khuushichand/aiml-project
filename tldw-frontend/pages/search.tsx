@@ -4,8 +4,23 @@ import { Layout } from '@/components/layout/Layout';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { apiClient } from '@/lib/api';
+import { Tabs } from '@/components/ui/Tabs';
+import JsonEditor from '@/components/ui/JsonEditor';
+import JsonViewer from '@/components/ui/JsonViewer';
+import JsonTree from '@/components/ui/JsonTree';
+import { useToast } from '@/components/ui/ToastProvider';
+
+function buildCurl(url: string, method: string, headers: Record<string, string>, body?: any) {
+  const parts: string[] = [
+    `curl -X ${method.toUpperCase()} \\\n+  '${url}' \\\n+  -H 'Accept: application/json'`,
+  ];
+  Object.entries(headers || {}).forEach(([k, v]) => { if (v) parts.push(`  -H '${k}: ${v}'`); });
+  if (body !== undefined) parts.push(`  -H 'Content-Type: application/json' \\\n+  --data '${JSON.stringify(body).replace(/'/g, "'\\''")}'`);
+  return parts.join(' \\\n');
+}
 
 export default function SearchPage() {
+  const { show } = useToast();
   const router = useRouter();
   const [query, setQuery] = useState('');
   const [searchType, setSearchType] = useState<'hybrid' | 'semantic' | 'fulltext'>('hybrid');
@@ -72,12 +87,15 @@ export default function SearchPage() {
   const [userId, setUserId] = useState<string>('');
   const [sessionId, setSessionId] = useState<string>('');
 
+  const [view, setView] = useState<'basic' | 'json' | 'response' | 'curl'>('basic');
+  const [jsonBody, setJsonBody] = useState<string>('');
+  const [respView, setRespView] = useState<'pretty' | 'tree'>('pretty');
   const onSearch = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const payload: any = { query };
+      let payload: any = { query };
       // Sources
       payload.sources = Object.entries(sources).filter(([k, v]) => v).map(([k]) => k);
       // Search config
@@ -152,8 +170,14 @@ export default function SearchPage() {
       // User context
       if (userId.trim()) payload.user_id = userId.trim();
       if (sessionId.trim()) payload.session_id = sessionId.trim();
+      // JSON tab overrides
+      if (view === 'json') {
+        try { payload = JSON.parse(jsonBody || '{}'); } catch (e) { show({ title: 'Invalid JSON', description: 'Fix JSON before searching', variant: 'warning' }); setLoading(false); return; }
+      }
       const res = await apiClient.post('/rag/search', payload);
       setResult(res);
+      setView('response');
+      show({ title: 'Search complete', variant: 'success' });
 
       // Update URL params to share current state
       const queryParams: Record<string, any> = {
@@ -219,6 +243,7 @@ export default function SearchPage() {
       router.replace({ pathname: '/search', query: queryParams }, undefined, { shallow: true });
     } catch (e: any) {
       setError(e.message || 'Search failed');
+      show({ title: 'Search failed', description: e.message || 'Search failed', variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -327,16 +352,96 @@ export default function SearchPage() {
       if (typeof retr.top_k === 'number') {
         setLimit(retr.top_k);
       }
+      show({ title: 'Preset applied', description: selectedPreset, variant: 'success' });
     } catch (e) {
-      // ignore
+      show({ title: 'Failed to apply preset', variant: 'warning' });
     }
   };
+
+  // Keep a JSON body snapshot up to date from current basic form
+  useEffect(() => {
+    const payload: any = { query };
+    payload.sources = Object.entries(sources).filter(([k, v]) => v).map(([k]) => k);
+    payload.search_mode = searchType === 'semantic' ? 'vector' : searchType === 'fulltext' ? 'fts' : 'hybrid';
+    payload.hybrid_alpha = hybridAlpha;
+    payload.top_k = limit;
+    payload.min_score = minScore;
+    payload.expand_query = expandQuery;
+    if (expansionStrategies.trim()) payload.expansion_strategies = expansionStrategies.split(',').map(s => s.trim()).filter(Boolean);
+    payload.enable_cache = enableCache;
+    payload.adaptive_cache = adaptiveCache;
+    payload.cache_threshold = cacheThreshold;
+    if (keywordFilter.trim()) payload.keyword_filter = keywordFilter.split(',').map(s => s.trim()).filter(Boolean);
+    payload.enable_security_filter = securityFilter;
+    payload.detect_pii = detectPII;
+    payload.redact_pii = redactPII;
+    payload.sensitivity_level = sensitivity;
+    payload.content_filter = contentFilter;
+    payload.enable_table_processing = enableTable;
+    payload.table_method = tableMethod;
+    const ct: string[] = []; Object.entries(chunkTypes).forEach(([k, v]) => { if (v) ct.push(k); }); if (ct.length) payload.chunk_type_filter = ct;
+    payload.enable_parent_expansion = parentExpansion;
+    payload.parent_context_size = parentContext;
+    payload.include_sibling_chunks = siblingChunks;
+    payload.sibling_window = siblingWindow;
+    payload.include_parent_document = includeParentDoc;
+    payload.parent_max_tokens = parentMaxTokens;
+    payload.enable_claims = enableClaims;
+    payload.claim_extractor = claimExtractor;
+    payload.claim_verifier = claimVerifier;
+    payload.claims_top_k = claimsTopK;
+    payload.claims_conf_threshold = claimsConf;
+    payload.claims_max = claimsMax;
+    if (nliModel.trim()) payload.nli_model = nliModel.trim();
+    payload.enable_reranking = enableRerank;
+    payload.reranking_strategy = rerankStrategy;
+    if (rerankTopK) payload.rerank_top_k = Number(rerankTopK);
+    payload.enable_citations = enableCitations;
+    payload.citation_style = citationStyle;
+    payload.include_page_numbers = includePageNumbers;
+    payload.enable_chunk_citations = enableChunkCitations;
+    payload.enable_generation = enableGen;
+    if (genModel.trim()) payload.generation_model = genModel.trim();
+    if (genPrompt.trim()) payload.generation_prompt = genPrompt;
+    payload.max_generation_tokens = genMaxTokens;
+    payload.collect_feedback = collectFeedback;
+    if (feedbackUser.trim()) payload.feedback_user_id = feedbackUser.trim();
+    payload.apply_feedback_boost = applyFeedbackBoost;
+    payload.enable_monitoring = enableMonitoring;
+    payload.enable_observability = enableObservability;
+    payload.track_cost = trackCost;
+    payload.debug_mode = debugMode;
+    payload.enable_performance_analysis = perfAnalysis;
+    if (timeoutSeconds) payload.timeout_seconds = Number(timeoutSeconds);
+    payload.enable_resilience = enableResilience;
+    payload.retry_attempts = retryAttempts;
+    payload.circuit_breaker = circuitBreaker;
+    if (userId.trim()) payload.user_id = userId.trim();
+    if (sessionId.trim()) payload.session_id = sessionId.trim();
+    try { setJsonBody(JSON.stringify(payload, null, 2)); } catch {}
+  }, [
+    query, sources, searchType, hybridAlpha, limit, minScore, expandQuery, expansionStrategies, enableCache, adaptiveCache, cacheThreshold, keywordFilter,
+    securityFilter, detectPII, redactPII, sensitivity, contentFilter, enableTable, tableMethod, chunkTypes, parentExpansion, parentContext, siblingChunks, siblingWindow, includeParentDoc, parentMaxTokens,
+    enableClaims, claimExtractor, claimVerifier, claimsTopK, claimsConf, claimsMax, nliModel, enableRerank, rerankStrategy, rerankTopK, enableCitations, citationStyle, includePageNumbers, enableChunkCitations,
+    enableGen, genModel, genPrompt, genMaxTokens, collectFeedback, feedbackUser, applyFeedbackBoost, enableMonitoring, enableObservability, trackCost, debugMode, perfAnalysis, timeoutSeconds, enableResilience, retryAttempts, circuitBreaker, userId, sessionId
+  ]);
+
+  const curl = useMemo(() => {
+    let body: any = {};
+    try { body = jsonBody ? JSON.parse(jsonBody) : {}; } catch { body = {}; }
+    return buildCurl('/api/v1/rag/search', 'POST', { 'Content-Type': 'application/json' }, body);
+  }, [jsonBody]);
 
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
-        <h1 className="text-2xl font-bold text-gray-900">Unified RAG Search</h1>
-        <div className="rounded-md border bg-white p-4">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-900">Unified RAG Search</h1>
+          <div className="w-1/2">
+            <Tabs items={[{ key: 'basic', label: 'Basic' }, { key: 'json', label: 'JSON' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]} value={view} onChange={(k)=>setView(k as any)} />
+          </div>
+        </div>
+        <div className="rounded-md border bg-white p-4 transition-all duration-150">
           <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-6">
             <div className="sm:col-span-3">
               <Input label="Query" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your media..." />
@@ -366,10 +471,11 @@ export default function SearchPage() {
               </div>
             </div>
             <div className="flex items-end">
-              <Button onClick={onSearch} loading={loading} disabled={loading || !query.trim()}>Search</Button>
+              <Button onClick={onSearch} loading={loading} disabled={loading || (view === 'basic' && !query.trim())}>Search</Button>
             </div>
           </div>
           {/* Advanced Options (collapsible sections) */}
+          {view === 'basic' && (
           <details className="mb-4 rounded border p-3">
             <summary className="cursor-pointer text-sm font-medium">Advanced Options</summary>
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -591,9 +697,52 @@ export default function SearchPage() {
                   <input className="w-full rounded border p-1" value={userId} onChange={(e)=>setUserId(e.target.value)} />
                   <label className="mt-2 block text-xs">Session ID</label>
                   <input className="w-full rounded border p-1" value={sessionId} onChange={(e)=>setSessionId(e.target.value)} />
-                </div>
-              </details>
             </div>
+          </details>
+          )}
+
+          {view === 'json' && (
+            <div className="mt-2">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm text-gray-700">Advanced JSON</div>
+                <div className="space-x-2">
+                  <Button variant="secondary" onClick={() => { try { setJsonBody(JSON.stringify(JSON.parse(jsonBody), null, 2)); show({ title: 'Formatted', variant: 'success' }); } catch {} }}>Format</Button>
+                  <Button variant="secondary" onClick={() => { try { navigator.clipboard.writeText(jsonBody); show({ title: 'Payload copied', variant: 'success' }); } catch {} }}>Copy</Button>
+                  <Button onClick={onSearch} loading={loading} disabled={loading}>Search</Button>
+                </div>
+              </div>
+              <JsonEditor value={jsonBody} onChange={setJsonBody} height={360} />
+            </div>
+          )}
+
+          {view === 'response' && (
+            <div className="mt-2">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm text-gray-700">Response</div>
+                <div className="space-x-2">
+                  <Button variant="secondary" onClick={() => setRespView('pretty')} disabled={respView==='pretty'}>Pretty</Button>
+                  <Button variant="secondary" onClick={() => setRespView('tree')} disabled={respView==='tree'}>Tree</Button>
+                  <Button variant="secondary" onClick={() => { try { navigator.clipboard.writeText(JSON.stringify(result, null, 2)); show({ title: 'Response copied', variant: 'success' }); } catch {} }}>Copy JSON</Button>
+                </div>
+              </div>
+              <div className="rounded border bg-gray-50 p-3">
+                {respView === 'pretty' ? <JsonViewer data={result} /> : <JsonTree data={result} />}
+              </div>
+            </div>
+          )}
+
+          {view === 'curl' && (
+            <div className="mt-2">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm text-gray-700">cURL</div>
+                <div className="space-x-2">
+                  <Button variant="secondary" onClick={() => { try { navigator.clipboard.writeText(curl); show({ title: 'cURL copied', variant: 'success' }); } catch {} }}>Copy</Button>
+                </div>
+              </div>
+              <pre className="overflow-auto whitespace-pre break-words rounded border bg-gray-50 p-3 font-mono text-xs text-gray-800">{curl}</pre>
+            </div>
+          )}
+        </div>
           </details>
           {error && <div className="rounded bg-red-50 p-3 text-sm text-red-800">{error}</div>}
           {result && (

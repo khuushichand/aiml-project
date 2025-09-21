@@ -83,7 +83,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Create router
-router = APIRouter(prefix="/evaluations", tags=["Evaluations"])
+router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 
 # Security
 security = HTTPBearer(auto_error=False)

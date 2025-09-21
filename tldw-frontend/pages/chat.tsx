@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api';
 import { streamSSE } from '@/lib/sse';
+import { useToast } from '@/components/ui/ToastProvider';
 import type { ChatMessage } from '@/types/api';
 
 interface LLMProvider {
@@ -22,6 +23,7 @@ interface ProvidersResponse {
 }
 
 export default function ChatPage() {
+  const { show } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([{
     role: 'system',
     content: 'You are a helpful assistant.',
@@ -90,6 +92,7 @@ export default function ChatPage() {
 
   const sendMessage = async () => {
     if (!input.trim() || sending) return;
+    show({ title: 'Sending message…', variant: 'info' });
     const newMessages = [...messages, { role: 'user', content: input.trim() } as ChatMessage, { role: 'assistant', content: '' } as ChatMessage];
     setMessages(newMessages);
     setInput('');
@@ -140,6 +143,7 @@ export default function ChatPage() {
             setSessions(next); persistSessions(next);
           }
         });
+        show({ title: 'Response complete', variant: 'success' });
       } else {
         // Non-streaming
         const res = await apiClient.post<any>('/chat/completions', JSON.parse(body));
@@ -163,9 +167,11 @@ export default function ChatPage() {
           const next = [{ id: String(id), title, model, created_at: new Date().toISOString() }, ...sessions].slice(0, 50);
           setSessions(next); persistSessions(next);
         }
+        show({ title: 'Response ready', variant: 'success' });
       }
     } catch (e: any) {
       setMessages((prev) => [...prev, { role: 'system', content: `Error: ${e.message || e}` } as ChatMessage]);
+      show({ title: 'Chat error', description: e?.message || 'Failed', variant: 'danger' });
     } finally {
       setSending(false);
       abortRef.current = null;
@@ -225,7 +231,7 @@ export default function ChatPage() {
 
   return (
     <Layout>
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-4 transition-all duration-150">
         <h1 className="text-2xl font-bold text-gray-900">Chat</h1>
 
         <div className="rounded-md border bg-white p-4">

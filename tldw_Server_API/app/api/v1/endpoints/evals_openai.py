@@ -37,7 +37,7 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
 # Create router
-router = APIRouter(tags=["Evaluations"])
+router = APIRouter(tags=["evaluations"])
 
 # Security
 security = HTTPBearer(auto_error=False)

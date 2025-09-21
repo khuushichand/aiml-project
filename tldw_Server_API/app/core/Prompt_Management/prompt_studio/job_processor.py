@@ -11,6 +11,14 @@ from .job_manager import JobManager, JobType, JobStatus
 from .test_case_manager import TestCaseManager
 from .test_case_generator import TestCaseGenerator
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
+    EventBroadcaster, EventType,
+)
+try:
+    # Import connection manager used by WebSocket endpoints
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import connection_manager as ws_connection_manager
+except Exception:
+    ws_connection_manager = None
 
 ########################################################################################################################
 # Job Processor
@@ -528,6 +536,28 @@ class JobProcessor:
                     optimization_id, initial_prompt_id, i + 1
                 )
                 iterations.append(iteration_result)
+
+                # Persist iteration to iterations table
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO prompt_studio_optimization_iterations (
+                            optimization_id, iteration_number, prompt_variant, metrics, tokens_used, cost, note
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            optimization_id,
+                            iteration_result.get("iteration"),
+                            None,
+                            json.dumps({"metric": iteration_result.get("metric")}),
+                            iteration_result.get("tokens_used"),
+                            iteration_result.get("cost"),
+                            None,
+                        ),
+                    )
+                    conn.commit()
+                except Exception as _iter_err:
+                    logger.warning(f"Failed to persist optimization iteration: {_iter_err}")
                 
                 if iteration_result["metric"] > best_metric:
                     best_metric = iteration_result["metric"]
@@ -538,6 +568,20 @@ class JobProcessor:
                     logger.info(f"Early stopping at iteration {i + 1} with metric {best_metric}")
                     break
                 
+                # Broadcast iteration to realtime clients
+                try:
+                    if ws_connection_manager:
+                        broadcaster = EventBroadcaster(ws_connection_manager, self.db)
+                        await broadcaster.broadcast_optimization_iteration(
+                            optimization_id=optimization_id,
+                            iteration=i + 1,
+                            max_iterations=max_iterations,
+                            current_metric=iteration_result.get("metric", 0.0),
+                            best_metric=best_metric,
+                        )
+                except Exception as _bcast_err:
+                    logger.warning(f"Failed broadcasting optimization iteration: {_bcast_err}")
+
                 await asyncio.sleep(0.5)  # Simulate processing time
             
             # Calculate improvement

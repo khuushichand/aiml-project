@@ -1,0 +1,54 @@
+# Production Dockerfile for tldw_server API
+# - Minimal, non-root, multi-stage build
+# - Includes ffmpeg for media processing and libmagic for file type detection
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# System deps: ffmpeg (media), libmagic (python-magic), curl (health/debug)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libmagic1 \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install project using pyproject (editable not needed in production)
+# Copy only metadata first for better layer caching
+COPY pyproject.toml README.md /app/
+
+# Install runtime deps (no dev extras)
+RUN pip install --upgrade pip && \
+    pip install .
+
+# Now copy the full source
+COPY tldw_Server_API /app/tldw_Server_API
+COPY tldw-frontend /app/tldw-frontend
+COPY Docs /app/Docs
+COPY Helper_Scripts /app/Helper_Scripts
+COPY Databases /app/Databases
+
+# Create a non-root user
+RUN useradd -m -u 10001 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+ENV PYTHONPATH=/app/tldw_Server_API \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    UVICORN_WORKERS=4 \
+    LOG_LEVEL=info
+
+EXPOSE 8000
+
+# Basic healthcheck using the readiness probe
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS http://localhost:8000/ready || exit 1
+
+# Start the server
+CMD ["python", "-m", "uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info"]
+

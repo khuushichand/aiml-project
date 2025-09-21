@@ -325,14 +325,38 @@ class ClaimsEngine:
             return {"claims": [], "summary": {}}
 
         # choose extractor
-        if claim_extractor == "claimify":
-            extractor = self.extractor_llm
-        elif claim_extractor == "aps":
-            extractor = self.extractor_llm
-        else:
-            extractor = self.extractor_llm
+        claims: List[Claim] = []
+        extractor_mode = (claim_extractor or "auto").strip().lower()
 
-        claims = await extractor.extract(answer, max_claims=claims_max)
+        if extractor_mode == "aps":
+            # APS-style proposition extraction via PropositionChunkingStrategy (LLM engine, gemma_aps prompt)
+            try:
+                from tldw_Server_API.app.core.Chunking.strategies.propositions import (
+                    PropositionChunkingStrategy,
+                )
+
+                strategy = PropositionChunkingStrategy(
+                    language="en",
+                    llm_call_func=self._analyze,
+                    llm_config={"window_chars": 1200, "api_name": "openai", "temp": 0.2},
+                )
+                # Use max_size=1 so each proposition becomes its own unit
+                prop_chunks = strategy.chunk(
+                    text=answer,
+                    max_size=1,
+                    overlap=0,
+                    engine="llm",
+                    proposition_prompt_profile="gemma_aps",
+                )
+                for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
+                    if isinstance(ptxt, str) and ptxt.strip():
+                        claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
+            except Exception as e:
+                logger.warning(f"APS extractor failed, falling back to LLM extractor: {e}")
+                claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+        else:
+            # default to LLM-based claim extraction (claimify/generic)
+            claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
         verifications: List[ClaimVerification] = []
 
         async def _verify_one(c: Claim) -> ClaimVerification:
@@ -383,5 +407,7 @@ class ClaimsEngine:
                 "nei": nei,
                 "precision": precision,
                 "coverage": coverage,
+                # claim_faithfulness: fraction of supported among all verified claims
+                "claim_faithfulness": (supported / total) if total else 0.0,
             },
         }

@@ -118,3 +118,28 @@ Requests
 tenacity
 trafilatura
 argon2-cffi==25.1.0
+
+# OCR (optional)
+# To enable the dots.ocr backend, install per upstream instructions:
+#   - git clone https://github.com/rednote-hilab/dots.ocr.git && cd dots.ocr
+#   - Install compatible PyTorch (see their README for CUDA/CPU variants)
+#   - pip install -e .
+#   - Download model weights: python3 tools/download_model.py
+#   - For best performance, deploy a vLLM server with the downloaded weights
+# After installation, the backend can be selected via API using `ocr_backend=dots`.
+# Optional: control prompt with env var DOTS_OCR_PROMPT (default: prompt_ocr).
+# If you prefer dependency pinning, you may try (uncomment to use, but upstream recommends manual setup):
+# dots-ocr @ git+https://github.com/rednote-hilab/dots.ocr.git
+
+# To enable the POINTS-Reader backend, clone and install the repo and configure a CLI command:
+#   - For local transformers: install WePOINTS toolkit and run via HF model `tencent/POINTS-Reader`
+#       git clone https://github.com/WePOINTS/WePOINTS.git && cd WePOINTS && pip install -e .
+#       (Recommended env: python==3.10.12, torch==2.5.1, transformers==4.55.2, cuda==12.1)
+#   - For SGLang serving: `python -m sglang.launch_server --model-path tencent/POINTS-Reader --trust-remote-code --chat-template points-v15-chat --port 8081`
+#   - Env selection:
+#       export POINTS_MODE=sglang                # or transformers (default: auto)
+#       export POINTS_SGLANG_URL=http://127.0.0.1:8081/v1/chat/completions
+#       export POINTS_SGLANG_MODEL=WePoints
+#       export POINTS_MODEL_PATH=tencent/POINTS-Reader
+#       export POINTS_PROMPT='...'               # optional prompt override
+# Select via API using `ocr_backend=points`.

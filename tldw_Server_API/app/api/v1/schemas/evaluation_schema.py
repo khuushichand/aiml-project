@@ -169,7 +169,7 @@ class RAGEvaluationRequest(BaseModel):
         description="Ground truth answer if available",
         max_length=50000
     )
-    metrics: Optional[List[Literal["relevance", "faithfulness", "answer_similarity", "context_precision", "context_recall"]]] = Field(
+    metrics: Optional[List[Literal["relevance", "faithfulness", "answer_similarity", "context_precision", "context_recall", "claim_faithfulness"]]] = Field(
         default=["relevance", "faithfulness", "answer_similarity"],
         description="Metrics to evaluate"
     )

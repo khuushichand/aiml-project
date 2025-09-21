@@ -316,7 +316,7 @@ Evaluates retrieval-augmented generation quality.
   ],
   "generated_response": "Exercise provides numerous benefits including...",
   "ground_truth": "Expected answer for comparison",
-  "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision"]
+  "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision", "claim_faithfulness"]
 }
 ```
 
@@ -327,7 +327,8 @@ Evaluates retrieval-augmented generation quality.
     "relevance": {"score": 0.89, "explanation": "Highly relevant to query"},
     "faithfulness": {"score": 0.95, "explanation": "Well-grounded in contexts"},
     "answer_similarity": {"score": 0.82, "explanation": "Close to ground truth"},
-    "context_precision": {"score": 0.78, "explanation": "Good context selection"}
+    "context_precision": {"score": 0.78, "explanation": "Good context selection"},
+    "claim_faithfulness": {"score": 0.90, "explanation": "Most extracted claims are supported by contexts"}
   },
   "overall_score": 0.86,
   "retrieval_quality": 0.78,

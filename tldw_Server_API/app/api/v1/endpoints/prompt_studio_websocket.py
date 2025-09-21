@@ -1,5 +1,17 @@
-# prompt_studio_websocket.py
-# WebSocket endpoint for real-time Prompt Studio updates
+"""
+Prompt Studio Real-time API (WebSocket + SSE)
+
+Provides real-time updates for Prompt Studio via WebSocket with a
+Server-Sent Events (SSE) fallback. Clients can subscribe to project
+or job streams to receive status changes, heartbeats, and events
+emitted by background workers.
+
+Key responsibilities
+- Manage client connections, grouping by client_id and project_id
+- Broadcast job status and domain events
+- Provide lightweight heartbeats and ping/pong keepalive
+- Offer SSE fallback for environments without WebSocket support
+"""
 
 import json
 import asyncio
@@ -11,7 +23,7 @@ from loguru import logger
 # Create router
 router = APIRouter(
     prefix="/api/v1/prompt-studio/ws",
-    tags=["Prompt Studio - WebSocket"]
+    tags=["Prompt Studio"]
 )
 
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (

@@ -1,5 +1,19 @@
-# prompt_studio_evaluations.py
-# Evaluation endpoints for Prompt Studio
+"""
+Prompt Studio Evaluations API
+
+Runs and manages evaluations of prompts against selected test cases.
+Exposes synchronous and asynchronous evaluation creation, and listing
+of previous evaluations with pagination.
+
+Key responsibilities
+- Create evaluations (sync or background job)
+- List evaluations filtered by project/prompt
+- Persist metrics for later analysis and comparison
+
+Security
+- Project-scoped access controls
+- Background execution via FastAPI BackgroundTasks or job queue
+"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from typing import List, Optional, Dict, Any
@@ -20,12 +34,58 @@ from ..schemas.prompt_studio_schemas import (
     EvaluationList,
     EvaluationUpdate,
     EvaluationMetrics,
-    EvaluationConfig,
 )
 
 router = APIRouter(prefix="/api/v1/prompt-studio")
 
-@router.post("/evaluations", response_model=EvaluationResponse)
+@router.post(
+    "/evaluations",
+    response_model=EvaluationResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "basic": {
+                            "summary": "Create an evaluation",
+                            "value": {
+                                "project_id": 1,
+                                "prompt_id": 12,
+                                "name": "Baseline Eval",
+                                "test_case_ids": [1, 2, 3],
+                                "model_configs": [
+                                    {"model_name": "gpt-4o-mini", "temperature": 0.2, "max_tokens": 256}
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Evaluation created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "created": {
+                                "summary": "Created evaluation",
+                                "value": {
+                                    "id": 501,
+                                    "uuid": "e1b2...",
+                                    "project_id": 1,
+                                    "prompt_id": 12,
+                                    "status": "running",
+                                    "created_at": "2024-09-21T10:00:00"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_evaluation(
     evaluation: EvaluationCreate,
     background_tasks: BackgroundTasks,
@@ -45,11 +105,11 @@ async def create_evaluation(
         Created evaluation response
     """
     try:
-        # Normalize config
-        cfg: Optional[EvaluationConfig] = evaluation.config
-        model_name = (cfg.model_name if cfg and cfg.model_name else "gpt-3.5-turbo")
-        temperature = (cfg.temperature if cfg and cfg.temperature is not None else 0.7)
-        max_tokens = (cfg.max_tokens if cfg and cfg.max_tokens is not None else 1000)
+        # Normalize config from list (use first item if provided)
+        first_cfg = (evaluation.model_configs[0] if evaluation.model_configs else {})
+        model_name = first_cfg.get("model_name") or first_cfg.get("model") or "gpt-3.5-turbo"
+        temperature = first_cfg.get("temperature", 0.7)
+        max_tokens = first_cfg.get("max_tokens", 1000)
 
         # Use EvaluationManager for sync path; for async we create a record and update later
         eval_manager = EvaluationManager(db)
@@ -59,11 +119,7 @@ async def create_evaluation(
             eval_uuid = str(uuid.uuid4())
             conn = db.get_connection()
             cursor = conn.cursor()
-            model_configs = json.dumps({
-                "model_name": model_name,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            })
+            model_configs = json.dumps(evaluation.model_configs or [])
             started_ts = datetime.now().isoformat()
             cursor.execute(
                 """
@@ -127,7 +183,9 @@ async def create_evaluation(
         logger.error(f"Failed to create evaluation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/evaluations", response_model=List[EvaluationResponse])
+@router.get("/evaluations", response_model=List[EvaluationResponse], openapi_extra={
+    "responses": {"200": {"description": "Evaluations", "content": {"application/json": {"examples": {"list": {"summary": "Eval list", "value": [{"id": 501, "project_id": 1, "prompt_id": 12, "status": "running"}]}}}}}}
+})
 async def list_evaluations(
     project_id: int = Query(..., description="Project ID"),
     prompt_id: Optional[int] = Query(None, description="Filter by prompt ID"),
@@ -186,7 +244,9 @@ async def list_evaluations(
         logger.error(f"Failed to list evaluations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/evaluations/{evaluation_id}", response_model=EvaluationResponse)
+@router.get("/evaluations/{evaluation_id}", response_model=EvaluationResponse, openapi_extra={
+    "responses": {"200": {"description": "Evaluation", "content": {"application/json": {"examples": {"get": {"summary": "Evaluation details", "value": {"id": 501, "project_id": 1, "prompt_id": 12, "status": "completed"}}}}}}}}
+})
 async def get_evaluation(
     evaluation_id: int,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -275,7 +335,9 @@ async def get_evaluation(
         logger.error(f"Failed to get evaluation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/evaluations/{evaluation_id}")
+@router.delete("/evaluations/{evaluation_id}", openapi_extra={
+    "responses": {"200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"value": {"message": "Evaluation 123 deleted successfully"}}}}}}}
+})
 async def delete_evaluation(
     evaluation_id: int,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -333,7 +395,9 @@ async def _complete_ping(ping_id: str):
         _BG_PINGS[ping_id]["status"] = "failed"
 
 
-@router.post("/background/ping")
+@router.post("/background/ping", openapi_extra={
+    "responses": {"200": {"description": "Ping scheduled", "content": {"application/json": {"examples": {"scheduled": {"value": {"id": "abc123", "status": "processing", "created_at": "2024-09-21T12:00:00"}}}}}}}
+})
 async def background_ping(background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Schedule a trivial background task to verify background execution works."""
     pid = str(uuid.uuid4())
@@ -342,7 +406,9 @@ async def background_ping(background_tasks: BackgroundTasks) -> Dict[str, Any]:
     return _BG_PINGS[pid]
 
 
-@router.get("/background/pings/{ping_id}")
+@router.get("/background/pings/{ping_id}", openapi_extra={
+    "responses": {"200": {"description": "Ping status", "content": {"application/json": {"examples": {"done": {"value": {"id": "abc123", "status": "completed", "completed_at": "2024-09-21T12:00:01"}}}}}}, "404": {"description": "Not found"}}
+})
 async def get_ping_status(ping_id: str) -> Dict[str, Any]:
     if ping_id not in _BG_PINGS:
         raise HTTPException(status_code=404, detail="Ping not found")
@@ -397,8 +463,15 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
         except Exception:
             test_case_ids = []
         try:
-            cfg = _json.loads(model_cfg_json) if model_cfg_json else {}
+            cfg_raw = _json.loads(model_cfg_json) if model_cfg_json else {}
         except Exception:
+            cfg_raw = {}
+        # Support list or dict
+        if isinstance(cfg_raw, list) and cfg_raw:
+            cfg = cfg_raw[0]
+        elif isinstance(cfg_raw, dict):
+            cfg = cfg_raw
+        else:
             cfg = {}
         model_name = cfg.get("model_name") or cfg.get("model") or "gpt-3.5-turbo"
         temperature = cfg.get("temperature", 0.7)

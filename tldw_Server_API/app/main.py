@@ -421,18 +421,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
     
-    # Display authentication mode and API key for single-user mode
+    # Display authentication mode (mask API key in production)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
         settings = get_settings()
-        
+        import os as _os
+        def _mask_key(_key: str) -> str:
+            if not _key or len(_key) < 8:
+                return "********"
+            return f"{_key[:4]}...{_key[-4:]}"
+        _is_prod = _os.getenv("ENV", "development").lower() in {"prod", "production"}
+        _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
+
         logger.info("=" * 60)
         logger.info("🚀 TLDW Server Started Successfully")
         logger.info("=" * 60)
         
         if is_single_user_mode():
             logger.info(f"🔐 Authentication Mode: SINGLE USER")
-            logger.info(f"🔑 API Key: {settings.SINGLE_USER_API_KEY}")
+            # Never log full API key in production unless explicitly allowed
+            if _is_prod and not _show_key:
+                logger.info(f"🔑 API Key: {_mask_key(settings.SINGLE_USER_API_KEY)} (masked)")
+            else:
+                logger.info(f"🔑 API Key: {settings.SINGLE_USER_API_KEY}")
             logger.info("=" * 60)
             logger.info("Use this API key in the X-API-KEY header for requests")
         else:
@@ -594,8 +605,7 @@ OPENAPI_TAGS = [
     {"name": "prompts", "description": "Prompt library management (import/export).",
      "externalDocs": {"description": "Prompts design", "url": "/docs-static/Design/Prompts.md"}},
     {"name": "Prompt Studio", "description": "Projects, prompts, tests, optimization, and background jobs.",
-     "externalDocs": {"description": "Prompts overview", "url": "/docs-static/Design/Prompts.md"}},
-    {"name": "Prompt Studio - Test Cases", "description": "Manage Prompt Studio test cases (CRUD, import/export, generation)."},
+     "externalDocs": {"description": "Prompt Studio API", "url": "/docs-static/API-related/Prompt_Studio_API.md"}},
     {"name": "RAG - Health", "description": "RAG health, caching, and metrics.",
      "externalDocs": {"description": "RAG notes", "url": "/docs-static/RAG_Notes.md"}},
     {"name": "RAG - Unified", "description": "Unified RAG: FTS5 + embeddings + re-ranking.",
@@ -765,7 +775,7 @@ def custom_openapi():
         },
         {
             "name": "Studio & Knowledge",
-            "tags": ["Prompt Studio", "Prompt Studio - Test Cases", "prompts", "notes", "chatbooks", "tools"],
+            "tags": ["Prompt Studio", "prompts", "notes", "chatbooks", "tools"],
         },
         {
             "name": "Infra",
@@ -805,6 +815,13 @@ async def display_startup_info():
     if is_single_user_mode():
         settings = get_settings()
         api_key = settings.SINGLE_USER_API_KEY
+        import os as _os
+        def _mask_key(_key: str) -> str:
+            if not _key or len(_key) < 8:
+                return "********"
+            return f"{_key[:4]}...{_key[-4:]}"
+        _is_prod = _os.getenv("ENV", "development").lower() in {"prod", "production"}
+        _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
         
         # Create a visually prominent display
         logger.info("="*70)
@@ -812,7 +829,10 @@ async def display_startup_info():
         logger.info("="*70)
         logger.info("")
         logger.info("📌 API Key for authentication:")
-        logger.info(f"   {api_key}")
+        if _is_prod and not _show_key:
+            logger.info(f"   {_mask_key(api_key)} (masked)")
+        else:
+            logger.info(f"   {api_key}")
         logger.info("")
         logger.info("🌐 Access URLs:")
         logger.info("   WebUI:    http://localhost:8000/webui/")
@@ -870,12 +890,19 @@ if WEBUI_DIR.exists():
             "_comment": "Auto-generated configuration"
         }
         
-        # In single user mode, include the API key
+        # In single user mode, include the API key unless running in production
+        import os as _os
+        _is_prod_env = _os.getenv("ENV", "development").lower() in {"prod", "production"}
         if is_single_user_mode():
             settings = get_settings()
-            config["apiKey"] = settings.SINGLE_USER_API_KEY
             config["mode"] = "single-user"
-            config["_comment"] = "Auto-configured for single user mode"
+            if not _is_prod_env:
+                config["apiKey"] = settings.SINGLE_USER_API_KEY
+                config["_comment"] = "Auto-configured for single user mode"
+            else:
+                # Omit API key in production environment for security
+                config["apiKey"] = ""
+                config["_comment"] = "Single-user mode (production): API key omitted"
         else:
             config["mode"] = "multi-user"
             config["_comment"] = "Multi-user mode - manual authentication required"
@@ -898,7 +925,6 @@ if WEBUI_DIR.exists():
             def _to_bool(val: str) -> bool:
                 return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
-            import os as _os
             env_default = _os.getenv('CHAT_SAVE_DEFAULT') or _os.getenv('DEFAULT_CHAT_SAVE')
             default_save = None
             if env_default is not None:
@@ -987,7 +1013,7 @@ app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"]
 app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
 
 # Router for chat endpoints/chat temp-file handling
-app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])
+app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
 
 
 # Router for character endpoints
@@ -1098,6 +1124,41 @@ app.include_router(web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-sc
 @app.get("/health", openapi_extra={"security": []})
 async def health_check():
     return {"status": "healthy"}
+
+# Readiness check (verifies critical dependencies)
+@app.get("/ready", openapi_extra={"security": []})
+async def readiness_check():
+    """Readiness probe for orchestrators and load balancers."""
+    try:
+        # DB health
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        db_pool = await get_db_pool()
+        db_health = await db_pool.health_check()
+
+        # Provider manager health (if initialized)
+        try:
+            from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+            pm = get_provider_manager()
+            provider_health = pm.get_health_report() if pm else {}
+            providers_ok = pm is not None
+        except Exception:
+            provider_health = {}
+            providers_ok = False
+
+        # OTEL status
+        from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE
+
+        ready = (db_health.get("status") == "healthy")
+        status = "ready" if ready else "not_ready"
+        return {
+            "status": status,
+            "database": db_health,
+            "providers_initialized": providers_ok,
+            "provider_health": provider_health,
+            "otel_available": bool(OTEL_AVAILABLE),
+        }
+    except Exception as e:
+        return {"status": "not_ready", "error": str(e)}
 
 #
 ## Entry point for running the server

@@ -59,7 +59,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_l
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 # Create router
-router = APIRouter(prefix="/evaluations", tags=["Evaluations"])
+router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 
 # Initialize evaluation components
 evaluation_manager = EvaluationManager()

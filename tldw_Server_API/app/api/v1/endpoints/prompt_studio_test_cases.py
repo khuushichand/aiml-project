@@ -1,8 +1,24 @@
-# prompt_studio_test_cases.py
-# API endpoints for test case management in Prompt Studio
+"""
+Prompt Studio Test Cases API
+
+Owns the test corpus for a project. Test cases provide inputs,
+expected outputs, and metadata (tags, golden flag) to enable
+repeatable evaluation and optimization of prompts.
+
+Key responsibilities
+- CRUD for individual and bulk test cases
+- Import/export test cases (CSV/JSON)
+- Generate test cases from descriptions or signatures
+- Filter/search/paginate lists by tags, golden status, signatures
+
+Security
+- Read operations require project access
+- Write operations require project write access
+- Rate limits applied to generation endpoints
+"""
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Form
 from loguru import logger
 
 # Local imports
@@ -19,13 +35,14 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager 
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io import TestCaseIO
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_generator import TestCaseGenerator
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, InputError
+from fastapi.responses import Response
 
 ########################################################################################################################
 # Router Setup
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/test-cases",
-    tags=["Prompt Studio - Test Cases"],
+    tags=["Prompt Studio"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
@@ -37,7 +54,56 @@ router = APIRouter(
 ########################################################################################################################
 # Test Case CRUD Endpoints
 
-@router.post("/create", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/create",
+    response_model=StandardResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "single": {
+                            "summary": "Create a test case",
+                            "value": {
+                                "project_id": 1,
+                                "name": "Short text",
+                                "inputs": {"text": "Hello world"},
+                                "expected_outputs": {"summary": "Hello world."},
+                                "tags": ["smoke"],
+                                "is_golden": true
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Test case created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "created": {
+                                "summary": "Created test case",
+                                "value": {
+                                    "success": true,
+                                    "data": {
+                                        "id": 101,
+                                        "project_id": 1,
+                                        "name": "Short text",
+                                        "is_golden": true,
+                                        "created_at": "2024-09-20T10:00:00"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_test_case(
     test_case_data: TestCaseCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -96,7 +162,46 @@ async def create_test_case(
             detail="Failed to create test case"
         )
 
-@router.post("/bulk", response_model=StandardResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/bulk",
+    response_model=StandardResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "bulk": {
+                            "summary": "Bulk create",
+                            "value": {
+                                "project_id": 1,
+                                "test_cases": [
+                                    {"name": "Short", "inputs": {"text": "Hi"}, "expected_outputs": {"summary": "Hi."}},
+                                    {"name": "Long", "inputs": {"text": "..."}}
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Bulk created",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "created": {
+                                "summary": "Bulk response",
+                                "value": {"success": true, "data": [{"id": 102}, {"id": 103}]}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_bulk_test_cases(
     bulk_data: TestCaseBulkCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -152,7 +257,9 @@ async def create_bulk_test_cases(
             detail="Failed to create test cases"
         )
 
-@router.get("/list/{project_id}", response_model=ListResponse)
+@router.get("/list/{project_id}", response_model=ListResponse, openapi_extra={
+    "responses": {"200": {"description": "Test cases", "content": {"application/json": {"examples": {"list": {"summary": "Cases", "value": {"success": true, "data": [{"id": 101, "name": "Short text"}], "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}}}}}}
+})
 async def list_test_cases(
     project_id: int = Path(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -213,7 +320,9 @@ async def list_test_cases(
             detail="Failed to list test cases"
         )
 
-@router.get("/get/{test_case_id}", response_model=StandardResponse)
+@router.get("/get/{test_case_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {"200": {"description": "Test case", "content": {"application/json": {"examples": {"get": {"summary": "Case", "value": {"success": true, "data": {"id": 101, "name": "Short text", "is_golden": true}}}}}}}}
+})
 async def get_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -254,7 +363,12 @@ async def get_test_case(
             detail="Failed to get test case"
         )
 
-@router.put("/update/{test_case_id}", response_model=StandardResponse)
+@router.put("/update/{test_case_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Test case updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated case", "value": {"success": true, "data": {"id": 101, "name": "Short text (v2)", "is_golden": true}}}}}}},
+        "404": {"description": "Not found"}
+    }
+})
 async def update_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     updates: TestCaseUpdate = ...,
@@ -310,7 +424,12 @@ async def update_test_case(
             detail="Failed to update test case"
         )
 
-@router.delete("/delete/{test_case_id}", response_model=StandardResponse)
+@router.delete("/delete/{test_case_id}", response_model=StandardResponse, openapi_extra={
+    "responses": {
+        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"value": {"success": true, "data": {"message": "Test case soft deleted"}}}}}}},
+        "404": {"description": "Not found"}
+    }
+})
 async def delete_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     permanent: bool = Query(False, description="Permanently delete"),
@@ -372,7 +491,52 @@ async def delete_test_case(
 ########################################################################################################################
 # Import/Export Endpoints
 
-@router.post("/import", response_model=StandardResponse)
+@router.post(
+    "/import",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "json": {
+                            "summary": "Import from JSON",
+                            "value": {
+                                "project_id": 1,
+                                "format": "json",
+                                "data": "[{\\"name\\":\\"Short\\",\\"inputs\\":{\\"text\\":\\"Hi\\"}}]",
+                                "auto_generate_names": true
+                            }
+                        },
+                        "csv": {
+                            "summary": "Import from CSV (inline string)",
+                            "value": {
+                                "project_id": 1,
+                                "format": "csv",
+                                "data": "name,inputs,expected_outputs\\nShort,\\"{\\\\\"text\\\\\":\\\\\"Hi\\\\\"}\\",\\"{\\\\\"summary\\\\\":\\\\\"Hi.\\\\\"}\\""
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Import result",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "result": {
+                                "summary": "Imported count",
+                                "value": {"success": true, "data": {"imported": 2, "errors": [], "total_test_cases": 10}}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def import_test_cases(
     import_data: TestCaseImportRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
@@ -440,7 +604,171 @@ async def import_test_cases(
             detail="Failed to import test cases"
         )
 
-@router.post("/export/{project_id}", response_model=StandardResponse)
+
+@router.post(
+    "/import/csv-upload",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "project_id": {"type": "integer"},
+                            "signature_id": {"type": "integer"},
+                            "auto_generate_names": {"type": "boolean"},
+                            "file": {"type": "string", "format": "binary"}
+                        },
+                        "required": ["project_id", "file"]
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Import result",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "result": {
+                                "summary": "CSV Import",
+                                "value": {"success": true, "data": {"imported": 3, "errors": [], "total_test_cases": 15}}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def import_test_cases_csv_upload(
+    project_id: int = Form(...),
+    file: UploadFile = File(...),
+    signature_id: Optional[int] = Form(None),
+    auto_generate_names: bool = Form(True),
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    security_config: SecurityConfig = Depends(get_security_config),
+    user_context: Dict = Depends(get_prompt_studio_user)
+) -> StandardResponse:
+    """Import test cases from a CSV file upload (multipart/form-data)."""
+    try:
+        await require_project_write_access(project_id, user_context=user_context, db=db)
+
+        manager = TestCaseManager(db)
+        io_manager = TestCaseIO(manager)
+
+        # Read file content
+        content_bytes = await file.read()
+        try:
+            csv_text = content_bytes.decode("utf-8")
+        except Exception:
+            csv_text = content_bytes.decode("latin-1")
+
+        imported, errors = io_manager.import_from_csv(
+            project_id=project_id,
+            csv_data=csv_text,
+            signature_id=signature_id,
+            auto_generate_names=auto_generate_names
+        )
+
+        # Count current total
+        current_total = manager.get_test_case_stats(project_id)["total"]
+
+        return StandardResponse(
+            success=True,
+            data={
+                "imported": imported,
+                "errors": errors,
+                "total_test_cases": current_total
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error importing test cases via upload: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to import CSV test cases")
+
+
+@router.get(
+    "/import/template",
+    response_class=Response,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "CSV template",
+                "content": {
+                    "text/csv": {
+                        "examples": {
+                            "template": {
+                                "summary": "CSV template example",
+                                "value": "name,description,input.text,expected.summary,tags,is_golden\n"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def get_csv_import_template(
+    signature_id: Optional[int] = Query(None, description="Optional signature id to derive input/output columns") ,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
+) -> Response:
+    """Download a CSV template for test case import.
+
+    If a signature_id is provided, the template will include input.* and expected.*
+    columns derived from the signature schemas. Otherwise, a minimal template is returned.
+    """
+    try:
+        manager = TestCaseManager(db)
+        io_manager = TestCaseIO(manager)
+        csv_text = io_manager.generate_csv_template(signature_id=signature_id)
+        return Response(
+            content=csv_text,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=prompt_studio_test_cases_template.csv"}
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate CSV template: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate CSV template")
+
+@router.post(
+    "/export/{project_id}",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "json": {
+                            "summary": "Export as JSON",
+                            "value": {
+                                "format": "json",
+                                "include_golden_only": false,
+                                "tag_filter": ["smoke"]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Export payload",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "json": {
+                                "summary": "JSON export",
+                                "value": {"success": true, "data": {"format": "json", "data": [{"name": "Short"}]}}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def export_test_cases(
     project_id: int = Path(..., description="Project ID"),
     export_request: TestCaseExportRequest = ...,
@@ -498,7 +826,44 @@ async def export_test_cases(
 ########################################################################################################################
 # Generation Endpoints
 
-@router.post("/generate", response_model=StandardResponse)
+@router.post(
+    "/generate",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "diverse": {
+                            "summary": "Generate cases (diverse)",
+                            "value": {
+                                "project_id": 1,
+                                "signature_id": 2,
+                                "num_cases": 5,
+                                "generation_strategy": "diverse"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Generated test cases",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "generated": {
+                                "summary": "Generated examples",
+                                "value": {"success": true, "data": [{"id": 110, "is_generated": true}]}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def generate_test_cases(
     generate_request: TestCaseGenerateRequest,
     _rate: bool = Depends(lambda: check_rate_limit("generate")),
