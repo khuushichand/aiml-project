@@ -11,6 +11,7 @@ Common usage
 - Set `enable_ocr=true` and choose `ocr_backend` (`tesseract`, `dots`, or `points`).
 - `ocr_mode`: `fallback` (only pages lacking text) or `always` (force OCR).
 - `ocr_dpi`: 200–300 is a good balance.
+- Parallelism: `OCR_PAGE_CONCURRENCY` controls per-page OCR concurrency (default 1). Keep small (1–2) for GPU-backed models.
 
 ## dots.ocr (backend: `dots`)
 
@@ -27,11 +28,15 @@ Install via extras (optional)
   - This pulls the dots.ocr repo via a VCS dependency.
 
 Backend specifics
-- Invocation: shells out to `python -m dots_ocr.parser <image.png>` per page.
-- Env: `DOTS_OCR_PROMPT` (default `prompt_ocr`); choose layout/text prompts from the upstream repo.
+- Invocation: shells out to `python -m dots_ocr.parser <image.png>` per page (or use `DOTS_OCR_CMD` to specify an explicit command).
+- Env: `DOTS_OCR_PROMPT` (default `prompt_ocr`); choose layout/text prompts from the upstream repo. `DOTS_OCR_CMD` can point to a script for custom setups.
 
 Docs
 - See `tldw_Server_API/requirements.txt` notes under “OCR (optional)”.
+
+Pros/cons
+- Pros: strong layout understanding; good accuracy on scanned docs; vLLM option for scale.
+- Cons: heavy install; per-page CLI call if not served; model weights management.
 
 ## POINTS-Reader (backend: `points`)
 
@@ -68,3 +73,13 @@ Install via extras (optional)
 - Prefer `fallback` mode to reduce compute and latency when PDFs already contain text.
 - Lower `ocr_dpi` for speed; raise it if recognition quality needs improvement.
 - Review provider-specific known issues and constraints in their docs.
+
+## Quick comparison
+
+| Backend   | Modes             | Best for                          | Notes                                  |
+|-----------|-------------------|-----------------------------------|----------------------------------------|
+| tesseract | CLI               | Light installs, fast text         | No layout semantics, basic accuracy    |
+| dots      | CLI + vLLM        | High quality OCR + layout         | Heavy; recommend vLLM; prompt-tunable  |
+| points    | Transformers/SGLang | OCR + HTML tables + Markdown text | trust_remote_code required; SGLang ideal |
+
+Note: VCS installs (extras) require `git` and network. For airgapped deployments, install upstream repos manually, then install this project without the extras.

@@ -447,12 +447,14 @@ Key settings in `.env`:
 | `AUTH_MODE` | `single_user` or `multi_user` | `multi_user` |
 | `JWT_SECRET_KEY` | Secret for JWT signing (multi-user) | Required for multi-user |
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
+| `ENABLE_REGISTRATION` | Allow new user registration | `false` |
+| `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
 
 ### Single-User API Key (How to obtain)
 
 - Recommended: set `SINGLE_USER_API_KEY` explicitly in your `.env` (or environment). You know the key because you set it.
 - Development logs: in dev mode (default), the server prints the full key at startup.
-- Production logs: set `ENV=production` to mask the key in logs. To briefly show it once on startup (e.g., for initial bootstrap), also set `SHOW_API_KEY_ON_STARTUP=true`, then remove it.
+- Production logs: set `tldw_production=true` to mask the key in logs. To briefly show it once on startup (e.g., for initial bootstrap), also set `SHOW_API_KEY_ON_STARTUP=true`, then remove it.
 - Programmatic retrieval:
   - Python (same env as server):
     ```bash
@@ -463,9 +465,13 @@ Key settings in `.env`:
     docker compose exec app printenv SINGLE_USER_API_KEY
     ```
 - WebUI convenience (dev): `GET /webui/config.json` returns the key in single-user mode so the WebUI can auto-configure. Avoid relying on this in production.
+  - In production (`tldw_production=true`), `/webui/config.json` omits the `apiKey` field for security.
 - Important: Always set a secure `SINGLE_USER_API_KEY` in production. If unset, the server may use a deterministic test key for convenience during development/testing.
-| `ENABLE_REGISTRATION` | Allow new user registration | `false` |
-| `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
+  - When `tldw_production=true`, the server refuses to start if `SINGLE_USER_API_KEY` is missing, a default/test value, or shorter than 24 characters.
+
+### Multi-User JWT Secret (production)
+
+- When `tldw_production=true` and `AUTH_MODE=multi_user`, the server refuses to start unless `JWT_SECRET_KEY` is set via environment, at least 32 characters, and not the default template value.
 
 ### Security Best Practices
 
@@ -644,7 +650,7 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "top_k": 10
   }'
 
-# Enable factual claims and summary
+# Enable factual claims (APS) and summary
 curl -X POST "http://localhost:8000/api/v1/rag/search" \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: your-api-key" \
@@ -652,7 +658,7 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "query": "What is CRISPR?",
     "enable_generation": true,
     "enable_claims": true,
-    "claim_extractor": "auto",
+    "claim_extractor": "aps",
     "claim_verifier": "hybrid",
     "claims_top_k": 5,
     "claims_conf_threshold": 0.7,
@@ -676,6 +682,20 @@ curl -X POST "http://localhost:8000/api/v1/rag/search/stream" \
 
 # Optional: Set a local NLI model for offline verification
 # export RAG_NLI_MODEL=/models/roberta-large-mnli
+
+### APS (Abstractive Proposition Segmentation)
+
+APS decomposes text into atomic, verifiable propositions for claim‑level grounding.
+
+- Enable in RAG: set `"enable_claims": true, "claim_extractor": "aps"` to extract APS‑style claims from the generated answer and verify each against retrieved contexts.
+- Proposition chunking: use `method="propositions"`, `proposition_engine="llm"`, `proposition_prompt_profile="gemma_aps"` to chunk text into APS‑style propositions outside of RAG.
+- Model options (optional):
+  - `google/gemma-2b-aps-it`
+  - `google/gemma-7b-aps-it` (and community GGUF variants)
+- Configuration tips:
+  - The APS extractor calls your default OpenAI‑compatible chat endpoint; to back it with a specific APS‑IT model, set your gateway (vLLM/TabbyAPI/OpenRouter/custom‑openai) to use that model by default.
+  - For ingestion‑time claims (non‑APS path), you can also set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `tldw_Server_API/Config_Files/config.txt`.
+  - For local verification, set `RAG_NLI_MODEL` (e.g., `roberta-large-mnli`).
 
 # Simple search interface
 curl -X GET "http://localhost:8000/api/v1/rag/simple?q=machine%20learning&limit=5" \

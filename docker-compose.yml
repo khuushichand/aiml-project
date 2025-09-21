@@ -14,8 +14,8 @@ services:
       - AUTH_MODE=${AUTH_MODE:-single_user}
       # Provide a secure API key in single_user mode
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-change-me}
-      # Set ENV=production in prod to mask keys in logs
-      - ENV=${ENV:-development}
+      # In production set: tldw_production=true (masks API key in logs and omits it from /webui/config.json)
+      - tldw_production=${tldw_production:-false}
       # Database URL: use Postgres in multi_user
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./Databases/users.db}
       # Optional OpenTelemetry envs can be passed through here
@@ -79,4 +79,3 @@ volumes:
 #   #   export AUTH_MODE=multi_user
 #   #   export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
 #   #   docker compose up --build
-

@@ -378,6 +378,19 @@ def process_pdf(
                             "OCR requested but no backend available"
                         ]
                     else:
+                        # Determine small concurrency for OCR if configured
+                        try:
+                            import os as _os
+                            concurrency_env = _os.getenv("OCR_PAGE_CONCURRENCY")
+                            if concurrency_env is not None:
+                                concurrency_env = int(concurrency_env)
+                            else:
+                                # Fall back to config default if present
+                                cfg = loaded_config_data.get('OCR', {}) if loaded_config_data else {}
+                                concurrency_env = int(cfg.get('page_concurrency_default', 1))
+                        except Exception:
+                            concurrency_env = 1
+
                         ocr_text, page_count, ocr_pages = _ocr_pdf_pages(
                             pdf_path=path_for_processing,
                             lang=ocr_lang or "eng",
@@ -385,16 +398,27 @@ def process_pdf(
                             backend=backend,
                             per_page_min_text=ocr_min_page_text_chars,
                             per_page_check=True,
+                            concurrency=max(1, concurrency_env),
                         )
                         result.setdefault("analysis_details", {})
-                        result["analysis_details"]["ocr"] = {
+                        details = {
                             "backend": getattr(backend, "name", type(backend).__name__),
                             "mode": (ocr_mode or "fallback").lower(),
                             "dpi": ocr_dpi,
                             "lang": ocr_lang or "eng",
                             "total_pages": page_count,
                             "ocr_pages": ocr_pages,
+                            "page_concurrency": max(1, concurrency_env),
                         }
+                        # Attach backend-specific metadata if available
+                        try:
+                            if hasattr(backend, "describe") and callable(getattr(backend, "describe")):
+                                extra = backend.describe() or {}
+                                if isinstance(extra, dict):
+                                    details.update(extra)
+                        except Exception:
+                            pass
+                        result["analysis_details"]["ocr"] = details
 
                         if ocr_text and ocr_text.strip():
                             if (ocr_mode or "fallback").lower() == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
@@ -934,37 +958,53 @@ def _ocr_pdf_pages(
     backend,
     per_page_min_text: int = 40,
     per_page_check: bool = True,
+    concurrency: int = 1,
 ) -> tuple[str, int, int]:
     """
     Render PDF pages to images and run OCR.
 
     Returns: (markdown_text, total_pages, ocr_pages_count)
     """
-    text_parts: List[str] = []
+    text_by_index: List[str] = []
     ocr_pages = 0
     with pymupdf.open(pdf_path) as doc:
         page_count = len(doc)
+        text_by_index = [""] * page_count
         scale = max(dpi, 72) / 72.0
-        for i, page in enumerate(doc, start=1):
-            # Skip OCR for pages that already have enough text (if enabled)
-            do_ocr = True
-            if per_page_check:
-                try:
-                    pre_text = page.get_text("text") or ""
-                    if len(pre_text.strip()) >= max(per_page_min_text, 1):
-                        text_parts.append(f"## Page {i}\n\n{pre_text.strip()}\n\n---\n")
-                        do_ocr = False
-                except Exception:
-                    # If pre-extraction fails, fall back to OCR
-                    do_ocr = True
 
-            if do_ocr:
-                mat = pymupdf.Matrix(scale, scale)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img_bytes = pix.tobytes("png")
-                page_text = backend.ocr_image(img_bytes, lang=lang) or ""
+        # Render pages sequentially (PyMuPDF doc is not thread-safe),
+        # but dispatch OCR requests in a small thread pool to overlap I/O.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        concurrency = max(1, int(concurrency))
+        futures = []
+        idx_map = {}
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            for idx, page in enumerate(doc, start=1):
+                do_ocr = True
+                if per_page_check:
+                    try:
+                        pre_text = page.get_text("text") or ""
+                        if len(pre_text.strip()) >= max(per_page_min_text, 1):
+                            text_by_index[idx - 1] = f"## Page {idx}\n\n{pre_text.strip()}\n\n---\n"
+                            do_ocr = False
+                    except Exception:
+                        do_ocr = True
+
+                if do_ocr:
+                    mat = pymupdf.Matrix(scale, scale)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    img_bytes = pix.tobytes("png")
+                    fut = pool.submit(backend.ocr_image, img_bytes, lang)
+                    futures.append(fut)
+                    idx_map[fut] = idx
+
+            for fut in as_completed(futures):
+                page_text = fut.result() or ""
+                idx = idx_map.get(fut)
                 if page_text.strip():
                     ocr_pages += 1
-                text_parts.append(f"## Page {i}\n\n{page_text.strip()}\n\n---\n")
+                text_by_index[idx - 1] = f"## Page {idx}\n\n{page_text.strip()}\n\n---\n"
 
-    return ("".join(text_parts).strip(), page_count, ocr_pages)
+    return ("".join(text_by_index).strip(), page_count, ocr_pages)

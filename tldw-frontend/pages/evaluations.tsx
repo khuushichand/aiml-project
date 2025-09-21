@@ -8,21 +8,24 @@ import JsonViewer from '@/components/ui/JsonViewer';
 import JsonTree from '@/components/ui/JsonTree';
 import { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
+import { CardSkeleton } from '@/components/ui/Skeleton';
 
 export default function EvaluationsPage() {
-  const [tab, setTab] = useState<'ocr_json'|'ocr_pdf'|'geval'|'rq'>('ocr_json');
+  const [tab, setTab] = useState<'ocr_json'|'ocr_pdf'|'geval'|'rq'|'results'|'run'>('ocr_json');
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Evaluations</h1>
-          <div className="w-1/2"><Tabs items={[{key:'ocr_json',label:'OCR (JSON)'},{key:'ocr_pdf',label:'OCR (PDF)'},{key:'geval',label:'G-Eval'},{key:'rq',label:'Response Quality'}]} value={tab} onChange={(k)=>setTab(k as any)} /></div>
+          <div className="w-1/2"><Tabs items={[{key:'ocr_json',label:'OCR (JSON)'},{key:'ocr_pdf',label:'OCR (PDF)'},{key:'geval',label:'G-Eval'},{key:'rq',label:'Response Quality'},{key:'results',label:'Results'},{key:'run',label:'Run Details'}]} value={tab} onChange={(k)=>setTab(k as any)} /></div>
         </div>
         <div className="rounded-md border bg-white p-4 transition-all duration-150">
           {tab === 'ocr_json' && <OCRJson/>}
           {tab === 'ocr_pdf' && <OCRPdf/>}
           {tab === 'geval' && <GEval/>}
           {tab === 'rq' && <ResponseQuality/>}
+          {tab === 'results' && <ResultsExplorer/>}
+          {tab === 'run' && <RunDetails/>}
         </div>
       </div>
     </Layout>
@@ -245,6 +248,172 @@ function MetricsViewer({ data }: { data: any }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function ResultsExplorer() {
+  const { show } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [items, setItems] = useState<any[]>([]);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState<'all'|'success'|'failed'|'running'>('all');
+  const [selected, setSelected] = useState<any>(null);
+
+  const refresh = async () => {
+    setLoading(true);
+    setSelected(null);
+    try {
+      const url = `${getApiBaseUrl()}/evaluations?limit=50`;
+      const r = await fetch(url, { headers: buildAuthHeaders('GET') });
+      const json = await r.json();
+      const arr = Array.isArray(json?.items) ? json.items : (Array.isArray(json) ? json : []);
+      setItems(arr);
+      show({ title: 'Results loaded', variant: 'success' });
+    } catch (e: any) {
+      setItems([]);
+      show({ title: 'Failed to load results', description: e?.message || 'Failed', variant: 'danger' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return (items || []).filter((it) => {
+      if (status !== 'all') {
+        const s = String(it.status || '').toLowerCase();
+        const map: any = { success: ['success','completed','done'], failed: ['failed','error'], running: ['running','in_progress'] };
+        const allowed: string[] = map[status] || [];
+        if (!allowed.some((x) => s.includes(x))) return false;
+      }
+      if (t) {
+        const hay = JSON.stringify(it).toLowerCase();
+        if (!hay.includes(t)) return false;
+      }
+      return true;
+    });
+  }, [items, q, status]);
+
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-sm text-gray-700">Results</div>
+          <div className="space-x-2">
+            <Button variant="secondary" onClick={refresh} disabled={loading}>Refresh</Button>
+          </div>
+        </div>
+        <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-6">
+          <div className="md:col-span-4"><Input placeholder="Filter…" value={q} onChange={(e)=>setQ(e.target.value)} /></div>
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-sm font-medium text-gray-700">Status</label>
+            <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={status} onChange={(e)=>setStatus(e.target.value as any)}>
+              <option value="all">All</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+              <option value="running">Running</option>
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => (<CardSkeleton key={i} />))}</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-sm text-gray-600">No results.</div>
+        ) : (
+          <ul className="space-y-2">
+            {filtered.map((it, idx) => (
+              <li key={idx} className="cursor-pointer rounded border p-2 hover:bg-gray-50" onClick={()=>setSelected(it)}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-gray-800">{it.name || it.type || 'Evaluation'}</div>
+                    <div className="text-xs text-gray-500">{it.status || '—'} • {it.created_at ? new Date(it.created_at).toLocaleString() : ''}</div>
+                  </div>
+                  <div className="text-xs text-gray-400">{it.id || it.eval_id || ''}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div>
+        <div className="mb-2 text-sm text-gray-700">Selected</div>
+        <div className="rounded border bg-gray-50 p-3">
+          {selected ? <JsonViewer data={selected} /> : <div className="text-sm text-gray-600">Pick a result on the left.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunDetails() {
+  const { show } = useToast();
+  const [runId, setRunId] = useState('');
+  const [polling, setPolling] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [view, setView] = useState<'pretty'|'tree'>('pretty');
+  const timerRef = useRef<any>(null);
+
+  const fetchRun = async (id: string) => {
+    if (!id.trim()) { show({ title: 'Enter run id', variant: 'warning' }); return; }
+    try {
+      const url = `${getApiBaseUrl()}/evaluations/runs/${encodeURIComponent(id.trim())}`;
+      const r = await fetch(url, { headers: buildAuthHeaders('GET') });
+      const text = await r.text(); let json: any; try { json = JSON.parse(text); } catch { json = text; }
+      setData(json);
+      if (!r.ok) show({ title: 'Fetch failed', description: `${r.status} ${r.statusText}`, variant: 'warning' });
+    } catch (e: any) {
+      show({ title: 'Error fetching run', description: e?.message || 'Failed', variant: 'danger' });
+    }
+  };
+
+  const startPolling = () => {
+    if (!runId.trim()) { show({ title: 'Enter run id', variant: 'warning' }); return; }
+    setPolling(true);
+    fetchRun(runId);
+    timerRef.current = setInterval(() => fetchRun(runId), 2000);
+    show({ title: 'Polling started', variant: 'info' });
+  };
+  const stopPolling = () => {
+    setPolling(false);
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    show({ title: 'Polling stopped', variant: 'info' });
+  };
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+
+  const cancelRun = async () => {
+    if (!runId.trim()) return;
+    try {
+      const url = `${getApiBaseUrl()}/evaluations/runs/${encodeURIComponent(runId.trim())}/cancel`;
+      const r = await fetch(url, { method: 'POST', headers: buildAuthHeaders('POST') });
+      show({ title: r.ok ? 'Cancel sent' : 'Cancel failed', description: `${r.status} ${r.statusText}`, variant: r.ok ? 'success' : 'warning' });
+    } catch (e: any) {
+      show({ title: 'Cancel error', description: e?.message || 'Failed', variant: 'danger' });
+    }
+  };
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <div className="sm:col-span-2"><Input label="Run ID" value={runId} onChange={(e)=>setRunId(e.target.value)} /></div>
+        <div className="flex items-end space-x-2">
+          {!polling ? (
+            <Button onClick={startPolling}>Start Poll</Button>
+          ) : (
+            <Button variant="secondary" onClick={stopPolling}>Stop Poll</Button>
+          )}
+          <Button variant="secondary" onClick={cancelRun}>Cancel Run</Button>
+        </div>
+      </div>
+      <div className="mt-3 rounded border bg-gray-50 p-3">
+        {view === 'pretty' ? <JsonViewer data={data} /> : <JsonTree data={data} />}
+      </div>
+      <div className="mt-2 space-x-2">
+        <Button variant="secondary" onClick={() => setView('pretty')} disabled={view==='pretty'}>Pretty</Button>
+        <Button variant="secondary" onClick={() => setView('tree')} disabled={view==='tree'}>Tree</Button>
       </div>
     </div>
   );

@@ -119,6 +119,12 @@ function StreamingSTTSection() {
   const [showWave, setShowWave] = useState(true);
   const [vadEnabled, setVadEnabled] = useState(true);
   const [vadThreshold, setVadThreshold] = useState(0.02); // RMS threshold
+  const [autoCommit, setAutoCommit] = useState(true);
+  const [silenceMs, setSilenceMs] = useState(2000);
+  const lastActiveRef = useRef<number>(0);
+  const [volume, setVolume] = useState(0);
+  const [autoStop, setAutoStop] = useState(true);
+  const autoStoppedRef = useRef<boolean>(false);
 
   const addDebug = (s: string) => {
     const line = `${new Date().toLocaleTimeString()} ${s}`;
@@ -188,6 +194,10 @@ function StreamingSTTSection() {
           const bufferLength = analyserRef.current.fftSize;
           const dataArray = new Uint8Array(bufferLength);
           analyserRef.current.getByteTimeDomainData(dataArray);
+          // Compute RMS based on time domain for volume meter
+          let sum = 0; for (let i=0;i<bufferLength;i++){ const v = (dataArray[i]/128)-1; sum+= v*v; }
+          const rms = Math.sqrt(sum / bufferLength);
+          setVolume(Math.max(0, Math.min(1, rms*3))); // scale for UI
           c.clearRect(0, 0, canvas.width, canvas.height);
           c.strokeStyle = '#2563eb'; c.lineWidth = 2; c.beginPath();
           const sliceWidth = canvas.width / bufferLength; let x = 0;
@@ -232,7 +242,24 @@ function StreamingSTTSection() {
           if (vadEnabled) {
             let sum = 0; for (let i=0;i<chunk.length;i++){ const v = chunk[i]; sum += v*v; }
             const rms = Math.sqrt(sum / chunk.length);
-            if (rms < vadThreshold) { addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`); return; }
+            const now = Date.now();
+          if (rms < vadThreshold) {
+            // silence chunk
+            if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
+              wsRef.current?.send(JSON.stringify({ type: 'commit' }));
+              addDebug(`Auto-commit after ${silenceMs}ms silence`);
+              lastActiveRef.current = now; // prevent repeated commits
+            }
+            if (autoStop && !autoStoppedRef.current && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs * 2) {
+              autoStoppedRef.current = true;
+              addDebug(`Auto-stop after ${(silenceMs*2)}ms silence`);
+              stop();
+            }
+            addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`);
+            return;
+          }
+          // voice detected
+          lastActiveRef.current = now;
           }
           wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
         }
@@ -249,6 +276,7 @@ function StreamingSTTSection() {
     if (ctxRef.current) { try { ctxRef.current.close(); } catch {} ctxRef.current = null; }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'commit' }));
     if (animTimer.current) { cancelAnimationFrame(animTimer.current); animTimer.current = null; }
+    autoStoppedRef.current = false;
     show({ title: 'Recording stopped', variant: 'info' });
   };
 
@@ -304,9 +332,23 @@ function StreamingSTTSection() {
             <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={showWave} onChange={(e)=>setShowWave(e.target.checked)} /><span>Show</span></label>
             <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={vadEnabled} onChange={(e)=>setVadEnabled(e.target.checked)} /><span>VAD</span></label>
             <div className="flex items-center space-x-2"><span>Thresh</span><input type="range" min={0.005} max={0.1} step={0.005} value={vadThreshold} onChange={(e)=>setVadThreshold(parseFloat(e.target.value))} /></div>
+            <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={autoCommit} onChange={(e)=>setAutoCommit(e.target.checked)} /><span>Auto-commit</span></label>
+            <div className="flex items-center space-x-2"><span>Silence</span><input type="number" min={500} step={100} className="w-20 rounded border p-1" value={silenceMs} onChange={(e)=>setSilenceMs(parseInt(e.target.value||'2000'))} /><span>ms</span></div>
+            <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={autoStop} onChange={(e)=>setAutoStop(e.target.checked)} /><span>Auto-stop</span></label>
           </div>
         </div>
         <canvas ref={canvasRef} width={640} height={120} className="w-full rounded bg-white" />
+        <div className="mt-2 h-2 w-full rounded bg-gray-200">
+          <div className="h-2 rounded bg-blue-500 transition-all" style={{ width: `${Math.min(100, Math.round(volume*100))}%` }} />
+        </div>
+        <div className="mt-2 flex items-center space-x-1">
+          {Array.from({ length: 10 }).map((_, i) => {
+            const threshold = (i + 1) / 10;
+            const on = volume >= threshold;
+            const color = i < 6 ? 'bg-green-500' : i < 8 ? 'bg-yellow-500' : 'bg-red-500';
+            return <span key={i} className={`inline-block h-2 w-4 rounded-sm ${on ? color : 'bg-gray-300'}`} />;
+          })}
+        </div>
       </div>
       <div className="rounded border bg-gray-50 p-3">
         <div className="text-xs text-gray-500">Transcript</div>

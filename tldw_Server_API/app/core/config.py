@@ -1881,6 +1881,24 @@ def load_and_log_configs():
             # Non-fatal: keep defaults
             pass
 
+        # Optional OCR section for backend preferences and defaults
+        try:
+            if config_parser_object.has_section('OCR'):
+                ocr_section = {}
+                backend_priority = config_parser_object.get('OCR', 'backend_priority', fallback='')
+                if backend_priority:
+                    ocr_section['backend_priority'] = backend_priority
+                page_conc = config_parser_object.get('OCR', 'page_concurrency_default', fallback='')
+                if page_conc:
+                    ocr_section['page_concurrency_default'] = int(page_conc)
+                sglang_timeout = config_parser_object.get('OCR', 'sglang_timeout', fallback='')
+                if sglang_timeout:
+                    ocr_section['sglang_timeout'] = int(sglang_timeout)
+                if ocr_section:
+                    return_dict['OCR'] = ocr_section
+        except Exception:
+            pass
+
         return return_dict
     except Exception as e:
         logging.error(f"Error loading config: {str(e)}")

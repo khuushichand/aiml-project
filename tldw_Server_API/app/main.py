@@ -83,6 +83,7 @@ from tldw_Server_API.app.api.v1.endpoints.research import router as research_rou
 
 # Unified Evaluation endpoint
 from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
+from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
 #
 # Benchmark Endpoint
 from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
@@ -430,7 +431,7 @@ async def lifespan(app: FastAPI):
             if not _key or len(_key) < 8:
                 return "********"
             return f"{_key[:4]}...{_key[-4:]}"
-        _is_prod = _os.getenv("ENV", "development").lower() in {"prod", "production"}
+        _is_prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
         _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
 
         logger.info("=" * 60)
@@ -820,7 +821,7 @@ async def display_startup_info():
             if not _key or len(_key) < 8:
                 return "********"
             return f"{_key[:4]}...{_key[-4:]}"
-        _is_prod = _os.getenv("ENV", "development").lower() in {"prod", "production"}
+        _is_prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
         _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
         
         # Create a visually prominent display
@@ -892,7 +893,7 @@ if WEBUI_DIR.exists():
         
         # In single user mode, include the API key unless running in production
         import os as _os
-        _is_prod_env = _os.getenv("ENV", "development").lower() in {"prod", "production"}
+        _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
         if is_single_user_mode():
             settings = get_settings()
             config["mode"] = "single-user"
@@ -1080,6 +1081,7 @@ app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["r
 
 # Router for Unified Evaluation endpoint (combines both legacy endpoints)
 app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
 
 # Router for Benchmark endpoint (NEW)
 app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])

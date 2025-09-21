@@ -335,10 +335,56 @@ class ClaimsEngine:
                     PropositionChunkingStrategy,
                 )
 
+                # Load provider/model/temp from config.txt with sensible fallbacks
+                try:
+                    from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+                except Exception:
+                    _settings = {}
+
+                provider = None
+                model_override = None
+                temperature = 0.2
+                try:
+                    provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
+                except Exception:
+                    provider = None
+                try:
+                    model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+                except Exception:
+                    model_override = None
+                try:
+                    temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.2))
+                except Exception:
+                    temperature = 0.2
+
+                # Fallbacks to RAG defaults then global default_api
+                if provider is None:
+                    try:
+                        rag_cfg = _settings.get("RAG", {}) or {}
+                        provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
+                    except Exception:
+                        provider = None
+                if provider is None:
+                    try:
+                        provider = str(_settings.get("default_api", "openai")).strip() or "openai"
+                    except Exception:
+                        provider = "openai"
+                if model_override is None:
+                    try:
+                        rag_cfg = _settings.get("RAG", {}) or {}
+                        model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
+                    except Exception:
+                        model_override = None
+
                 strategy = PropositionChunkingStrategy(
                     language="en",
                     llm_call_func=self._analyze,
-                    llm_config={"window_chars": 1200, "api_name": "openai", "temp": 0.2},
+                    llm_config={
+                        "window_chars": 1200,
+                        "api_name": provider or "openai",
+                        "temp": temperature,
+                        "model_override": model_override,
+                    },
                 )
                 # Use max_size=1 so each proposition becomes its own unit
                 prop_chunks = strategy.chunk(

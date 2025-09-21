@@ -297,14 +297,32 @@ class Settings(BaseSettings):
         if self.JWT_SECRET_KEY:
             # Secret provided via environment - validate it
             if len(self.JWT_SECRET_KEY) < 32:
-                raise ValueError("JWT_SECRET_KEY must be at least 32 characters for security")
+                raise ValueError(
+                    "JWT_SECRET_KEY must be at least 32 characters for security.\n"
+                    "Set it via environment or .env. Example:\n"
+                    "  export JWT_SECRET_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")\n"
+                    "See README: Authentication Setup."
+                )
+
+            # Hard fail in production if default/weak
+            prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+            if prod_flag:
+                default_values = {"CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS"}
+                if self.JWT_SECRET_KEY in default_values:
+                    raise ValueError(
+                        "In production (tldw_production=true), JWT_SECRET_KEY must not use default template values.\n"
+                        "Set a strong key via environment or .env. Example:\n"
+                        "  export JWT_SECRET_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                    )
             logger.info("Using JWT secret from environment variable")
             return
         
         # No JWT secret available - this is a configuration error
         raise ValueError(
-            "JWT_SECRET_KEY must be set via environment variable for multi-user mode. "
-            "This is required for security - file-based storage is not supported."
+            "JWT_SECRET_KEY must be set via environment variable for multi-user mode.\n"
+            "Set it via environment or .env. Example:\n"
+            "  export JWT_SECRET_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")\n"
+            "This is required for security."
         )
     
     def _validate_api_key(self):
@@ -335,10 +353,31 @@ class Settings(BaseSettings):
                     )
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
-                    "Default API key detected! Please set SINGLE_USER_API_KEY environment variable."
+                    "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
+                    "Example:\n"
+                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
                 )
             elif len(self.SINGLE_USER_API_KEY) < 16:
-                raise ValueError("SINGLE_USER_API_KEY must be at least 16 characters")
+                raise ValueError(
+                    "SINGLE_USER_API_KEY must be at least 16 characters.\n"
+                    "Set it via environment or .env. Example:\n"
+                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                )
+
+            # Hard fail in production if key is missing/weak/default
+            prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+            if prod_flag:
+                weak = (
+                    not self.SINGLE_USER_API_KEY
+                    or self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "test-api-key-12345", "change-me-in-production"}
+                    or len(self.SINGLE_USER_API_KEY) < 24
+                )
+                if weak:
+                    raise ValueError(
+                        "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
+                        "and must not use defaults.\nSet it via environment or .env. Example:\n"
+                        "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                    )
     
     @field_validator("JWT_SECRET_KEY")
     @classmethod

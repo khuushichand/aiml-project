@@ -172,22 +172,48 @@ class OCREvaluator:
                             with doc:
                                 total_pages = len(doc)
                                 ocr_pages = 0
-                                for i, page in enumerate(doc, start=1):
-                                    mat = pymupdf.Matrix(scale, scale)
-                                    pix = page.get_pixmap(matrix=mat, alpha=False)
-                                    img_bytes = pix.tobytes("png")
-                                    page_text = backend.ocr_image(img_bytes, lang=lang) or ""
-                                    if page_text.strip():
-                                        ocr_pages += 1
-                                    page_texts.append(page_text)
+                                # Small concurrency
+                                from concurrent.futures import ThreadPoolExecutor, as_completed
+                                import os as _os
+                                try:
+                                    concurrency_env = int((_os.getenv("OCR_PAGE_CONCURRENCY") or "1"))
+                                except Exception:
+                                    concurrency_env = 1
+                                futures = []
+                                idx_map = {}
+                                with ThreadPoolExecutor(max_workers=max(1, concurrency_env)) as pool:
+                                    for i, page in enumerate(doc, start=1):
+                                        mat = pymupdf.Matrix(scale, scale)
+                                        pix = page.get_pixmap(matrix=mat, alpha=False)
+                                        img_bytes = pix.tobytes("png")
+                                        fut = pool.submit(backend.ocr_image, img_bytes, lang)
+                                        futures.append(fut)
+                                        idx_map[fut] = i
+                                    ordered = [""] * total_pages
+                                    for fut in as_completed(futures):
+                                        text = fut.result() or ""
+                                        i = idx_map[fut]
+                                        if text.strip():
+                                            ocr_pages += 1
+                                        ordered[i - 1] = text
+                                page_texts.extend(ordered)
                                 hyp_text = "\n".join(page_texts)
-                                ocr_info.update({
+                                details = {
                                     "backend": getattr(backend, "name", type(backend).__name__),
                                     "dpi": dpi,
                                     "lang": lang,
                                     "total_pages": total_pages,
                                     "ocr_pages": ocr_pages,
-                                })
+                                    "page_concurrency": max(1, concurrency_env),
+                                }
+                                try:
+                                    if hasattr(backend, "describe") and callable(getattr(backend, "describe")):
+                                        extra = backend.describe() or {}
+                                        if isinstance(extra, dict):
+                                            details.update(extra)
+                                except Exception:
+                                    pass
+                                ocr_info.update(details)
                     except Exception as e:
                         logger.error(f"OCR eval PDF per-page processing failed for {item.id}: {e}")
                         hyp_text = ""

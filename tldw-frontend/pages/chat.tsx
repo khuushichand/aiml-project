@@ -6,6 +6,8 @@ import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api';
 import { streamSSE } from '@/lib/sse';
 import { useToast } from '@/components/ui/ToastProvider';
 import type { ChatMessage } from '@/types/api';
+import JsonEditor from '@/components/ui/JsonEditor';
+import { Tabs } from '@/components/ui/Tabs';
 
 interface LLMProvider {
   name: string;
@@ -39,6 +41,8 @@ export default function ChatPage() {
   const [saveToDb, setSaveToDb] = useState<boolean>(false);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string; model: string; created_at: string }>>([]);
   const lastSessionIdRef = useRef<string | null>(null);
+  const [preset, setPreset] = useState<'creative'|'balanced'|'precise'|'json'>('balanced');
+  const [advanced, setAdvanced] = useState<string>('{}');
 
   const persistSessions = (list: any[]) => {
     try { localStorage.setItem('tldw-chat-sessions', JSON.stringify(list)); } catch {}
@@ -99,12 +103,13 @@ export default function ChatPage() {
     setSending(true);
 
     try {
-      const payload: any = {
+      let payload: any = {
         model,
         stream,
         save_to_db: !!saveToDb,
         messages: newMessages.filter((m) => m.role !== 'system' || m.content.trim() !== '').map((m) => ({ role: m.role, content: m.content })),
       };
+      try { const extra = JSON.parse(advanced || '{}'); if (extra && typeof extra === 'object') payload = { ...payload, ...extra }; } catch {}
       if (conversationId) payload.conversation_id = conversationId;
       const body = JSON.stringify(payload);
 
@@ -201,6 +206,14 @@ export default function ChatPage() {
     loadProviders();
   }, []);
 
+  const applyPreset = (p: typeof preset) => {
+    setPreset(p);
+    if (p === 'creative') setAdvanced(JSON.stringify({ temperature: 1.0, top_p: 1.0, presence_penalty: 0.2 }, null, 2));
+    else if (p === 'precise') setAdvanced(JSON.stringify({ temperature: 0.2, top_p: 0.9 }, null, 2));
+    else if (p === 'json') setAdvanced(JSON.stringify({ response_format: { type: 'json_object' } }, null, 2));
+    else setAdvanced(JSON.stringify({ temperature: 0.7, top_p: 1.0 }, null, 2));
+  };
+
   // Persist current chat model for use across pages (e.g., Media Analyze)
   useEffect(() => {
     try { localStorage.setItem('tldw-current-chat-model', model); } catch {}
@@ -271,6 +284,25 @@ export default function ChatPage() {
               </label>
             </div>
           </div>
+
+          <details className="mb-3 rounded border p-3">
+            <summary className="cursor-pointer text-sm font-medium">Advanced Parameters</summary>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Preset</label>
+                <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>applyPreset(e.target.value as any)}>
+                  <option value="creative">Creative</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="precise">Precise</option>
+                  <option value="json">JSON Mode</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-sm font-medium text-gray-700">Params (JSON)</label>
+                <JsonEditor value={advanced} onChange={setAdvanced} height={140} />
+              </div>
+            </div>
+          </details>
 
           <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
             <div>Conversation ID: <span className="font-mono">{conversationId || '(new)'}</span></div>

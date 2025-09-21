@@ -280,7 +280,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 False,
                 False,
                 False,
-                None
+                config.get('model_override')
             )
             if result and isinstance(result, tuple) and len(result) > 0:
                 return result[0]

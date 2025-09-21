@@ -90,6 +90,8 @@ export default function SearchPage() {
   const [view, setView] = useState<'basic' | 'json' | 'response' | 'curl'>('basic');
   const [jsonBody, setJsonBody] = useState<string>('');
   const [respView, setRespView] = useState<'pretty' | 'tree'>('pretty');
+  const [preset, setPreset] = useState<'fast'|'balanced'|'accurate'>('balanced');
+  const [extras, setExtras] = useState<string>('{}');
   const onSearch = async () => {
     setLoading(true);
     setError(null);
@@ -173,6 +175,15 @@ export default function SearchPage() {
       // JSON tab overrides
       if (view === 'json') {
         try { payload = JSON.parse(jsonBody || '{}'); } catch (e) { show({ title: 'Invalid JSON', description: 'Fix JSON before searching', variant: 'warning' }); setLoading(false); return; }
+      } else {
+        // Apply simple preset tuning and merge extras
+        if (preset === 'fast') { payload.enable_reranking = false; }
+        if (preset === 'balanced') { payload.enable_reranking = true; payload.reranking_strategy = 'flashrank'; }
+        if (preset === 'accurate') { payload.enable_reranking = true; payload.reranking_strategy = 'cross_encoder'; }
+        if (payload.enable_generation) {
+          (payload as any).generation_temperature = preset === 'accurate' ? 0.2 : preset === 'fast' ? 0.8 : 0.7;
+        }
+        try { const extraObj = JSON.parse(extras || '{}'); if (extraObj && typeof extraObj === 'object') payload = { ...payload, ...extraObj }; } catch {}
       }
       const res = await apiClient.post('/rag/search', payload);
       setResult(res);

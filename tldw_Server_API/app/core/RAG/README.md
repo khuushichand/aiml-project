@@ -70,6 +70,30 @@ result = await unified_rag_pipeline(
 
 print(result.claims)       # per-claim label, confidence, evidence
 print(result.factuality)   # supported/refuted/nei, precision, coverage, claim_faithfulness
+
+### APS (Abstractive Proposition Segmentation)
+
+What it is:
+- APS decomposes text into minimal, self‑contained factual propositions that can be individually verified.
+- We use an APS‑style prompt profile ("gemma_aps") with the proposition chunker to extract atomic claims with high precision.
+
+How it’s implemented here:
+- `claim_extractor="aps"` routes claim extraction through `PropositionChunkingStrategy` using the LLM engine with `proposition_prompt_profile="gemma_aps"`.
+- The extractor windows long text (≈1200 chars), extracts atomic propositions, normalizes/merges short items, and returns one claim per proposition.
+- Verification then runs per‑claim using a hybrid approach: local NLI if available (`RAG_NLI_MODEL`), otherwise an LLM judge.
+
+Using APS elsewhere:
+- Chunking API: use `method="propositions"`, `proposition_engine="llm"`, `proposition_prompt_profile="gemma_aps"` for APS‑style proposition chunking.
+
+Recommended models (optional):
+- `google/gemma-2b-aps-it`
+- `google/gemma-7b-aps-it` (or community GGUF variants for CPU/quantized)
+
+Model configuration notes:
+- The APS extractor uses your default OpenAI‑compatible chat endpoint. To back it with a specific APS‑IT model:
+  - Point your OpenAI‑compatible gateway (e.g., vLLM/TabbyAPI/OpenRouter/custom‑openai) at the APS model and set it as the default model, or
+  - For ingestion‑time claim extraction (non‑APS path), set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `Config_Files/config.txt`.
+- Local NLI for verification: set `RAG_NLI_MODEL` (e.g., `roberta-large-mnli`) to reduce LLM calls.
 ```
 
 ## Hierarchical Chunking (Optional)

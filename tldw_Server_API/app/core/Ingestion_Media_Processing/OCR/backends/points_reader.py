@@ -48,11 +48,14 @@ class PointsReaderBackend(OCRBackend):
     def available(cls) -> bool:
         mode = _resolve_mode()
         if mode in ("auto", "sglang"):
-            # Consider requests presence sufficient for availability
+            # Require a URL to be configured for availability in SGLang path
+            url = os.getenv("POINTS_SGLANG_URL")
             try:
-                return importlib.util.find_spec("requests") is not None
+                has_requests = importlib.util.find_spec("requests") is not None
             except Exception:
-                pass
+                has_requests = False
+            if url and has_requests:
+                return True
         if mode in ("auto", "transformers"):
             try:
                 has_tf = importlib.util.find_spec("transformers") is not None
@@ -61,6 +64,26 @@ class PointsReaderBackend(OCRBackend):
             except Exception:
                 return False
         return False
+
+    def describe(self) -> dict:
+        mode = _resolve_mode()
+        info = {
+            "mode": mode,
+            "prompt": os.getenv("POINTS_PROMPT"),
+        }
+        if mode == "sglang" or (mode == "auto" and os.getenv("POINTS_SGLANG_URL")):
+            info.update({
+                "url": os.getenv("POINTS_SGLANG_URL"),
+                "model": os.getenv("POINTS_SGLANG_MODEL", "WePoints"),
+                "timeout": int(os.getenv("POINTS_SGLANG_TIMEOUT", "60")),
+                "use_data_url": os.getenv("POINTS_SGLANG_USE_DATA_URL", "false"),
+            })
+        else:
+            info.update({
+                "model_path": os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader"),
+                "device": os.getenv("POINTS_DEVICE"),
+            })
+        return info
 
     def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
         if not self.available():
@@ -100,15 +123,27 @@ class PointsReaderBackend(OCRBackend):
 
 def _ocr_via_sglang(image_path: str, prompt: str) -> str:
     import requests  # lazy import
+    import base64
 
     url = os.getenv("POINTS_SGLANG_URL", "http://127.0.0.1:8081/v1/chat/completions")
     model = os.getenv("POINTS_SGLANG_MODEL", "WePoints")
+    timeout = int(os.getenv("POINTS_SGLANG_TIMEOUT", "60"))
+    use_data_url = str(os.getenv("POINTS_SGLANG_USE_DATA_URL", "false")).lower() in ("1","true","yes")
 
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
         except Exception:
             return default
+
+    content_image = None
+    if use_data_url:
+        with open(image_path, "rb") as f:
+            b = f.read()
+        b64 = base64.b64encode(b).decode("ascii")
+        content_image = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+    else:
+        content_image = {"type": "image_url", "image_url": {"url": image_path}}
 
     data = {
         "model": model,
@@ -117,7 +152,7 @@ def _ocr_via_sglang(image_path: str, prompt: str) -> str:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_path}},
+                    content_image,
                 ],
             }
         ],
@@ -129,7 +164,7 @@ def _ocr_via_sglang(image_path: str, prompt: str) -> str:
         "do_sample": _getf("POINTS_DO_SAMPLE", lambda x: str(x).lower() in ("1","true","yes"), True),
     }
 
-    resp = requests.post(url, json=data, timeout=30)
+    resp = requests.post(url, json=data, timeout=timeout)
     resp.raise_for_status()
     try:
         j = resp.json()
@@ -157,13 +192,15 @@ def _load_transformers():
 
         model_path = os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader")
         # device and dtype selection
+        device_env = os.getenv("POINTS_DEVICE")
+        if device_env:
+            device_map = device_env
+        else:
+            device_map = "auto"
         if torch.cuda.is_available():
-            device_map = "cuda"
             dtype = torch.float16
         else:
-            device_map = "cpu"
-            # Use bfloat16 if available, else float32
-            dtype = getattr(torch, "bfloat16", torch.float32)
+            dtype = torch.float32
 
         _TF_MODEL = AutoModelForCausalLM.from_pretrained(
             model_path,
@@ -216,4 +253,3 @@ def _ocr_via_transformers(image_path: str, prompt: str) -> str:
     except Exception as e:
         logging.error(f"POINTS local inference failed: {e}", exc_info=True)
         return ""
-

@@ -39,6 +39,8 @@ Generation parameters (both modes):
 - `POINTS_TOP_P` (float, default 0.8)
 - `POINTS_TOP_K` (int, default 20)
 - `POINTS_DO_SAMPLE` (bool: true/false, default true)
+- `POINTS_SGLANG_TIMEOUT` (int seconds, default 60)
+- `POINTS_SGLANG_USE_DATA_URL` (bool: if true, send image as data URL rather than local path)
 
 ## Installation
 
@@ -87,6 +89,9 @@ export POINTS_SGLANG_MODEL=WePoints
 Extras install (optional):
 - Client-only deps can be installed with:
   - `pip install .[ocr_points_sglang]`
+
+Security note
+- The upstream model requires `trust_remote_code=True` in Transformers and SGLang launch. Only enable this in controlled environments and review the code you execute.
 
 ## Using with API Endpoints
 

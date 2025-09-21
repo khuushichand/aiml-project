@@ -48,6 +48,7 @@ Configure provider keys in `.env` or `tldw_Server_API/Config_Files/config.txt`.
 - LLM Providers: `GET /api/v1/llm/providers`
 - Chatbooks: `POST /api/v1/chatbooks/export`, `POST /api/v1/chatbooks/import`
 - MCP Unified: `GET /api/v1/mcp/status` and related
+- OCR: `GET /api/v1/ocr/backends` (list available OCR backends and health hints)
 
 See `app/main.py` for router includes and full route namespaces.
 
@@ -134,6 +135,9 @@ Notes
 - Known issues from upstream: repeated/missing content on complex layouts, difficulties with handwriting, English/Chinese focus.
 
 See `Docs/OCR/POINTS-Reader.md` for a complete setup and usage guide.
+
+Auto vs explicit backend
+- The `auto` selection uses registry order by default (tesseract → dots → points). For the highest quality, explicitly set `ocr_backend` to `dots` or `points`, or use the new `auto_high_quality` alias which prefers ML backends (points → dots → tesseract). You can also set a custom priority via config (`[OCR] backend_priority = points, dots, tesseract`).
 
 ## Notes
 
