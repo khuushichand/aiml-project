@@ -242,7 +242,10 @@ export default function MediaPage() {
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
                   <label className="mb-1 block text-xs text-gray-700">Analysis Model</label>
-                  <input className="w-full rounded border p-2" value={analysisModel} onChange={(e)=>setAnalysisModel(e.target.value)} placeholder="provider/model or model" />
+                  <div className="flex items-center space-x-2">
+                    <input className="w-full rounded border p-2" value={analysisModel} onChange={(e)=>setAnalysisModel(e.target.value)} placeholder="provider/model or model" />
+                    <Button variant="secondary" onClick={() => { try { const m = localStorage.getItem('tldw-current-chat-model'); if (m) setAnalysisModel(m); } catch {} }}>Use Chat model</Button>
+                  </div>
                 </div>
                 <div className="sm:col-span-2">
                   <label className="mb-1 block text-xs text-gray-700">Prompt</label>

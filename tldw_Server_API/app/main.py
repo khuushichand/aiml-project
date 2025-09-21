@@ -549,12 +549,152 @@ async def lifespan(app: FastAPI):
 ############################# End of Test DB Handling###################
 
 # Create FastAPI app with lifespan
+from fastapi.openapi.utils import get_openapi
+
+# --- OpenAPI / Docs configuration ---
+
+# Curated tag metadata to improve /docs grouping and clarity
+OPENAPI_TAGS = [
+    {"name": "health", "description": "Health and status checks."},
+    {"name": "authentication", "description": "AuthNZ endpoints for API key and JWT-based auth."},
+    {"name": "users", "description": "User management: create, list, roles, and profiles."},
+    {"name": "admin", "description": "Administrative operations and diagnostics."},
+    {"name": "media", "description": "Ingest and process media (video/audio/PDF/EPUB/HTML/Markdown)."},
+    {"name": "audio", "description": "Audio transcription and TTS (OpenAI-compatible)."},
+    {"name": "audio-websocket", "description": "Real-time streaming transcription over WebSocket."},
+    {"name": "chat", "description": "Chat completions and conversation management (OpenAI-compatible)."},
+    {"name": "character, persona", "description": "Character cards/personas and related operations."},
+    {"name": "character chat sessions", "description": "Character chat sessions lifecycle management."},
+    {"name": "character messages", "description": "Character message creation, retrieval, and search."},
+    {"name": "metrics", "description": "Metrics and monitoring endpoints."},
+    {"name": "monitoring", "description": "OpenTelemetry/metrics reporting in JSON."},
+    {"name": "chunking", "description": "Content chunking operations and utilities."},
+    {"name": "chunking templates", "description": "Chunking template management (create, list, update)."},
+    {"name": "embeddings", "description": "OpenAI-compatible embeddings generation."},
+    {"name": "vector-stores", "description": "OpenAI-compatible vector store APIs (indexes, vectors)."},
+    {"name": "media-embeddings", "description": "Generate embeddings for uploaded/ingested media."},
+    {"name": "notes", "description": "Notes and knowledge management (NotebookLM-style)."},
+    {"name": "prompts", "description": "Prompt library management (import/export)."},
+    {"name": "Prompt Studio", "description": "Projects, prompts, tests, optimization, and background jobs."},
+    {"name": "RAG - Health", "description": "RAG health, caching, and metrics."},
+    {"name": "RAG - Unified", "description": "Unified RAG: FTS5 + embeddings + re-ranking."},
+    {"name": "Workflows", "description": "Workflow definitions and execution (scaffolding)."},
+    {"name": "research", "description": "Research providers and web data collection."},
+    {"name": "evaluations", "description": "Unified evaluation APIs (geval, batch, metrics)."},
+    {"name": "benchmarks", "description": "Benchmarking endpoints and utilities."},
+    {"name": "config", "description": "Server configuration and capability info."},
+    {"name": "sync", "description": "Synchronization operations and helpers."},
+    {"name": "tools", "description": "Tooling endpoints (utilities)."},
+    {"name": "MCP Unified", "description": "Production-ready MCP server + endpoints (JWT/RBAC)."},
+    {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore)."},
+    {"name": "llm", "description": "LLM provider configuration and discovery."},
+    {"name": "llamacpp", "description": "Llama.cpp helpers and management."},
+    {"name": "web-scraping", "description": "Web scraping management and job control."},
+]
+
+APP_DESCRIPTION = (
+    """
+    Too Long; Didn't Watch Server (tldw_server) — unified research assistant and media analysis platform.
+
+    Auth: Click the “Authorize” button.
+    - Single-user mode: use header X-API-KEY with the printed key.
+    - Multi-user mode: use Bearer JWT tokens (login endpoints under authentication).
+
+    Highlights
+    - Media ingestion (video/audio/docs) with automatic metadata
+    - STT (file + real-time WS) and TTS (OpenAI-compatible)
+    - RAG: SQLite FTS5 + embeddings + re-ranking
+    - Chat: OpenAI-compatible /chat/completions across providers
+    - Notes, prompts, evaluations, MCP Unified server
+
+    Helpful paths
+    - Web UI: /webui
+    - OpenAPI JSON: /openapi.json
+    - Metrics: /metrics and /api/v1/metrics
+    """
+    .strip()
+)
+
 app = FastAPI(
     title="tldw API",
-    version="0.0.1",
-    description="Version 0.0.1: Smooth Slide | FastAPI Backend for the tldw project",
-    lifespan=lifespan
+    version="0.1.0",
+    description=APP_DESCRIPTION,
+    terms_of_service="https://github.com/cpacker/tldw_server",
+    contact={
+        "name": "tldw_server Maintainers",
+        "url": "https://github.com/cpacker/tldw_server/issues",
+    },
+    license_info={
+        "name": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0",
+    },
+    openapi_tags=OPENAPI_TAGS,
+    swagger_ui_parameters={
+        "displayRequestDuration": True,
+        "deepLinking": True,
+        "docExpansion": "none",
+        "defaultModelsExpandDepth": -1,
+        "defaultModelExpandDepth": 2,
+        "persistAuthorization": True,
+        "tryItOutEnabled": True,
+        "tagsSorter": "alpha",
+        "operationsSorter": "alpha",
+        # "syntaxHighlight.theme": "monokai",  # optional, supported by Swagger UI
+        "filter": True,
+    },
+    lifespan=lifespan,
 )
+
+# Add global security schemes, servers, and branding to the generated OpenAPI schema
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=OPENAPI_TAGS,
+    )
+
+    # Servers for common deployments
+    openapi_schema["servers"] = [
+        {"url": "http://localhost:8000", "description": "Local development"},
+        {"url": "http://127.0.0.1:8000", "description": "Loopback"},
+    ]
+
+    # Security schemes to document both supported auth modes
+    components = openapi_schema.setdefault("components", {})
+    security_schemes = components.setdefault("securitySchemes", {})
+    security_schemes.update(
+        {
+            "ApiKeyAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-KEY",
+                "description": "Single-user mode API key authentication.",
+            },
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Multi-user mode JWT bearer token.",
+            },
+        }
+    )
+
+    # Optional: top-level external docs and logo
+    openapi_schema["externalDocs"] = {
+        "description": "Project documentation",
+        "url": "/docs-static",
+    }
+    openapi_schema.setdefault("info", {}).setdefault("x-logo", {"url": "/static/favicon.ico"})
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # Global SlowAPI rate limiting (skip in test mode)
 import os as _os_mod

@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import { Layout } from '@/components/layout/Layout';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { apiClient } from '@/lib/api';
 
 export default function SearchPage() {
+  const router = useRouter();
   const [query, setQuery] = useState('');
   const [searchType, setSearchType] = useState<'hybrid' | 'semantic' | 'fulltext'>('hybrid');
   const [limit, setLimit] = useState<number>(10);
@@ -152,12 +154,152 @@ export default function SearchPage() {
       if (sessionId.trim()) payload.session_id = sessionId.trim();
       const res = await apiClient.post('/rag/search', payload);
       setResult(res);
+
+      // Update URL params to share current state
+      const queryParams: Record<string, any> = {
+        q: query,
+        st: searchType,
+        k: limit,
+        ha: hybridAlpha,
+        ms: minScore,
+        src: Object.entries(sources).filter(([k, v]) => v).map(([k]) => k).join(','),
+        ex: expandQuery ? '1' : '0',
+        exs: expansionStrategies,
+        ce: enableCache ? '1' : '0',
+        ca: adaptiveCache ? '1' : '0',
+        ct: cacheThreshold,
+        kw: keywordFilter,
+        sec: securityFilter ? '1' : '0',
+        dpi: detectPII ? '1' : '0',
+        rpii: redactPII ? '1' : '0',
+        sens: sensitivity,
+        cf: contentFilter ? '1' : '0',
+        et: enableTable ? '1' : '0',
+        tm: tableMethod,
+        cts: Object.entries(chunkTypes).filter(([k,v]) => v).map(([k]) => k).join(','),
+        pexp: parentExpansion ? '1' : '0',
+        pctx: parentContext,
+        sb: siblingChunks ? '1' : '0',
+        sw: siblingWindow,
+        ipd: includeParentDoc ? '1' : '0',
+        pmt: parentMaxTokens,
+        ecl: enableClaims ? '1' : '0',
+        cle: claimExtractor,
+        clv: claimVerifier,
+        ctk: claimsTopK,
+        cconf: claimsConf,
+        cmax: claimsMax,
+        nli: nliModel,
+        err: enableRerank ? '1' : '0',
+        rrs: rerankStrategy,
+        rtk: rerankTopK || '',
+        ecit: enableCitations ? '1' : '0',
+        echunk: enableChunkCitations ? '1' : '0',
+        ipn: includePageNumbers ? '1' : '0',
+        cstyle: citationStyle,
+        egen: enableGen ? '1' : '0',
+        gmod: genModel,
+        gpr: genPrompt,
+        gmax: genMaxTokens,
+        fb: collectFeedback ? '1' : '0',
+        fuid: feedbackUser,
+        fboost: applyFeedbackBoost ? '1' : '0',
+        mon: enableMonitoring ? '1' : '0',
+        obs: enableObservability ? '1' : '0',
+        cost: trackCost ? '1' : '0',
+        dbg: debugMode ? '1' : '0',
+        perf: perfAnalysis ? '1' : '0',
+        to: timeoutSeconds || '',
+        res: enableResilience ? '1' : '0',
+        rat: retryAttempts,
+        cb: circuitBreaker ? '1' : '0',
+        uid: userId,
+        sid: sessionId,
+      };
+      router.replace({ pathname: '/search', query: queryParams }, undefined, { shallow: true });
     } catch (e: any) {
       setError(e.message || 'Search failed');
     } finally {
       setLoading(false);
     }
   };
+
+  // Load state from URL parameters
+  useEffect(() => {
+    if (!router.isReady) return;
+    const qp = router.query;
+    const get = (k: string, def?: any) => (qp[k] !== undefined ? qp[k] : def) as any;
+    const getB = (k: string, def=false) => (get(k) === '1' ? true : def);
+    try {
+      setQuery(String(get('q', '')));
+      setSearchType((get('st', 'hybrid') as any));
+      setLimit(Number(get('k', 10)) || 10);
+      setHybridAlpha(parseFloat(get('ha', 0.7) as any) || 0.7);
+      setMinScore(parseFloat(get('ms', 0) as any) || 0);
+      const srcStr = String(get('src', 'media_db'));
+      const srcSet = new Set(srcStr.split(',').filter(Boolean));
+      setSources({ media_db: srcSet.has('media_db'), notes: srcSet.has('notes'), characters: srcSet.has('characters'), chats: srcSet.has('chats') });
+      setExpandQuery(getB('ex', false));
+      setExpansionStrategies(String(get('exs', '')));
+      setEnableCache(getB('ce', true));
+      setAdaptiveCache(getB('ca', true));
+      setCacheThreshold(parseFloat(get('ct', 0.85) as any) || 0.85);
+      setKeywordFilter(String(get('kw', '')));
+      setSecurityFilter(getB('sec', false));
+      setDetectPII(getB('dpi', false));
+      setRedactPII(getB('rpii', false));
+      setSensitivity((get('sens', 'public') as any));
+      setContentFilter(getB('cf', false));
+      setEnableTable(getB('et', false));
+      setTableMethod((get('tm', 'markdown') as any));
+      const ctsStr = String(get('cts', 'text'));
+      const ctsSet = new Set(ctsStr.split(',').filter(Boolean));
+      setChunkTypes({ text: ctsSet.has('text'), code: ctsSet.has('code'), table: ctsSet.has('table'), list: ctsSet.has('list') });
+      setParentExpansion(getB('pexp', false));
+      setParentContext(Number(get('pctx', 500)) || 500);
+      setSiblingChunks(getB('sb', false));
+      setSiblingWindow(Number(get('sw', 1)) || 1);
+      setIncludeParentDoc(getB('ipd', false));
+      setParentMaxTokens(Number(get('pmt', 1200)) || 1200);
+      setEnableClaims(getB('ecl', false));
+      setClaimExtractor((get('cle', 'auto') as any));
+      setClaimVerifier((get('clv', 'hybrid') as any));
+      setClaimsTopK(Number(get('ctk', 5)) || 5);
+      setClaimsConf(parseFloat(get('cconf', 0.7) as any) || 0.7);
+      setClaimsMax(Number(get('cmax', 25)) || 25);
+      setNliModel(String(get('nli', '')));
+      setEnableRerank(getB('err', true));
+      setRerankStrategy((get('rrs', 'flashrank') as any));
+      const rtkVal = get('rtk', '');
+      setRerankTopK(rtkVal === '' ? '' : Number(rtkVal));
+      setEnableCitations(getB('ecit', false));
+      setEnableChunkCitations(getB('echunk', true));
+      setIncludePageNumbers(getB('ipn', false));
+      setCitationStyle((get('cstyle', 'apa') as any));
+      setEnableGen(getB('egen', false));
+      setGenModel(String(get('gmod', '')));
+      setGenPrompt(String(get('gpr', '')));
+      setGenMaxTokens(Number(get('gmax', 500)) || 500);
+      setCollectFeedback(getB('fb', false));
+      setFeedbackUser(String(get('fuid', '')));
+      setApplyFeedbackBoost(getB('fboost', false));
+      setEnableMonitoring(getB('mon', false));
+      setEnableObservability(getB('obs', false));
+      setTrackCost(getB('cost', false));
+      setDebugMode(getB('dbg', false));
+      setPerfAnalysis(getB('perf', false));
+      const toVal = get('to', '');
+      setTimeoutSeconds(toVal === '' ? '' : Number(toVal));
+      setEnableResilience(getB('res', false));
+      setRetryAttempts(Number(get('rat', 3)) || 3);
+      setCircuitBreaker(getB('cb', false));
+      setUserId(String(get('uid', '')));
+      setSessionId(String(get('sid', '')));
+    } catch {
+      // ignore parse errors
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady]);
 
   // Load server presets list
   useEffect(() => {
@@ -387,7 +529,21 @@ export default function SearchPage() {
                 <div className="mt-2">
                   <label className="block text-sm"><input type="checkbox" checked={enableGen} onChange={(e)=>setEnableGen(e.target.checked)} /> <span>Enable generation</span></label>
                   <label className="mt-2 block text-xs">Model</label>
-                  <input className="w-full rounded border p-1" value={genModel} onChange={(e)=>setGenModel(e.target.value)} placeholder="provider/model or model" />
+                  {/* Provider/model dropdown if available, else free text */}
+                  {providers.length > 0 ? (
+                    <select className="w-full rounded border p-1" value={genModel} onChange={(e)=>setGenModel(e.target.value)}>
+                      <option value="">Use default</option>
+                      {providers.map((p) => (
+                        <optgroup key={p.name} label={`${p.display_name || p.name}${p.is_configured === false ? ' (Not Configured)' : ''}`}>
+                          {(p.models || []).map((m) => (
+                            <option key={`${p.name}/${m}`} value={`${p.name}/${m}`} disabled={p.is_configured === false}>{m}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  ) : (
+                    <input className="w-full rounded border p-1" value={genModel} onChange={(e)=>setGenModel(e.target.value)} placeholder="provider/model or model" />
+                  )}
                   <label className="mt-2 block text-xs">Prompt</label>
                   <textarea className="w-full rounded border p-1" rows={3} value={genPrompt} onChange={(e)=>setGenPrompt(e.target.value)} placeholder="Optional custom prompt" />
                   <label className="mt-2 block text-xs">Max tokens</label>

@@ -195,6 +195,11 @@ export default function ChatPage() {
     loadProviders();
   }, []);
 
+  // Persist current chat model for use across pages (e.g., Media Analyze)
+  useEffect(() => {
+    try { localStorage.setItem('tldw-current-chat-model', model); } catch {}
+  }, [model]);
+
   // Prefill message from Media page
   useEffect(() => {
     try {
