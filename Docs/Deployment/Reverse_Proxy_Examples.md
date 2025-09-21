@@ -34,6 +34,10 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    # Propagate request IDs & tracing headers if provided by upstream clients
+    proxy_set_header X-Request-ID $http_x_request_id;
+    proxy_set_header traceparent $http_traceparent;
+    proxy_set_header tracestate $http_tracestate;
 
     # WebSocket upgrade rules
     map $http_upgrade $connection_upgrade {

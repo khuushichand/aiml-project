@@ -2173,7 +2173,8 @@ async def _process_document_like_item(
     temp_dir: Path, # Use Path object
     loop: asyncio.AbstractEventLoop,
     db_path: str,
-    client_id: str
+    client_id: str,
+    user_id: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Handles PRE-CHECK, download/prep, processing, and DB persistence for document-like items.
@@ -2232,6 +2233,26 @@ async def _process_document_like_item(
             if downloaded_path and isinstance(downloaded_path, FilePath) and downloaded_path.exists():
                  processing_filepath = downloaded_path
                  processing_filename = downloaded_path.name
+                 # Per-item quota check for downloaded files
+                 if user_id is not None:
+                     try:
+                         from tldw_Server_API.app.services.storage_quota_service import get_storage_quota_service
+                         quota_service = get_storage_quota_service()
+                         size_bytes = downloaded_path.stat().st_size
+                         has_quota, info = await quota_service.check_quota(user_id, size_bytes, raise_on_exceed=False)
+                         if not has_quota:
+                             raise HTTPException(
+                                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                 detail=(
+                                     f"Storage quota exceeded. Current: {info['current_usage_mb']}MB, "
+                                     f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
+                                     f"Available: {info['available_mb']}MB"
+                                 )
+                             )
+                     except HTTPException:
+                         raise
+                     except Exception as _qerr:
+                         logger.warning(f"Per-item quota check failed (non-fatal): {_qerr}")
                  if media_type == 'pdf':
                      # Use aiofiles directly here since we have the path
                      async with aiofiles.open(processing_filepath, "rb") as f:
@@ -2548,7 +2569,8 @@ async def add_media(
     # token: str = Header(..., description="Authentication token"), # Auth handled by get_media_db_for_user
     files: Optional[List[UploadFile]] = File(None, description="List of files to upload"),
     # --- DB Dependency ---
-    db: MediaDatabase = Depends(get_media_db_for_user) # Use the correct dependency
+    db: MediaDatabase = Depends(get_media_db_for_user), # Use the correct dependency
+    current_user: User = Depends(get_request_user)
 ):
     """
     **Add Media Endpoint**
@@ -2632,6 +2654,31 @@ async def add_media(
                       "message": "File saving failed."
                   })
 
+
+            # --- Quota check for uploaded files ---
+            try:
+                if saved_files_info:
+                    total_uploaded_bytes = 0
+                    for pf in saved_files_info:
+                        try:
+                            total_uploaded_bytes += Path(str(pf["path"]).strip()).stat().st_size
+                        except Exception:
+                            pass
+                    if total_uploaded_bytes > 0:
+                        from tldw_Server_API.app.services.storage_quota_service import get_storage_quota_service
+                        quota_service = get_storage_quota_service()
+                        has_quota, info = await quota_service.check_quota(current_user.id, total_uploaded_bytes, raise_on_exceed=False)
+                        if not has_quota:
+                            detail = (
+                                f"Storage quota exceeded. Current: {info['current_usage_mb']}MB, "
+                                f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
+                                f"Available: {info['available_mb']}MB"
+                            )
+                            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=detail)
+            except HTTPException:
+                raise
+            except Exception as _qerr:
+                logger.warning(f"Quota check failed (non-fatal): {_qerr}")
 
             # --- 5. Prepare Inputs and Options ---
             uploaded_file_paths = [str(pf["path"]) for pf in saved_files_info]
@@ -2745,7 +2792,8 @@ async def add_media(
                         temp_dir=temp_dir_path,
                         loop=loop,
                         db_path=db_path_for_workers,
-                        client_id=client_id_for_workers
+                        client_id=client_id_for_workers,
+                        user_id=current_user.id if hasattr(current_user, 'id') else None
                     )
                     for source in all_valid_input_sources
                 ]

@@ -1079,6 +1079,14 @@ async def unregister_webhook(
 ):
     """Unregister a webhook"""
     try:
+        # Validate URL safety to avoid internal host targeting
+        from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+        from tldw_Server_API.app.core.Metrics import get_metrics_registry
+        try:
+            assert_url_safe(url)
+        except HTTPException as he:
+            get_metrics_registry().increment("security_ssrf_block_total", 1)
+            raise he
         success = await webhook_manager.unregister_webhook(user_id, url)
         
         if not success:

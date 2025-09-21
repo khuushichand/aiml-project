@@ -284,6 +284,26 @@ class MetricsRegistry:
                 description="Total number of responses where security headers were applied",
             )
         )
+
+        # Storage quota metrics (per user)
+        self.register_metric(
+            MetricDefinition(
+                name="user_storage_used_mb",
+                type=MetricType.GAUGE,
+                description="Per-user storage used in MB",
+                unit="MB",
+                labels=["user_id"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="user_storage_quota_mb",
+                type=MetricType.GAUGE,
+                description="Per-user storage quota in MB",
+                unit="MB",
+                labels=["user_id"],
+            )
+        )
         
         # Circuit breaker metrics
         self.register_metric(

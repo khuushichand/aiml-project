@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     QuotaExceededError,
     UserNotFoundError
 )
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 #######################################################################################################################
 #
@@ -99,6 +100,14 @@ class StorageQuotaService:
             # Update cache
             self.quota_cache[cache_key] = (current_mb, quota_mb)
         
+        # Emit gauges for current values
+        try:
+            reg = get_metrics_registry()
+            reg.set_gauge("user_storage_used_mb", float(current_mb), labels={"user_id": str(user_id)})
+            reg.set_gauge("user_storage_quota_mb", float(quota_mb), labels={"user_id": str(user_id)})
+        except Exception:
+            pass
+
         # Calculate new usage
         new_mb = new_bytes / (1024 * 1024)
         projected_mb = current_mb + new_mb
@@ -207,6 +216,14 @@ class StorageQuotaService:
                         f"(new total: {new_usage:.2f}MB / {quota}MB)"
                     )
                 
+                # Update gauges
+                try:
+                    reg = get_metrics_registry()
+                    reg.set_gauge("user_storage_used_mb", float(new_usage), labels={"user_id": str(user_id)})
+                    reg.set_gauge("user_storage_quota_mb", float(quota), labels={"user_id": str(user_id)})
+                except Exception:
+                    pass
+
                 return {
                     "user_id": user_id,
                     "storage_used_mb": round(new_usage, 2),
@@ -218,6 +235,17 @@ class StorageQuotaService:
         except Exception as e:
             logger.error(f"Failed to update storage usage: {e}")
             raise StorageError(f"Failed to update storage usage: {e}")
+
+
+# Singleton accessor
+_quota_service: Optional[StorageQuotaService] = None
+
+
+def get_storage_quota_service() -> StorageQuotaService:
+    global _quota_service
+    if _quota_service is None:
+        _quota_service = StorageQuotaService()
+    return _quota_service
     
     async def calculate_user_storage(
         self,
