@@ -942,6 +942,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Security middleware (headers + request size limit)
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
+from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 
 _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
@@ -953,6 +954,9 @@ if _enable_sec_headers:
 
 # HTTP request metrics middleware (records count and latency per route)
 app.add_middleware(HTTPMetricsMiddleware)
+
+# Request ID propagation (adds X-Request-ID header)
+app.add_middleware(RequestIDMiddleware)
 
 # WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
 WEBUI_DIR = BASE_DIR.parent / "WebUI"

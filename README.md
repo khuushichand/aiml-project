@@ -359,6 +359,7 @@ Prebuilt configuration samples are included to speed up deployments:
   - Ensures WebSocket upgrades and long request timeouts
 
 - Traefik dynamic config: `Samples/Traefik/traefik-dynamic.yml`
+- Grafana dashboard (security): `Samples/Grafana/security-dashboard.json`
   - Mount into Traefik file provider (e.g., `/etc/traefik/dynamic`)
   - Configure static settings for Docker provider, entrypoints, and LetsEncrypt
 

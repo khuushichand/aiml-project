@@ -164,3 +164,19 @@ This overrides the default origins configured in `tldw_Server_API/app/core/confi
 - Run the app as non-root (Dockerfile.prod already does this).
 - Don’t log secrets in production; the app masks the single-user API key when `tldw_production=true`.
 - Keep dependencies patched; consider container image scanning (e.g., Trivy).
+
+## Content Security Policy (CSP)
+
+For the WebUI, use CSP to reduce XSS risk.
+
+- Strict CSP (no inline scripts):
+  ```nginx
+  add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'" always;
+  ```
+
+- If inline scripts are present, prefer nonces and inject them into HTML (advanced), or as a last resort allow inline scripts:
+  ```nginx
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'" always;
+  ```
+
+Adjust CSP policies to your WebUI’s needs; if you add third-party fonts or images, update the sources accordingly.
