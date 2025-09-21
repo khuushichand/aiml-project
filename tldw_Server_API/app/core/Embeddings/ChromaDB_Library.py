@@ -467,49 +467,46 @@ class ChromaDBManager:
                              exc_info=True)
                 raise RuntimeError(f"Failed to access or create collection '{name_to_use}': {e}") from e
 
-    # Point 4: Situate Context - Async/Batching exploration
-    # FIXME - Explore async/batching for situate_context LLM calls
-    # This would likely involve using an async HTTP client for `analyze` or a batching LLM API.
-    def situate_context(self, api_name_for_context: str, doc_content: str, chunk_content: str) -> str:
-        """Generates a succinct context for a chunk within a larger document using an LLM.
+    # Point 4: Situate Context - generates a succinct header for each chunk using an LLM
+    def situate_context(self, provider: str, model_override: Optional[str], doc_content: str, chunk_content: str, temperature: Optional[float]) -> str:
+        """Generate a succinct context header situating a chunk within its document.
 
-        Args:
-            api_name_for_context: Provider/model alias to use for the LLM call
-            doc_content: The surrounding document content to provide as context (may be a windowed slice)
-            chunk_content: The specific chunk text being situated
-
-        Returns:
-            A short, succinct context string (may be empty string on failure)
+        Constructs a single custom prompt that includes both the document slice (or full doc/outline)
+        and the chunk content, followed by the situate instruction. Uses the configured provider and
+        optional model override via the unified analyze() function.
         """
-        # Prompts loaded from Prompts/embeddings.prompts.md with safe fallback
-        doc_content_prompt = f"<document>\n{doc_content}\n</document>"
-        situate_base_prompt = load_prompt("embeddings", "Situate Context Prompt") or (
+        # Load instruction from prompts with safe fallback
+        situate_instr = load_prompt("embeddings", "Situate Context Prompt") or (
             "Please give a short succinct context to situate this chunk within the overall document\n"
             "for the purposes of improving search retrieval of the chunk.\n"
             "Answer only with the succinct context and nothing else."
         )
-        chunk_context_prompt = (
-            f"\n\n\n\n\nHere is the chunk we want to situate within the whole document\n<chunk>\n{chunk_content}\n</chunk>\n\n" + situate_base_prompt
+        # Build a single user prompt that carries both doc and chunk
+        custom_prompt = (
+            f"<document>\n{doc_content}\n</document>\n\n"
+            f"<chunk>\n{chunk_content}\n</chunk>\n\n"
+            f"{situate_instr}"
         )
         try:
-            # Assuming `analyze` handles its own LLM config (API key, model selection via api_name)
-            # FIXME - Update to proper analyze function call args
-            response = analyze(
-                api_name=api_name_for_context,
-                input_data=chunk_content,
-                prompt=chunk_context_prompt,
-                context=doc_content_prompt,
-
-                # temp=0, # Pass relevant params for `analyze`
-                # system_message=None
-                user_embedding_config=self.user_embedding_config  # Pass user_embedding_config if analyze needs it for LLM keys/endpoints
+            resp = analyze(
+                provider or "openai",
+                "",  # keep input minimal; prompt includes all needed content
+                custom_prompt,
+                None,   # api_key (None -> load from config)
+                "You generate concise context headers for retrieval.",
+                (float(temperature) if temperature is not None else 0.1),
+                streaming=False,
+                recursive_summarization=False,
+                chunked_summarization=False,
+                chunk_options=None,
+                model_override=model_override,
             )
-            return response.strip() if response else ""
+            # analyze may return a generator; ensure string
+            text = resp if isinstance(resp, str) else str(resp)
+            return (text or "").strip()
         except Exception as e:
-            logger.error(f"User '{self.user_id}': Error in situate_context with LLM '{api_name_for_context}': {e}",
-                         exc_info=True)
-            # Depending on desired behavior, either return empty string or raise
-            return ""  # Fail gracefully for contextualization
+            logger.error(f"User '{self.user_id}': Error in situate_context with LLM '{provider}': {e}", exc_info=True)
+            return ""
 
     def _estimate_token_count(self, text: str) -> int:
         """Rough token estimate without external tokenizer.
@@ -521,7 +518,7 @@ class ChromaDBManager:
         words = text.split()
         return max(len(words), len(text) // 4)
 
-    def _build_document_outline(self, api_name_for_context: str, doc_content: str) -> str:
+    def _build_document_outline(self, provider: str, model_override: Optional[str], doc_content: str, temperature: Optional[float]) -> str:
         """Create a concise, high-level outline of the document using an LLM.
 
         Returns an outline as bullet points or short titled sections. On failure, returns empty string.
@@ -531,13 +528,19 @@ class ChromaDBManager:
                 "Produce a brief outline of the document with 5-10 bullets. "
                 "Each bullet should have a short section title and a one-line summary."
             )
-            context = f"<document>\n{doc_content}\n</document>"
+            custom_prompt = f"<document>\n{doc_content}\n</document>\n\n{prompt}"
             resp = analyze(
-                api_name=api_name_for_context,
-                input_data="",  # content is provided as context
-                prompt=prompt,
-                context=context,
-                user_embedding_config=self.user_embedding_config,
+                provider or "openai",
+                "",
+                custom_prompt,
+                None,
+                "You write concise document outlines.",
+                (float(temperature) if temperature is not None else 0.1),
+                False,
+                False,
+                False,
+                None,
+                model_override=model_override,
             )
             return (resp or "").strip()
         except Exception as e:
@@ -577,6 +580,15 @@ class ChromaDBManager:
         effective_llm_model_for_context = llm_model_for_context or self.embedding_config.get(
             "contextual_llm_model", self.embedding_config.get(
                 "default_llm_for_contextualization", "gpt-3.5-turbo"))
+        # Determine provider for contextualization
+        try:
+            from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+        except Exception:
+            _settings = {}
+        ctx_provider = (
+            self.embedding_config.get("contextual_llm_provider")
+            or str(_settings.get("default_api", "openai"))
+        )
 
         logger.info(
             f"User '{self.user_id}': Processing content for media_id {media_id} "
@@ -776,7 +788,20 @@ class ChromaDBManager:
             # Build document outline once if needed
             doc_outline = ""
             if create_contextualized and not use_full_doc_context and include_outline:
-                doc_outline = self._build_document_outline(effective_llm_model_for_context, content)
+                # Resolve contextualization temperature from embedding config
+                ctx_temp = None
+                try:
+                    tval = emb_cfg.get("contextual_llm_temperature")
+                    if tval is not None:
+                        ctx_temp = float(tval)
+                except Exception:
+                    ctx_temp = None
+                doc_outline = self._build_document_outline(
+                    ctx_provider,
+                    effective_llm_model_for_context,
+                    content,
+                    ctx_temp,
+                )
 
             if create_embeddings:
                 docs_for_chroma = []  # This will hold the text that's actually stored in Chroma
@@ -816,10 +841,21 @@ class ChromaDBManager:
                             else:
                                 combined_context_doc = windowed_doc
 
+                        # Resolve contextualization temperature (chunk-scope)
+                        ctx_temp = None
+                        try:
+                            tval = self.embedding_config.get("contextual_llm_temperature")
+                            if tval is not None:
+                                ctx_temp = float(tval)
+                        except Exception:
+                            ctx_temp = None
+
                         context_summary = self.situate_context(
+                            ctx_provider,
                             effective_llm_model_for_context,
                             combined_context_doc,
-                            chunk_text
+                            chunk_text,
+                            ctx_temp,
                         )
 
                         # Build an AutoContext-style header for downstream reuse

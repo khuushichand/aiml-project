@@ -565,6 +565,39 @@ def _hf_trusts_remote_code(model_name: str) -> bool:
         return False
 
 # ============================================================================
+# Public Configuration Endpoint
+# ============================================================================
+
+@router.get("/embeddings/providers-config", summary="List configured embedding providers and models")
+async def get_embeddings_providers_config(current_user: User = Depends(get_request_user)):
+    """Return enabled providers and their models from the simplified embeddings config.
+
+    Response:
+        {
+          "default_provider": str,
+          "default_model": str,
+          "providers": [ {"name": str, "models": [str, ...]}, ... ]
+        }
+    """
+    try:
+        from tldw_Server_API.app.core.Embeddings.simplified_config import get_config as _get_cfg
+        cfg = _get_cfg()
+        providers = []
+        for p in cfg.get_enabled_providers():
+            providers.append({
+                "name": p.name,
+                "models": list(p.models or [])
+            })
+        return {
+            "default_provider": cfg.default_provider,
+            "default_model": cfg.default_model,
+            "providers": providers,
+        }
+    except Exception as e:
+        logger.error(f"Failed to read embeddings providers config: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load embeddings configuration")
+
+# ============================================================================
 # Models and Warmup/Download Utilities
 # ============================================================================
 

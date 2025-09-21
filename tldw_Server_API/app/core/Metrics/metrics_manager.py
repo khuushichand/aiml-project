@@ -268,6 +268,22 @@ class MetricsRegistry:
                 labels=["component", "error_type"]
             )
         )
+
+        # Security metrics
+        self.register_metric(
+            MetricDefinition(
+                name="security_ssrf_block_total",
+                type=MetricType.COUNTER,
+                description="Total number of outbound URL validations blocked (SSRF protection)",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="security_headers_responses_total",
+                type=MetricType.COUNTER,
+                description="Total number of responses where security headers were applied",
+            )
+        )
         
         # Circuit breaker metrics
         self.register_metric(

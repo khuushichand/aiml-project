@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge';
 import { validateWithAjv } from '@/lib/ajv';
 import { formatRelativeTime } from '@/lib/utils';
 import { useToast } from '@/components/ui/ToastProvider';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -170,9 +171,33 @@ export default function ConfigPage() {
   // Helpers
   const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
 
+  // Clipboard hotkeys: Cmd/Ctrl+Shift+C copies cURL, Cmd/Ctrl+Shift+J copies response JSON
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      if (e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        copy(curl, 'cURL copied');
+      }
+      if (e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        copy(jsonPrettify(respBody), 'Response JSON copied');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [curl, respBody]);
+
   return (
     <Layout>
       <div className="space-y-6">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'Cmd/Ctrl+Shift+C', description: 'Copy cURL' },
+            { keys: 'Cmd/Ctrl+Shift+J', description: 'Copy response JSON' },
+            { keys: '?', description: 'Toggle shortcuts help' },
+          ]}
+        />
         <h1 className="text-2xl font-bold text-gray-900">General & Utilities</h1>
 
         {/* Connection Status */}

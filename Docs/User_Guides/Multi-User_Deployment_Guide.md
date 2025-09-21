@@ -38,6 +38,14 @@ This guide covers deploying tldw_server in multi-user mode for teams and organiz
 3. **Kubernetes Deployment** (For enterprise scale)
 4. **Cloud Deployment** (AWS, GCP, Azure)
 
+> Reverse Proxy Samples
+>
+> - See `Docs/Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik guidance.
+> - Sample configs included in this repo:
+>   - Nginx: `Samples/Nginx/nginx.conf`
+>   - Traefik: `Samples/Traefik/traefik-dynamic.yml`
+> - Ensure WebSocket upgrade is enabled for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
+
 ---
 
 ## Prerequisites

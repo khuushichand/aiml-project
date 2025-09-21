@@ -129,6 +129,10 @@ This tool is designed for:
   - See `Docs/OCR/OCR_Providers.md` for side-by-side setup of dots.ocr and POINTS.
   - See `Docs/OCR/POINTS-Reader.md` for detailed POINTS configuration (Transformers vs SGLang, env vars, prompts).
 
+Health and discovery
+- The API exposes `GET /api/v1/ocr/backends` to list currently detected OCR backends and basic health (e.g., SGLang/vLLM reachability). Use this to verify configuration from the WebUI: open the “Config Info” or “Network” tab and issue a GET request.
+- For POINTS (local Transformers) you can preload the model via `POST /api/v1/ocr/points/preload` to surface errors early.
+
 ### Recent Improvements
 
 **v1.2.0 - Auto-Configuration Update**

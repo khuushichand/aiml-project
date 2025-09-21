@@ -12,6 +12,8 @@ from tldw_Server_API.app.services.enhanced_web_scraping_service import (
     get_web_scraping_service, WebScrapingService
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 router = APIRouter(
@@ -251,6 +253,13 @@ async def check_url_duplicate(
         Duplicate status and information about the original if found
     """
     try:
+        # SSRF guard
+        try:
+            assert_url_safe(url)
+        except HTTPException as he:
+            get_metrics_registry().increment("security_ssrf_block_total", 1)
+            raise he
+
         service = get_web_scraping_service()
         if not service._initialized:
             await service.initialize()

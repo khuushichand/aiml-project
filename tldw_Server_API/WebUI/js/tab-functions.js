@@ -208,6 +208,127 @@ function checkTTSProviderStatus() {
     }, 1000);
 }
 
+// ----------------------------------------------------------------------------
+// Transcript Segmentation (TreeSeg) UI Functions
+// ----------------------------------------------------------------------------
+
+function segParseEntries() {
+    const raw = (document.getElementById('segInput')?.value || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('[') || raw.startsWith('{')) {
+        try {
+            const data = JSON.parse(raw);
+            return Array.isArray(data) ? data : [data];
+        } catch (e) {
+            alert('Invalid JSON in transcript input');
+            return [];
+        }
+    }
+    return raw.split('\n').map(line => ({ composite: line.trim() })).filter(e => e.composite);
+}
+
+async function segmentTranscriptRun() {
+    const entries = segParseEntries();
+    if (!entries.length) {
+        alert('Please provide transcript entries');
+        return;
+    }
+
+    const K = parseInt(document.getElementById('segK')?.value || '6', 10);
+    const min_segment_size = parseInt(document.getElementById('segMinSize')?.value || '5', 10);
+    const lambda_balance = parseFloat(document.getElementById('segLambda')?.value || '0.01');
+    const utterance_expansion_width = parseInt(document.getElementById('segWidth')?.value || '2', 10);
+    const embeddings_provider = (document.getElementById('segProvider')?.value || '').trim() || undefined;
+    const embeddings_model = (document.getElementById('segModel')?.value || '').trim() || undefined;
+
+    const payload = {
+        entries,
+        K,
+        min_segment_size,
+        lambda_balance,
+        utterance_expansion_width,
+        embeddings_provider,
+        embeddings_model,
+    };
+
+    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+
+    try {
+        const res = await fetch(`${baseUrl}/api/v1/audio/segment/transcript`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+        const data = await res.json();
+        segRenderResults(data, entries.length);
+    } catch (e) {
+        console.error('Segmentation failed', e);
+        alert(`Segmentation failed: ${e.message}`);
+    }
+}
+
+function segRenderResults(result, totalCount) {
+    const transEl = document.getElementById('segTransitions');
+    if (transEl) transEl.textContent = JSON.stringify(result.transitions || [], null, 2);
+
+    const timeline = document.getElementById('segTimeline');
+    if (timeline) timeline.innerHTML = '';
+    const segments = result.segments || [];
+    const totalLen = totalCount || segments.reduce((a, s) => a + (s.indices?.length || 0), 0);
+    if (timeline) {
+        segments.forEach((seg, idx) => {
+            const len = (seg.indices && seg.indices.length) ? seg.indices.length : 1;
+            const widthPct = Math.max(2, Math.round((len / Math.max(1, totalLen)) * 100));
+            const div = document.createElement('div');
+            div.title = `Segment ${idx + 1}: ${len} items`;
+            div.style.cssText = `height: 18px; background:${segColor(idx)}; width:${widthPct}%; min-width:6px;`;
+            timeline.appendChild(div);
+        });
+    }
+
+    const list = document.getElementById('segList');
+    if (list) list.innerHTML = '';
+    segments.forEach((seg, idx) => {
+        const box = document.createElement('div');
+        box.className = 'result-item';
+        const speakers = (seg.speakers || []).join(', ');
+        const header = document.createElement('div');
+        header.innerHTML = `<strong>Segment ${idx + 1}</strong> | Indices: ${seg.start_index}-${seg.end_index} | Speakers: ${speakers || '—'}`;
+
+        const pre = document.createElement('pre');
+        pre.textContent = (seg.text || '').slice(0, 800);
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.style.maxHeight = '200px';
+        pre.style.overflow = 'auto';
+
+        box.appendChild(header);
+        box.appendChild(pre);
+        if (list) list.appendChild(box);
+    });
+}
+
+function segColor(i) {
+    const colors = ['#4caf50', '#2196f3', '#ff9800', '#9c27b0', '#e91e63', '#00bcd4', '#8bc34a'];
+    return colors[i % colors.length];
+}
+
+function segClearOutput() {
+    const transEl = document.getElementById('segTransitions');
+    if (transEl) transEl.textContent = '---';
+    const timeline = document.getElementById('segTimeline');
+    if (timeline) timeline.innerHTML = '';
+    const list = document.getElementById('segList');
+    if (list) list.innerHTML = '';
+}
+
 async function loadProviderVoices() {
     try {
         const provider = document.getElementById('audioTTS_provider')?.value || '';
@@ -310,8 +431,280 @@ document.addEventListener('DOMContentLoaded', function() {
         if (sttModel) {
             updateModelOptions();
         }
+        // Load embedding providers/models from server then init dropdowns
+        loadEmbeddingProviderConfig().then(() => {
+            initEmbeddingDropdowns();
+        }).catch(() => {
+            initEmbeddingDropdowns();
+        });
     }, 500);
 });
+
+// ----------------------------------------------------------------------------
+// File-based Transcription UI
+// ----------------------------------------------------------------------------
+
+async function audioFileTranscribeRun() {
+    const fileInput = document.getElementById('fileTrans_audio');
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+        alert('Please select an audio file');
+        return;
+    }
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('model', document.getElementById('fileTrans_model')?.value || 'whisper-1');
+    const lang = (document.getElementById('fileTrans_language')?.value || '').trim();
+    if (lang) fd.append('language', lang);
+    fd.append('response_format', document.getElementById('fileTrans_response')?.value || 'json');
+    fd.append('temperature', document.getElementById('fileTrans_temp')?.value || '0.0');
+    fd.append('timestamp_granularities', document.getElementById('fileTrans_ts')?.value || 'segment');
+
+    const doSeg = document.getElementById('fileTrans_segment')?.checked;
+    if (doSeg) {
+        fd.append('segment', 'true');
+        fd.append('seg_K', document.getElementById('fileSegK')?.value || '6');
+        fd.append('seg_min_segment_size', document.getElementById('fileSegMin')?.value || '5');
+        fd.append('seg_lambda_balance', document.getElementById('fileSegLambda')?.value || '0.01');
+        fd.append('seg_utterance_expansion_width', document.getElementById('fileSegWidth')?.value || '2');
+        const p = (document.getElementById('fileSegProvider')?.value || '').trim();
+        const m = (document.getElementById('fileSegModel')?.value || '').trim();
+        if (p) fd.append('seg_embeddings_provider', p);
+        if (m) fd.append('seg_embeddings_model', m);
+    }
+
+    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+
+    try {
+        const res = await fetch(`${baseUrl}/api/v1/audio/transcriptions`, {
+            method: 'POST',
+            headers: {
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: fd,
+        });
+        const contentType = res.headers.get('content-type') || '';
+        let data;
+        if (contentType.includes('application/json')) {
+            data = await res.json();
+        } else {
+            const text = await res.text();
+            data = { text };
+        }
+        renderFileTranscriptionResult(data);
+    } catch (e) {
+        console.error('Transcription failed', e);
+        alert(`Transcription failed: ${e.message}`);
+    }
+}
+
+function renderFileTranscriptionResult(result) {
+    const out = document.getElementById('fileTrans_output');
+    if (out) out.textContent = result?.text || '(no text)';
+
+    const segBlock = document.getElementById('fileSeg_results');
+    if (!result?.segmentation || !result.segmentation.segments) {
+        if (segBlock) segBlock.style.display = 'none';
+        return;
+    }
+    if (segBlock) segBlock.style.display = 'block';
+    const seg = result.segmentation;
+    const transEl = document.getElementById('fileSegTransitions');
+    if (transEl) transEl.textContent = JSON.stringify(seg.transitions || [], null, 2);
+    const timeline = document.getElementById('fileSegTimeline');
+    const list = document.getElementById('fileSegList');
+    if (timeline) timeline.innerHTML = '';
+    if (list) list.innerHTML = '';
+    const segments = seg.segments || [];
+    const totalLen = segments.reduce((a, s) => a + (s.indices?.length || 0), 0);
+    if (timeline) {
+        segments.forEach((s, i) => {
+            const len = (s.indices && s.indices.length) ? s.indices.length : 1;
+            const widthPct = Math.max(2, Math.round((len / Math.max(1, totalLen)) * 100));
+            const div = document.createElement('div');
+            div.title = `Segment ${i + 1}: ${len} items`;
+            div.style.cssText = `height: 18px; background:${segColor(i)}; width:${widthPct}%; min-width:6px;`;
+            timeline.appendChild(div);
+        });
+    }
+    if (list) {
+        segments.forEach((s, i) => {
+            const box = document.createElement('div');
+            box.className = 'result-item';
+            const speakers = (s.speakers || []).join(', ');
+            const header = document.createElement('div');
+            header.innerHTML = `<strong>Segment ${i + 1}</strong> | Indices: ${s.start_index}-${s.end_index} | Speakers: ${speakers || '—'}`;
+            const pre = document.createElement('pre');
+            pre.textContent = (s.text || '').slice(0, 800);
+            pre.style.whiteSpace = 'pre-wrap';
+            pre.style.maxHeight = '200px';
+            pre.style.overflow = 'auto';
+            box.appendChild(header);
+            box.appendChild(pre);
+            list.appendChild(box);
+        });
+    }
+}
+
+function audioFileTranscribeClear() {
+    const out = document.getElementById('fileTrans_output');
+    if (out) out.textContent = '---';
+    const segBlock = document.getElementById('fileSeg_results');
+    if (segBlock) segBlock.style.display = 'none';
+    const t1 = document.getElementById('fileSegTransitions');
+    const t2 = document.getElementById('fileSegTimeline');
+    const t3 = document.getElementById('fileSegList');
+    if (t1) t1.textContent = '---';
+    if (t2) t2.innerHTML = '';
+    if (t3) t3.innerHTML = '';
+}
+
+// ----------------------------------------------------------------------------
+// Embedding provider/model dropdown helpers
+// ----------------------------------------------------------------------------
+
+const EMBED_PROVIDER_CONFIG = {
+    openai: {
+        models: ['text-embedding-3-small', 'text-embedding-3-large']
+    },
+    huggingface: {
+        models: ['sentence-transformers/all-MiniLM-L6-v2', 'BAAI/bge-small-en-v1.5']
+    },
+    local: {
+        models: ['all-MiniLM-L6-v2', 'all-MiniLM-L12-v2']
+    }
+};
+
+async function loadEmbeddingProviderConfig() {
+    try {
+        const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+        const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+        const res = await fetch(`${baseUrl}/api/v1/embeddings/providers-config`, {
+            headers: {
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && Array.isArray(data.providers)) {
+            // Reset config
+            const newCfg = {};
+            const providerNames = [];
+            data.providers.forEach(p => {
+                newCfg[p.name] = { models: Array.isArray(p.models) ? p.models : [] };
+                providerNames.push(p.name);
+            });
+            // Merge in known defaults if none present
+            const fallbacks = {
+                openai: ['text-embedding-3-small', 'text-embedding-3-large'],
+                huggingface: ['sentence-transformers/all-MiniLM-L6-v2'],
+                local: ['all-MiniLM-L6-v2']
+            };
+            Object.keys(fallbacks).forEach(k => {
+                if (!newCfg[k]) newCfg[k] = { models: fallbacks[k] };
+                if (!Array.isArray(newCfg[k].models) || !newCfg[k].models.length) newCfg[k].models = fallbacks[k];
+            });
+            // Mutate constant object properties (safe under const binding)
+            Object.keys(EMBED_PROVIDER_CONFIG).forEach(k => delete EMBED_PROVIDER_CONFIG[k]);
+            Object.keys(newCfg).forEach(k => EMBED_PROVIDER_CONFIG[k] = newCfg[k]);
+
+            // Set defaults in UI if present
+            const defProv = data.default_provider || '';
+            const defModel = data.default_model || '';
+            // Populate provider selects dynamically
+            populateProviderSelect('segProvider', providerNames, defProv);
+            populateProviderSelect('fileSegProvider', providerNames, defProv);
+            // Ensure model lists are updated to match providers
+            updateEmbeddingModels('segProvider', 'segModel');
+            updateEmbeddingModels('fileSegProvider', 'fileSegModel');
+            // Try to select default model when provider matches server default
+            if (defProv && defModel) {
+                const segProv = document.getElementById('segProvider');
+                const segModel = document.getElementById('segModel');
+                if (segProv && segModel && segProv.value === defProv && [...segModel.options].some(o => o.value === defModel)) {
+                    segModel.value = defModel;
+                }
+                const fileProv = document.getElementById('fileSegProvider');
+                const fileModel = document.getElementById('fileSegModel');
+                if (fileProv && fileModel && fileProv.value === defProv && [...fileModel.options].some(o => o.value === defModel)) {
+                    fileModel.value = defModel;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Could not load embeddings providers config from server', e);
+    }
+}
+
+function populateProviderSelect(selectId, providers, defaultProvider) {
+    try {
+        const sel = document.getElementById(selectId);
+        if (!sel) return;
+        const current = sel.value;
+        const opts = [
+            { value: '', text: '(use server default)' },
+            ...providers.map(p => ({ value: p, text: p.charAt(0).toUpperCase() + p.slice(1) }))
+        ];
+        sel.innerHTML = '';
+        opts.forEach(o => {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.text;
+            sel.appendChild(opt);
+        });
+        if (defaultProvider && providers.includes(defaultProvider)) {
+            sel.value = defaultProvider;
+        } else if ([...sel.options].some(o => o.value === current)) {
+            sel.value = current;
+        }
+    } catch (e) {
+        console.warn('populateProviderSelect failed', e);
+    }
+}
+
+async function refreshEmbeddingProviders() {
+    try {
+        await loadEmbeddingProviderConfig();
+        // Refresh model lists to reflect any changes
+        updateEmbeddingModels('segProvider', 'segModel');
+        updateEmbeddingModels('fileSegProvider', 'fileSegModel');
+    } catch (e) {
+        console.warn('Refresh providers failed', e);
+    }
+}
+
+function initEmbeddingDropdowns() {
+    setupEmbeddingDropdown('segProvider', 'segModel');
+    setupEmbeddingDropdown('fileSegProvider', 'fileSegModel');
+}
+
+function setupEmbeddingDropdown(providerId, modelId) {
+    const prov = document.getElementById(providerId);
+    const model = document.getElementById(modelId);
+    if (!prov || !model) return;
+    prov.addEventListener('change', () => updateEmbeddingModels(providerId, modelId));
+    updateEmbeddingModels(providerId, modelId);
+}
+
+function updateEmbeddingModels(providerId, modelId) {
+    const prov = document.getElementById(providerId);
+    const model = document.getElementById(modelId);
+    if (!prov || !model) return;
+    const provider = prov.value;
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '(use provider default)';
+    model.innerHTML = '';
+    model.appendChild(defaultOpt);
+    if (!provider) return;
+    const cfg = EMBED_PROVIDER_CONFIG[provider] || { models: [] };
+    cfg.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        model.appendChild(opt);
+    });
+}
 
 // ============================================================================
 // Web Scraping Friendly Ingest

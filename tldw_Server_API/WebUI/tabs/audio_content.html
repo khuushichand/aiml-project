@@ -330,6 +330,122 @@
     </div>
 </div>
 
+<!-- File-based Transcription Tab -->
+<div id="tabAudioFileTranscription" class="tab-content">
+    <div class="endpoint-section" id="audioFileTranscription">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/audio/transcriptions - File-based Transcription</span>
+        </h2>
+        <p>Upload an audio file for transcription. Optionally auto-run transcript segmentation and visualize results.
+           <a href="/docs-static/API-related/Audio_Transcription_API.md" target="_blank">API Docs</a>
+        </p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="fileTrans_audio">Audio File:</label>
+                    <input id="fileTrans_audio" type="file" accept="audio/*">
+                </div>
+                <div class="form-group">
+                    <label for="fileTrans_model">Model:</label>
+                    <select id="fileTrans_model">
+                        <option value="whisper-1" selected>whisper-1 (faster-whisper)</option>
+                        <option value="parakeet">parakeet (NVIDIA)</option>
+                        <option value="canary">canary (NVIDIA)</option>
+                        <option value="qwen2audio">qwen2audio</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="fileTrans_language">Language (optional):</label>
+                    <input id="fileTrans_language" type="text" placeholder="e.g., en">
+                </div>
+                <div class="form-group">
+                    <label for="fileTrans_response">Response format:</label>
+                    <select id="fileTrans_response">
+                        <option value="json" selected>json</option>
+                        <option value="verbose_json">verbose_json</option>
+                        <option value="text">text</option>
+                        <option value="srt">srt</option>
+                        <option value="vtt">vtt</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="fileTrans_temp">Temperature:</label>
+                    <input id="fileTrans_temp" type="number" step="0.1" min="0" max="1" value="0.0">
+                </div>
+                <div class="form-group">
+                    <label for="fileTrans_ts">Timestamp granularities:</label>
+                    <input id="fileTrans_ts" type="text" value="segment">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input id="fileTrans_segment" type="checkbox"> Auto-segment after transcription
+                    </label>
+                </div>
+            </div>
+            <div class="column">
+                <details>
+                    <summary>Segmentation Options</summary>
+                    <div class="form-group">
+                        <label for="fileSegK">K (max segments):</label>
+                        <input id="fileSegK" type="number" value="6" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="fileSegMin">Min segment size:</label>
+                        <input id="fileSegMin" type="number" value="5" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="fileSegLambda">Lambda balance:</label>
+                        <input id="fileSegLambda" type="number" step="0.01" value="0.01" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="fileSegWidth">Expansion width:</label>
+                        <input id="fileSegWidth" type="number" value="2" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="fileSegProvider">Embeddings provider (optional):</label>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <select id="fileSegProvider" style="flex:1;">
+                                <option value="">(use server default)</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="huggingface">HuggingFace</option>
+                                <option value="local">Local</option>
+                            </select>
+                            <button class="btn-small" type="button" onclick="refreshEmbeddingProviders()" title="Refresh providers and models">
+                                <i class="icon-refresh"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="fileSegModel">Embeddings model (optional):</label>
+                        <select id="fileSegModel">
+                            <option value="">(use provider default)</option>
+                        </select>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="api-button" onclick="audioFileTranscribeRun()">Transcribe</button>
+            <button class="api-button secondary" onclick="audioFileTranscribeClear()">Clear</button>
+        </div>
+
+        <h3>Transcription</h3>
+        <pre id="fileTrans_output">---</pre>
+
+        <div id="fileSeg_results" style="display:none;">
+            <h3>Segmentation</h3>
+            <pre id="fileSegTransitions">---</pre>
+            <div id="fileSegTimeline" style="display:flex; gap:2px; align-items:center; margin-bottom:8px;"></div>
+            <div id="fileSegList" class="result-list"></div>
+        </div>
+    </div>
+</div>
+
 <!-- Streaming Transcription Tab -->
 <div id="tabAudioStreaming" class="tab-content">
     <div class="endpoint-section" id="audioStreaming">
@@ -525,6 +641,85 @@
                 <pre id="streamingConnectionInfo">Not connected</pre>
             </div>
         </details>
+    </div>
+</div>
+
+<!-- Transcript Segmentation (TreeSeg) Tab -->
+<div id="tabTranscriptSeg" class="tab-content">
+    <div class="endpoint-section" id="transcriptSegmentation">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/audio/segment/transcript - Transcript Segmentation (TreeSeg)</span>
+        </h2>
+        <p>Propose coherent edit boundaries for transcripts using hierarchical tree segmentation.
+           <a href="/docs-static/API-related/Transcript_Segmentation_API.md" target="_blank">API Docs</a>
+        </p>
+
+        <!-- Input -->
+        <div class="form-group">
+            <label for="segInput">Transcript Input:</label>
+            <textarea id="segInput" rows="8" placeholder="One utterance per line, or paste JSON entries [{composite, start?, end?, speaker?}]..."></textarea>
+            <small class="text-muted">Paste plain lines or JSON list of entries. Each entry requires a 'composite' field.</small>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="segK">Max segments (K):</label>
+                    <input id="segK" type="number" value="6" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="segMinSize">Min segment size:</label>
+                    <input id="segMinSize" type="number" value="5" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="segLambda">Balance lambda:</label>
+                    <input id="segLambda" type="number" value="0.01" step="0.01" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="segWidth">Utterance expansion width:</label>
+                    <input id="segWidth" type="number" value="2" min="0">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="segProvider">Embeddings provider (optional):</label>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="segProvider" style="flex:1;">
+                            <option value="">(use server default)</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="huggingface">HuggingFace</option>
+                            <option value="local">Local</option>
+                        </select>
+                        <button class="btn-small" type="button" onclick="refreshEmbeddingProviders()" title="Refresh providers and models">
+                            <i class="icon-refresh"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="segModel">Embeddings model (optional):</label>
+                    <select id="segModel">
+                        <option value="">(use provider default)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="api-button" onclick="segmentTranscriptRun()">Segment Transcript</button>
+            <button class="api-button secondary" onclick="segClearOutput()">Clear</button>
+        </div>
+
+        <!-- Output -->
+        <div class="seg-results">
+            <h3>Transitions</h3>
+            <pre id="segTransitions">---</pre>
+            <h3>Segments</h3>
+            <div id="segTimeline" style="display:flex; gap:2px; align-items:center; margin-bottom:8px;"></div>
+            <div id="segList" class="result-list"></div>
+        </div>
     </div>
 </div>
 

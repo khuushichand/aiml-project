@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import type { ChatMessage } from '@/types/api';
 import JsonEditor from '@/components/ui/JsonEditor';
 import { Tabs } from '@/components/ui/Tabs';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 interface LLMProvider {
   name: string;
@@ -214,6 +215,31 @@ export default function ChatPage() {
     else setAdvanced(JSON.stringify({ temperature: 0.7, top_p: 1.0 }, null, 2));
   };
 
+  // Chat hotkeys: Cmd/Ctrl+Enter send, Esc abort stream, Cmd/Ctrl+Shift+J copy last assistant message
+  useEffect(() => {
+    const onKey = async (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        await sendMessage();
+      }
+      if (e.key === 'Escape') {
+        abortRef.current?.abort();
+        show({ title: 'Streaming aborted', variant: 'info' });
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'j') {
+        try {
+          const last = [...messages].reverse().find((m) => m.role === 'assistant');
+          if (last?.content) {
+            await navigator.clipboard.writeText(last.content);
+            show({ title: 'Assistant reply copied', variant: 'success' });
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [messages, sendMessage]);
+
   // Persist current chat model for use across pages (e.g., Media Analyze)
   useEffect(() => {
     try { localStorage.setItem('tldw-current-chat-model', model); } catch {}
@@ -245,6 +271,15 @@ export default function ChatPage() {
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4 transition-all duration-150">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'Cmd/Ctrl+Enter', description: 'Send message' },
+            { keys: 'Esc', description: 'Abort streaming' },
+            { keys: 'Cmd/Ctrl+Shift+J', description: 'Copy last assistant reply' },
+            { keys: 'Cmd/Ctrl+Shift+C', description: 'Copy cURL (on pages that have it)' },
+            { keys: '?', description: 'Toggle this help' },
+          ]}
+        />
         <h1 className="text-2xl font-bold text-gray-900">Chat</h1>
 
         <div className="rounded-md border bg-white p-4">

@@ -24,7 +24,9 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAISpeechRequest, 
     OpenAITranscriptionRequest,
     OpenAITranscriptionResponse,
-    OpenAITranslationRequest
+    OpenAITranslationRequest,
+    TranscriptSegmentationRequest,
+    TranscriptSegmentationResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
@@ -47,7 +49,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 router = APIRouter(
-    tags=["TTS (OpenAI Compatible)"],
+    tags=["Audio"],
     responses={
         404: {"description": "Not found"},
         401: {"description": "Unauthorized"},
@@ -278,6 +280,14 @@ async def create_transcription(
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities (comma-separated)"),
+    # Auto-segmentation options
+    segment: bool = Form(default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"),
+    seg_K: int = Form(default=6, description="Max segments for TreeSeg (if segment=true)"),
+    seg_min_segment_size: int = Form(default=5, description="Min items per segment for TreeSeg"),
+    seg_lambda_balance: float = Form(default=0.01, description="Balance penalty for TreeSeg"),
+    seg_utterance_expansion_width: int = Form(default=2, description="Context width for TreeSeg blocks"),
+    seg_embeddings_provider: Optional[str] = Form(default=None, description="Embeddings provider override for TreeSeg"),
+    seg_embeddings_model: Optional[str] = Form(default=None, description="Embeddings model override for TreeSeg"),
     current_user: User = Depends(get_request_user),
 ):
     """
@@ -434,6 +444,43 @@ async def create_transcription(
                     "no_speech_prob": 0.01
                 }]
             
+            # Optional: auto-run segmentation in JSON responses
+            if segment:
+                try:
+                    import re
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import (
+                        TreeSegmenter,
+                    )
+
+                    # Build basic entries from transcript (newline split; fallback to sentences)
+                    lines = [ln.strip() for ln in transcribed_text.splitlines() if ln.strip()]
+                    if not lines:
+                        # Fallback sentence split
+                        lines = [s.strip() for s in re.split(r"(?<=[.!?])\s+", transcribed_text) if s.strip()]
+                    entries = [{"composite": ln} for ln in lines]
+
+                    if entries:
+                        configs = {
+                            "MIN_SEGMENT_SIZE": seg_min_segment_size,
+                            "LAMBDA_BALANCE": seg_lambda_balance,
+                            "UTTERANCE_EXPANSION_WIDTH": seg_utterance_expansion_width,
+                        }
+                        if seg_embeddings_provider:
+                            configs["EMBEDDINGS_PROVIDER"] = seg_embeddings_provider
+                        if seg_embeddings_model:
+                            configs["EMBEDDINGS_MODEL"] = seg_embeddings_model
+
+                        segmenter = await TreeSegmenter.create_async(configs=configs, entries=entries)
+                        transitions = segmenter.segment_meeting(K=seg_K)
+                        segs = segmenter.get_segments()
+                        response_data["segmentation"] = {
+                            "transitions": transitions,
+                            "transition_indices": segmenter.get_transition_indices(),
+                            "segments": segs,
+                        }
+                except Exception as seg_err:
+                    logger.warning(f"Auto-segmentation failed: {seg_err}")
+
             if response_format == "verbose_json":
                 response_data["task"] = "transcribe"
                 response_data["duration"] = duration
@@ -500,6 +547,66 @@ async def create_translation(
 
 # Add other OpenAI compatible endpoints like /models, /voices later
 # For now, this is the core.
+
+
+@router.post("/segment/transcript", summary="Segment a transcript into coherent blocks (TreeSeg)")
+@limiter.limit("30/minute")
+async def segment_transcript(
+    req: TranscriptSegmentationRequest,
+    current_user: User = Depends(get_request_user),
+):
+    """
+    Segment a transcript into coherent segments using TreeSeg (hierarchical segmentation).
+
+    Input is a list of transcript entries (utterances) containing at least 'composite' text,
+    and optional 'start', 'end', 'speaker'. Returns a transitions vector and segments with
+    indices, time bounds, speakers, and concatenated text.
+
+    Docs: `Docs/API-related/Transcript_Segmentation_API.md`
+    """
+    try:
+        if not req.entries or len(req.entries) == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No entries provided")
+
+        # Prepare config for segmenter
+        configs = {
+            "MIN_SEGMENT_SIZE": req.min_segment_size,
+            "LAMBDA_BALANCE": req.lambda_balance,
+            "UTTERANCE_EXPANSION_WIDTH": req.utterance_expansion_width,
+            "MIN_IMPROVEMENT_RATIO": getattr(req, 'min_improvement_ratio', 0.0),
+        }
+        if req.embeddings_provider:
+            configs["EMBEDDINGS_PROVIDER"] = req.embeddings_provider
+        if req.embeddings_model:
+            configs["EMBEDDINGS_MODEL"] = req.embeddings_model
+
+        # Convert entries to plain dicts
+        entries = [e.model_dump() for e in req.entries]
+
+        # Lazy import to avoid heavy startup cost
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import (
+            TreeSegmenter,
+        )
+
+        segmenter = await TreeSegmenter.create_async(configs=configs, entries=entries)
+        transitions = segmenter.segment_meeting(K=req.K)
+        segs = segmenter.get_segments()
+
+        # Return response conforming to schema
+        return TranscriptSegmentationResponse(
+            transitions=transitions,
+            transition_indices=segmenter.get_transition_indices(),
+            segments=segs,  # shape matches TranscriptSegmentInfo
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcript segmentation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transcript segmentation failed"
+        )
 
 
 @router.get("/health")

@@ -187,6 +187,33 @@ The verifier prefers a local MNLI model and falls back to an LLM judge if unavai
 - Or pass `nli_model` to `unified_rag_pipeline` for per-request override.
 ```
 
+## Anthropic Contextual RAG (example config)
+
+To enable Contextual RAG using Anthropic for generating per‑chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:
+
+```ini
+# Use Anthropic as the default provider so contextualization routes correctly
+default_api = anthropic
+
+[Embeddings]
+enable_contextual_chunking = true
+contextual_llm_provider = anthropic
+contextual_llm_model = claude-3-7-sonnet-20250219
+contextual_llm_temperature = 0.1
+context_strategy = outline_window   # options: auto | full | window | outline_window
+context_window_size = 1200          # integer; or set to None to always use full document
+context_token_budget = 6000         # used when strategy=auto
+
+[API]
+# Ensure your Anthropic API is configured; also set ANTHROPIC_API_KEY in your .env
+anthropic_model = claude-3-7-sonnet-20250219
+anthropic_temperature = 0.1
+```
+
+Notes:
+- Customize the prompts for contextualization and outline under `tldw_Server_API/Config_Files/Prompts/embeddings.prompts.yaml|.md` using keys `situate_context_prompt` and `document_outline_prompt`.
+- You can override the contextual LLM model per call using `llm_model_for_context` in `process_and_store_content`.
+
 ## Directory Structure
 
 ```

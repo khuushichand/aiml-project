@@ -457,6 +457,48 @@ async def lifespan(app: FastAPI):
         logger.info("=" * 60)
     except Exception as e:
         logger.error(f"Failed to display startup info: {e}")
+
+    # Preflight environment report (non-blocking)
+    try:
+        import os as _os
+        from tldw_Server_API.app.core.AuthNZ.csrf_protection import global_settings as _csrf_globals
+        from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager as _get_pm
+        from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        from tldw_Server_API.app.core.config import ALLOWED_ORIGINS as _ALLOWED_ORIGINS
+
+        _s = _get_settings()
+        _prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _auth_mode = _s.AUTH_MODE
+        _db_url = _s.DATABASE_URL
+        _db_engine = "postgresql" if _db_url.startswith("postgresql") else ("sqlite" if _db_url.startswith("sqlite") else "other")
+        _redis_url = _s.REDIS_URL or ""
+        _redis_enabled = bool(_s.REDIS_URL) or bool(_os.getenv("REDIS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+        _csrf_enabled = (_auth_mode == "multi_user") or (_csrf_globals.get('CSRF_ENABLED', None) is True)
+        _cors_count = len(_ALLOWED_ORIGINS) if isinstance(_ALLOWED_ORIGINS, list) else 0
+        _has_limiter = hasattr(app.state, 'limiter')
+        _pm = _get_pm()
+        _providers = len(_pm.providers) if _pm and hasattr(_pm, 'providers') else 0
+
+        logger.info("Preflight Environment Report ─────────────────────────────────────────")
+        logger.info(f"• Mode: {_auth_mode} | Production: {_prod}")
+        logger.info(f"• Database: engine={_db_engine}")
+        if _db_engine == "sqlite" and _auth_mode == "multi_user":
+            if _prod:
+                logger.error("• Database check: FAIL (SQLite in multi-user prod not supported)")
+            else:
+                logger.warning("• Database check: WARN (SQLite in multi-user; prefer PostgreSQL)")
+        else:
+            logger.info("• Database check: OK")
+        logger.info(f"• Redis: enabled={_redis_enabled}")
+        logger.info(f"• CSRF: enabled={_csrf_enabled}")
+        logger.info(f"• CORS: allowed_origins={_cors_count}")
+        logger.info(f"• Global rate limiter: {_has_limiter}")
+        logger.info(f"• Providers configured: {_providers}")
+        logger.info(f"• OpenTelemetry available: {bool(_OTEL)}")
+        logger.info("──────────────────────────────────────────────────────────────────────")
+    except Exception as _pf_e:
+        logger.warning(f"Preflight report could not be generated: {_pf_e}")
     
     yield
     
@@ -637,6 +679,15 @@ OPENAPI_TAGS = [
     {"name": "Document Generator", "description": "Generate documents from conversations and templates."},
 ]
 
+import os as _env_os
+
+_prod_flag = _env_os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+_enable_openapi_env = _env_os.getenv("ENABLE_OPENAPI")
+_enable_openapi = True if _enable_openapi_env is None else (_enable_openapi_env.lower() in {"true", "1", "yes", "y", "on"})
+if _prod_flag and _enable_openapi_env is None:
+    # Default to hidden docs in production unless explicitly enabled
+    _enable_openapi = False
+
 APP_DESCRIPTION = (
     """
     Too Long; Didn't Watch Server (tldw_server) — unified research assistant and media analysis platform.
@@ -659,6 +710,10 @@ APP_DESCRIPTION = (
     """
     .strip()
 )
+
+_docs_url = "/docs" if _enable_openapi else None
+_redoc_url = "/redoc" if _enable_openapi else None
+_openapi_url = "/openapi.json" if _enable_openapi else None
 
 app = FastAPI(
     title="tldw API",
@@ -688,6 +743,9 @@ app = FastAPI(
         "filter": True,
     },
     swagger_ui_css_url="/static/swagger-overrides.css",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
     lifespan=lifespan,
 )
 
@@ -866,12 +924,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add CSRF Protection Middleware (NEW)
+# Add CSRF Protection Middleware (NEW) with friendly error logging for misconfiguration
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import add_csrf_protection
-add_csrf_protection(app)
+try:
+    add_csrf_protection(app)
+except Exception as _csrf_e:
+    logger.error(f"Failed to configure CSRF middleware: {_csrf_e}")
+    logger.error(
+        "Auth configuration error. If running in single-user mode, ensure SINGLE_USER_API_KEY is set.\n"
+        "If running in multi-user mode, ensure JWT_SECRET_KEY is set (>=32 chars).\n"
+        "See README: Authentication Setup and .env templates."
+    )
+    raise
 
 # Static files serving
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+# Security middleware (headers + request size limit)
+from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
+from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
+
+_enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
+_enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
+    (_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"}
+)
+if _enable_sec_headers:
+    app.add_middleware(SecurityHeadersMiddleware, enabled=True)
+
+# HTTP request metrics middleware (records count and latency per route)
+app.add_middleware(HTTPMetricsMiddleware)
 
 # WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
 WEBUI_DIR = BASE_DIR.parent / "WebUI"

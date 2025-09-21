@@ -8,7 +8,7 @@
 # Local Imports
 #
 #######################################################################################################################
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any, List
 
 from pydantic import Field, BaseModel
 
@@ -169,3 +169,42 @@ class OpenAITranslationRequest(BaseModel):
 #
 # End of audio_schemas.py
 #######################################################################################################################
+class TranscriptUtterance(BaseModel):
+    """Single utterance entry for transcript segmentation."""
+
+    composite: str = Field(..., description="Utterance text or composite text")
+    start: Optional[float] = Field(None, description="Start time in seconds")
+    end: Optional[float] = Field(None, description="End time in seconds")
+    speaker: Optional[str] = Field(None, description="Speaker label")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Arbitrary extra metadata")
+
+
+class TranscriptSegmentInfo(BaseModel):
+    indices: List[int]
+    start_index: int
+    end_index: int
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    speakers: List[str] = []
+    text: str
+
+
+class TranscriptSegmentationRequest(BaseModel):
+    """Request schema for transcript tree segmentation."""
+
+    entries: List[TranscriptUtterance] = Field(..., description="Transcript utterances")
+    K: int = Field(6, ge=1, description="Maximum number of segments")
+    min_segment_size: int = Field(5, ge=1, description="Minimum items per segment")
+    lambda_balance: float = Field(0.01, ge=0.0, description="Balance penalty coefficient")
+    utterance_expansion_width: int = Field(2, ge=0, description="Number of previous utterances to join per block")
+    min_improvement_ratio: float = Field(0.0, ge=0.0, description="Stop splitting if relative improvement is below this threshold (0-1)")
+    embeddings_provider: Optional[str] = Field(None, description="Embedding provider (if using built-in service)")
+    embeddings_model: Optional[str] = Field(None, description="Embedding model (if using built-in service)")
+
+
+class TranscriptSegmentationResponse(BaseModel):
+    """Response schema with transitions vector and segment details."""
+
+    transitions: List[int]
+    transition_indices: List[int] = []
+    segments: List[TranscriptSegmentInfo]

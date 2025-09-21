@@ -8,6 +8,7 @@ import { debounce } from '@/lib/utils';
 import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
 
@@ -178,9 +179,33 @@ export default function MediaPage() {
     }
   };
 
+  // Media hotkeys: Cmd/Ctrl+Shift+L (Load all), Cmd/Ctrl+Shift+S (Summarize), Cmd/Ctrl+Shift+J (Copy result JSON)
+  useEffect(() => {
+    const onKey = async (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'l') { e.preventDefault(); await loadAll(1); }
+      if (k === 's') { e.preventDefault(); await summarizeSelected(); }
+      if (k === 'j') {
+        e.preventDefault();
+        try { await navigator.clipboard.writeText(JSON.stringify(result, null, 2)); show({ title: 'Result copied', variant: 'success' }); } catch {}
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [result, summarizeSelected]);
+
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4 transition-all duration-150">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'Cmd/Ctrl+Shift+L', description: 'Load all media' },
+            { keys: 'Cmd/Ctrl+Shift+S', description: 'Summarize selected media' },
+            { keys: 'Cmd/Ctrl+Shift+J', description: 'Copy latest result JSON' },
+            { keys: '?', description: 'Toggle shortcuts help' },
+          ]}
+        />
         <h1 className="text-2xl font-bold text-gray-900">Media Processing</h1>
 
         <div className="rounded-md border bg-white p-4 space-y-4 transition-all duration-150">

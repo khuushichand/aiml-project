@@ -38,6 +38,28 @@
             <p>Click "Get Quickstart Guide" to load the interactive guide...</p>
         </div>
     </div>
+
+    <div class="endpoint-section" id="ocrBackends">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/ocr/backends - OCR Backends Status</span>
+        </h2>
+        <p>List detected OCR backends and basic health, including SGLang/vLLM reachability.</p>
+
+        <button class="api-button" onclick="makeRequest('ocrBackends', 'GET', '/api/v1/ocr/backends', 'none')">
+            Check OCR Backends
+        </button>
+
+        <h3>Response:</h3>
+        <pre id="ocrBackends_response">---</pre>
+
+        <div class="info-box" style="margin-top: 20px;">
+            <h4>OCR Status Summary</h4>
+            <div id="ocrBackends_summary" style="margin-top: 10px;">
+                <p>Click "Check OCR Backends" to see status...</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -158,6 +180,18 @@ window.makeRequest = function(sectionId, method, endpoint, bodyType) {
                 }
             }
         }, 100);
+    } else if (sectionId === 'ocrBackends') {
+        setTimeout(() => {
+            const el = document.getElementById('ocrBackends_response');
+            if (el && el.textContent !== '---') {
+                try {
+                    const data = JSON.parse(el.textContent);
+                    displayOcrBackendsStatus(data);
+                } catch (e) {
+                    console.error('Error parsing OCR backends response:', e);
+                }
+            }
+        }, 100);
     }
     
     return result;
@@ -179,6 +213,35 @@ document.addEventListener('DOMContentLoaded', () => {
         initializeConfigInfoTab();
     }
 });
+
+// Render OCR backends status
+function displayOcrBackendsStatus(data) {
+    const summaryDiv = document.getElementById('ocrBackends_summary');
+    if (!data || typeof data !== 'object') {
+        summaryDiv.innerHTML = '<p>No OCR backend data available</p>';
+        return;
+    }
+    let html = '<div style="font-family: monospace; font-size: 14px;">';
+    html += '<ul>';
+    Object.entries(data).forEach(([name, info]) => {
+        const available = info && info.available ? '✓' : '✗';
+        html += `<li><strong>${name}</strong>: ${available} available`;
+        // Enrich for known providers
+        if (name === 'points') {
+            const mode = info.mode || (info.describe && info.describe.mode) || 'n/a';
+            const reach = info.sglang_reachable === true ? ' (SGLang reachable)' : (info.sglang_reachable === false ? ' (SGLang unreachable)' : '');
+            html += ` — mode: ${mode}${reach}`;
+        } else if (name === 'dots') {
+            const reach = info.vllm_reachable === true ? ' (vLLM reachable)' : (info.vllm_reachable === false ? ' (vLLM unreachable)' : '');
+            const prompt = (info.prompt || '').toString();
+            html += ` — prompt: ${prompt}${reach}`;
+        }
+        html += '</li>';
+    });
+    html += '</ul>';
+    html += '</div>';
+    summaryDiv.innerHTML = html;
+}
 </script>
 
 <style>

@@ -1,0 +1,25 @@
+# Traefik dynamic configuration for tldw_server
+# Mount this file into Traefik (e.g., /etc/traefik/dynamic/traefik-dynamic.yml)
+# Requires static configuration with Docker provider and entrypoints (web/websecure).
+
+http:
+  routers:
+    tldw:
+      rule: Host(`your.domain.com`)
+      entryPoints:
+        - websecure
+      service: tldw
+      tls: {}
+
+  services:
+    tldw:
+      loadBalancer:
+        servers:
+          - url: "http://app:8000"
+
+  middlewares:
+    long-timeouts:
+      headers:
+        customResponseHeaders:
+          X-Accel-Buffering: "no"
+

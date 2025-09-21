@@ -40,9 +40,31 @@ def list_ocr_backends() -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dots_ocr import (
             DotsOCRBackend,
         )
-        out.setdefault("dots", {}).update({"prompt": DotsOCRBackend().describe().get("prompt")})
+        dots_desc = DotsOCRBackend().describe()
+        out.setdefault("dots", {}).update({"prompt": dots_desc.get("prompt")})
+        vllm = dots_desc.get("vllm_url")
+        if vllm:
+            try:
+                import requests
+
+                r = requests.get(vllm.rsplit("/v1", 1)[0] + "/v1/models", timeout=1.5)
+                out["dots"]["vllm_reachable"] = r.status_code in (200, 401)
+            except Exception:
+                out["dots"]["vllm_reachable"] = False
     except Exception:
         pass
 
     return out
 
+
+@router.post("/points/preload")
+def preload_points_transformers() -> Dict[str, Any]:
+    """Preload POINTS transformers model to surface errors early."""
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
+            _load_transformers,
+        )
+        _load_transformers()
+        return {"status": "ok", "mode": "transformers"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}

@@ -6,6 +6,7 @@ import { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
 import { Tabs } from '@/components/ui/Tabs';
 import JsonViewer from '@/components/ui/JsonViewer';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 function httpToWs(url: string) {
   return url.replace(/^http/, 'ws');
@@ -16,6 +17,12 @@ export default function AudioPage() {
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'R', description: 'Start/Stop recording (when connected)' },
+            { keys: '?', description: 'Toggle shortcuts help' },
+          ]}
+        />
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Audio</h1>
           <div className="w-1/2"><Tabs items={[{key:'tts',label:'TTS'},{key:'stt',label:'Streaming STT'}]} value={tab} onChange={(k)=>setTab(k as any)} /></div>
@@ -125,6 +132,7 @@ function StreamingSTTSection() {
   const [volume, setVolume] = useState(0);
   const [autoStop, setAutoStop] = useState(true);
   const autoStoppedRef = useRef<boolean>(false);
+  const [autoStopOnFinal, setAutoStopOnFinal] = useState(true);
 
   const addDebug = (s: string) => {
     const line = `${new Date().toLocaleTimeString()} ${s}`;
@@ -162,7 +170,15 @@ function StreamingSTTSection() {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'partial') setPartial(msg.text || '');
-          else if (msg.type === 'final' || msg.type === 'transcription') { setFinals((f)=>[...f, msg.text || '']); setPartial(''); }
+          else if (msg.type === 'final' || msg.type === 'transcription') {
+            setFinals((f)=>[...f, msg.text || '']);
+            setPartial('');
+            if (autoStopOnFinal && !autoStoppedRef.current) {
+              autoStoppedRef.current = true;
+              addDebug('Auto-stop on final result');
+              stop();
+            }
+          }
           else if (msg.type === 'status') addDebug(`Status: ${msg.state || ''}`);
           else if (msg.type === 'error') { show({ title: 'STT error', description: msg.message || 'Error', variant: 'danger' }); addDebug(`Error: ${msg.message}`); }
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
@@ -335,6 +351,7 @@ function StreamingSTTSection() {
             <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={autoCommit} onChange={(e)=>setAutoCommit(e.target.checked)} /><span>Auto-commit</span></label>
             <div className="flex items-center space-x-2"><span>Silence</span><input type="number" min={500} step={100} className="w-20 rounded border p-1" value={silenceMs} onChange={(e)=>setSilenceMs(parseInt(e.target.value||'2000'))} /><span>ms</span></div>
             <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={autoStop} onChange={(e)=>setAutoStop(e.target.checked)} /><span>Auto-stop</span></label>
+            <label className="inline-flex items-center space-x-2"><input type="checkbox" checked={autoStopOnFinal} onChange={(e)=>setAutoStopOnFinal(e.target.checked)} /><span>Stop on final</span></label>
           </div>
         </div>
         <canvas ref={canvasRef} width={640} height={120} className="w-full rounded bg-white" />

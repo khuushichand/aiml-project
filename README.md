@@ -14,6 +14,13 @@
 
 ---
 
+## Samples (Quick Links)
+
+- Reverse Proxy guide: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Nginx sample config: `Samples/Nginx/nginx.conf`
+- Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
+- Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
+
 ## QuickStart
 
 ```bash
@@ -61,6 +68,7 @@ More details: see `Docs/API-related/AuthNZ-API-Guide.md` and `tldw_Server_API/ap
 
 - Navigate to `http://127.0.0.1:8000/webui/` for the integrated Web UI.
 - Use the tabs to explore API features, run requests, and view responses.
+ - For reverse proxy and TLS examples (Nginx/Traefik), see `Docs/Deployment/Reverse_Proxy_Examples.md`.
 
 ### Chat Dictionaries UI
 - Location: Chat → Dictionaries
@@ -333,6 +341,29 @@ docker build -f tldw_Server_API/Dockerfiles/Dockerfile -t tldw-gpu .
 docker run --gpus all -p 8000:8000 tldw-gpu
 ```
 
+### Reverse Proxy & TLS (Samples)
+
+- Examples and guidance: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Sample config files included in this repo:
+  - Nginx: `Samples/Nginx/nginx.conf`
+  - Traefik (dynamic config): `Samples/Traefik/traefik-dynamic.yml`
+- Set `tldw_production=true` and restrict CORS via `ALLOWED_ORIGINS` in production.
+
+## Samples
+
+Prebuilt configuration samples are included to speed up deployments:
+
+- Nginx reverse proxy: `Samples/Nginx/nginx.conf`
+  - Copy/mount as `/etc/nginx/conf.d/default.conf`
+  - Update `server_name` and TLS certificate paths
+  - Ensures WebSocket upgrades and long request timeouts
+
+- Traefik dynamic config: `Samples/Traefik/traefik-dynamic.yml`
+  - Mount into Traefik file provider (e.g., `/etc/traefik/dynamic`)
+  - Configure static settings for Docker provider, entrypoints, and LetsEncrypt
+
+See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Docker Compose snippets.
+
 ### Platform-Specific Notes
 
 **Windows**: If you need CUDA support for transcription without full CUDA installation:
@@ -473,6 +504,20 @@ Key settings in `.env`:
 
 - When `tldw_production=true` and `AUTH_MODE=multi_user`, the server refuses to start unless `JWT_SECRET_KEY` is set via environment, at least 32 characters, and not the default template value.
 
+### Database (production, multi-user mode)
+
+- When `tldw_production=true` and `AUTH_MODE=multi_user`, SQLite is not supported and startup will fail if `DATABASE_URL` points to SQLite.
+- Configure PostgreSQL via `DATABASE_URL` (examples):
+  - Local:
+    ```bash
+    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
+    ```
+  - With docker-compose (service name `postgres`):
+    ```bash
+    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+    ```
+  - See Multi-User Deployment Guide for more details.
+
 ### Security Best Practices
 
 1. **Never commit `.env` to version control** - Add to `.gitignore`
@@ -480,6 +525,14 @@ Key settings in `.env`:
 3. **Enable HTTPS in production** - Required for secure cookies
 4. **Rotate keys periodically** - Use the API key rotation feature
 5. **Monitor authentication failures** - Check logs for attacks
+6. See the Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
+
+### Security Controls (env)
+
+- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs, WebUI config hardening).
+- `ENABLE_OPENAPI`: Set `false` to hide docs/Redoc/OpenAPI; defaults to `false` in production when unspecified.
+- `ALLOWED_ORIGINS`: Comma-separated list or JSON array to restrict CORS in production.
+- `ENABLE_SECURITY_HEADERS`: Enable/disable security headers middleware (defaults to `true` in production).
 
 ### Troubleshooting
 
@@ -686,7 +739,8 @@ curl -X POST "http://localhost:8000/api/v1/rag/search/stream" \
 ### APS (Abstractive Proposition Segmentation)
 
 APS decomposes text into atomic, verifiable propositions for claim‑level grounding.
-
+https://huggingface.co/google/gemma-2b-aps-it
+https://huggingface.co/google/gemma-7b-aps-it
 - Enable in RAG: set `"enable_claims": true, "claim_extractor": "aps"` to extract APS‑style claims from the generated answer and verify each against retrieved contexts.
 - Proposition chunking: use `method="propositions"`, `proposition_engine="llm"`, `proposition_prompt_profile="gemma_aps"` to chunk text into APS‑style propositions outside of RAG.
 - Model options (optional):
@@ -743,6 +797,33 @@ The RAG module has comprehensive documentation for both developers and API consu
 
 - **[RAG Developer Guide](Docs/Development/RAG-Developer-Guide.md)** - Architecture, components, testing, and extending the RAG module
 - **[RAG API Guide](Docs/API-related/RAG-API-Guide.md)** - Complete API reference with examples in JavaScript, Python, and cURL
+
+### Anthropic Contextual RAG (example config)
+
+To enable Contextual RAG using Anthropic for generating per‑chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:
+
+```ini
+# Use Anthropic as the default provider so contextualization calls route correctly
+default_api = anthropic
+
+[Embeddings]
+enable_contextual_chunking = true
+contextual_llm_provider = anthropic
+contextual_llm_model = claude-3-7-sonnet-20250219
+contextual_llm_temperature = 0.1
+context_strategy = outline_window   # options: auto | full | window | outline_window
+context_window_size = 1200          # integer; or set to None to always use full document
+context_token_budget = 6000         # used when strategy=auto
+
+[API]
+# Ensure your Anthropic API is configured; also set ANTHROPIC_API_KEY in your .env
+anthropic_model = claude-3-7-sonnet-20250219
+anthropic_temperature = 0.1
+```
+
+Notes:
+- Customize the prompts for contextualization and outline under `tldw_Server_API/Config_Files/Prompts/embeddings.prompts.yaml|.md` using keys `situate_context_prompt` and `document_outline_prompt`.
+- You can override the contextual LLM model per call using `llm_model_for_context` in `process_and_store_content`.
 
 ---
 

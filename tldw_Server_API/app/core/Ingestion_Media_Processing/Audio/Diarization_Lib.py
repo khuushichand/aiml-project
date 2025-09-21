@@ -399,6 +399,67 @@ class DiarizationService:
         if config:
             self.config.update(config)
 
+    async def propose_human_edit_boundaries(
+        self,
+        transcript_entries: List[Dict[str, Any]],
+        K: int = 6,
+        min_segment_size: int = 5,
+        lambda_balance: float = 0.01,
+        utterance_expansion_width: int = 2,
+        embeddings_provider: Optional[str] = None,
+        embeddings_model: Optional[str] = None,
+        embedder: Optional[Callable[[List[str]], Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Propose segment boundaries for human editing using TreeSeg on transcript entries.
+
+        Args:
+            transcript_entries: List of utterance dicts. Each must include 'composite'.
+            K: Maximum number of segments to produce.
+            min_segment_size: Minimum number of items per segment.
+            lambda_balance: Balance penalty coefficient.
+            utterance_expansion_width: Number of prior utterances to concatenate per block.
+            embeddings_provider: Optional provider for embedding service (if not using embedder).
+            embeddings_model: Optional model for embedding service.
+            embedder: Optional async callable for embeddings; overrides provider/model.
+
+        Returns:
+            Dict with 'transitions' vector and 'segments' list (indices, times, speakers, text).
+        """
+        try:
+            # Import lazily to avoid heavy imports on module load
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import (
+                TreeSegmenter,
+            )
+
+            configs = {
+                "MIN_SEGMENT_SIZE": int(min_segment_size),
+                "LAMBDA_BALANCE": float(lambda_balance),
+                "UTTERANCE_EXPANSION_WIDTH": int(utterance_expansion_width),
+            }
+
+            if embeddings_provider:
+                configs["EMBEDDINGS_PROVIDER"] = embeddings_provider
+            if embeddings_model:
+                configs["EMBEDDINGS_MODEL"] = embeddings_model
+
+            segmenter = await TreeSegmenter.create_async(
+                configs=configs,
+                entries=transcript_entries,
+                embedder=embedder,
+            )
+            transitions = segmenter.segment_meeting(K=K)
+            segments = segmenter.get_segments()
+
+            return {
+                "transitions": transitions,
+                "segments": segments,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to propose edit boundaries: {e}")
+            raise
+
         logger.debug(f"Diarization service configuration: {self.config}")
 
         # Validate configuration

@@ -84,6 +84,8 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_L
 from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
 #
 # Document Processing
@@ -1474,6 +1476,14 @@ def _validate_inputs(media_type: MediaType, urls: Optional[List[str]], files: Op
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No valid media sources supplied. At least one 'url' in the 'urls' list or one 'file' in the 'files' list must be provided."
         )
+    # SSRF guard for URL inputs
+    if urls:
+        for u in urls:
+            try:
+                assert_url_safe(u)
+            except HTTPException as he:
+                get_metrics_registry().increment("security_ssrf_block_total", 1)
+                raise he
 
 
 async def _save_uploaded_files(
@@ -2211,6 +2221,12 @@ async def _process_document_like_item(
     try:
         if is_url:
             logger.info(f"Downloading URL: {processing_source}")
+            # SSRF guard for individual item
+            try:
+                assert_url_safe(processing_source)
+            except HTTPException as he:
+                get_metrics_registry().increment("security_ssrf_block_total", 1)
+                raise he
             download_func = functools.partial(smart_download, processing_source, temp_dir) # Pass url, temp_dir positionally
             downloaded_path = await loop.run_in_executor(None, download_func)
             if downloaded_path and isinstance(downloaded_path, FilePath) and downloaded_path.exists():

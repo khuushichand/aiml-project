@@ -28,8 +28,9 @@ Install via extras (optional)
   - This pulls the dots.ocr repo via a VCS dependency.
 
 Backend specifics
-- Invocation: shells out to `python -m dots_ocr.parser <image.png>` per page (or use `DOTS_OCR_CMD` to specify an explicit command).
-- Env: `DOTS_OCR_PROMPT` (default `prompt_ocr`); choose layout/text prompts from the upstream repo. `DOTS_OCR_CMD` can point to a script for custom setups.
+- CLI mode: shells out to `python -m dots_ocr.parser <image.png>` per page (or use `DOTS_OCR_CMD` to specify an explicit command).
+- vLLM mode: if `DOTS_VLLM_URL` is set, calls an OpenAI-compatible endpoint (`/v1/chat/completions`). Use `DOTS_VLLM_MODEL` (served-model-name), `DOTS_VLLM_TIMEOUT`, and `DOTS_VLLM_USE_DATA_URL` (default true) to control behavior.
+- Env: `DOTS_OCR_PROMPT` (default `prompt_ocr`); `DOTS_OCR_CMD` can point to a script for custom setups.
 
 Docs
 - See `tldw_Server_API/requirements.txt` notes under “OCR (optional)”.

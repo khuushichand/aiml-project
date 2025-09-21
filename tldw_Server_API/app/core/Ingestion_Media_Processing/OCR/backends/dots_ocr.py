@@ -35,8 +35,10 @@ class DotsOCRBackend(OCRBackend):
 
     @classmethod
     def available(cls) -> bool:
-        # Only check for import availability; do not validate vLLM/HF runtime here.
+        # Available if module importable OR a VLLM endpoint is configured
         try:
+            if os.getenv("DOTS_VLLM_URL"):
+                return True
             return importlib.util.find_spec("dots_ocr") is not None
         except Exception:
             return False
@@ -45,6 +47,10 @@ class DotsOCRBackend(OCRBackend):
         return {
             "prompt": os.getenv("DOTS_OCR_PROMPT", "prompt_ocr"),
             "cmd_override": bool(os.getenv("DOTS_OCR_CMD")),
+            "vllm_url": os.getenv("DOTS_VLLM_URL"),
+            "vllm_model": os.getenv("DOTS_VLLM_MODEL", "model"),
+            "vllm_timeout": int(os.getenv("DOTS_VLLM_TIMEOUT", "60")),
+            "vllm_use_data_url": os.getenv("DOTS_VLLM_USE_DATA_URL", "false"),
         }
 
     def _build_command(self, img_path: str) -> list:
@@ -56,8 +62,15 @@ class DotsOCRBackend(OCRBackend):
 
     def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
         if not self.available():
-            logging.warning("DotsOCRBackend requested but dots_ocr module is not available.")
+            logging.warning("DotsOCRBackend not available: set DOTS_VLLM_URL or install dots_ocr module.")
             return ""
+
+        # If DOTS_VLLM_URL configured, use OpenAI-compatible endpoint
+        if os.getenv("DOTS_VLLM_URL"):
+            try:
+                return _ocr_via_vllm(image_bytes, os.getenv("DOTS_OCR_PROMPT", "prompt_ocr"))
+            except Exception as e:
+                logging.error(f"Dots vLLM path failed, falling back to CLI: {e}", exc_info=True)
 
         # Write the image to a temporary PNG file and run the parser
         with tempfile.TemporaryDirectory(prefix="dots_ocr_") as tmpdir:
@@ -165,3 +178,62 @@ def _extract_text_from_any(obj) -> str:
         return str(obj)
     except Exception:
         return ""
+
+
+def _ocr_via_vllm(image_bytes: bytes, prompt: str) -> str:
+    import base64
+    import requests
+
+    url = os.getenv("DOTS_VLLM_URL").rstrip("/")
+    model = os.getenv("DOTS_VLLM_MODEL", "model")
+    timeout = int(os.getenv("DOTS_VLLM_TIMEOUT", "60"))
+    use_data_url = str(os.getenv("DOTS_VLLM_USE_DATA_URL", "true")).lower() in ("1", "true", "yes")
+
+    content_image = None
+    if use_data_url:
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        content_image = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+    else:
+        # Must write temp file to pass a path-based URL, but remote servers likely can't read it
+        # so default is data URL
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as f:
+            f.write(image_bytes)
+            f.flush()
+            content_image = {"type": "image_url", "image_url": {"url": f.name}}
+
+    def _getf(env, cast, default):
+        try:
+            return cast(os.getenv(env, str(default)))
+        except Exception:
+            return default
+
+    data = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    content_image,
+                ],
+            }
+        ],
+        "max_new_tokens": _getf("DOTS_VLLM_MAX_NEW_TOKENS", int, 2048),
+        "temperature": _getf("DOTS_VLLM_TEMPERATURE", float, 0.7),
+        "repetition_penalty": _getf("DOTS_VLLM_REPETITION_PENALTY", float, 1.05),
+        "top_p": _getf("DOTS_VLLM_TOP_P", float, 0.8),
+        "top_k": _getf("DOTS_VLLM_TOP_K", int, 20),
+        "do_sample": _getf("DOTS_VLLM_DO_SAMPLE", lambda x: str(x).lower() in ("1","true","yes"), True),
+    }
+
+    resp = requests.post(url, json=data, timeout=timeout)
+    resp.raise_for_status()
+    try:
+        j = resp.json()
+    except Exception:
+        j = json.loads(resp.text)
+    return (
+        j.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    ) or ""

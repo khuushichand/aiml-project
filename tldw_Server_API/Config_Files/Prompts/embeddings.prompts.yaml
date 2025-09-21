@@ -1,11 +1,14 @@
 situate_context: |
-  Write a single-line contextual chunk header that situates this chunk within the overall
-  document. Include document-level and section-level context (e.g., topic and section path)
-  so the meaning of the chunk is clear when read alone. Keep it under 20 words. Output only
-  the header.
+  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. 
+  Answer only with the succinct context and nothing else. 
 
 # Alternate key for loader compatibility
 situate_context_prompt: |
+  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. 
+  Answer only with the succinct context and nothing else. 
+
+# LLM Gen-d prompt, untested
+situate_context_prompt_alt: |
   Write a single-line contextual chunk header that situates this chunk within the overall
   document. Include document-level and section-level context (e.g., topic and section path)
   so the meaning of the chunk is clear when read alone. Keep it under 20 words. Output only

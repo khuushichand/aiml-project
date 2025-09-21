@@ -40,7 +40,7 @@ https://huggingface.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0
 https://www.kaggle.com/benchmarks/deepmind/simpleqa-verified
 https://softwaredoug.com/blog/2025/06/22/grug-brained-search-eval
 
-
+https://github.com/OpenGVLab/GenExam
 
 
 

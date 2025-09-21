@@ -398,10 +398,22 @@ class Settings(BaseSettings):
         auth_mode = info.data.get("AUTH_MODE", "single_user")
         
         if auth_mode == "multi_user" and v.startswith("sqlite"):
-            logger.warning(
-                "Using SQLite in multi-user mode is not recommended. "
-                "Consider using PostgreSQL for better concurrency."
-            )
+            # In production, disallow SQLite for multi-user mode
+            prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+            if prod_flag:
+                raise ValueError(
+                    "In production (tldw_production=true) with AUTH_MODE=multi_user, SQLite is not supported.\n"
+                    "Please configure PostgreSQL via DATABASE_URL. Examples:\n"
+                    "  export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users\n"
+                    "  # With docker-compose service name:\n"
+                    "  export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users\n"
+                    "See Multi-User Deployment Guide for details."
+                )
+            else:
+                logger.warning(
+                    "Using SQLite in multi-user mode is not recommended. "
+                    "Consider using PostgreSQL for better concurrency."
+                )
         
         return v
     

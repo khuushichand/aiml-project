@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -9,12 +9,20 @@ import JsonTree from '@/components/ui/JsonTree';
 import { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 export default function EvaluationsPage() {
   const [tab, setTab] = useState<'ocr_json'|'ocr_pdf'|'geval'|'rq'|'results'|'run'>('ocr_json');
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'P', description: 'Run Details: start/stop polling' },
+            { keys: 'Cmd/Ctrl+Shift+J', description: 'Copy selected result JSON (in Results tab)' },
+            { keys: '?', description: 'Toggle shortcuts help' },
+          ]}
+        />
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Evaluations</h1>
           <div className="w-1/2"><Tabs items={[{key:'ocr_json',label:'OCR (JSON)'},{key:'ocr_pdf',label:'OCR (PDF)'},{key:'geval',label:'G-Eval'},{key:'rq',label:'Response Quality'},{key:'results',label:'Results'},{key:'run',label:'Run Details'}]} value={tab} onChange={(k)=>setTab(k as any)} /></div>
@@ -260,6 +268,7 @@ function ResultsExplorer() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<'all'|'success'|'failed'|'running'>('all');
   const [selected, setSelected] = useState<any>(null);
+  const [tabSetter, setTabSetter] = useState<any>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -326,13 +335,27 @@ function ResultsExplorer() {
         ) : (
           <ul className="space-y-2">
             {filtered.map((it, idx) => (
-              <li key={idx} className="cursor-pointer rounded border p-2 hover:bg-gray-50" onClick={()=>setSelected(it)}>
+              <li key={idx} className="rounded border p-2 hover:bg-gray-50">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium text-gray-800">{it.name || it.type || 'Evaluation'}</div>
                     <div className="text-xs text-gray-500">{it.status || '—'} • {it.created_at ? new Date(it.created_at).toLocaleString() : ''}</div>
                   </div>
                   <div className="text-xs text-gray-400">{it.id || it.eval_id || ''}</div>
+                </div>
+                <div className="mt-2 flex items-center space-x-2 text-xs">
+                  <Button variant="secondary" onClick={()=>setSelected(it)}>View</Button>
+                  {(it.run_id || it.id) && (
+                    <Button variant="secondary" onClick={() => {
+                      try {
+                        const id = String(it.run_id || it.id);
+                        sessionStorage.setItem('tldw-eval-run-id', id);
+                        window.location.hash = '#run';
+                        window.dispatchEvent(new CustomEvent('tldw-switch-eval-tab', { detail: { tab: 'run', runId: id } }));
+                      } catch {}
+                    }}>Watch</Button>
+                  )}
+                  <Button variant="secondary" onClick={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(it, null, 2)); } catch {} }}>Copy JSON</Button>
                 </div>
               </li>
             ))}
@@ -383,6 +406,16 @@ function RunDetails() {
     show({ title: 'Polling stopped', variant: 'info' });
   };
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  // Listen for watch events from Results tab and pick stored run id
+  useEffect(() => {
+    const h = (e: any) => {
+      const d = e?.detail || {};
+      if (d?.tab === 'run' && d?.runId) setRunId(String(d.runId));
+    };
+    window.addEventListener('tldw-switch-eval-tab', h as any);
+    try { const saved = sessionStorage.getItem('tldw-eval-run-id'); if (saved) setRunId(saved); } catch {}
+    return () => window.removeEventListener('tldw-switch-eval-tab', h as any);
+  }, []);
 
   const cancelRun = async () => {
     if (!runId.trim()) return;

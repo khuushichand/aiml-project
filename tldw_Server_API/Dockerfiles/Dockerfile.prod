@@ -50,5 +50,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS http://localhost:8000/ready || exit 1
 
 # Start the server
-CMD ["python", "-m", "uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info"]
-
+CMD ["python", "-m", "uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info", "--proxy-headers"]

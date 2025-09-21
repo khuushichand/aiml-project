@@ -26,17 +26,32 @@ from loguru import logger#
 SERVER_CLIENT_ID = "SERVER_API_V1"
 
 # --- CORS Configuration ---
-# List of allowed origins for CORS
-ALLOWED_ORIGINS = [
-    "http://localhost",
-    "http://localhost:8080",
-    "http://localhost:8081",
-    "http://127.0.0.1",
-    "http://127.0.0.1:8080",
-    "http://127.0.0.1:8081",
-    "https://localhost",
-    "https://localhost:8080",
-]
+# List of allowed origins for CORS (env override supported)
+def _parse_allowed_origins_env(raw: str):
+    try:
+        # Support JSON array
+        if raw.strip().startswith("["):
+            vals = json.loads(raw)
+            return [str(v).strip() for v in vals if str(v).strip()]
+    except Exception:
+        pass
+    # Fallback: comma-separated list
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+_ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")
+if _ENV_ALLOWED:
+    ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
+else:
+    ALLOWED_ORIGINS = [
+        "http://localhost",
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://127.0.0.1",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8081",
+        "https://localhost",
+        "https://localhost:8080",
+    ]
 
 # --- API Configuration ---
 # API version prefix for all endpoints
@@ -1168,6 +1183,15 @@ def load_and_log_configs():
             enable_contextual_chunking_flag = False
         # Allow contextual LLM model in Embeddings (fallback to Claims section for backward compat)
         contextual_llm_model_cfg = config_parser_object.get('Embeddings', 'contextual_llm_model', fallback=None)
+        contextual_llm_provider_cfg = config_parser_object.get('Embeddings', 'contextual_llm_provider', fallback=None)
+        # Temperature for contextualization LLM
+        contextual_llm_temperature_cfg = None
+        try:
+            _temp_val = config_parser_object.get('Embeddings', 'contextual_llm_temperature', fallback='')
+            if _temp_val is not None and str(_temp_val).strip() != '':
+                contextual_llm_temperature_cfg = float(_temp_val)
+        except Exception:
+            contextual_llm_temperature_cfg = None
         if not contextual_llm_model_cfg:
             contextual_llm_model_cfg = config_parser_object.get('Claims', 'contextual_llm_model', fallback=None)
         # Window size: allow None to lock full-doc behavior
@@ -1719,6 +1743,8 @@ def load_and_log_configs():
                 # Contextual chunking defaults for embeddings
                 'enable_contextual_chunking': enable_contextual_chunking_flag,
                 'contextual_llm_model': contextual_llm_model_cfg,
+                'contextual_llm_provider': contextual_llm_provider_cfg,
+                'contextual_llm_temperature': contextual_llm_temperature_cfg,
                 'context_window_size': context_window_size_val,  # None means full-doc by default
                 'context_strategy': context_strategy_val,        # auto|full|window|outline_window
                 'context_token_budget': context_token_budget_val,

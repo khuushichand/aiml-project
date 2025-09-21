@@ -78,6 +78,13 @@ Transcribe audio into text.
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
 | timestamp_granularities | array | No | Timestamp levels: `segment`, `word` |
+| segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
+| seg_K | integer | No | Max segments for TreeSeg (default 6) |
+| seg_min_segment_size | integer | No | Min items per segment (default 5) |
+| seg_lambda_balance | number | No | Balance penalty (default 0.01) |
+| seg_utterance_expansion_width | integer | No | Context width per block (default 2) |
+| seg_embeddings_provider | string | No | Embeddings provider override (optional) |
+| seg_embeddings_model | string | No | Embeddings model override (optional) |
 
 **Response (JSON format):**
 ```json
@@ -85,6 +92,13 @@ Transcribe audio into text.
   "text": "Transcribed text here",
   "language": "en",
   "duration": 10.5,
+  "segmentation": {
+    "transitions": [0,0,1,0],
+    "transition_indices": [2],
+    "segments": [
+      {"indices":[0,1],"start_index":0,"end_index":1,"speakers":[],"text":"..."}
+    ]
+  },
   "segments": [
     {
       "id": 0,
@@ -427,3 +441,6 @@ logging.basicConfig(level=logging.DEBUG)
 - [Configuration Guide](../User_Guides/Configuration.md)
 - [Live Transcription Guide](../User_Guides/Live_Transcription.md)
 - [Model Selection Guide](../User_Guides/Model_Selection.md)
+- For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
+- TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
+- If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.

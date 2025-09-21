@@ -9,6 +9,7 @@ import JsonEditor from '@/components/ui/JsonEditor';
 import JsonViewer from '@/components/ui/JsonViewer';
 import JsonTree from '@/components/ui/JsonTree';
 import { useToast } from '@/components/ui/ToastProvider';
+import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 function buildCurl(url: string, method: string, headers: Record<string, string>, body?: any) {
   const parts: string[] = [
@@ -443,9 +444,47 @@ export default function SearchPage() {
     return buildCurl('/api/v1/rag/search', 'POST', { 'Content-Type': 'application/json' }, body);
   }, [jsonBody]);
 
+  // Mini payload diff: compare Extras JSON keys vs base JSON body
+  const extrasObj = useMemo(() => {
+    try { return JSON.parse(extras || '{}'); } catch { return {}; }
+  }, [extras]);
+  const payloadDiff = useMemo(() => {
+    const changes: Array<{ key: string; type: 'added'|'changed'|'unchanged'; from?: any; to?: any }> = [];
+    let base: any = {};
+    try { base = jsonBody ? JSON.parse(jsonBody) : {}; } catch {}
+    if (extrasObj && typeof extrasObj === 'object') {
+      for (const k of Object.keys(extrasObj)) {
+        const to = (extrasObj as any)[k];
+        const from = (base as any)[k];
+        if (typeof from === 'undefined') changes.push({ key: k, type: 'added', to });
+        else if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ key: k, type: 'changed', from, to });
+        else changes.push({ key: k, type: 'unchanged', from, to });
+      }
+    }
+    return changes;
+  }, [extrasObj, jsonBody]);
+  
+  // Clipboard hotkeys
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      if (e.key.toLowerCase() === 'c') { e.preventDefault(); try { navigator.clipboard.writeText(curl); show({ title: 'cURL copied', variant: 'success' }); } catch {} }
+      if (e.key.toLowerCase() === 'j') { e.preventDefault(); try { navigator.clipboard.writeText(JSON.stringify(result, null, 2)); show({ title: 'Response copied', variant: 'success' }); } catch {} }
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [curl, result]);
+
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
+        <HotkeysOverlay
+          entries={[
+            { keys: 'Cmd/Ctrl+Shift+C', description: 'Copy cURL' },
+            { keys: 'Cmd/Ctrl+Shift+J', description: 'Copy response JSON' },
+            { keys: '?', description: 'Toggle shortcuts help' },
+          ]}
+        />
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Unified RAG Search</h1>
           <div className="w-1/2">
@@ -710,6 +749,43 @@ export default function SearchPage() {
                   <input className="w-full rounded border p-1" value={sessionId} onChange={(e)=>setSessionId(e.target.value)} />
             </div>
           </details>
+          )}
+
+          {view === 'basic' && (
+            <details className="mb-4 rounded border p-3">
+              <summary className="cursor-pointer text-sm font-semibold">Advanced Parameters</summary>
+              <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Preset</label>
+                  <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>setPreset(e.target.value as any)}>
+                    <option value="fast">Fast (no rerank)</option>
+                    <option value="balanced">Balanced (flashrank)</option>
+                    <option value="accurate">Accurate (cross_encoder)</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Extras (JSON)</label>
+                  <JsonEditor value={extras} onChange={setExtras} height={140} />
+                  {payloadDiff.length > 0 && (
+                    <div className="mt-2 rounded border bg-gray-50 p-2 text-xs">
+                      <div className="mb-1 font-semibold text-gray-800">Payload overrides</div>
+                      <ul className="space-y-1">
+                        {payloadDiff.map((d, i) => (
+                          <li key={i} className="flex items-start justify-between">
+                            <div className="font-mono">{d.key}</div>
+                            <div className="ml-2 text-right">
+                              {d.type === 'added' && <span className="text-green-700">added</span>}
+                              {d.type === 'changed' && <span className="text-blue-700">changed</span>}
+                              {d.type === 'unchanged' && <span className="text-gray-500">unchanged</span>}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </details>
           )}
 
           {view === 'json' && (
