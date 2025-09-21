@@ -89,6 +89,10 @@ class WorkflowEngine:
     async def start_run(self, run_id: str, mode: RunMode = RunMode.ASYNC) -> None:
         """Execute a linear workflow with retries, timeouts, and cancel checks."""
         logger.info(f"WorkflowEngine: starting run {run_id} in mode={mode}")
+        # Capture tenant/workflow for scheduler notification at end
+        _r = self.db.get_run(run_id)
+        _tenant_for_notify = _r.tenant_id if _r else self.config.tenant_id
+        _wf_for_notify = _r.workflow_id if _r else None
         self.db.update_run_status(run_id, status="running", started_at=self._now_iso())
         self.db.append_event(self.config.tenant_id, run_id, "run_started", {"mode": mode})
         try:
@@ -207,7 +211,7 @@ class WorkflowEngine:
                                 except Exception:
                                     pass
                             outputs = await asyncio.wait_for(
-                                self._run_step_adapter(step_type, step_cfg_eff, context, last_outputs, run_id),
+                                self._run_step_adapter(step_type, step_cfg_eff, context, last_outputs, run_id, step_run_id=step_run_id),
                                 timeout=step_timeout,
                             )
                             # If a prompt renders to explicit bad token, treat as failure (test-friendly)
@@ -258,9 +262,9 @@ class WorkflowEngine:
                             increment_counter("workflows_runs_failed", labels={"tenant": self.config.tenant_id})
                         except Exception:
                             pass
-                        # Completion webhook on cancel
+                        # Completion webhook on failure
                         try:
-                            await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
+                            await self._maybe_send_completion_webhook(definition, run_id, status="failed")
                         except Exception:
                             pass
                         return
@@ -411,7 +415,7 @@ class WorkflowEngine:
                 try:
                     # Dispatch same as start_run via helper
                     outputs = await asyncio.wait_for(
-                        self._run_step_adapter(stype, {**scfg, "timeout_seconds": step_timeout}, {"inputs": context.get("inputs", {})}, last, run_id),
+                        self._run_step_adapter(stype, {**scfg, "timeout_seconds": step_timeout}, {"inputs": context.get("inputs", {})}, last, run_id, step_run_id=step_run_id),
                         timeout=step_timeout,
                     )
                     err = None
@@ -482,22 +486,36 @@ class WorkflowEngine:
                 duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
         except Exception:
             duration_ms = None
-        self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last)
+        # Attempt to derive token/cost metrics from outputs
+        tokens_in = None
+        tokens_out = None
+        cost_usd = None
+        try:
+            meta = (last or {}).get("metadata") or {}
+            tu = meta.get("token_usage") or {}
+            tokens_in = tu.get("prompt_tokens") or tu.get("input_tokens")
+            tokens_out = tu.get("completion_tokens") or tu.get("output_tokens")
+            cost_usd = meta.get("cost_usd")
+        except Exception:
+            pass
+        self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last, tokens_input=tokens_in, tokens_output=tokens_out, cost_usd=cost_usd)
         self.db.append_event(self.config.tenant_id, run_id, "run_completed", {"success": True})
         try:
             await self._maybe_send_completion_webhook(definition, run_id, status="succeeded")
         except Exception:
             pass
+        finally:
+            try:
+                WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
+            except Exception:
+                pass
 
     def submit(self, run_id: str, mode: RunMode = RunMode.ASYNC) -> None:
-        """Submit a run for execution. Async mode schedules a task, sync blocks."""
-        if mode == RunMode.SYNC:
-            # Run in caller's loop synchronously
-            loop = asyncio.get_event_loop()
-            loop.create_task(self.start_run(run_id, mode))
-        else:
-            loop = asyncio.get_event_loop()
-            loop.create_task(self.start_run(run_id, mode))
+        """Submit a run for execution via scheduler (respects concurrency limits)."""
+        try:
+            WorkflowScheduler.instance().schedule(self, run_id, mode)
+        except Exception:
+            asyncio.get_event_loop().create_task(self.start_run(run_id, mode))
 
     def pause(self, run_id: str) -> None:
         self.db.update_run_status(run_id, status="paused", status_reason="paused_by_user")
@@ -510,6 +528,25 @@ class WorkflowEngine:
     def cancel(self, run_id: str) -> None:
         try:
             self.db.set_cancel_requested(run_id, True)
+        except Exception:
+            pass
+        # Attempt to terminate any recorded subprocesses for this run
+        try:
+            from pathlib import Path
+            rows = self.db.find_running_subprocesses_for_run(run_id)
+            for r in rows:
+                task = __import__("types").SimpleNamespace()
+                task.pid = r.get("pid")
+                task.pgid = r.get("pgid")
+                task.workdir = Path(r.get("workdir") or ".")
+                task.stdout_path = Path(r.get("stdout_path") or "stdout.log")
+                task.stderr_path = Path(r.get("stderr_path") or "stderr.log")
+                try:
+                    from tldw_Server_API.app.core.Workflows.subprocess_utils import terminate_process
+                    terminated, forced = terminate_process(task)  # type: ignore[arg-type]
+                except Exception:
+                    terminated, forced = (False, False)
+                self.db.append_event(self.config.tenant_id, run_id, "step_cancelled", {"step_run_id": r.get("step_run_id"), "forced_kill": bool(forced)})
         except Exception:
             pass
         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user")
@@ -526,12 +563,23 @@ class WorkflowEngine:
         context: Dict[str, Any],
         last_outputs: Dict[str, Any],
         run_id: str,
+        step_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Dispatch to the proper adapter with cancel/heartbeat hooks in context."""
         # Inject helper hooks
         ctx = {**context, "prev": last_outputs}
         ctx["is_cancelled"] = lambda: self.db.is_cancel_requested(run_id)
         ctx["heartbeat"] = lambda: None  # Engine-level heartbeat already updated per attempt
+        if step_run_id:
+            ctx["record_subprocess"] = lambda pid=None, pgid=None, workdir=None, stdout_path=None, stderr_path=None: self.db.update_step_subprocess(
+                step_run_id=step_run_id,
+                pid=pid,
+                pgid=pgid,
+                workdir=str(workdir) if workdir is not None else None,
+                stdout_path=str(stdout_path) if stdout_path is not None else None,
+                stderr_path=str(stderr_path) if stderr_path is not None else None,
+            )
+            ctx["append_event"] = lambda etype, payload=None: self.db.append_event(self.config.tenant_id, run_id, etype, payload or {}, step_run_id=step_run_id)
 
         if step_type == "prompt":
             return await run_prompt_adapter(step_cfg, ctx)
@@ -568,6 +616,63 @@ class WorkflowEngine:
                 self.db.append_event(self.config.tenant_id, str(rid), "run_failed", {"status_reason": "orphan_reaped", "step_run_id": sid})
         except Exception as e:
             logger.warning(f"Orphan reaper failed: {e}")
+
+
+class WorkflowScheduler:
+    """In-process scheduler with per-tenant and per-workflow concurrency limits."""
+
+    _inst: Optional["WorkflowScheduler"] = None
+
+    @classmethod
+    def instance(cls) -> "WorkflowScheduler":
+        if cls._inst is None:
+            cls._inst = WorkflowScheduler()
+        return cls._inst
+
+    def __init__(self) -> None:
+        from collections import deque
+        import os
+        self._queue = deque()  # items: (engine, run_id, mode, tenant, workflow_id)
+        self._active_tenant: Dict[str, int] = {}
+        self._active_workflow: Dict[Optional[int], int] = {}
+        self.tenant_limit = int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2"))
+        self.workflow_limit = int(os.getenv("WORKFLOWS_WORKFLOW_CONCURRENCY", "1"))
+
+    def schedule(self, engine: "WorkflowEngine", run_id: str, mode: RunMode) -> None:
+        run = engine.db.get_run(run_id)
+        if not run:
+            asyncio.get_event_loop().create_task(engine.start_run(run_id, mode))
+            return
+        tenant = run.tenant_id
+        wf = run.workflow_id
+        if self._can_start(tenant, wf):
+            self._start(engine, run_id, mode, tenant, wf)
+        else:
+            self._queue.append((engine, run_id, mode, tenant, wf))
+
+    def notify_finished(self, tenant: str, workflow_id: Optional[int]) -> None:
+        if tenant:
+            self._active_tenant[tenant] = max(0, self._active_tenant.get(tenant, 0) - 1)
+        if workflow_id is not None:
+            self._active_workflow[workflow_id] = max(0, self._active_workflow.get(workflow_id, 0) - 1)
+        # Try to launch next admissible queued item (fair FIFO scan)
+        for _ in range(len(self._queue)):
+            engine, run_id, mode, t, wf = self._queue[0]
+            if self._can_start(t, wf):
+                self._queue.popleft()
+                self._start(engine, run_id, mode, t, wf)
+                break
+            else:
+                self._queue.rotate(-1)
+
+    def _can_start(self, tenant: str, workflow_id: Optional[int]) -> bool:
+        return self._active_tenant.get(tenant, 0) < self.tenant_limit and self._active_workflow.get(workflow_id, 0) < self.workflow_limit
+
+    def _start(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: Optional[int]) -> None:
+        self._active_tenant[tenant] = self._active_tenant.get(tenant, 0) + 1
+        if workflow_id is not None:
+            self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
+        asyncio.get_event_loop().create_task(engine.start_run(run_id, mode))
 
     async def _maybe_send_completion_webhook(self, definition: Dict[str, Any], run_id: str, status: str) -> None:
         """If definition includes on_completion_webhook, dispatch it via webhook adapter."""

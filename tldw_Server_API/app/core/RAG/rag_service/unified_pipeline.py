@@ -16,6 +16,9 @@ Design Philosophy:
 import asyncio
 import time
 import uuid
+import re
+from datetime import datetime, timedelta
+import calendar
 from typing import Dict, List, Any, Optional, Union, Literal
 from dataclasses import dataclass, field
 from loguru import logger
@@ -180,6 +183,7 @@ async def unified_rag_pipeline(
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
+    auto_temporal_filters: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
     
@@ -553,6 +557,81 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"HyDE prep failed: {e}")
 
+        # ========== AUTO TEMPORAL FILTERS (optional) ==========
+        if auto_temporal_filters:
+            try:
+                qlower = query.lower()
+                start_dt = None
+                end_dt = None
+
+                now = datetime.utcnow()
+                # Relative expressions
+                if "yesterday" in qlower:
+                    start_dt = now - timedelta(days=1)
+                    end_dt = now
+                elif "last week" in qlower:
+                    start_dt = now - timedelta(days=7)
+                    end_dt = now
+                elif "past week" in qlower:
+                    start_dt = now - timedelta(days=7)
+                    end_dt = now
+                elif "last month" in qlower:
+                    # Compute previous calendar month
+                    y = now.year
+                    m = now.month - 1 if now.month > 1 else 12
+                    y = y if now.month > 1 else y - 1
+                    start_dt = datetime(y, m, 1)
+                    _, last_day = calendar.monthrange(y, m)
+                    end_dt = datetime(y, m, last_day, 23, 59, 59)
+                elif "past month" in qlower:
+                    start_dt = now - timedelta(days=30)
+                    end_dt = now
+
+                # Quarters like Q1 2024
+                m_quarter = re.search(r"\bq([1-4])\s*(20\d{2}|19\d{2})\b", qlower)
+                if m_quarter:
+                    qn = int(m_quarter.group(1))
+                    y = int(m_quarter.group(2))
+                    qm = {1: 1, 2: 4, 3: 7, 4: 10}[qn]
+                    start_dt = datetime(y, qm, 1)
+                    end_month = qm + 2
+                    _, last_day = calendar.monthrange(y, end_month)
+                    end_dt = datetime(y, end_month, last_day, 23, 59, 59)
+
+                # Month name + year, e.g., January 2023
+                month_names = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
+                m_month_year = re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2}|19\d{2})\b", qlower)
+                if m_month_year:
+                    mon = month_names.get(m_month_year.group(1))
+                    y = int(m_month_year.group(2))
+                    if mon:
+                        start_dt = datetime(y, mon, 1)
+                        _, last_day = calendar.monthrange(y, mon)
+                        end_dt = datetime(y, mon, last_day, 23, 59, 59)
+
+                # Year-only reference (prefer exact year range)
+                m_year = re.search(r"\b(20\d{2}|19\d{2})\b", qlower)
+                if m_year and start_dt is None and end_dt is None:
+                    y = int(m_year.group(1))
+                    start_dt = datetime(y, 1, 1)
+                    end_dt = datetime(y, 12, 31, 23, 59, 59)
+
+                if start_dt is None and end_dt is None:
+                    # Conservative default: last 7 days window when auto filtering is enabled
+                    start_dt = now - timedelta(days=7)
+                    end_dt = now
+
+                if start_dt and end_dt:
+                    enable_date_filter = True
+                    date_range = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
+                    result.metadata["temporal_filter"] = {
+                        "start": date_range["start"],
+                        "end": date_range["end"],
+                        "source": "auto",
+                    }
+            except Exception:
+                pass
+
         # ========== DOCUMENT RETRIEVAL ==========
         if not result.cache_hit:
             retrieval_start = time.time()
@@ -592,6 +671,17 @@ async def unified_rag_pipeline(
                                 config.date_filter = (start, end)
                         except Exception:
                             pass
+                    # Fallback: use metadata-written temporal filter (auto)
+                    if getattr(config, 'date_filter', None) is None:
+                        tf = result.metadata.get("temporal_filter") if isinstance(result.metadata, dict) else None
+                        if isinstance(tf, dict):
+                            try:
+                                from datetime import datetime
+                                s = tf.get("start"); e = tf.get("end")
+                                if s and e:
+                                    config.date_filter = (datetime.fromisoformat(s), datetime.fromisoformat(e))
+                            except Exception:
+                                pass
                     
                     # Determine sources
                     if sources is None:
@@ -668,6 +758,14 @@ async def unified_rag_pipeline(
                 # Try a lightweight LLM to propose follow-ups
                 try:
                     from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as llm_analyze  # type: ignore
+                    # Determine default provider/model from config if available
+                    try:
+                        from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                        _cfg = load_and_log_configs() or {}
+                        _prov = (_cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
+                        _model = (_cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
+                    except Exception:
+                        _prov, _model = "openai", "gpt-4o-mini"
                     prompt = (
                         "You help a search system identify missing information.\n"
                         "Given the user query and several retrieved snippets, propose up to 2 concise follow-up search queries "
@@ -678,7 +776,7 @@ async def unified_rag_pipeline(
                         snippet = (d.content or "")[:300].replace("\n", " ")
                         prompt += f"- {snippet}\n"
                     prompt += "\nJSON:"
-                    llm_out = llm_analyze(api_name="openai", input_data="", custom_prompt_arg=prompt, model_override="gpt-4o-mini")
+                    llm_out = llm_analyze(api_name=_prov, input_data="", custom_prompt_arg=prompt, model_override=_model)
                     import json as _json
                     if isinstance(llm_out, str):
                         try:
@@ -1498,3 +1596,47 @@ async def advanced_search(
         enable_performance_analysis=True,
         **kwargs
     )
+def compute_temporal_range_from_query(query: str) -> Optional[Dict[str, str]]:
+    """Compute an approximate temporal range from a natural language query.
+
+    Returns dict with ISO start/end if a range can be inferred; otherwise None.
+    Conservative default: last 7 days if common patterns not found.
+    """
+    try:
+        qlower = (query or "").lower()
+        start_dt = None
+        end_dt = None
+        now = datetime.utcnow()
+        if "yesterday" in qlower:
+            start_dt = now - timedelta(days=1); end_dt = now
+        elif "last week" in qlower or "past week" in qlower:
+            start_dt = now - timedelta(days=7); end_dt = now
+        elif "last month" in qlower:
+            y = now.year; m = now.month - 1 if now.month > 1 else 12; y = y if now.month > 1 else y - 1
+            start_dt = datetime(y, m, 1)
+            _, last_day = calendar.monthrange(y, m)
+            end_dt = datetime(y, m, last_day, 23, 59, 59)
+        elif "past month" in qlower:
+            start_dt = now - timedelta(days=30); end_dt = now
+        m_quarter = re.search(r"\bq([1-4])\s*(20\d{2}|19\d{2})\b", qlower)
+        if m_quarter:
+            qn = int(m_quarter.group(1)); y = int(m_quarter.group(2)); qm = {1:1,2:4,3:7,4:10}[qn]
+            start_dt = datetime(y, qm, 1)
+            end_month = qm + 2; _, last_day = calendar.monthrange(y, end_month)
+            end_dt = datetime(y, end_month, last_day, 23, 59, 59)
+        month_names = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
+        m_month_year = re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2}|19\d{2})\b", qlower)
+        if m_month_year:
+            mon = month_names.get(m_month_year.group(1)); y = int(m_month_year.group(2))
+            if mon:
+                start_dt = datetime(y, mon, 1)
+                _, last_day = calendar.monthrange(y, mon)
+                end_dt = datetime(y, mon, last_day, 23, 59, 59)
+        m_year = re.search(r"\b(20\d{2}|19\d{2})\b", qlower)
+        if m_year and start_dt is None and end_dt is None:
+            y = int(m_year.group(1)); start_dt = datetime(y,1,1); end_dt = datetime(y,12,31,23,59,59)
+        if start_dt is None and end_dt is None:
+            start_dt = now - timedelta(days=7); end_dt = now
+        return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
+    except Exception:
+        return None

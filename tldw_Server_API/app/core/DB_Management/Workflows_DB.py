@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -66,6 +67,22 @@ class WorkflowsDatabase:
     """Lightweight SQLite adapter for workflows data."""
 
     def __init__(self, db_path: Optional[str] = None) -> None:
+        # Honor DATABASE_URL_WORKFLOWS when pointing to SQLite; Postgres reserved for future
+        url = os.getenv("DATABASE_URL_WORKFLOWS", "").strip()
+        if not db_path and url:
+            if url.startswith("sqlite://"):
+                # sqlite:///./Databases/workflows.db or sqlite:////abs/path
+                path = url.split("sqlite://", 1)[1]
+                # Trim leading slashes for relative path formats
+                if path.startswith("/") and not path.startswith("//"):
+                    # keep absolute
+                    resolved = path
+                else:
+                    resolved = path.lstrip("/")
+                db_path = resolved or str(DEFAULT_DB_PATH)
+            else:
+                # Unsupported driver for now
+                logger.warning("DATABASE_URL_WORKFLOWS is set but non-SQLite backends are not yet supported; falling back to SQLite")
         self.db_path = str(db_path or DEFAULT_DB_PATH)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -125,6 +142,9 @@ class WorkflowsDatabase:
                 definition_snapshot_json TEXT,
                 idempotency_key TEXT,
                 session_id TEXT,
+                tokens_input INTEGER,
+                tokens_output INTEGER,
+                cost_usd REAL,
                 cancel_requested INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(workflow_id) REFERENCES workflows(id)
             );
@@ -155,6 +175,11 @@ class WorkflowsDatabase:
                 locked_at TEXT,
                 lock_expires_at TEXT,
                 heartbeat_at TEXT,
+                pid INTEGER,
+                pgid INTEGER,
+                workdir TEXT,
+                stdout_path TEXT,
+                stderr_path TEXT,
                 FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id)
             );
             """
@@ -181,6 +206,46 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")
+        self._conn.commit()
+
+        # Attempt to add newly introduced columns if missing (SQLite tolerant pattern)
+        for alter in [
+            "ALTER TABLE workflow_runs ADD COLUMN tokens_input INTEGER",
+            "ALTER TABLE workflow_runs ADD COLUMN tokens_output INTEGER",
+            "ALTER TABLE workflow_runs ADD COLUMN cost_usd REAL",
+            "ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER",
+            "ALTER TABLE workflow_step_runs ADD COLUMN pgid INTEGER",
+            "ALTER TABLE workflow_step_runs ADD COLUMN workdir TEXT",
+            "ALTER TABLE workflow_step_runs ADD COLUMN stdout_path TEXT",
+            "ALTER TABLE workflow_step_runs ADD COLUMN stderr_path TEXT",
+        ]:
+            try:
+                cur.execute(alter)
+                self._conn.commit()
+            except Exception:
+                pass
+
+        # Artifacts table (v0.2)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                step_run_id TEXT,
+                type TEXT,
+                uri TEXT,
+                size_bytes INTEGER,
+                mime_type TEXT,
+                checksum_sha256 TEXT,
+                encryption TEXT,
+                owned_by TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id)
+            );
+            """
+        )
         self._conn.commit()
 
     # ---------- Definitions ----------
@@ -300,13 +365,19 @@ class WorkflowsDatabase:
         started_at: Optional[str] = None,
         ended_at: Optional[str] = None,
         duration_ms: Optional[int] = None,
+        tokens_input: Optional[int] = None,
+        tokens_output: Optional[int] = None,
+        cost_usd: Optional[float] = None,
     ) -> None:
         self._conn.execute(
             """
             UPDATE workflow_runs
             SET status = ?, status_reason = ?, outputs_json = ?, error = ?,
                 started_at = COALESCE(?, started_at), ended_at = COALESCE(?, ended_at),
-                duration_ms = COALESCE(?, duration_ms)
+                duration_ms = COALESCE(?, duration_ms),
+                tokens_input = COALESCE(?, tokens_input),
+                tokens_output = COALESCE(?, tokens_output),
+                cost_usd = COALESCE(?, cost_usd)
             WHERE run_id = ?
             """,
             (
@@ -317,6 +388,9 @@ class WorkflowsDatabase:
                 started_at,
                 ended_at,
                 duration_ms,
+                tokens_input,
+                tokens_output,
+                cost_usd,
                 run_id,
             ),
         )
@@ -500,6 +574,100 @@ class WorkflowsDatabase:
         )
         rows = self._conn.cursor().execute(sql, (cutoff_iso,)).fetchall()
         return [dict(r) for r in rows]
+
+    # ---------- Subprocess tracking ----------
+    def update_step_subprocess(
+        self,
+        *,
+        step_run_id: str,
+        pid: Optional[int] = None,
+        pgid: Optional[int] = None,
+        workdir: Optional[str] = None,
+        stdout_path: Optional[str] = None,
+        stderr_path: Optional[str] = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE workflow_step_runs
+            SET pid = COALESCE(?, pid), pgid = COALESCE(?, pgid), workdir = COALESCE(?, workdir),
+                stdout_path = COALESCE(?, stdout_path), stderr_path = COALESCE(?, stderr_path)
+            WHERE step_run_id = ?
+            """,
+            (
+                pid,
+                pgid,
+                workdir,
+                stdout_path,
+                stderr_path,
+                step_run_id,
+            ),
+        )
+        self._conn.commit()
+
+    def find_running_subprocesses_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+        sql = (
+            "SELECT step_run_id, pid, pgid, workdir, stdout_path, stderr_path FROM workflow_step_runs "
+            "WHERE run_id = ? AND status = 'running' AND (pid IS NOT NULL OR pgid IS NOT NULL)"
+        )
+        rows = self._conn.cursor().execute(sql, (run_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------- Artifacts ----------
+    def add_artifact(
+        self,
+        *,
+        artifact_id: str,
+        tenant_id: str,
+        run_id: str,
+        step_run_id: Optional[str],
+        type: str,
+        uri: str,
+        size_bytes: Optional[int] = None,
+        mime_type: Optional[str] = None,
+        checksum_sha256: Optional[str] = None,
+        encryption: Optional[str] = None,
+        owned_by: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO workflow_artifacts(
+                artifact_id, tenant_id, run_id, step_run_id, type, uri, size_bytes, mime_type, checksum_sha256,
+                encryption, owned_by, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact_id,
+                tenant_id,
+                run_id,
+                step_run_id,
+                type,
+                uri,
+                size_bytes,
+                mime_type,
+                checksum_sha256,
+                encryption,
+                owned_by,
+                json.dumps(metadata or {}),
+                _utcnow_iso(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_artifacts_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+        rows = self._conn.cursor().execute(
+            "SELECT * FROM workflow_artifacts WHERE run_id = ? ORDER BY created_at ASC",
+            (run_id,),
+        ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["metadata_json"] = json.loads(d.get("metadata_json") or "{}")
+            except Exception:
+                pass
+            out.append(d)
+        return out
 
 
 __all__ = ["WorkflowsDatabase", "WorkflowDefinition", "WorkflowRun", "DEFAULT_DB_PATH"]

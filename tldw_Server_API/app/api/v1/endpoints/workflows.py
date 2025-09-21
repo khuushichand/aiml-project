@@ -401,6 +401,36 @@ async def get_run_events(
     return out
 
 
+@router.get("/runs/{run_id}/artifacts")
+async def get_run_artifacts(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    arts = db.list_artifacts_for_run(run_id)
+    # Normalize payload
+    results = []
+    for a in arts:
+        results.append({
+            "artifact_id": a.get("artifact_id"),
+            "type": a.get("type"),
+            "uri": a.get("uri"),
+            "size_bytes": a.get("size_bytes"),
+            "mime_type": a.get("mime_type"),
+            "checksum_sha256": a.get("checksum_sha256"),
+            "metadata": a.get("metadata_json") or {},
+            "created_at": a.get("created_at"),
+            "step_run_id": a.get("step_run_id"),
+        })
+    return results
+
+
 # -------------------- Options Discovery: Chunkers --------------------
 
 @router.get("/options/chunkers")

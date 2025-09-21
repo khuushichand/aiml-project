@@ -199,8 +199,10 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                 - preserve_code_blocks: Keep code blocks intact
                 - preserve_headers: Include header hierarchy
                 - table_serialization: How to serialize tables ('markdown', 'entity', 'narrative')
-                - contextual_header_mode: 'none' (default) or 'simple' to prepend a computed header
-                - doc_title: Optional document title to include in the contextual header
+                - contextual_header_mode: 'none' (default), 'simple', or 'contextual' to prepend breadcrumbs
+                - doc_title: Optional document title for breadcrumbs
+                - folder_path: Optional folder path (e.g., "Workspace/Team/Project") for breadcrumbs
+                - max_breadcrumb_levels: Limit number of header levels shown (default 6)
                 
         Returns:
             List of text chunks preserving structure
@@ -219,10 +221,33 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         # Group elements into chunks
         chunks = self._group_elements_into_chunks(elements, max_size, overlap, **options)
         
+        # Prepare global header index for breadcrumb computation
+        global_headers: List[Tuple[int, int, str]] = []  # (start, level, text)
+        for e in elements:
+            if e.type == StructureType.HEADER and isinstance(e.level, int):
+                start_pos = e.metadata.get('start') if isinstance(e.metadata, dict) else None
+                if isinstance(start_pos, int):
+                    global_headers.append((start_pos, int(e.level), e.content.strip()))
+        global_headers.sort(key=lambda t: t[0])
+
         # Convert chunks to text
         text_chunks = []
         for chunk_elements in chunks:
-            chunk_text = self._elements_to_text(chunk_elements, **options)
+            # Determine chunk start based on earliest element position
+            chunk_start = None
+            for ce in chunk_elements:
+                try:
+                    s = ce.metadata.get('start') if isinstance(ce.metadata, dict) else None
+                    if isinstance(s, int):
+                        chunk_start = s if chunk_start is None else min(chunk_start, s)
+                except Exception:
+                    pass
+            chunk_text = self._elements_to_text(
+                chunk_elements,
+                _global_headers=global_headers,
+                _chunk_start=chunk_start if isinstance(chunk_start, int) else 0,
+                **options
+            )
             if chunk_text.strip():
                 text_chunks.append(chunk_text)
         
@@ -551,30 +576,59 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         return '\n'.join(lines).strip()
 
     def _build_contextual_header(self, elements: List[DocumentElement], options: Dict[str, Any]) -> str:
-        """Build a lightweight contextual header for a chunk based on structural hints.
+        """Build contextual breadcrumbs for a chunk.
 
         Strategy:
-        - Use provided doc_title if available
-        - Extract the most relevant header within the chunk (prefer the smallest level number)
-        - Compose a concise header like: "Doc: <title> | Section: <hX>"
+        - Merge folder path and document title when available
+        - Build header breadcrumbs using global header index up to the chunk start
+        - Fallback to best in-chunk header if global headers unavailable
         """
         doc_title = options.get('doc_title')
-        # Collect headers from elements within this chunk
-        headers = [
-            (e.level or 7, e.content.strip())
-            for e in elements
-            if e.type == StructureType.HEADER and isinstance(e.content, str) and e.content.strip()
-        ]
-        # Prefer the highest-level header (lowest numeric level)
-        section_text = None
-        if headers:
-            headers.sort(key=lambda t: t[0])
-            section_text = headers[0][1]
+        folder_path = options.get('folder_path')  # e.g., "Workspace/Team Docs/Project X"
+        max_levels = int(options.get('max_breadcrumb_levels', 6))
+        # Extract global headers and chunk start (provided by chunk())
+        global_headers: List[Tuple[int, int, str]] = options.get('_global_headers') or []
+        chunk_start: int = options.get('_chunk_start') or 0
 
-        parts = []
+        # Compute header breadcrumb chain from global headers
+        breadcrumb_sections: List[str] = []
+        if global_headers:
+            stack: List[Tuple[int, str]] = []  # (level, text)
+            for pos, lvl, text in global_headers:
+                if pos >= chunk_start:
+                    break
+                # Maintain proper nesting: pop until top level < current
+                while stack and stack[-1][0] >= lvl:
+                    stack.pop()
+                stack.append((lvl, text))
+            breadcrumb_sections = [t for (_lvl, t) in stack]
+        else:
+            # Fallback: use highest-level header within the chunk
+            headers_in_chunk = [
+                (e.level or 7, (e.content or '').strip())
+                for e in elements
+                if e.type == StructureType.HEADER and isinstance(e.content, str) and e.content.strip()
+            ]
+            headers_in_chunk.sort(key=lambda t: t[0])
+            if headers_in_chunk:
+                breadcrumb_sections = [h[1] for h in headers_in_chunk]
+
+        # Trim breadcrumbs if too long
+        if max_levels > 0 and len(breadcrumb_sections) > max_levels:
+            breadcrumb_sections = breadcrumb_sections[-max_levels:]
+
+        parts: List[str] = []
+        # Folder path first if available
+        if isinstance(folder_path, str) and folder_path.strip():
+            parts.append(folder_path.strip())
+        # Document title next
         if isinstance(doc_title, str) and doc_title.strip():
-            parts.append(f"Doc: {doc_title.strip()}")
-        if section_text:
-            parts.append(f"Section: {section_text}")
+            parts.append(doc_title.strip())
+        # Then section path
+        if breadcrumb_sections:
+            parts.extend(breadcrumb_sections)
 
-        return " | ".join(parts) if parts else ""
+        if not parts:
+            return ""
+        # Join into a single breadcrumb line
+        return " > ".join(parts)

@@ -407,6 +407,18 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     pass
 
             task = start_process(cmd, workdir=step_dir, log_dir=log_dir)
+            # Record subprocess info for engine-driven cancellation
+            try:
+                if callable(context.get("record_subprocess")):
+                    context["record_subprocess"](
+                        pid=task.pid,
+                        pgid=task.pgid,
+                        workdir=str(step_dir),
+                        stdout_path=str(task.stdout_path),
+                        stderr_path=str(task.stderr_path),
+                    )
+            except Exception:
+                pass
 
             # Poll with timeout
             exited = False
@@ -456,6 +468,11 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 if stderr_tail:
                     meta_timeout["stderr_tail"] = stderr_tail
                 out["metadata"].append(meta_timeout)
+                try:
+                    if callable(context.get("append_event")):
+                        context["append_event"]("step_log_tail", {"stdout_tail": stdout_tail, "stderr_tail": stderr_tail, "source": uri})
+                except Exception:
+                    pass
                 continue
 
             # Build metadata including small log tails for debugging
@@ -487,6 +504,11 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 meta_entry["stdout_tail"] = stdout_tail2
             if stderr_tail2:
                 meta_entry["stderr_tail"] = stderr_tail2
+            try:
+                if (stdout_tail2 or stderr_tail2) and callable(context.get("append_event")):
+                    context["append_event"]("step_log_tail", {"stdout_tail": stdout_tail2, "stderr_tail": stderr_tail2, "source": uri})
+            except Exception:
+                pass
 
             # Attach chunking/indexing metadata if requested in config
             chunking = config.get("chunking") or {}

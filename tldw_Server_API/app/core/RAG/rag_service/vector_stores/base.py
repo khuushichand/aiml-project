@@ -19,6 +19,7 @@ class VectorStoreType(Enum):
     QDRANT = "qdrant"
     MILVUS = "milvus"
     FAISS = "faiss"
+    PGVECTOR = "pgvector"
 
 
 @dataclass

@@ -10,6 +10,10 @@ from loguru import logger
 
 from .base import VectorStoreAdapter, VectorStoreConfig, VectorStoreType
 from .chromadb_adapter import ChromaDBAdapter
+try:
+    from .pgvector_adapter import PGVectorAdapter
+except Exception:
+    PGVectorAdapter = None  # Optional
 
 
 class VectorStoreFactory:
@@ -18,12 +22,14 @@ class VectorStoreFactory:
     # Registry of available adapters
     _adapters: Dict[VectorStoreType, Type[VectorStoreAdapter]] = {
         VectorStoreType.CHROMADB: ChromaDBAdapter,
-        # Future adapters can be registered here:
+        # Future adapters:
         # VectorStoreType.PINECONE: PineconeAdapter,
         # VectorStoreType.WEAVIATE: WeaviateAdapter,
         # VectorStoreType.QDRANT: QdrantAdapter,
         # VectorStoreType.FAISS: FAISSAdapter,
     }
+    if PGVectorAdapter is not None:
+        _adapters[VectorStoreType.PGVECTOR] = PGVectorAdapter
     
     @classmethod
     def create_adapter(
@@ -120,11 +126,25 @@ class VectorStoreFactory:
                 "use_default": True,  # Use existing singleton
                 "embedding_config": embedding_config
             }
+        elif vector_store_type in ("pgvector", "postgres", "postgresql"):
+            # Collect PG connection params from settings
+            rag_cfg = settings.get("RAG", {})
+            pg_cfg = rag_cfg.get("pgvector", {}) if isinstance(rag_cfg.get("pgvector"), dict) else {}
+            connection_params = {
+                "host": pg_cfg.get("host", "localhost"),
+                "port": pg_cfg.get("port", 5432),
+                "database": pg_cfg.get("database", "postgres"),
+                "user": pg_cfg.get("user", "postgres"),
+                "password": pg_cfg.get("password", ""),
+                "sslmode": pg_cfg.get("sslmode", "prefer"),
+                # Optional DSN override
+                "dsn": pg_cfg.get("dsn"),
+            }
         # Add other store types here as needed
         
         # Create configuration
         try:
-            store_type_enum = VectorStoreType(vector_store_type)
+            store_type_enum = VectorStoreType(vector_store_type if vector_store_type != "postgres" and vector_store_type != "postgresql" else "pgvector")
         except ValueError:
             logger.warning(f"Unknown vector store type: {vector_store_type}, defaulting to ChromaDB")
             store_type_enum = VectorStoreType.CHROMADB

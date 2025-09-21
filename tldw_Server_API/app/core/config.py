@@ -1859,6 +1859,28 @@ def load_and_log_configs():
             'Redis': config_parser_object['Redis'] if 'Redis' in config_parser_object else {},
             'Web-Scraping': config_parser_object['Web-Scraping'] if 'Web-Scraping' in config_parser_object else {}
         }
+        # Assemble minimal RAG config section (vector store + pgvector params)
+        try:
+            rag_section = {}
+            if config_parser_object.has_section('RAG'):
+                rag_section['vector_store_type'] = config_parser_object.get('RAG', 'vector_store_type', fallback='chromadb')
+                rag_section['distance_metric'] = config_parser_object.get('RAG', 'distance_metric', fallback='cosine')
+                rag_section['collection_prefix'] = config_parser_object.get('RAG', 'collection_prefix', fallback='unified')
+                # PGVector connection params under [RAG]
+                rag_section['pgvector'] = {
+                    'host': config_parser_object.get('RAG', 'pgvector_host', fallback=os.getenv('PGVECTOR_HOST', 'localhost')),
+                    'port': config_parser_object.getint('RAG', 'pgvector_port', fallback=int(os.getenv('PGVECTOR_PORT', '5432'))),
+                    'database': config_parser_object.get('RAG', 'pgvector_database', fallback=os.getenv('PGVECTOR_DATABASE', 'postgres')),
+                    'user': config_parser_object.get('RAG', 'pgvector_user', fallback=os.getenv('PGVECTOR_USER', 'postgres')),
+                    'password': config_parser_object.get('RAG', 'pgvector_password', fallback=os.getenv('PGVECTOR_PASSWORD', '')),
+                    'sslmode': config_parser_object.get('RAG', 'pgvector_sslmode', fallback=os.getenv('PGVECTOR_SSLMODE', 'prefer')),
+                    'dsn': config_parser_object.get('RAG', 'pgvector_dsn', fallback=os.getenv('PGVECTOR_DSN', '')) or None,
+                }
+            return_dict['RAG'] = rag_section
+        except Exception:
+            # Non-fatal: keep defaults
+            pass
+
         return return_dict
     except Exception as e:
         logging.error(f"Error loading config: {str(e)}")
