@@ -1,13 +1,318 @@
+import { useEffect, useState, useRef } from 'react';
 import { Layout } from '@/components/layout/Layout';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { apiClient, API_BASE_URL, buildAuthHeaders } from '@/lib/api';
+import { streamSSE } from '@/lib/sse';
+import type { ChatMessage } from '@/types/api';
+
+interface LLMProvider {
+  name: string;
+  display_name?: string;
+  type?: string;
+  models?: string[];
+  is_configured?: boolean;
+  default_model?: string;
+}
+
+interface ProvidersResponse {
+  providers?: LLMProvider[];
+  default_provider?: string;
+  total_configured?: number;
+}
 
 export default function ChatPage() {
+  const [messages, setMessages] = useState<ChatMessage[]>([{
+    role: 'system',
+    content: 'You are a helpful assistant.',
+  }]);
+  const [input, setInput] = useState('');
+  const [model, setModel] = useState('gpt-3.5-turbo');
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
+  const [loadingProviders, setLoadingProviders] = useState(false);
+  const [stream, setStream] = useState(true);
+  const [sending, setSending] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [saveToDb, setSaveToDb] = useState<boolean>(false);
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string; model: string; created_at: string }>>([]);
+  const lastSessionIdRef = useRef<string | null>(null);
+
+  const persistSessions = (list: any[]) => {
+    try { localStorage.setItem('tldw-chat-sessions', JSON.stringify(list)); } catch {}
+  };
+  const loadSessions = () => {
+    try { const s = localStorage.getItem('tldw-chat-sessions'); if (s) setSessions(JSON.parse(s)); } catch {}
+  };
+  useEffect(() => { loadSessions(); }, []);
+
+  const startNewChat = () => {
+    setConversationId(null);
+    setMessages([{ role: 'system', content: 'You are a helpful assistant.' }]);
+  };
+
+  // Load saved messages when switching to a known conversation
+  useEffect(() => {
+    if (conversationId) {
+      try {
+        const raw = localStorage.getItem(`tldw-chat-messages-${conversationId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setMessages(parsed);
+        }
+      } catch {}
+    }
+  }, [conversationId]);
+
+  // Persist messages to localStorage per conversation (when available)
+  useEffect(() => {
+    if (conversationId) {
+      try { localStorage.setItem(`tldw-chat-messages-${conversationId}`, JSON.stringify(messages)); } catch {}
+    }
+  }, [messages, conversationId]);
+
+  // Migrate session id from temporary local-* to server conversation id when assigned
+  useEffect(() => {
+    const oldId = lastSessionIdRef.current;
+    if (!oldId) return;
+    if (!conversationId) return;
+    if (oldId.startsWith('local-') && oldId !== conversationId) {
+      const changed = sessions.some((s) => s.id === oldId);
+      if (changed) {
+        const updated = sessions.map((s) => s.id === oldId ? { ...s, id: conversationId } : s);
+        setSessions(updated);
+        persistSessions(updated);
+        lastSessionIdRef.current = conversationId;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return;
+    const newMessages = [...messages, { role: 'user', content: input.trim() } as ChatMessage, { role: 'assistant', content: '' } as ChatMessage];
+    setMessages(newMessages);
+    setInput('');
+    setSending(true);
+
+    try {
+      const payload: any = {
+        model,
+        stream,
+        save_to_db: !!saveToDb,
+        messages: newMessages.filter((m) => m.role !== 'system' || m.content.trim() !== '').map((m) => ({ role: m.role, content: m.content })),
+      };
+      if (conversationId) payload.conversation_id = conversationId;
+      const body = JSON.stringify(payload);
+
+      if (stream) {
+        const url = `${API_BASE_URL}/chat/completions`;
+        const headers = { ...buildAuthHeaders('POST', 'application/json'), Accept: 'text/event-stream' };
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        let acc = '';
+        await streamSSE(url, { method: 'POST', headers, body }, (delta) => {
+          acc += delta;
+          setMessages((prev) => {
+            const updated = [...prev];
+            // Append to last assistant message
+            const lastIdx = updated.length - 1;
+            if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+              updated[lastIdx] = { ...updated[lastIdx], content: acc } as ChatMessage;
+            }
+            return updated;
+          });
+        }, (json) => {
+          // Capture metadata conversation_id from stream_start or provider frames
+          const metaConv = json?.conversation_id || json?.tldw_metadata?.conversation_id;
+          if (metaConv && !conversationId) {
+            setConversationId(String(metaConv));
+          }
+        }, () => {
+          // On done, optionally store session reference
+          const firstUser = newMessages.find((m) => m.role === 'user');
+          const title = (firstUser?.content || '').slice(0, 60) || 'Chat';
+          const id = conversationId || 'local-' + Date.now();
+          lastSessionIdRef.current = id;
+          if (!sessions.find((s) => s.id === id)) {
+            const next = [{ id, title, model, created_at: new Date().toISOString() }, ...sessions].slice(0, 50);
+            setSessions(next); persistSessions(next);
+          }
+        });
+      } else {
+        // Non-streaming
+        const res = await apiClient.post<any>('/chat/completions', JSON.parse(body));
+        const text = res?.choices?.[0]?.message?.content || '';
+        if (res?.tldw_conversation_id && !conversationId) {
+          setConversationId(String(res.tldw_conversation_id));
+        }
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+            updated[lastIdx] = { ...updated[lastIdx], content: text } as ChatMessage;
+          }
+          return updated;
+        });
+        const firstUser = newMessages.find((m) => m.role === 'user');
+        const title = (firstUser?.content || '').slice(0, 60) || 'Chat';
+        const id = res?.tldw_conversation_id || conversationId || 'local-' + Date.now();
+        lastSessionIdRef.current = String(id);
+        if (!sessions.find((s) => s.id === id)) {
+          const next = [{ id: String(id), title, model, created_at: new Date().toISOString() }, ...sessions].slice(0, 50);
+          setSessions(next); persistSessions(next);
+        }
+      }
+    } catch (e: any) {
+      setMessages((prev) => [...prev, { role: 'system', content: `Error: ${e.message || e}` } as ChatMessage]);
+    } finally {
+      setSending(false);
+      abortRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    const loadProviders = async () => {
+      setLoadingProviders(true);
+      try {
+        const resp = await apiClient.get<ProvidersResponse>('/llm/providers');
+        const list = resp?.providers || [];
+        setProviders(list);
+        // Pick default provider/model if exposed
+        const defProvName = resp?.default_provider;
+        const defProv = list.find((p) => p.name === defProvName && p.is_configured !== false) || list.find((p) => p.is_configured !== false);
+        if (defProv && defProv.models && defProv.models.length > 0) {
+          const defModel = defProv.default_model || defProv.models[0];
+          setModel(`${defProv.name}/${defModel}`);
+        }
+      } catch (e) {
+        // keep current model
+      } finally {
+        setLoadingProviders(false);
+      }
+    };
+    loadProviders();
+  }, []);
+
+  // Prefill message from Media page
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('tldw-chat-prefill');
+      if (raw) {
+        const data = JSON.parse(raw);
+        // Only prefill if starting fresh
+        const userCount = messages.filter((m) => m.role === 'user').length;
+        if (userCount === 0 && !conversationId && data?.message) {
+          setMessages([
+            { role: 'system', content: 'You are a helpful assistant.' },
+            { role: 'user', content: String(data.message) }
+          ] as ChatMessage[]);
+        }
+      }
+      localStorage.removeItem('tldw-chat-prefill');
+    } catch {
+      // ignore
+    }
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <Layout>
-      <div className="space-y-4">
+      <div className="mx-auto max-w-3xl space-y-4">
         <h1 className="text-2xl font-bold text-gray-900">Chat</h1>
-        <p className="text-gray-600">Coming soon: OpenAI-compatible chat UI for /api/v1/chat/completions.</p>
+
+        <div className="rounded-md border bg-white p-4">
+          <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Model</label>
+              <select
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+              >
+                {providers.length > 0 ? (
+                  providers.map((p) => (
+                    <optgroup key={p.name} label={`${p.display_name || p.name}${p.is_configured === false ? ' (Not Configured)' : ''}`}>
+                      {(p.models || []).map((m) => (
+                        <option key={`${p.name}/${m}`} value={`${p.name}/${m}`} disabled={p.is_configured === false}>
+                          {m}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                ) : (
+                  <option value={model}>{loadingProviders ? 'Loading models…' : model}</option>
+                )}
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="inline-flex items-center space-x-2 text-sm text-gray-700">
+                <input type="checkbox" className="h-4 w-4" checked={stream} onChange={(e) => setStream(e.target.checked)} />
+                <span>Stream</span>
+              </label>
+            </div>
+            <div className="flex items-end">
+              <label className="inline-flex items-center space-x-2 text-sm text-gray-700">
+                <input type="checkbox" className="h-4 w-4" checked={saveToDb} onChange={(e) => setSaveToDb(e.target.checked)} />
+                <span>Save to DB</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
+            <div>Conversation ID: <span className="font-mono">{conversationId || '(new)'}</span></div>
+            <div className="space-x-2">
+              <Button variant="secondary" onClick={startNewChat}>New Chat</Button>
+            </div>
+          </div>
+
+          <div className="mb-4 h-80 overflow-y-auto rounded border p-3 text-sm">
+            {messages.filter(m => m.role !== 'system').map((m, idx) => (
+              <div key={idx} className="mb-3">
+                <div className="font-semibold text-gray-800">{m.role === 'user' ? 'You' : 'Assistant'}</div>
+                <div className="whitespace-pre-wrap text-gray-700">{m.content}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-end space-x-3">
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium text-gray-700">Message</label>
+              <textarea
+                className="h-24 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Type your message..."
+              />
+            </div>
+            <div className="pb-1">
+              <Button onClick={sendMessage} loading={sending} disabled={sending}>Send</Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Sessions list */}
+        {sessions.length > 0 && (
+          <div className="mt-6 rounded-md border bg-white p-3">
+            <div className="mb-2 text-sm font-medium text-gray-800">Recent Chats</div>
+            <ul className="text-sm">
+              {sessions.map((s) => (
+                <li key={s.id} className="flex items-center justify-between border-b py-1 last:border-b-0">
+                  <div>
+                    <div className="font-medium">{s.title}</div>
+                    <div className="text-xs text-gray-500">{s.model} • {new Date(s.created_at).toLocaleString()}</div>
+                  </div>
+                  <div className="space-x-2">
+                    <Button variant="secondary" onClick={() => setConversationId(s.id)}>Continue</Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </Layout>
   );
 }
-

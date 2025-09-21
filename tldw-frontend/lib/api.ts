@@ -104,3 +104,40 @@ export const apiClient = {
 };
 
 export default api;
+
+// Streaming helpers
+export const API_BASE_URL = baseURL;
+
+export function buildAuthHeaders(method: string = 'GET', contentType?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (contentType) headers['Content-Type'] = contentType;
+
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('access_token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const envApiBearer = process.env.NEXT_PUBLIC_API_BEARER;
+    if (envApiBearer && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${envApiBearer}`;
+    }
+
+    const storedApiKey = localStorage.getItem('x_api_key');
+    const envApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
+    const xApiKey = storedApiKey || envApiKey;
+    if (xApiKey) headers['X-API-KEY'] = xApiKey;
+
+    // CSRF for modifying requests when not using X-API-KEY
+    const methodUp = method.toUpperCase();
+    const needsCsrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUp) && !xApiKey;
+    if (needsCsrf) {
+      const cookie = (name: string): string | null => {
+        const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, '\\$1') + '=([^;]*)'));
+        return match ? decodeURIComponent(match[1]) : null;
+      };
+      const csrf = cookie('csrf_token');
+      if (csrf) headers['X-CSRF-Token'] = csrf;
+    }
+  }
+
+  return headers;
+}
