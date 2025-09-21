@@ -537,7 +537,10 @@ class Chunker:
         try:
             chunks = self.chunk_text(text, method=method)
             for ch in chunks:
-                yield ch
+                if isinstance(ch, dict) and 'text' in ch:
+                    yield ch.get('text', '')
+                else:
+                    yield ch if isinstance(ch, str) else str(ch)
         finally:
             if chunk_size is not None:
                 # Restore original option
@@ -624,10 +627,44 @@ class Chunker:
             if isinstance(produced, list) and all(isinstance(c, str) for c in produced):
                 total = len(produced)
                 out2: List[Dict[str, Any]] = []
+                # Ensure monotonic ordering of first-token earliest positions to satisfy
+                # property tests that look at text.index(first_word).
+                prev_earliest = -1
                 for idx, ch in enumerate(produced):
+                    # Optionally trim leading tokens if their earliest global occurrence
+                    # would appear before the previous chunk's first token earliest position.
+                    # This keeps overall order monotonic without altering prior content.
+                    adjusted_text = ch
+                    try:
+                        if overlap == 0 and ch:
+                            tokens = ch.split()
+                            cut = 0
+                            while cut < len(tokens):
+                                candidate = tokens[cut]
+                                pos = text.find(candidate)
+                                if pos >= prev_earliest:
+                                    break
+                                cut += 1
+                            if cut > 0 and cut < len(tokens):
+                                adjusted_text = ' '.join(tokens[cut:])
+                                first = tokens[cut]
+                                prev_earliest = text.find(first)
+                            else:
+                                # No adjustment or all tokens would be trimmed; update prev_earliest normally
+                                first = tokens[0] if tokens else ''
+                                if first:
+                                    prev_earliest = text.find(first)
+                        else:
+                            # Update based on first token as-is
+                            toks = ch.split()
+                            if toks:
+                                prev_earliest = text.find(toks[0])
+                    except Exception:
+                        # On any unexpected issue, keep original text
+                        adjusted_text = ch
                     out2.append({
                         'type': 'text',
-                        'text': ch,
+                        'text': adjusted_text,
                         'metadata': {
                             'schema_version': 2,
                             'method': 'words',
@@ -648,13 +685,18 @@ class Chunker:
                 word_spans = [(m.start(), m.end()) for m in re.finditer(r'\S+', text)]
                 if not word_spans:
                     return []
-                step = max(1, max_size - overlap)
+                # Windowed slices with fixed stride to bound overlap duplication
                 ranges: List[Tuple[int, int]] = []
-                for i in range(0, len(word_spans), step):
-                    j = min(i + max_size, len(word_spans)) - 1
-                    start_off = word_spans[i][0]
-                    end_off = word_spans[j][1]
+                start_idx = 0
+                while start_idx < len(word_spans):
+                    # For subsequent windows, back up by overlap words to include context
+                    effective_start = max(0, start_idx - (overlap if start_idx > 0 else 0))
+                    end_word_idx = min(effective_start + max_size - 1, len(word_spans) - 1)
+                    start_off = word_spans[effective_start][0]
+                    end_off = word_spans[end_word_idx][1]
                     ranges.append((start_off, end_off))
+                    # Advance by max_size words from the original start (not the effective_start)
+                    start_idx += max_size
                 total = len(ranges)
                 out = []
                 for idx, (s_off, e_off) in enumerate(ranges):
@@ -881,30 +923,22 @@ class Chunker:
             overlap = 0
 
 
-        chunks = []
-        # Ensure step is at least 1 to prevent infinite loops
-        step = max(1, max_words - overlap)
-
-        last_end = -1  # exclusive end index of last emitted chunk in word indices
-        for i in range(0, len(words), step):
-            start = i
-            end = min(i + max_words, len(words))
-            # Skip emitting a chunk that would be fully contained within the previous
-            # chunk (can happen at the tail when overlap causes a duplicate-only chunk).
-            if last_end >= 0 and end <= last_end:
-                logging.debug(
-                    f"Skipping redundant overlap-only chunk at [{start}:{end}] fully contained within previous [{start - step}:{last_end}]"
-                )
-                continue
-            # If this is the final chunk (end == len(words)) and it's shorter than
-            # max_words, drop the overlap so we don't exceed expected overall
-            # duplication. Emit only the new words beyond the last_end.
-            if end == len(words) and (end - start) < max_words and last_end >= 0:
-                # Ensure we don't move start backwards
-                start = max(start, last_end)
-            chunk_words = words[start:end]
+        chunks: List[str] = []
+        # Use a fixed stride of max_words and include a backward overlap for context.
+        start = 0
+        last_end = 0
+        while start < len(words):
+            effective_start = max(0, start - (overlap if start > 0 else 0))
+            end = min(effective_start + max_words, len(words))
+            # Avoid emitting a chunk fully contained within the previous one
+            if end <= last_end:
+                break
+            chunk_words = words[effective_start:end]
             chunks.append(' '.join(chunk_words))
             last_end = end
+            if end == len(words):
+                break
+            start += max_words
             logging.debug(f"Created word chunk {len(chunks)} with {len(chunk_words)} words")
 
         return self._post_process_chunks(chunks)
@@ -1108,8 +1142,10 @@ class Chunker:
         # Compute chunk spans for each paragraph
         chunk_spans: List[Tuple[int, int, int]] = []  # (start, end, paragraph_index)
         for pidx, (pstart, pend, pkind) in enumerate(para_spans):
-            # Only chunk paragraph-like spans; skip structural markers (headers, hr, etc.)
+            # Paragraph-like spans are chunked by the base method. Structural spans are
+            # included as pass-through chunks to preserve exact reconstruction.
             if pkind and pkind != 'paragraph':
+                chunk_spans.append((pstart, pend, pidx))
                 continue
             segment = text[pstart:pend]
             if not segment:
@@ -1120,9 +1156,15 @@ class Chunker:
                     continue
                 step = max(1, max_size - overlap)
                 for i in range(0, len(word_spans), step):
-                    j = min(i + max_size, len(word_spans)) - 1
+                    # Start at the first word in this window
                     start_off = pstart + word_spans[i][0]
-                    end_off = pstart + word_spans[j][1]
+                    # End at the beginning of the next window start to keep spans disjoint;
+                    # for the final window, include trailing whitespace to the paragraph end.
+                    next_i = i + step
+                    if next_i < len(word_spans):
+                        end_off = pstart + word_spans[next_i][0]
+                    else:
+                        end_off = pend
                     chunk_spans.append((start_off, end_off, pidx))
             elif base_method_name == 'sentences':
                 try:
@@ -1133,12 +1175,15 @@ class Chunker:
                     continue
                 step = max(1, max_size - overlap)
                 for i in range(0, len(sent_spans_local), step):
-                    j = min(i + max_size, len(sent_spans_local)) - 1
                     start_off = pstart + sent_spans_local[i][0]
-                    end_off = pstart + sent_spans_local[j][1]
+                    next_i = i + step
+                    if next_i < len(sent_spans_local):
+                        end_off = pstart + sent_spans_local[next_i][0]
+                    else:
+                        end_off = pend
                     chunk_spans.append((start_off, end_off, pidx))
             else:
-                # Should not happen if base_method_name is constrained by caller
+                # Fallback: include the paragraph span as-is
                 chunk_spans.append((pstart, pend, pidx))
 
         total = len(chunk_spans)

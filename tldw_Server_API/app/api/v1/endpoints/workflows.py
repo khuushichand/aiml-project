@@ -345,6 +345,51 @@ async def get_run_events(
     return out
 
 
+# -------------------- Options Discovery: Chunkers --------------------
+
+@router.get("/options/chunkers")
+async def get_chunker_options():
+    """Return available chunking methods with defaults and a basic parameter schema.
+
+    This introspects the Chunking module to surface methods and default options
+    for UI builders. Version is static for now.
+    """
+    try:
+        from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS
+        from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+    except Exception:
+        raise HTTPException(status_code=500, detail="Chunking module unavailable")
+
+    defaults = DEFAULT_CHUNK_OPTIONS.copy()
+    methods = [m.value for m in ChunkingMethod]
+    # Build a basic param schema (types are indicative)
+    schema = {
+        "method": {"type": "string", "enum": methods, "default": defaults.get("method")},
+        "max_size": {"type": "integer", "default": defaults.get("max_size")},
+        "overlap": {"type": "integer", "default": defaults.get("overlap")},
+        "language": {"type": "string", "default": defaults.get("language")},
+        "adaptive": {"type": "boolean", "default": defaults.get("adaptive")},
+        "multi_level": {"type": "boolean", "default": defaults.get("multi_level")},
+        "semantic_similarity_threshold": {"type": "number", "default": defaults.get("semantic_similarity_threshold")},
+        "semantic_overlap_sentences": {"type": "integer", "default": defaults.get("semantic_overlap_sentences")},
+        "json_chunkable_data_key": {"type": "string", "default": defaults.get("json_chunkable_data_key")},
+        "summarization_detail": {"type": "number", "default": defaults.get("summarization_detail")},
+        "tokenizer_name_or_path": {"type": "string", "default": defaults.get("tokenizer_name_or_path")},
+        "proposition_engine": {"type": "string", "enum": ["heuristic", "spacy", "llm", "auto"], "default": defaults.get("proposition_engine")},
+        "proposition_aggressiveness": {"type": "integer", "default": defaults.get("proposition_aggressiveness")},
+        "proposition_min_proposition_length": {"type": "integer", "default": defaults.get("proposition_min_proposition_length")},
+        "proposition_prompt_profile": {"type": "string", "default": defaults.get("proposition_prompt_profile")},
+    }
+
+    return {
+        "name": "core_chunking",
+        "version": "1.0.0",
+        "methods": methods,
+        "defaults": defaults,
+        "parameter_schema": schema,
+    }
+
+
 @router.post("/runs/{run_id}/{action}")
 async def control_run(
     run_id: str,
@@ -364,6 +409,16 @@ async def control_run(
         except Exception:
             pass
         engine.cancel(run_id)
+    elif action == "retry":
+        run = db.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        # Delegate to retry behavior
+        failed_step = db.get_last_failed_step_id(run_id)
+        if failed_step:
+            asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
+        else:
+            engine.submit(run_id, RunMode.ASYNC)
     else:
         raise HTTPException(status_code=400, detail="Unsupported action")
     return {"ok": True}

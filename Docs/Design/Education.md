@@ -27,7 +27,7 @@ https://shaeda.io/
 https://incontextlearning.com/
 https://www.supermemo.com/en/blog/twenty-rules-of-formulating-knowledge
 https://openstax.org/
-
+https://www.nature.com/articles/s41598-025-97652-6
 
 
 https://andymatuschak.org/hmwl/

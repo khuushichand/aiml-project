@@ -237,6 +237,13 @@ class TemplateProcessor:
         Supports both {"type", "params"} and {"operation", "config"} schemas.
         """
         chunks = data.get("chunks", [])
+        # Normalize to a list of strings for postprocessors which operate on text
+        texts: List[str] = []
+        for c in (chunks or []):
+            if isinstance(c, dict) and 'text' in c:
+                texts.append(str(c.get('text', '')))
+            else:
+                texts.append(str(c))
 
         for operation in stage.operations:
             # Support both schemas
@@ -248,11 +255,13 @@ class TemplateProcessor:
 
             if op_name in self._operations:
                 logger.debug(f"Running postprocessing: {op_name}")
-                chunks = self._operations[op_name](chunks, op_options)
+                texts = self._operations[op_name](texts, op_options)
             else:
                 logger.warning(f"Unknown operation: {op_name}")
 
-        data["chunks"] = chunks
+        # Keep postprocess output as simple strings; the final normalization in process_template
+        # will wrap them with minimal metadata for consistency.
+        data["chunks"] = texts
         return data
     
     # Built-in preprocessing operations

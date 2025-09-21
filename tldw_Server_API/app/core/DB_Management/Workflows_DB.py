@@ -269,7 +269,7 @@ class WorkflowsDatabase:
                 run_id, tenant_id, workflow_id, status, status_reason, user_id, inputs_json, outputs_json,
                 error, duration_ms, created_at, started_at, ended_at, definition_version, definition_snapshot_json,
                 idempotency_key, session_id
-            ) VALUES (?, ?, ?, 'queued', NULL, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?, 0)
+            ) VALUES (?, ?, ?, 'queued', NULL, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?)
             """,
             (
                 run_id,

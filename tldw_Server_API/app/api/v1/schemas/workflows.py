@@ -15,7 +15,7 @@ class StepConfig(BaseModel):
     type: str = Field(..., description="Step type name")
     config: Dict[str, Any] = Field(default_factory=dict)
     retry: Optional[int] = 0
-    timeout_seconds: Optional[int] = 300
+    timeout_seconds: Optional[float] = 300
     on_success: Optional[str] = None
     on_failure: Optional[str] = None
 
@@ -69,4 +69,3 @@ class EventResponse(BaseModel):
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     created_at: str
-

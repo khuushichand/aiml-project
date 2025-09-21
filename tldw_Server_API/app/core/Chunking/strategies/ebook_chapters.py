@@ -149,7 +149,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
 
         Disallowed: grouping (), alternation |, wildcard ., ?, *, nested classes, backrefs.
         """
-        # Quick rejects
+        # Quick rejects (keep '.' disallowed to avoid wildcard); allow common literals like ':'
         for bad in ("(", ")", "|", ".", "?", "*"):
             if bad in pattern:
                 return False
@@ -176,7 +176,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 i = j + 1
                 continue
             # Anchors and common literals allowed
-            if ch in "^$ " or ch.isalnum():
+            if ch in "^$ :," or ch.isalnum():
                 i += 1
                 continue
             if ch == "+":
