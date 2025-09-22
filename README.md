@@ -365,21 +365,109 @@ Prebuilt configuration samples are included to speed up deployments:
 
 See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Docker Compose snippets.
 
-## Metrics Cheatsheet (Uploads & Storage)
+## Metrics Cheatsheet
 
-These metrics are exposed for monitoring uploads and per-user storage usage:
+The server exports extensive metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Scrape `GET /api/v1/metrics` for Prometheus text or `GET /api/v1/metrics/json` for structured stats.
 
-- `uploads_total{user_id, media_type}`: Counter of uploaded files.
-- `upload_bytes_total{user_id, media_type}`: Counter of total uploaded bytes.
+### HTTP
+- `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
+- `http_request_duration_seconds{method,endpoint}`: Histogram of request latency.
+
+Example PromQL:
+- P95 latency by route: `histogram_quantile(0.95, sum by (le,endpoint) (rate(http_request_duration_seconds_bucket[5m])))`
+- Error rate: `sum by (endpoint) (increase(http_requests_total{status=~"5.."}[5m]))`
+
+### Database
+- `db_connections_active{database}`: Gauge of active DB connections.
+- `db_queries_total{database,operation}`: Counter of DB queries.
+- `db_query_duration_seconds{database,operation}`: Histogram of DB latency.
+
+### LLM
+- `llm_requests_total{provider,model,status}`: Counter of LLM calls.
+- `llm_tokens_used_total{provider,model,type}`: Counter of tokens by type `prompt|completion`.
+- `llm_request_duration_seconds{provider,model}`: Histogram of call latency.
+- `llm_cost_dollars{provider,model}`: Counter of cumulative cost (USD).
+
+### RAG
+- `rag_queries_total{pipeline,status}`: Counter of RAG queries.
+- `rag_retrieval_latency_seconds{source,pipeline}`: Histogram of retrieval latency.
+- `rag_documents_retrieved{source,pipeline}`: Histogram of docs retrieved.
+- `rag_cache_hits_total{cache_type}` / `rag_cache_misses_total{cache_type}`: Counters of cache results.
+
+### Embeddings (core)
+- `embeddings_generated_total{provider,model}`: Counter of embeddings created.
+- `embedding_generation_duration_seconds{provider,model}`: Histogram of generation time.
+
+### Embeddings v5 endpoint
+- `embedding_requests_total{provider,model,status}`: Counter of embedding requests.
+- `embedding_request_duration_seconds{provider,model}`: Histogram of request latency.
+- `embedding_cache_hits_total{provider,model}`: Counter of cache hits.
+- `embedding_cache_size`: Gauge of current embedding cache size.
+- `active_embedding_requests`: Gauge of in‑flight embedding requests.
+
+### Uploads & Storage
+- `uploads_total{user_id,media_type}`: Counter of uploaded files.
+- `upload_bytes_total{user_id,media_type}`: Counter of uploaded bytes.
 - `user_storage_used_mb{user_id}`: Gauge of current storage used (MB).
 - `user_storage_quota_mb{user_id}`: Gauge of configured storage quota (MB).
 
 Example PromQL:
 - Upload throughput (bytes/s): `rate(upload_bytes_total[1m])`
-- Top users by bytes (last 1h): `sum by (user_id) (increase(upload_bytes_total[1h]))`
+- Top users by bytes (1h): `sum by (user_id) (increase(upload_bytes_total[1h]))`
 - Users near quota: `user_storage_used_mb / user_storage_quota_mb > 0.9`
 
-Grafana: Import `Samples/Grafana/security-dashboard.json` for a starting dashboard with HTTP/security panels; extend with the upload metrics above.
+### System
+- `system_cpu_usage_percent`: Gauge of CPU usage percent.
+- `system_memory_usage_bytes`: Gauge of memory usage.
+- `system_disk_usage_bytes{mount_point}`: Gauge of disk usage by mount.
+
+### Errors & Security
+- `errors_total{component,error_type}`: Counter of errors by component.
+- `security_ssrf_block_total`: Counter of outbound URL validations blocked.
+- `security_headers_responses_total`: Counter of responses with security headers applied.
+
+### Circuit Breakers
+- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half‑open).
+- `circuit_breaker_trips_total{service,reason}`: Counter of trips.
+
+### Chat (OpenAI‑compatible Chat API)
+- Requests: `chat_requests_total{provider,model,status}`; latency: `chat_request_duration_seconds{provider,model}`.
+- Streaming: `chat_streaming_duration_seconds{conversation_id}`, `chat_streaming_chunks_total{conversation_id}`, `chat_streaming_heartbeats_total{conversation_id}`, `chat_streaming_timeouts_total{conversation_id}`.
+- Tokens: `chat_tokens_prompt{provider,model}`, `chat_tokens_completion{provider,model}`, `chat_tokens_total{provider,model}`.
+- LLM calls: `chat_llm_requests_total{provider,model,status}`, `chat_llm_latency_seconds{provider,model}`, `chat_llm_errors_total{provider,model,error_type}`, `chat_llm_cost_estimate_usd{provider,model}`.
+- Conversations: `chat_conversations_created_total{conversation_id}`, `chat_conversations_resumed_total{conversation_id}`, `chat_messages_saved_total{conversation_id,message_type}`.
+- Validation & DB: `chat_validation_failures_total`, `chat_validation_duration_seconds`, `chat_db_transactions_total{status}`, `chat_db_retries_total{retry_count}`, `chat_db_rollbacks_total`, `chat_db_operation_duration_seconds{operation}`.
+- Auth/limits: `chat_rate_limits_total{client_id}`, `chat_auth_failures_total`.
+
+Note: Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
+
+### Chunking Module
+- Requests: `chunking_requests_total{method,status}`.
+- Latency: `chunking_duration_seconds{method}`.
+- Sizes: `chunk_size_characters{method}`, `chunking_input_size_bytes{method}`.
+- Output: `chunks_per_request{method}`.
+- Cache: `chunking_cache_hits_total{method}`, `chunking_cache_misses_total{method}`, `chunking_cache_size`.
+- Errors: `chunking_errors_total{method,error_type}`.
+- Additional server metrics: `chunk_time_seconds{method,unit,splitter,language,stream}`, `chunk_output_bytes{...}`, `chunk_input_bytes{...}`, `chunk_count{...}`, `chunk_avg_chunk_size_bytes{...}`, plus gauges `chunk_last_count{...}`, `chunk_last_output_bytes{...}`.
+
+### MCP Unified
+- Requests: `mcp_requests_total{method,status}`, latency: `mcp_request_duration_seconds{method}`.
+- Modules: `mcp_module_health{module}`, `mcp_module_operations_total{module,operation,status}`.
+- Connections: `mcp_active_connections{type}`, `mcp_connection_errors_total{type,error}`.
+- Rate limits: `mcp_rate_limit_hits_total{key_type}`.
+- Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
+- System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
+
+### Prompt Studio
+- Executions: `prompt_studio.executions.total{provider,model,status}`, `prompt_studio.executions.duration_seconds{provider,model}`.
+- Tokens/Cost: `prompt_studio.tokens.used{provider,model,type}`, `prompt_studio.cost.total{provider,model}`.
+- Tests/Evals: `prompt_studio.tests.total{project,status}`, `prompt_studio.evaluations.score{project,metric_type}`, `prompt_studio.evaluations.duration_seconds{project}`.
+- Optimizations: `prompt_studio.optimizations.total{strategy,status}`, `prompt_studio.optimizations.improvement{strategy}`, `prompt_studio.optimizations.iterations{strategy}`.
+- Jobs: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.completed{job_type,status}`, `prompt_studio.jobs.duration_seconds{job_type}`.
+- WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
+- DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
+
+Grafana: Import `Samples/Grafana/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
 
 ### Platform-Specific Notes
 

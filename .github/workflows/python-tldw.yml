@@ -18,8 +18,8 @@ permissions:
   checks: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Job 1: Code Quality Checks
@@ -34,15 +34,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-quality-v2-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-quality-
-            ${{ runner.os }}-pip-
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
             
       - name: Install dependencies
         run: |
@@ -104,18 +99,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-v2-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
-            ${{ runner.os }}-pip-
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
             
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -216,15 +203,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-integration-v2-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-integration-
-            ${{ runner.os }}-pip-
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
             
       - name: Install system dependencies
         run: |
@@ -278,6 +260,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
           
       - name: Install system dependencies
         run: |
@@ -317,6 +303,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
           
       - name: Install system dependencies
         run: |
@@ -458,14 +448,7 @@ jobs:
         with:
           python-version: "3.12"
           
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-benchmark-v2-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-benchmark-
-            ${{ runner.os }}-pip-
+      # Pip cache handled by setup-python above
             
       - name: Install dependencies
         run: |
