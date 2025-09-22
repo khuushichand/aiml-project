@@ -122,7 +122,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 4 # Incremented schema version
+    _CURRENT_SCHEMA_VERSION = 7 # Schema v7 adds flashcard reverse flag
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -875,6 +875,276 @@ UPDATE db_schema_version
    AND version < 4;
 """
 
+    # --- Migration: V4 -> V5 (Flashcards/Decks/Reviews) ---
+    _MIGRATION_SQL_V4_TO_V5 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 5 – Flashcards/Decks/SRS (2025-09-21)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+/* Decks table */
+CREATE TABLE IF NOT EXISTS decks(
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT UNIQUE NOT NULL,
+  description   TEXT,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN  NOT NULL DEFAULT 0,
+  client_id     TEXT     NOT NULL DEFAULT 'unknown',
+  version       INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks(deleted);
+CREATE INDEX IF NOT EXISTS idx_decks_last_modified ON decks(last_modified);
+
+/* Flashcards table – with integer id for FTS external-content */
+CREATE TABLE IF NOT EXISTS flashcards(
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  uuid             TEXT UNIQUE NOT NULL,
+  deck_id          INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+  front            TEXT NOT NULL,
+  back             TEXT NOT NULL,
+  notes            TEXT,
+  is_cloze         BOOLEAN NOT NULL DEFAULT 0,
+  tags_json        TEXT,
+  source_ref_type  TEXT CHECK(source_ref_type IN ('media','message','note','manual')) DEFAULT 'manual',
+  source_ref_id    TEXT,
+  ef               REAL NOT NULL DEFAULT 2.5,
+  interval_days    INTEGER NOT NULL DEFAULT 0,
+  repetitions      INTEGER NOT NULL DEFAULT 0,
+  lapses           INTEGER NOT NULL DEFAULT 0,
+  due_at           DATETIME,
+  last_reviewed_at DATETIME,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN NOT NULL DEFAULT 0,
+  client_id        TEXT NOT NULL DEFAULT 'unknown',
+  version          INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_flashcards_deck_id ON flashcards(deck_id);
+CREATE INDEX IF NOT EXISTS idx_flashcards_due_at ON flashcards(due_at);
+CREATE INDEX IF NOT EXISTS idx_flashcards_deleted ON flashcards(deleted);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_uuid ON flashcards(uuid);
+
+/* FTS for flashcards (front/back/notes) */
+CREATE VIRTUAL TABLE IF NOT EXISTS flashcards_fts
+USING fts5(
+  front, back, notes,
+  content='flashcards',
+  content_rowid='id'
+);
+
+DROP TRIGGER IF EXISTS flashcards_ai;
+DROP TRIGGER IF EXISTS flashcards_au;
+DROP TRIGGER IF EXISTS flashcards_ad;
+
+CREATE TRIGGER flashcards_ai
+AFTER INSERT ON flashcards BEGIN
+  INSERT INTO flashcards_fts(rowid,front,back,notes)
+  SELECT new.id,new.front,new.back,new.notes
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER flashcards_au
+AFTER UPDATE ON flashcards BEGIN
+  INSERT INTO flashcards_fts(flashcards_fts,rowid,front,back,notes)
+  VALUES('delete',old.id,old.front,old.back,old.notes);
+
+  INSERT INTO flashcards_fts(rowid,front,back,notes)
+  SELECT new.id,new.front,new.back,new.notes
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER flashcards_ad
+AFTER DELETE ON flashcards BEGIN
+  INSERT INTO flashcards_fts(flashcards_fts,rowid,front,back,notes)
+  VALUES('delete',old.id,old.front,old.back,old.notes);
+END;
+
+/* Flashcard keyword linking */
+CREATE TABLE IF NOT EXISTS flashcard_keywords(
+  card_id    INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+  keyword_id INTEGER NOT NULL REFERENCES keywords(id)  ON DELETE CASCADE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(card_id, keyword_id)
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_kw_kw ON flashcard_keywords(keyword_id);
+CREATE INDEX IF NOT EXISTS idx_flashcard_kw_card ON flashcard_keywords(card_id);
+
+/* Reviews table (history of SRS reviews) */
+CREATE TABLE IF NOT EXISTS flashcard_reviews(
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id                INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+  reviewed_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  rating                 INTEGER NOT NULL,
+  answer_time_ms         INTEGER,
+  scheduled_interval_days INTEGER,
+  new_ef                 REAL,
+  new_repetitions        INTEGER,
+  was_lapse              BOOLEAN NOT NULL DEFAULT 0,
+  client_id              TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(card_id);
+CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_time ON flashcard_reviews(reviewed_at);
+
+/* Sync triggers for decks */
+DROP TRIGGER IF EXISTS decks_sync_create;
+DROP TRIGGER IF EXISTS decks_sync_update;
+DROP TRIGGER IF EXISTS decks_sync_delete;
+DROP TRIGGER IF EXISTS decks_sync_undelete;
+
+CREATE TRIGGER decks_sync_create
+AFTER INSERT ON decks BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('decks',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER decks_sync_update
+AFTER UPDATE ON decks
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.description IS NOT NEW.description OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER decks_sync_delete
+AFTER UPDATE ON decks
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('decks',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER decks_sync_undelete
+AFTER UPDATE ON decks
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* Sync triggers for flashcards */
+DROP TRIGGER IF EXISTS flashcards_sync_create;
+DROP TRIGGER IF EXISTS flashcards_sync_update;
+DROP TRIGGER IF EXISTS flashcards_sync_delete;
+DROP TRIGGER IF EXISTS flashcards_sync_undelete;
+
+CREATE TRIGGER flashcards_sync_create
+AFTER INSERT ON flashcards BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('flashcards',NEW.uuid,'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                     'notes',NEW.notes,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER flashcards_sync_update
+AFTER UPDATE ON flashcards
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.deck_id IS NOT NEW.deck_id OR
+     OLD.front IS NOT NEW.front OR
+     OLD.back IS NOT NEW.back OR
+     OLD.notes IS NOT NEW.notes OR
+     OLD.is_cloze IS NOT NEW.is_cloze OR
+     OLD.tags_json IS NOT NEW.tags_json OR
+     OLD.ef IS NOT NEW.ef OR
+     OLD.interval_days IS NOT NEW.interval_days OR
+     OLD.repetitions IS NOT NEW.repetitions OR
+     OLD.lapses IS NOT NEW.lapses OR
+     OLD.due_at IS NOT NEW.due_at OR
+     OLD.last_reviewed_at IS NOT NEW.last_reviewed_at OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                     'notes',NEW.notes,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER flashcards_sync_delete
+AFTER UPDATE ON flashcards
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('flashcards',NEW.uuid,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('uuid',NEW.uuid,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER flashcards_sync_undelete
+AFTER UPDATE ON flashcards
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                     'notes',NEW.notes,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* Finalise version bump to 5 */
+UPDATE db_schema_version
+   SET version = 5
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 5;
+"""
+
+    # --- Migration: V5 -> V6 (Flashcard model_type + extra) ---
+    _MIGRATION_SQL_V5_TO_V6 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 6 – Flashcard model_type + extra (2025-09-21)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE flashcards ADD COLUMN model_type TEXT NOT NULL DEFAULT 'basic' CHECK(model_type IN ('basic','basic_reverse','cloze'));
+ALTER TABLE flashcards ADD COLUMN extra TEXT;
+
+UPDATE db_schema_version
+   SET version = 6
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 6;
+"""
+
+    # --- Migration: V6 -> V7 (Flashcard reverse flag) ---
+    _MIGRATION_SQL_V6_TO_V7 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 7 – Flashcard reverse flag (2025-09-21)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE flashcards ADD COLUMN reverse BOOLEAN NOT NULL DEFAULT 0;
+
+UPDATE db_schema_version
+   SET version = 7
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 7;
+"""
+
     def __init__(self, db_path: Union[str, Path], client_id: str):
         """
         Initializes the CharactersRAGDB instance.
@@ -1228,11 +1498,11 @@ UPDATE db_schema_version
 
     def _apply_schema_v4(self, conn: sqlite3.Connection):
         """
-        Applies the full SQL schema for version `_CURRENT_SCHEMA_VERSION` (V4).
+        Applies the full SQL schema for Version 4.
 
         This method executes the `_FULL_SCHEMA_SQL_V4` script, which defines
         all tables, FTS tables, triggers, and updates the schema version record in
-        `db_schema_version` to `_CURRENT_SCHEMA_VERSION`.
+        `db_schema_version` to 4.
 
         Args:
             conn: The active sqlite3.Connection. The operations are performed
@@ -1240,27 +1510,89 @@ UPDATE db_schema_version
 
         Raises:
             SchemaError: If the schema script execution fails or the version
-                         is not correctly updated to `_CURRENT_SCHEMA_VERSION` in `db_schema_version`.
+                         is not correctly updated to 4 in `db_schema_version`.
         """
-        logger.info(f"Applying schema Version {self._CURRENT_SCHEMA_VERSION} for '{self._SCHEMA_NAME}' to DB: {self.db_path_str}...")
+        logger.info(f"Applying schema Version 4 for '{self._SCHEMA_NAME}' to DB: {self.db_path_str}...")
         try:
             # Using conn.executescript directly as it manages its own transaction
             conn.executescript(self._FULL_SCHEMA_SQL_V4)
-            logger.debug(f"[{self._SCHEMA_NAME} V{self._CURRENT_SCHEMA_VERSION}] Full schema script executed.")
+            logger.debug(f"[{self._SCHEMA_NAME} V4] Full schema script executed.")
 
             final_version = self._get_db_version(conn)
-            if final_version != self._CURRENT_SCHEMA_VERSION:
+            if final_version != 4:
                 raise SchemaError(
-                    f"[{self._SCHEMA_NAME} V{self._CURRENT_SCHEMA_VERSION}] Schema version update check failed. Expected {self._CURRENT_SCHEMA_VERSION}, got: {final_version}")
-            logger.info(f"[{self._SCHEMA_NAME} V{self._CURRENT_SCHEMA_VERSION}] Schema {self._CURRENT_SCHEMA_VERSION} applied and version confirmed for DB: {self.db_path_str}.")
+                    f"[{self._SCHEMA_NAME} V4] Schema version update check failed. Expected 4, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied and version confirmed for DB: {self.db_path_str}.")
         except sqlite3.Error as e:
-            logger.error(f"[{self._SCHEMA_NAME} V{self._CURRENT_SCHEMA_VERSION}] Schema application failed: {e}", exc_info=True)
-            raise SchemaError(f"DB schema V{self._CURRENT_SCHEMA_VERSION} setup failed for '{self._SCHEMA_NAME}': {e}") from e
+            logger.error(f"[{self._SCHEMA_NAME} V4] Schema application failed: {e}", exc_info=True)
+            raise SchemaError(f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
         except Exception as e:
-            logger.error(f"[{self._SCHEMA_NAME} V{self._CURRENT_SCHEMA_VERSION}] Unexpected error during schema V{self._CURRENT_SCHEMA_VERSION} application: {e}", exc_info=True)
-            raise SchemaError(f"Unexpected error applying schema V{self._CURRENT_SCHEMA_VERSION} for '{self._SCHEMA_NAME}': {e}") from e
+            logger.error(f"[{self._SCHEMA_NAME} V4] Unexpected error during schema V4 application: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error applying schema V4 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v4_to_v5(self, conn: sqlite3.Connection):
+        """
+        Migrates the existing database from schema version 4 to 5 (adds
+        flashcards/decks/reviews and related triggers/indices).
+        """
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V4 to V5 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V4_TO_V5)
+            final_version = self._get_db_version(conn)
+            if final_version != 5:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V4->V5 failed version check. Expected 5, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V5 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V4->V5 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V4->V5 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V4->V5: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V5 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v5_to_v6(self, conn: sqlite3.Connection):
+        """
+        Migrates schema from V5 to V6 (adds model_type, extra to flashcards).
+        """
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V5 to V6 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V5_TO_V6)
+            final_version = self._get_db_version(conn)
+            if final_version != 6:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V5->V6 failed version check. Expected 6, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V6 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V5->V6 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V5->V6 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V5->V6: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V6 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v6_to_v7(self, conn: sqlite3.Connection):
+        """Migrates schema from V6 to V7 (adds reverse flag)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V6 to V7 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V6_TO_V7)
+            final_version = self._get_db_version(conn)
+            if final_version != 7:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V6->V7 failed version check. Expected 7, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V7 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V6->V7 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V6->V7 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V6->V7: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V7 for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema(self):
         """
@@ -1299,7 +1631,18 @@ UPDATE db_schema_version
                         f"Database schema '{self._SCHEMA_NAME}' version ({current_db_version}) is newer than supported by code ({target_version}). Aborting.")
 
                 if current_db_version == 0:
-                    self._apply_schema_v4(conn) # This will apply version _CURRENT_SCHEMA_VERSION
+                    # New DB: apply V4 base then migrate to current target (>= V5)
+                    self._apply_schema_v4(conn)
+                    current_db_version = self._get_db_version(conn)
+                    if target_version >= 5 and current_db_version == 4:
+                        self._migrate_from_v4_to_v5(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 6 and current_db_version == 5:
+                        self._migrate_from_v5_to_v6(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 7 and current_db_version == 6:
+                        self._migrate_from_v6_to_v7(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Example for future migrations:
                 # elif current_db_version == 1:
                 #     self._migrate_from_v1_to_v2(conn)
@@ -1307,11 +1650,27 @@ UPDATE db_schema_version
                 #     if current_db_version == 2 and target_version > 2: # Continue if more migrations needed
                 #         self._migrate_from_v2_to_v3(conn)
                 #         # ...and so on
-                elif current_initial_version < target_version: # An older schema exists
-                    # Current simple logic: if not 0 and not target, and older, it's an unhandled migration.
-                    raise SchemaError(
-                        f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
-                        f"Manual migration or a new database may be required.")
+                elif current_initial_version < target_version:
+                    # Handle known migration paths
+                    if current_initial_version == 4 and target_version >= 5:
+                        self._migrate_from_v4_to_v5(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 6 and current_db_version == 5:
+                            self._migrate_from_v5_to_v6(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 5 and target_version >= 6:
+                        self._migrate_from_v5_to_v6(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 7 and current_db_version == 6:
+                            self._migrate_from_v6_to_v7(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 6 and target_version >= 7:
+                        self._migrate_from_v6_to_v7(conn)
+                        current_db_version = self._get_db_version(conn)
+                    else:
+                        raise SchemaError(
+                            f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
+                            f"Manual migration or a new database may be required.")
                 else: # Should not be reached due to prior checks
                     raise SchemaError(f"Unexpected schema state: current {current_initial_version}, target {target_version}")
 
@@ -3878,6 +4237,410 @@ UPDATE db_schema_version
                 """
         cursor = self.execute_query(query, (keyword_id, limit, offset))
         return [dict(row) for row in cursor.fetchall()]
+
+    # ==========================
+    # Flashcards & Decks (V5)
+    # ==========================
+    def add_deck(self, name: str, description: Optional[str] = None) -> int:
+        """Create a deck and return its id."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted) VALUES(?, ?, ?, ?, ?, 1, 0)",
+                    (name, description, now, now, self.client_id)
+                )
+                deck_id = cursor.lastrowid
+                return int(deck_id)
+        except sqlite3.IntegrityError as e:
+            if "UNIQUE constraint failed: decks.name" in str(e):
+                raise ConflictError("Deck name already exists", entity="decks", identifier=name)
+            raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
+
+    def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        cond = "" if include_deleted else "WHERE deleted = 0"
+        query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:
+            raise
+
+    def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> Optional[int]:
+        row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
+        return int(row[0]) if row else None
+
+    def add_flashcard(self, card_data: Dict[str, Any]) -> str:
+        """
+        Create a flashcard. card_data keys: deck_id (optional), front, back, notes?, is_cloze?, tags_json?,
+        source_ref_type?, source_ref_id?
+        Returns uuid.
+        """
+        now = self._get_current_utc_timestamp_iso()
+        uuid_val = self._generate_uuid()
+        deck_id = card_data.get('deck_id')
+        front = card_data['front']
+        back = card_data['back']
+        notes = card_data.get('notes')
+        extra = card_data.get('extra')
+        is_cloze = 1 if card_data.get('is_cloze') else 0
+        tags_json = card_data.get('tags_json')
+        source_ref_type = card_data.get('source_ref_type', 'manual')
+        source_ref_id = card_data.get('source_ref_id')
+        model_type = card_data.get('model_type')
+        reverse_flag = card_data.get('reverse')
+        if not model_type:
+            if is_cloze:
+                model_type = 'cloze'
+            else:
+                model_type = 'basic_reverse' if reverse_flag else 'basic'
+        if model_type not in ('basic', 'basic_reverse', 'cloze'):
+            raise InputError("Invalid model_type; must be 'basic','basic_reverse','cloze'")
+        # If reverse is not explicitly set, derive from model_type
+        if reverse_flag is None:
+            reverse_flag = 1 if model_type == 'basic_reverse' else 0
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO flashcards(uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
+                                           source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                                           lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version, model_type, reverse)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1, ?, ?)
+                    """,
+                    (uuid_val, deck_id, front, back, notes, extra, is_cloze, tags_json, source_ref_type, source_ref_id,
+                     now, now, self.client_id, model_type, 1 if reverse_flag else 0)
+                )
+                return uuid_val
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to add flashcard: {e}") from e
+
+    def add_flashcards_bulk(self, cards: List[Dict[str, Any]]) -> List[str]:
+        """Bulk create flashcards; returns list of uuids in same order."""
+        uuids: List[str] = []
+        try:
+            with self.transaction() as conn:
+                for card_data in cards:
+                    uuid_val = self._generate_uuid()
+                    uuids.append(uuid_val)
+                    now = self._get_current_utc_timestamp_iso()
+                    deck_id = card_data.get('deck_id')
+                    front = card_data['front']
+                    back = card_data['back']
+                    notes = card_data.get('notes')
+                    is_cloze = 1 if card_data.get('is_cloze') else 0
+                    tags_json = card_data.get('tags_json')
+                    source_ref_type = card_data.get('source_ref_type', 'manual')
+                    source_ref_id = card_data.get('source_ref_id')
+                    conn.execute(
+                        """
+                        INSERT INTO flashcards(uuid, deck_id, front, back, notes, is_cloze, tags_json,
+                                               source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                                               lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version)
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1)
+                        """,
+                        (uuid_val, deck_id, front, back, notes, is_cloze, tags_json, source_ref_type, source_ref_id,
+                         now, now, self.client_id)
+                    )
+            return uuids
+        except KeyError as e:
+            raise InputError(f"Missing required field in bulk flashcard: {e}") from e
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {e}") from e
+
+    def list_flashcards(self,
+                        deck_id: Optional[int] = None,
+                        tag: Optional[str] = None,
+                        due_status: str = 'all',
+                        q: Optional[str] = None,
+                        include_deleted: bool = False,
+                        limit: int = 100,
+                        offset: int = 0,
+                        order_by: str = 'due_at') -> List[Dict[str, Any]]:
+        """List flashcards with filters. due_status in {'new','learning','due','all'}."""
+        where_clauses = ["1=1"]
+        params: List[Any] = []
+        if not include_deleted:
+            where_clauses.append("f.deleted = 0")
+        if deck_id is not None:
+            where_clauses.append("f.deck_id = ?")
+            params.append(deck_id)
+        # due filter
+        now_iso = self._get_current_utc_timestamp_iso()
+        if due_status == 'new':
+            where_clauses.append("f.last_reviewed_at IS NULL")
+        elif due_status == 'learning':
+            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+        elif due_status == 'due':
+            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
+
+        # tag filter (single tag)
+        join_tag = ""
+        if tag:
+            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            where_clauses.append("kw.keyword = ?")
+            params.append(tag)
+
+        # FTS filter
+        fts_filter = ""
+        if q:
+            fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
+            params.append(q)
+
+        # order by
+        order_sql = "ORDER BY f.due_at, f.created_at DESC" if order_by == 'due_at' else "ORDER BY f.created_at DESC"
+
+        where_sql = " AND ".join(where_clauses)
+        query = f"""
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
+            FROM flashcards f
+            LEFT JOIN decks d ON d.id = f.deck_id
+            {join_tag}
+            WHERE {where_sql} {fts_filter}
+            {order_sql}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:
+            raise
+
+    def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> Dict[str, Any]:
+        """
+        Apply SM-2 style scheduling update and return new values.
+        rating: 0-5 (Anki scale). q<3 counts as lapse.
+        """
+        q = max(0, min(5, int(rating)))
+        was_lapse = q < 3
+        if was_lapse:
+            lapses += 1
+            repetitions = 0
+            interval_days = 1
+            # EF unchanged for lapse (keep, clamp)
+        else:
+            # Ease factor update
+            ef = ef + 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)
+            ef = max(1.3, ef)
+            repetitions += 1
+            if repetitions == 1:
+                interval_days = 1
+            elif repetitions == 2:
+                interval_days = 6
+            else:
+                interval_days = int(round(interval_days * ef)) if interval_days > 0 else 6
+        return {
+            'ef': float(ef),
+            'interval_days': int(interval_days),
+            'repetitions': int(repetitions),
+            'lapses': int(lapses),
+            'was_lapse': was_lapse,
+        }
+
+    def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                card = conn.execute(
+                    "SELECT id, ef, interval_days, repetitions, lapses FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (card_uuid,)
+                ).fetchone()
+                if not card:
+                    raise CharactersRAGDBError("Flashcard not found or deleted")
+                card_id = int(card['id'])
+                upd = self._srs_sm2_update(card['ef'], card['interval_days'], card['repetitions'], card['lapses'], rating)
+
+                # Compute next due date
+                due_at = datetime.now(timezone.utc) + timedelta(days=upd['interval_days'])
+                due_at_iso = due_at.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+                conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET ef = ?, interval_days = ?, repetitions = ?, lapses = ?,
+                           last_reviewed_at = ?, due_at = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (upd['ef'], upd['interval_days'], upd['repetitions'], upd['lapses'], now, due_at_iso, now, self.client_id, card_id)
+                )
+                conn.execute(
+                    """
+                    INSERT INTO flashcard_reviews(card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days, new_ef, new_repetitions, was_lapse, client_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (card_id, now, int(rating), answer_time_ms, upd['interval_days'], upd['ef'], upd['repetitions'], 1 if upd['was_lapse'] else 0, self.client_id)
+                )
+                updated = conn.execute(
+                    "SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at, last_modified, version FROM flashcards WHERE id = ?",
+                    (card_id,)
+                ).fetchone()
+                return dict(updated)
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e
+
+    def export_flashcards_csv(self,
+                              deck_id: Optional[int] = None,
+                              tag: Optional[str] = None,
+                              q: Optional[str] = None) -> bytes:
+        """Export flashcards to CSV suitable for Anki import. Columns: Deck, Front, Back, Tags, Notes."""
+        rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
+        # Anki text import accepts tab-delimited; Tags space-delimited
+        output_lines: List[str] = []
+        for r in rows:
+            deck_name = r.get('deck_name') or ''
+            front = r.get('front') or ''
+            back = r.get('back') or ''
+            tags = ''
+            if r.get('tags_json'):
+                try:
+                    tags_list = json.loads(r['tags_json'])
+                    if isinstance(tags_list, list):
+                        tags = " ".join(str(t) for t in tags_list)
+                except Exception:
+                    tags = ''
+            notes = r.get('notes') or ''
+            # Escape tabs/newlines minimally
+            def esc(s: str) -> str:
+                return s.replace('\t', ' ').replace('\r', ' ').replace('\n', ' ').strip()
+            output_lines.append("\t".join([esc(deck_name), esc(front), esc(back), esc(tags), esc(notes)]))
+        csv_bytes = ("\n".join(output_lines) + "\n").encode('utf-8')
+        return csv_bytes
+
+    def get_flashcard(self, card_uuid: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single flashcard by uuid (active only)."""
+        query = """
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
+              FROM flashcards f
+              LEFT JOIN decks d ON d.id = f.deck_id
+             WHERE f.uuid = ? AND f.deleted = 0
+        """
+        try:
+            cur = self.execute_query(query, (card_uuid,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:
+            raise
+
+    def update_flashcard(self, card_uuid: str, updates: Dict[str, Any], expected_version: Optional[int] = None) -> bool:
+        """
+        Update mutable fields: deck_id, front, back, notes, is_cloze, tags_json.
+        If expected_version is provided, enforce optimistic locking.
+        """
+        allowed = {"deck_id", "front", "back", "notes", "extra", "is_cloze", "tags_json", "model_type", "reverse"}
+        set_parts = []
+        params: List[Any] = []
+        for k, v in updates.items():
+            if k in allowed:
+                set_parts.append(f"{k} = ?")
+                params.append(v)
+        if not set_parts:
+            return True
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
+        params.extend([now, self.client_id])
+
+        try:
+            with self.transaction() as conn:
+                # get id and (optionally) version
+                row = conn.execute("SELECT id, version FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
+                if not row:
+                    raise CharactersRAGDBError("Flashcard not found or deleted")
+                card_id, current_version = int(row[0]), int(row[1])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating flashcard", entity="flashcards", identifier=card_uuid)
+                params_final = params + [card_id]
+                query = f"UPDATE flashcards SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                rc = conn.execute(query, tuple(params_final)).rowcount
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to update flashcard: {e}") from e
+
+    def soft_delete_flashcard(self, card_uuid: str, expected_version: int) -> bool:
+        """Soft delete a flashcard with optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id, version, deleted FROM flashcards WHERE uuid = ?", (card_uuid,)).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)
+                card_id, cur_ver, deleted = int(row[0]), int(row[1]), int(row[2])
+                if deleted:
+                    return True
+                if cur_ver != expected_version:
+                    raise ConflictError("Version mismatch deleting flashcard", entity="flashcards", identifier=card_uuid)
+                rc = conn.execute(
+                    "UPDATE flashcards SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND deleted = 0",
+                    (now, expected_version + 1, self.client_id, card_id)
+                ).rowcount
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete flashcard: {e}") from e
+
+    def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
+        """Return keywords linked to a flashcard."""
+        query = """
+            SELECT kw.*
+              FROM flashcards f
+              JOIN flashcard_keywords fk ON fk.card_id = f.id
+              JOIN keywords kw ON kw.id = fk.keyword_id
+             WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
+             ORDER BY kw.keyword COLLATE NOCASE
+        """
+        try:
+            cur = self.execute_query(query, (card_uuid,))
+            return [dict(r) for r in cur.fetchall()]
+        except CharactersRAGDBError:
+            raise
+
+    def set_flashcard_tags(self, card_uuid: str, tags: List[str]) -> bool:
+        """
+        Replace flashcard tags (keywords) with provided list.
+        Ensures keywords exist, links missing, removes extra.
+        Also updates flashcards.tags_json accordingly.
+        """
+        norm_tags = [t.strip() for t in tags if t and t.strip()]
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
+                if not row:
+                    raise CharactersRAGDBError("Flashcard not found or deleted")
+                card_id = int(row[0])
+                # current keyword ids
+                cur_kw_ids = set(r[0] for r in conn.execute(
+                    "SELECT keyword_id FROM flashcard_keywords WHERE card_id = ?", (card_id,)
+                ).fetchall())
+                # ensure keywords exist and collect ids
+                desired_kw_ids = set()
+                for t in norm_tags:
+                    # add or get
+                    kw = self.get_keyword_by_text(t)
+                    if not kw:
+                        kid = self.add_keyword(t)
+                    else:
+                        kid = kw['id']
+                    desired_kw_ids.add(int(kid))
+                # link missing
+                for kid in desired_kw_ids - cur_kw_ids:
+                    conn.execute("INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)",
+                                 (card_id, int(kid), self._get_current_utc_timestamp_iso()))
+                # unlink extras
+                for kid in cur_kw_ids - desired_kw_ids:
+                    conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
+                # update tags_json mirror
+                conn.execute("UPDATE flashcards SET tags_json = ?, last_modified = ?, version = version + 1, client_id = ? WHERE id = ?",
+                             (json.dumps(norm_tags), self._get_current_utc_timestamp_iso(), self.client_id, card_id))
+                return True
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to set flashcard tags: {e}") from e
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

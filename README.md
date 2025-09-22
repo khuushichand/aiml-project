@@ -367,7 +367,9 @@ See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Dock
 
 ## Metrics Cheatsheet
 
-The server exports extensive metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Scrape `GET /api/v1/metrics` for Prometheus text or `GET /api/v1/metrics/json` for structured stats.
+The server exports extensive metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Scrape `GET /api/v1/metrics` for Prometheus text or `GET /api/v1/metrics/json` for structured stats. Also available:
+- `GET /api/v1/metrics/health`: Health snapshot with `status`, `active_requests`, `active_streams`, `active_transactions`.
+- `GET /api/v1/metrics/chat`: Chat‑specific metrics and `token_costs` map.
 
 ### HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -388,11 +390,19 @@ Example PromQL:
 - `llm_request_duration_seconds{provider,model}`: Histogram of call latency.
 - `llm_cost_dollars{provider,model}`: Counter of cumulative cost (USD).
 
+Example PromQL:
+- P95 latency per model: `histogram_quantile(0.95, sum by (le,provider,model) (rate(llm_request_duration_seconds_bucket[5m])))`
+- Cost per minute by provider: `sum by (provider) (rate(llm_cost_dollars[5m]))`
+
 ### RAG
 - `rag_queries_total{pipeline,status}`: Counter of RAG queries.
 - `rag_retrieval_latency_seconds{source,pipeline}`: Histogram of retrieval latency.
 - `rag_documents_retrieved{source,pipeline}`: Histogram of docs retrieved.
 - `rag_cache_hits_total{cache_type}` / `rag_cache_misses_total{cache_type}`: Counters of cache results.
+
+Example PromQL:
+- P95 retrieval latency by source: `histogram_quantile(0.95, sum by (le,source) (rate(rag_retrieval_latency_seconds_bucket[5m])))`
+- Cache hit rate: `sum(rate(rag_cache_hits_total[5m])) / (sum(rate(rag_cache_hits_total[5m])) + sum(rate(rag_cache_misses_total[5m])))`
 
 ### Embeddings (core)
 - `embeddings_generated_total{provider,model}`: Counter of embeddings created.
@@ -438,6 +448,10 @@ Example PromQL:
 - Conversations: `chat_conversations_created_total{conversation_id}`, `chat_conversations_resumed_total{conversation_id}`, `chat_messages_saved_total{conversation_id,message_type}`.
 - Validation & DB: `chat_validation_failures_total`, `chat_validation_duration_seconds`, `chat_db_transactions_total{status}`, `chat_db_retries_total{retry_count}`, `chat_db_rollbacks_total`, `chat_db_operation_duration_seconds{operation}`.
 - Auth/limits: `chat_rate_limits_total{client_id}`, `chat_auth_failures_total`.
+
+Example PromQL:
+- Chat error rate: `sum(increase(chat_errors_total[5m]))`
+- Streaming timeouts (rate): `rate(chat_streaming_timeouts_total[5m])`
 
 Note: Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
 

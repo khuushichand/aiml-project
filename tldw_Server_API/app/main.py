@@ -106,6 +106,9 @@ from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as 
 # Chatbooks Endpoint
 from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
 #
+# Flashcards Endpoint (V5 - ChaChaNotes)
+from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+#
 # LLM Providers Endpoint
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
 from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router
@@ -1181,6 +1184,9 @@ app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
 
 # Router for Tools endpoint
 app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+
+# Router for Flashcards
+app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
 
 
 # Router for MCP Unified (Secure, production-ready implementation)
