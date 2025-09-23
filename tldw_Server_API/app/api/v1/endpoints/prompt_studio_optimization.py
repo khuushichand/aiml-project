@@ -46,7 +46,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import Database
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/optimizations",
-    tags=["Prompt Studio"],
+    tags=["Prompt Studio (Experimental)"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},

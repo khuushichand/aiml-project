@@ -36,7 +36,7 @@ from ..schemas.prompt_studio_schemas import (
     EvaluationMetrics,
 )
 
-router = APIRouter(prefix="/api/v1/prompt-studio")
+router = APIRouter(prefix="/api/v1/prompt-studio", tags=["Prompt Studio (Experimental)"])
 
 @router.post(
     "/evaluations",

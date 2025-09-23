@@ -105,3 +105,9 @@ class FlashcardQuery(BaseModel):
     limit: Optional[int] = Field(100, ge=1, le=1000)
     offset: Optional[int] = Field(0, ge=0)
     order_by: Optional[Literal['due_at', 'created_at']] = 'due_at'
+
+
+class FlashcardsImportRequest(BaseModel):
+    content: str = Field(..., description="TSV content: Deck, Front, Back, Tags, Notes per line")
+    delimiter: Optional[str] = Field('\t', description="Field delimiter; default tab")
+    has_header: Optional[bool] = Field(False, description="Whether the first line is a header")

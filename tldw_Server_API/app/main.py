@@ -650,13 +650,13 @@ OPENAPI_TAGS = [
     {"name": "notes", "description": "Notes and knowledge management (NotebookLM-style)."},
     {"name": "prompts", "description": "Prompt library management (import/export).",
      "externalDocs": {"description": "Prompts design", "url": "/docs-static/Design/Prompts.md"}},
-    {"name": "Prompt Studio", "description": "Projects, prompts, tests, optimization, and background jobs.",
+    {"name": "Prompt Studio (Experimental)", "description": "Projects, prompts, tests, optimization, and background jobs (experimental).",
      "externalDocs": {"description": "Prompt Studio API", "url": "/docs-static/API-related/Prompt_Studio_API.md"}},
     {"name": "RAG - Health", "description": "RAG health, caching, and metrics.",
      "externalDocs": {"description": "RAG notes", "url": "/docs-static/RAG_Notes.md"}},
     {"name": "RAG - Unified", "description": "Unified RAG: FTS5 + embeddings + re-ranking.",
      "externalDocs": {"description": "RAG notes", "url": "/docs-static/RAG_Notes.md"}},
-    {"name": "Workflows", "description": "Workflow definitions and execution (scaffolding).",
+    {"name": "Workflows (Experimental)", "description": "Workflow definitions and execution (scaffolding, experimental).",
      "externalDocs": {"description": "Workflows", "url": "/docs-static/Design/Workflows.md"}},
     {"name": "research", "description": "Research providers and web data collection.",
      "externalDocs": {"description": "Researcher", "url": "/docs-static/Design/Researcher.md"}},
@@ -667,8 +667,9 @@ OPENAPI_TAGS = [
     {"name": "config", "description": "Server configuration and capability info."},
     {"name": "sync", "description": "Synchronization operations and helpers."},
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
-    {"name": "MCP Unified", "description": "Production-ready MCP server + endpoints (JWT/RBAC).",
+    {"name": "MCP Unified (Experimental)", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
      "externalDocs": {"description": "MCP v2 Developer Guide", "url": "/docs-static/MCP_Docs/MCP_v2_Developer_Guide.md"}},
+    {"name": "flashcards (Experimental)", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": "/docs-static/API-related/Chatbook_Features_API_Documentation.md"}},
     {"name": "llm", "description": "LLM provider configuration and discovery.",
@@ -1144,12 +1145,12 @@ app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prom
 
 
 # Router for Prompt Studio endpoints
-app.include_router(prompt_studio_projects_router, tags=["Prompt Studio"])
-app.include_router(prompt_studio_prompts_router, tags=["Prompt Studio"])
-app.include_router(prompt_studio_test_cases_router, tags=["Prompt Studio"])
-app.include_router(prompt_studio_optimization_router, tags=["Prompt Studio"])
-app.include_router(prompt_studio_evaluations_router, tags=["Prompt Studio"])
-app.include_router(prompt_studio_websocket_router, tags=["Prompt Studio"])
+app.include_router(prompt_studio_projects_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_prompts_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_test_cases_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_optimization_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_evaluations_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_websocket_router, tags=["Prompt Studio (Experimental)"])
 
 
 # Router for RAG endpoints
@@ -1160,7 +1161,7 @@ app.include_router(rag_unified_router, tags=["RAG - Unified"])
 
 
 # Workflows API (v0.1 scaffolding)
-app.include_router(workflows_router, tags=["Workflows"])
+app.include_router(workflows_router, tags=["Workflows (Experimental)"])
 
 
 # Router for Research endpoint
@@ -1186,11 +1187,11 @@ app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
 app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
 
 # Router for Flashcards
-app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
+app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards (Experimental)"])
 
 
 # Router for MCP Unified (Secure, production-ready implementation)
-app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["MCP Unified"])
+app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["MCP Unified (Experimental)"])
 # Note: Old MCP routers have been archived due to security vulnerabilities
 
 # Router for Chatbooks - import/export functionality

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TLDW Server – Auth (Multi‑User)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; max-width: 800px; }
+    h1 { margin-bottom: 0.25rem; }
+    .muted { color: #666; margin-top: 0; }
+    form { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    label { display: block; margin: 0.5rem 0 0.25rem; }
+    input[type="text"], input[type="password"], input[type="email"] { width: 100%; padding: 0.5rem; }
+    button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; cursor: pointer; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .card { flex: 1 1 360px; }
+    pre { background: #f7f7f7; padding: 0.75rem; border-radius: 6px; overflow: auto; }
+    .hidden { display: none; }
+    .ok { color: #107c10; }
+    .warn { color: #b36b00; }
+    .err { color: #b00020; }
+  </style>
+  <script>
+    async function getConfig() {
+      try {
+        const r = await fetch('/webui/config.json', { cache: 'no-store' });
+        return await r.json();
+      } catch { return { mode: 'unknown' }; }
+    }
+
+    function setOutput(elId, data, klass) {
+      const el = document.getElementById(elId);
+      el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      el.className = klass || '';
+    }
+
+    async function registerUser(ev) {
+      ev.preventDefault();
+      const username = document.getElementById('reg_username').value.trim();
+      const email = document.getElementById('reg_email').value.trim();
+      const password = document.getElementById('reg_password').value;
+      const registration_code = document.getElementById('reg_code').value.trim() || null;
+      try {
+        const r = await fetch('/api/v1/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, email, password, registration_code })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || r.statusText);
+        setOutput('reg_result', data, 'ok');
+      } catch (e) {
+        setOutput('reg_result', String(e), 'err');
+      }
+    }
+
+    async function login(ev) {
+      ev.preventDefault();
+      const username = document.getElementById('login_username').value.trim();
+      const password = document.getElementById('login_password').value;
+      const form = new URLSearchParams();
+      form.set('username', username);
+      form.set('password', password);
+      try {
+        const r = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: form.toString()
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || r.statusText);
+        // Persist access token for WebUI clients (optional)
+        if (data.access_token) {
+          localStorage.setItem('tldw_access_token', data.access_token);
+        }
+        setOutput('login_result', data, 'ok');
+      } catch (e) {
+        setOutput('login_result', String(e), 'err');
+      }
+    }
+
+    function copyToken() {
+      const pre = document.getElementById('login_result');
+      try {
+        const obj = JSON.parse(pre.textContent);
+        if (obj && obj.access_token) {
+          navigator.clipboard.writeText(obj.access_token);
+          alert('Access token copied to clipboard');
+        } else {
+          alert('No token found');
+        }
+      } catch {
+        alert('No token found');
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      const cfg = await getConfig();
+      const modeEl = document.getElementById('mode');
+      modeEl.textContent = (cfg && cfg.mode) ? cfg.mode : 'unknown';
+      if (cfg && cfg.mode === 'single-user') {
+        document.getElementById('mu_hint').classList.remove('hidden');
+        document.getElementById('forms').classList.add('hidden');
+      }
+    });
+  </script>
+  </head>
+  <body>
+    <h1>Authentication</h1>
+    <p class="muted">Mode: <strong id="mode">detecting…</strong></p>
+
+    <p id="mu_hint" class="hidden warn">Single-user mode detected. For multi-user testing with SQLite, set <code>AUTH_MODE=multi_user</code> and restart the server. In single-user mode, use the API key shown at startup.</p>
+
+    <div id="forms" class="row">
+      <div class="card">
+        <form onsubmit="registerUser(event)">
+          <h2>Register</h2>
+          <label for="reg_username">Username</label>
+          <input type="text" id="reg_username" required />
+          <label for="reg_email">Email</label>
+          <input type="email" id="reg_email" required />
+          <label for="reg_password">Password</label>
+          <input type="password" id="reg_password" required />
+          <label for="reg_code">Registration Code (optional)</label>
+          <input type="text" id="reg_code" />
+          <button type="submit">Create Account</button>
+          <pre id="reg_result"></pre>
+        </form>
+      </div>
+
+      <div class="card">
+        <form onsubmit="login(event)">
+          <h2>Login</h2>
+          <label for="login_username">Username or Email</label>
+          <input type="text" id="login_username" required />
+          <label for="login_password">Password</label>
+          <input type="password" id="login_password" required />
+          <button type="submit">Get Token</button>
+          <button type="button" onclick="copyToken()">Copy Token</button>
+          <pre id="login_result"></pre>
+        </form>
+      </div>
+    </div>
+
+    <p>
+      Tip: After logging in, the access token is saved to <code>localStorage</code> as <code>tldw_access_token</code> for WebUI clients.
+    </p>
+  </body>
+  </html>
+

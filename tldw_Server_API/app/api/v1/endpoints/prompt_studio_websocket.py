@@ -23,7 +23,7 @@ from loguru import logger
 # Create router
 router = APIRouter(
     prefix="/api/v1/prompt-studio/ws",
-    tags=["Prompt Studio"]
+    tags=["Prompt Studio (Experimental)"]
 )
 
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (

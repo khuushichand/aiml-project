@@ -4488,11 +4488,19 @@ UPDATE db_schema_version
     def export_flashcards_csv(self,
                               deck_id: Optional[int] = None,
                               tag: Optional[str] = None,
-                              q: Optional[str] = None) -> bytes:
-        """Export flashcards to CSV suitable for Anki import. Columns: Deck, Front, Back, Tags, Notes."""
+                              q: Optional[str] = None,
+                              *,
+                              delimiter: str = '\t',
+                              include_header: bool = False) -> bytes:
+        """Export flashcards to delimited text. Columns: Deck, Front, Back, Tags, Notes.
+        Args:
+            delimiter: field separator (default tab)
+            include_header: include a header row
+        """
         rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
-        # Anki text import accepts tab-delimited; Tags space-delimited
         output_lines: List[str] = []
+        if include_header:
+            output_lines.append(delimiter.join(["Deck", "Front", "Back", "Tags", "Notes"]))
         for r in rows:
             deck_name = r.get('deck_name') or ''
             front = r.get('front') or ''
@@ -4506,11 +4514,11 @@ UPDATE db_schema_version
                 except Exception:
                     tags = ''
             notes = r.get('notes') or ''
-            # Escape tabs/newlines minimally
+            # Escape delimiter/tabs/newlines minimally
             def esc(s: str) -> str:
-                return s.replace('\t', ' ').replace('\r', ' ').replace('\n', ' ').strip()
-            output_lines.append("\t".join([esc(deck_name), esc(front), esc(back), esc(tags), esc(notes)]))
-        csv_bytes = ("\n".join(output_lines) + "\n").encode('utf-8')
+                return s.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ').replace(delimiter, ' ').strip()
+            output_lines.append(delimiter.join([esc(deck_name), esc(front), esc(back), esc(tags), esc(notes)]))
+        csv_bytes = ("\n".join(output_lines) + ("\n" if output_lines else "")).encode('utf-8')
         return csv_bytes
 
     def get_flashcard(self, card_uuid: str) -> Optional[Dict[str, Any]]:

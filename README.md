@@ -109,8 +109,12 @@ More details: see `Docs/API-related/AuthNZ-API-Guide.md` and `tldw_Server_API/ap
 
 All features were (are) designed to run **locally** on your device, ensuring privacy and data ownership. The tool was (is) open-source and free to use, with the goal of supporting research, learning, and personal knowledge management.
 
-It has now been rewritten as a FastAPI python Server application, in order to support larger deployments and multiple users. This includes:
-- FIXME
+It has now been rewritten as a FastAPI Python server to support larger deployments and multiple users. This includes:
+- A modern FastAPI backend with OpenAPI docs and integrated WebUI
+- OpenAI-compatible Chat, Embeddings, STT/TTS endpoints
+- AuthNZ module with single-user (API key) and multi-user (JWT) modes
+- Hybrid RAG (FTS5 + vector + re-ranking) and a unified RAG API
+- Multi-provider LLM integration (commercial + local)
 
 </details>
 
@@ -228,6 +232,10 @@ tldw_server is built as a modern, scalable API service:
 - **Authentication**: JWT tokens with role-based access control
 - **Background Jobs**: Async task processing for long operations
 - **Extensibility**: Plugin system via MCP (Model Context Protocol)
+
+#### Database Scope (v0.1)
+- **AuthNZ/User DB**: Supports PostgreSQL (recommended for multi-user) and SQLite (dev/local). Configure via `DATABASE_URL`.
+- **Content/Media DBs**: SQLite with FTS5 by default (media, notes, characters, chat). PostgreSQL for content DBs is on the roadmap.
 
 ### Project Structure
 ```
@@ -672,6 +680,30 @@ Key settings in `.env`:
 - **[AuthNZ API Guide](Docs/API-related/AuthNZ-API-Guide.md)** - Complete API reference with examples
 
 </details>
+
+### Quick Setup (Multi‑User with SQLite – Dev)
+
+For local/dev multi-user without Postgres:
+
+```bash
+# 1) Enable multi-user mode with SQLite AuthNZ DB
+export AUTH_MODE=multi_user
+export DATABASE_URL=sqlite:///./Databases/users.db
+
+# 2) Initialize the AuthNZ database
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+
+# 3) Start the server
+uvicorn tldw_Server_API.app.main:app --reload
+
+# 4) Open the simple auth page to register/login and get a JWT
+open http://127.0.0.1:8000/webui/auth.html   # macOS
+# xdg-open on Linux, or just paste the URL in a browser
+```
+
+Notes
+- This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
+- The auth page posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
 
 ---
 

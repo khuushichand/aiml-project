@@ -23,12 +23,13 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     FlashcardQuery,
     FlashcardUpdate,
     FlashcardTagsUpdate,
+    FlashcardsImportRequest,
 )
 import json
 
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 
-router = APIRouter(prefix="/flashcards", tags=["flashcards"])
+router = APIRouter(prefix="/flashcards", tags=["flashcards (Experimental)"])
 
 
 @router.post("/decks", response_model=Deck)
@@ -222,6 +223,110 @@ def get_flashcard_tags(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_
         raise HTTPException(status_code=500, detail="Failed to get flashcard tags")
 
 
+@router.post("/import")
+def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
+    try:
+        delimiter = payload.delimiter or '\t'
+        raw_lines = [ln for ln in (payload.content or '').splitlines()]
+        header_map: dict[str, int] = {}
+        lines = raw_lines
+        if payload.has_header and raw_lines:
+            header = raw_lines[0]
+            lines = raw_lines[1:]
+            cols = [c.strip() for c in header.split(delimiter)]
+            # Build header map (lower-cased keys)
+            for idx, name in enumerate(cols):
+                lname = name.strip().lower()
+                header_map[lname] = idx
+        # Build or cache decks by name
+        decks_cache: dict[str, int] = {}
+        # Preload existing decks once
+        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        created: list[dict] = []
+        for raw in lines:
+            if not raw.strip():
+                continue
+            parts = raw.split(delimiter)
+            # Default mapping: Deck, Front, Back, Tags, Notes
+            deck_name = front = back = tags_s = notes = extra = model_type = deck_desc = None
+            reverse_flag = None
+            is_cloze_flag = None
+            def get_col(*names: str) -> Optional[str]:
+                for nm in names:
+                    idx = header_map.get(nm)
+                    if idx is not None and idx < len(parts):
+                        return parts[idx].strip()
+                return None
+
+            if header_map:
+                deck_name = get_col('deck', 'deckname', 'deck_name') or ''
+                deck_desc = get_col('deckdescription', 'deck_description', 'deckdesc', 'deck desc')
+                front = get_col('front', 'question') or ''
+                back = get_col('back', 'answer') or ''
+                tags_s = get_col('tags') or ''
+                notes = get_col('notes', 'note') or ''
+                extra = get_col('extra', 'back extra', 'back_extra') or None
+                model_type = (get_col('model_type', 'model', 'type') or '').lower() or None
+                rev_val = (get_col('reverse', 'reversed') or '').lower()
+                if rev_val in ('1', 'true', 'yes', 'y', 'on'):
+                    reverse_flag = True
+                elif rev_val in ('0', 'false', 'no', 'n', 'off'):
+                    reverse_flag = False
+                ic_val = (get_col('iscloze', 'is_cloze') or '').lower()
+                if ic_val in ('1', 'true', 'yes', 'y', 'on'):
+                    is_cloze_flag = True
+                elif ic_val in ('0', 'false', 'no', 'n', 'off'):
+                    is_cloze_flag = False
+            else:
+                # Expect 5 columns: Deck, Front, Back, Tags, Notes
+                if len(parts) < 5:
+                    parts = parts + [''] * (5 - len(parts))
+                deck_name, front, back, tags_s, notes = [p.strip() for p in parts[:5]]
+                extra = None
+                model_type = None
+                reverse_flag = None
+                deck_desc = None
+                is_cloze_flag = None
+            # Resolve deck
+            deck_id = None
+            if deck_name:
+                if deck_name in decks_cache:
+                    deck_id = decks_cache[deck_name]
+                else:
+                    if deck_name in existing_decks:
+                        deck_id = existing_decks[deck_name]
+                    else:
+                        deck_id = db.add_deck(deck_name, description=deck_desc)
+                        existing_decks[deck_name] = deck_id
+                    decks_cache[deck_name] = deck_id
+            # Parse tags from space-delimited
+            tags_list = [t for t in (tags_s or '').replace(',', ' ').split() if t]
+            # Create card
+            data: dict = {
+                'deck_id': deck_id,
+                'front': front,
+                'back': back,
+                'notes': notes,
+                'tags_json': json.dumps(tags_list) if tags_list else None,
+                'model_type': model_type or 'basic',
+                'reverse': bool(reverse_flag) if reverse_flag is not None else False,
+            }
+            if extra:
+                data['extra'] = extra
+            # If model_type indicates cloze, set is_cloze
+            if (model_type or '').lower() == 'cloze' or is_cloze_flag:
+                data['is_cloze'] = True
+            uuid = db.add_flashcard(data)
+            created.append({'uuid': uuid, 'deck_id': deck_id})
+            # Also ensure keyword links reflect tags
+            if tags_list:
+                db.set_flashcard_tags(uuid, tags_list)
+        return {'imported': len(created), 'items': created}
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to import flashcards TSV: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards")
+
+
 @router.post("/review", response_model=FlashcardReviewResponse)
 def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
@@ -239,6 +344,8 @@ def export_flashcards(
     q: Optional[str] = None,
     format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
     include_reverse: Optional[bool] = False,
+    delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
+    include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
@@ -248,9 +355,12 @@ def export_flashcards(
             return StreamingResponse(iter([apkg]), media_type="application/apkg",
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv
-        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q)
-        return StreamingResponse(iter([data]), media_type="text/tab-separated-values; charset=utf-8",
-                                 headers={"Content-Disposition": "attachment; filename=flashcards.tsv"})
+        dlm = delimiter or '\t'
+        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q, delimiter=dlm, include_header=bool(include_header))
+        media_type = "text/tab-separated-values; charset=utf-8" if dlm == '\t' else "text/csv; charset=utf-8"
+        filename = "flashcards.tsv" if dlm == '\t' else "flashcards.csv"
+        return StreamingResponse(iter([data]), media_type=media_type,
+                                 headers={"Content-Disposition": f"attachment; filename={filename}"})
     except CharactersRAGDBError as e:
         logger.error(f"Failed to export flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to export flashcards")

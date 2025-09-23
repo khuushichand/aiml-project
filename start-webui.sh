@@ -109,7 +109,8 @@ if [ ! -z "$SINGLE_USER_API_KEY" ]; then
 elif [ "$AUTH_MODE" = "multi_user" ]; then
     echo -e "${BLUE}Authentication:${NC}"
     echo -e "  Mode: ${YELLOW}Multi-User${NC}"
-    echo -e "  Please log in through the WebUI to obtain a token."
+    echo -e "  Please register/login via the WebUI to obtain a token:"
+    echo -e "    ${GREEN}http://localhost:8000/webui/auth.html${NC}"
 else
     echo -e "${BLUE}Authentication:${NC}"
     echo -e "  Mode: ${YELLOW}Manual Configuration Required${NC}"

@@ -13,6 +13,11 @@ from pydantic import Field, field_validator
 #
 # Local imports
 from loguru import logger
+try:
+    # Prefer centralized loader to honor project config precedence
+    from tldw_Server_API.app.core.config import load_comprehensive_config
+except Exception:
+    load_comprehensive_config = None  # Fallback if import graph changes
 
 #######################################################################################################################
 #
@@ -437,11 +442,56 @@ class Settings(BaseSettings):
 _settings: Optional[Settings] = None
 
 
+def _bool_from_str(val: str) -> bool:
+    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _load_overrides_from_config() -> dict:
+    """Load Settings overrides from Config_Files/config.txt (AuthNZ section).
+
+    Environment variables retain precedence; only provide values that are
+    NOT already present in the environment.
+    """
+    overrides = {}
+    if not load_comprehensive_config:
+        return overrides
+    try:
+        cfg = load_comprehensive_config()
+        if not cfg or not cfg.has_section("AuthNZ"):
+            return overrides
+
+        def maybe_set(field: str, key: str, caster=lambda v: v):
+            # Map config key to Settings field if env var not set
+            env_name = field
+            if os.getenv(env_name) is None and cfg.has_option("AuthNZ", key):
+                try:
+                    overrides[field] = caster(cfg.get("AuthNZ", key))
+                except Exception:
+                    pass
+
+        maybe_set("AUTH_MODE", "auth_mode", lambda v: v.strip())
+        maybe_set("DATABASE_URL", "database_url", lambda v: v.strip())
+        maybe_set("JWT_SECRET_KEY", "jwt_secret_key", lambda v: v.strip())
+        maybe_set("SINGLE_USER_API_KEY", "single_user_api_key", lambda v: v.strip())
+        maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
+        maybe_set("REQUIRE_REGISTRATION_CODE", "require_registration_code", _bool_from_str)
+        maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
+        maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
+        maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
+        maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
+        maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
+        maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
+    except Exception as e:
+        logger.debug(f"AuthNZ settings: failed to load overrides from config.txt: {e}")
+    return overrides
+
+
 def get_settings() -> Settings:
-    """Get settings singleton instance"""
+    """Get settings singleton instance with optional config.txt overrides"""
     global _settings
     if not _settings:
-        _settings = Settings()
+        overrides = _load_overrides_from_config()
+        _settings = Settings(**overrides)
         logger.info(f"Settings initialized - Auth mode: {_settings.AUTH_MODE}")
     return _settings
 

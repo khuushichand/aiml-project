@@ -93,15 +93,19 @@ video_summarize_prompt = "Above is the transcript of a video. Please read throug
 
 
 [Database]
-# Database backend type: 'sqlite' or 'postgresql' (PostgreSQL support pending integration)
+# NOTE: This section configures the CONTENT/MEDIA databases (not AuthNZ).
+# AuthNZ/User DB is configured via the `DATABASE_URL` environment variable and supports PostgreSQL
+# (recommended for multi-user) and SQLite (dev/local). This section below controls the media/notes/characters/chat DBs.
+#
+# Content DB backend type: currently 'sqlite' only in v0.1 (FTS5-based search). PostgreSQL for content DBs is on the roadmap.
 type = sqlite
 sqlite_path = Databases/server_media_summary.db
 backup_path = ./tldw_DB_Backups/
 #Path to the backup location for the database. If the path does not exist, the backup will not be created.
 
-# PostgreSQL Configuration (Not yet integrated - backend files exist but not connected)
-# Uncomment and configure if you want to use PostgreSQL instead of SQLite
-# WARNING: PostgreSQL support is NOT functional yet - integration pending
+# PostgreSQL Configuration for CONTENT DBs (Roadmap)
+# PostgreSQL for content/media DBs is not yet integrated in v0.1. Keep using SQLite here.
+# The AuthNZ/User DB already supports PostgreSQL via `DATABASE_URL`.
 # type = postgresql
 # pg_host = localhost
 # pg_port = 5432
@@ -223,6 +227,31 @@ video_adaptive_chunking = false
 video_chunking_multi_level = false
 video_language = english
 chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
+
+
+[AuthNZ]
+# Optional: configure authentication and AuthNZ DB via config.txt.
+# Environment variables still take precedence.
+#
+# Authentication mode: single_user (API key) or multi_user (JWT)
+auth_mode = single_user
+# AuthNZ database (PostgreSQL recommended for production multi-user; SQLite OK for dev)
+database_url = sqlite:///./Databases/users.db
+# Secrets (for dev only; prefer .env or real env in production)
+# jwt_secret_key = CHANGE_ME_MIN_32_CHARS
+# single_user_api_key = CHANGE_ME_SECURE_KEY
+# Registration controls
+enable_registration = true
+require_registration_code = false
+# Rate limits (Auth endpoints)
+rate_limit_enabled = true
+rate_limit_per_minute = 60
+rate_limit_burst = 10
+# Token lifetimes
+access_token_expire_minutes = 30
+refresh_token_expire_days = 7
+# Optional Redis for sessions
+# redis_url = redis://localhost:6379/0
 
 
 [Embeddings]
