@@ -61,6 +61,10 @@ class WorkflowRun:
     idempotency_key: Optional[str]
     session_id: Optional[str]
     cancel_requested: Optional[int] = 0
+    # Accounting fields (nullable)
+    tokens_input: Optional[int] = None
+    tokens_output: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 class WorkflowsDatabase:

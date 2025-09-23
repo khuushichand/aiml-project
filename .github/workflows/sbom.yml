@@ -1,0 +1,72 @@
+name: SBOM
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate Python SBOM from pyproject (cdxgen)
+        run: |
+          if [ -f pyproject.toml ]; then \
+            npx @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
+          fi
+
+      - name: Generate Node SBOM (cyclonedx-npm)
+        run: |
+          if [ -f package.json ]; then \
+            npx @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
+          fi
+
+      - name: Generate Source SBOM with Syft (CycloneDX JSON)
+        uses: anchore/syft-action@v0.16.0
+        with:
+          args: dir:. -o cyclonedx-json=sbom-syft.cdx.json
+
+      - name: Setup Python (for merge/validate)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cyclonedx-cli
+        run: python -m pip install cyclonedx-cli
+
+      - name: Merge SBOMs
+        run: |
+          FILES=""
+          [ -f sbom-python.cdx.json ] && FILES="$FILES sbom-python.cdx.json"
+          [ -f sbom-frontend.cdx.json ] && FILES="$FILES sbom-frontend.cdx.json"
+          [ -f sbom-syft.cdx.json ] && FILES="$FILES sbom-syft.cdx.json"
+          if [ -n "$FILES" ]; then \
+            cyclonedx-cli merge --input-files $FILES --output-file sbom.cdx.json; \
+          else \
+            echo "No component SBOMs to merge"; \
+          fi
+
+      - name: Validate merged SBOM
+        run: |
+          if [ -f sbom.cdx.json ]; then \
+            python -m cyclonedx_cli validate --input-file sbom.cdx.json; \
+          fi
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-python.cdx.json
+            sbom-frontend.cdx.json
+            sbom-syft.cdx.json
+            sbom.cdx.json

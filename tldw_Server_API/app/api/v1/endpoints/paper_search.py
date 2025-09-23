@@ -23,21 +23,14 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     BioRxivPubsSearchRequestForm,
     BioRxivPubsSearchResponse,
     BioRxivPublishedRecord,
+    PubMedSearchRequestForm,
+    PubMedSearchResponse,
+    PubMedPaper,
 )
-from tldw_Server_API.app.core.Third_Party.Arxiv import (
-    search_arxiv_custom_api,
-    get_arxiv_by_id,
-)
-from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import (
-    search_papers_semantic_scholar,
-    get_paper_details_semantic_scholar,
-)
-from tldw_Server_API.app.core.Third_Party.BioRxiv import (
-    search_biorxiv,
-    get_biorxiv_by_doi,
-    search_biorxiv_pubs,
-    get_biorxiv_published_by_doi,
-)
+from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
+from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
+from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
+from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
 
 
 router = APIRouter()
@@ -62,7 +55,7 @@ async def paper_search_arxiv(
     try:
         papers_list, total_results_from_api, error_message = await loop.run_in_executor(
             None,
-            search_arxiv_custom_api,
+            Arxiv.search_arxiv_custom_api,
             search_params.query,
             search_params.author,
             search_params.year,
@@ -117,7 +110,7 @@ async def paper_search_biorxiv(
     try:
         items, total_results, error_message = await loop.run_in_executor(
             None,
-            search_biorxiv,
+            BioRxiv.search_biorxiv,
             search_params.q,
             search_params.server,
             search_params.from_date,
@@ -175,7 +168,7 @@ async def paper_search_biorxiv_by_doi(
     try:
         item, error_message = await loop.run_in_executor(
             None,
-            get_biorxiv_by_doi,
+            BioRxiv.get_biorxiv_by_doi,
             doi,
             server,
         )
@@ -215,7 +208,7 @@ async def paper_search_semantic_scholar(
     try:
         api_response_data, error_message = await loop.run_in_executor(
             None,
-            search_papers_semantic_scholar,
+            Semantic_Scholar.search_papers_semantic_scholar,
             search_params.query,
             offset,
             search_params.results_per_page,
@@ -295,7 +288,7 @@ async def paper_search_biorxiv_pubs(
     try:
         items, total_results, error_message = await loop.run_in_executor(
             None,
-            search_biorxiv_pubs,
+            BioRxiv.search_biorxiv_pubs,
             search_params.server,
             search_params.from_date,
             search_params.to_date,
@@ -346,6 +339,69 @@ async def paper_search_biorxiv_pubs(
 
 
 @router.get(
+    "/pubmed",
+    response_model=PubMedSearchResponse,
+    summary="Search PubMed",
+    tags=["paper-search"],
+)
+async def paper_search_pubmed(
+    search_params: PubMedSearchRequestForm = Depends(),
+):
+    """Provider-specific search for PubMed with pagination via E-utilities."""
+    offset = (search_params.page - 1) * search_params.results_per_page
+    logger.info(
+        f"/paper-search/pubmed: q='{search_params.q}', from_year={search_params.from_year}, to_year={search_params.to_year}, free_full_text={search_params.free_full_text}, page={search_params.page}, size={search_params.results_per_page}"
+    )
+    loop = asyncio.get_running_loop()
+    try:
+        items, total_results, error_message = await loop.run_in_executor(
+            None,
+            PubMed.search_pubmed,
+            search_params.q,
+            offset,
+            search_params.results_per_page,
+            search_params.from_year,
+            search_params.to_year,
+            search_params.free_full_text,
+        )
+        if error_message:
+            logger.error(f"PubMed provider error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"PubMed API request timed out: {error_message}")
+            if "http error" in error_message.lower():
+                # Try to extract status code
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=f"PubMed API error: {error_message}")
+            raise HTTPException(status_code=502, detail=f"PubMed API error: {error_message}")
+        if items is None:
+            raise HTTPException(status_code=500, detail="PubMed search failed to return data.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PubMed search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected PubMed error: {str(e)}")
+
+    total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+    if total_results == 0:
+        total_pages = 0
+
+    return PubMedSearchResponse(
+        query_echo={
+            "q": search_params.q,
+            "from_year": search_params.from_year,
+            "to_year": search_params.to_year,
+            "free_full_text": search_params.free_full_text,
+        },
+        items=[PubMedPaper(**it) for it in items],
+        total_results=total_results,
+        page=search_params.page,
+        results_per_page=search_params.results_per_page,
+        total_pages=total_pages,
+    )
+
+
+@router.get(
     "/biorxiv-pubs/by-doi",
     response_model=BioRxivPublishedRecord,
     summary="Get published metadata by DOI (bioRxiv/medRxiv)",
@@ -360,7 +416,7 @@ async def paper_search_biorxiv_pubs_by_doi(
     try:
         item, error_message = await loop.run_in_executor(
             None,
-            get_biorxiv_published_by_doi,
+            BioRxiv.get_biorxiv_published_by_doi,
             doi,
             server,
         )
@@ -393,7 +449,7 @@ async def paper_search_arxiv_by_id(
 ):
     loop = asyncio.get_running_loop()
     try:
-        item, error_message = await loop.run_in_executor(None, get_arxiv_by_id, id)
+        item, error_message = await loop.run_in_executor(None, Arxiv.get_arxiv_by_id, id)
         if error_message:
             logger.error(f"arXiv by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
@@ -422,7 +478,7 @@ async def paper_search_semantic_scholar_by_id(
     try:
         data, error_message = await loop.run_in_executor(
             None,
-            get_paper_details_semantic_scholar,
+            Semantic_Scholar.get_paper_details_semantic_scholar,
             paper_id,
         )
         if error_message:
@@ -444,3 +500,37 @@ async def paper_search_semantic_scholar_by_id(
     except Exception as e:
         logger.error(f"Unexpected Semantic Scholar by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Unexpected Semantic Scholar by-id error: {str(e)}")
+
+
+@router.get(
+    "/pubmed/by-id",
+    response_model=PubMedPaper,
+    summary="Get PubMed record by PMID (with abstract)",
+    tags=["paper-search"],
+)
+async def paper_search_pubmed_by_id(
+    pmid: str = Query(..., description="PubMed PMID, e.g., 12345678"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(
+            None,
+            PubMed.get_pubmed_by_id,
+            pmid,
+        )
+        if error_message:
+            logger.error(f"PubMed by-id provider error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"PubMed API request timed out: {error_message}")
+            if "http error" in error_message.lower():
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=f"PubMed API error: {error_message}")
+        if not item:
+            raise HTTPException(status_code=404, detail="Record not found for PMID")
+        return PubMedPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PubMed by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected PubMed by-id error: {str(e)}")

@@ -662,7 +662,7 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Workflows", "url": "/docs-static/Design/Workflows.md"}},
     {"name": "research", "description": "Research providers and web data collection.",
      "externalDocs": {"description": "Researcher", "url": "/docs-static/Design/Researcher.md"}},
-    {"name": "paper-search", "description": "Provider-specific paper search (arXiv, BioRxiv/MedRxiv, Semantic Scholar).",
+    {"name": "paper-search", "description": "Provider-specific paper search (arXiv, BioRxiv/MedRxiv, PubMed, Semantic Scholar).",
      "externalDocs": {"description": "Paper Search", "url": "/docs-static/Design/PaperSearch.md"}},
     {"name": "evaluations", "description": "Unified evaluation APIs (geval, batch, metrics).",
      "externalDocs": {"description": "Eval report", "url": "/docs-static/EVALUATION_TEST_REPORT.md"}},

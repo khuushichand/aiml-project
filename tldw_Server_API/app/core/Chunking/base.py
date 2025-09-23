@@ -283,23 +283,7 @@ class ChunkerConfig:
         logger.info(f"ChunkerConfig initialized with method={self.default_method.value if hasattr(self.default_method, 'value') else self.default_method}, "
                    f"max_size={default_max_size}, overlap={default_overlap}")
 
-
-# Custom exceptions
-class ChunkingError(Exception):
-    """Base exception for chunking errors."""
-    pass
-
-
-class InvalidInputError(ChunkingError):
-    """Exception raised for invalid input."""
-    pass
-
-
-class InvalidChunkingMethodError(ChunkingError):
-    """Exception raised for invalid chunking method."""
-    pass
-
-
-class TokenizerError(ChunkingError):
-    """Exception raised for tokenizer-related errors."""
-    pass
+    
+    # Note: Exceptions for the chunking module live in
+    # tldw_Server_API.app.core.Chunking.exceptions. This file intentionally
+    # avoids duplicating those definitions.

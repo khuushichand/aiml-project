@@ -105,3 +105,43 @@ class BioRxivPubsSearchRequestForm:
 
 
 # End of paper_search_schemas.py
+ 
+class PubMedPaper(BaseModel):
+    pmid: str
+    title: str
+    authors: Optional[str] = None
+    journal: Optional[str] = None
+    pub_date: Optional[str] = None
+    abstract: Optional[str] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    pmcid: Optional[str] = None
+    pmc_url: Optional[str] = None
+    pdf_url: Optional[str] = None
+
+
+class PubMedSearchResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[PubMedPaper]
+    total_results: int
+    page: int
+    results_per_page: int
+    total_pages: int
+
+
+class PubMedSearchRequestForm:
+    def __init__(
+        self,
+        q: str = Query(..., min_length=1, description="PubMed search query (supports normal PubMed syntax)."),
+        from_year: Optional[int] = Query(None, ge=1800, le=2100, description="Filter by publication year start (YYYY)."),
+        to_year: Optional[int] = Query(None, ge=1800, le=2100, description="Filter by publication year end (YYYY)."),
+        free_full_text: bool = Query(False, description="Restrict to 'Free full text' articles."),
+        page: int = Query(1, ge=1, description="Page number (1-indexed)."),
+        results_per_page: int = Query(10, ge=1, le=100, description="Results per page (max 100)."),
+    ):
+        self.q = q
+        self.from_year = from_year
+        self.to_year = to_year
+        self.free_full_text = free_full_text
+        self.page = page
+        self.results_per_page = results_per_page

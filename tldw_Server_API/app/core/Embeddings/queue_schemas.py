@@ -38,10 +38,27 @@ class UserTier(str, Enum):
 
 
 class ChunkingConfig(BaseModel):
-    """Configuration for text chunking"""
-    chunk_size: int = Field(default=1000, ge=100, le=10000)
-    overlap: int = Field(default=200, ge=0, le=500)
-    separator: str = "\n"
+    """Configuration for text chunking
+
+    Defaults mirror legacy character-based behavior while enabling optional
+    upgrades to use the v2 Chunker and/or templates when fields are set.
+    """
+    # Core sizing
+    chunk_size: int = Field(default=1000, ge=100, le=10000, description="Primary size parameter; interpreted per 'unit' if using v2 Chunker, else characters")
+    overlap: int = Field(default=200, ge=0, le=500, description="Overlap amount (interpreted per 'unit' if using v2 Chunker, else characters)")
+    separator: str = Field(default="\n", description="Preferred break character for fallback char-based chunking")
+
+    # v2 Chunker options (optional)
+    method: Optional[str] = Field(default=None, description="Chunking method for v2 Chunker (e.g., 'words', 'sentences', 'paragraphs', 'tokens', 'semantic', 'json', 'xml', 'ebook_chapters', 'propositions')")
+    unit: Optional[str] = Field(default=None, description="Unit for interpreting chunk_size/overlap when using v2 Chunker; one of: 'words', 'tokens', or 'chars'. Defaults to method-appropriate behavior or to 'words'.")
+    language: Optional[str] = Field(default=None, description="Language hint for v2 Chunker")
+
+    # Template processing (optional; uses built-in template manager)
+    template_name: Optional[str] = Field(default=None, description="Apply a named template (preprocess → chunk → postprocess) for chunking")
+    hierarchical: Optional[bool] = Field(default=None, description="Enable hierarchical parsing when supported by template or method")
+    hierarchical_template: Optional[Dict[str, Any]] = Field(default=None, description="Custom hierarchical boundary rules when hierarchical is enabled")
+
+    # Legacy/contextual fields (unchanged)
     preserve_metadata: bool = True
     contextualize: bool = False  # Whether to add context via LLM
     contextual_llm_model: Optional[str] = Field(default=None, description="LLM model for contextualization")

@@ -6,21 +6,51 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+# Optional v2 chunker for consistent chunk semantics
+try:
+    from tldw_Server_API.app.core.Chunking.chunker import Chunker as V2Chunker
+    from tldw_Server_API.app.core.Chunking.templates import TemplateManager
+except Exception:  # graceful import failure for isolated tests/envs
+    V2Chunker = None  # type: ignore
+    TemplateManager = None  # type: ignore
+
 from ..queue_schemas import (
     ChunkData,
     ChunkingMessage,
     EmbeddingMessage,
     JobStatus,
+    ChunkingConfig,
 )
 from .base_worker import BaseWorker, WorkerConfig
 
 
 class ChunkingWorker(BaseWorker):
-    """Worker that processes text chunking tasks"""
+    """Worker that processes text chunking tasks
+
+    Behavior:
+    - Uses the v2 Chunker (words-based) by default for consistency with API/templates,
+      producing chunks with accurate start/end offsets.
+    - Gracefully falls back to simple character-based chunking with optional
+      separator-aware splits if Chunker is unavailable.
+    """
     
     def __init__(self, config: WorkerConfig):
         super().__init__(config)
         self.embedding_queue = config.queue_name.replace("chunking", "embedding")
+        # Initialize v2 chunker if available
+        self._v2_chunker = None
+        self._template_mgr = None
+        if V2Chunker is not None:
+            try:
+                self._v2_chunker = V2Chunker()
+                logger.debug("Initialized v2 Chunker for embeddings chunking worker")
+            except Exception as e:
+                logger.warning(f"Failed to initialize v2 Chunker; will use simple chunking. Error: {e}")
+        if TemplateManager is not None:
+            try:
+                self._template_mgr = TemplateManager()
+            except Exception as e:
+                logger.warning(f"Failed to initialize TemplateManager; templates will be unavailable. Error: {e}")
         
     def _parse_message(self, data: Dict[str, Any]) -> ChunkingMessage:
         """Parse raw message data into ChunkingMessage"""
@@ -37,9 +67,7 @@ class ChunkingWorker(BaseWorker):
             # Perform chunking
             chunks = self._chunk_text(
                 message.content,
-                message.chunking_config.chunk_size,
-                message.chunking_config.overlap,
-                message.chunking_config.separator
+                message.chunking_config,
             )
             
             # Create chunk data objects
@@ -93,51 +121,134 @@ class ChunkingWorker(BaseWorker):
         )
         logger.debug(f"Sent job {result.job_id} to embedding queue")
     
-    def _chunk_text(
-        self,
-        text: str,
-        chunk_size: int,
-        overlap: int,
-        separator: str
-    ) -> List[tuple[str, int, int]]:
+    def _chunk_text(self, text: str, *args, **kwargs) -> List[tuple[str, int, int]]:
+        """Chunk helper supporting both legacy and v2-config signatures.
+
+        - New: _chunk_text(text, cfg: ChunkingConfig)
+        - Legacy: _chunk_text(text, chunk_size: int, overlap: int, separator: str)
+        """
+        # Build config from args/kwargs
+        cfg: Optional[ChunkingConfig] = None
+        if args:
+            first = args[0]
+            if isinstance(first, ChunkingConfig):
+                cfg = first
+            else:
+                # Legacy positional: chunk_size, overlap, separator
+                chunk_size = int(first)
+                overlap = int(args[1]) if len(args) > 1 else 0
+                separator = str(args[2]) if len(args) > 2 else "\n"
+                # For very small legacy sizes, keep direct fallback semantics
+                if chunk_size < 100:
+                    return self._legacy_char_chunk(text, chunk_size, overlap, separator)
+                cfg = ChunkingConfig(chunk_size=chunk_size, overlap=overlap, separator=separator)
+        if cfg is None:
+            # Attempt kwargs
+            if 'cfg' in kwargs and isinstance(kwargs['cfg'], ChunkingConfig):
+                cfg = kwargs['cfg']
+            else:
+                chunk_size = int(kwargs.get('chunk_size', 1000))
+                overlap = int(kwargs.get('overlap', 200))
+                separator = str(kwargs.get('separator', "\n"))
+                if chunk_size < 100:
+                    return self._legacy_char_chunk(text, chunk_size, overlap, separator)
+                cfg = ChunkingConfig(chunk_size=chunk_size, overlap=overlap, separator=separator)
         """
         Split text into chunks with overlap.
         Returns list of (chunk_text, start_index, end_index) tuples.
+
+        Order of precedence when v2 Chunker is available:
+        1) If a template_name is provided, use TemplateManager to process text.
+        2) Else, if a method is provided, use v2 Chunker with that method.
+        3) Else, default to v2 Chunker with words-based chunking (char→word mapping).
+        If v2 Chunker or TemplateManager are unavailable, use the legacy
+        character-based fallback.
         """
         if not text:
             return []
-        
-        chunks = []
-        
-        # Simple chunking by character count with overlap
-        # In production, you might want more sophisticated chunking
-        # that respects sentence/paragraph boundaries
-        
+
+        # Prefer v2 chunker for consistency with API/templates
+        if self._v2_chunker is not None:
+            try:
+                # 1) Template path
+                if getattr(cfg, 'template_name', None) and self._template_mgr is not None:
+                    processed = self._template_mgr.process(text, cfg.template_name)
+                    out: List[tuple[str, int, int]] = []
+                    cursor = 0
+                    for item in (processed or []):
+                        if isinstance(item, dict) and 'text' in item:
+                            chunk_text = str(item.get('text', '')).strip()
+                        else:
+                            chunk_text = str(item).strip()
+                        if not chunk_text:
+                            continue
+                        idx = text.find(chunk_text, cursor)
+                        if idx == -1:
+                            idx = text.find(chunk_text)
+                        if idx == -1:
+                            continue
+                        start_idx = idx
+                        end_idx = idx + len(chunk_text)
+                        out.append((chunk_text, start_idx, end_idx))
+                        cursor = end_idx
+                    if out:
+                        return out
+
+                # 2) Method path
+                method = (cfg.method or 'words')
+                unit = (cfg.unit or None)
+                language = getattr(cfg, 'language', None)
+
+                # If unit explicitly chars, use fallback
+                if unit == 'chars' and method != 'tokens':
+                    raise RuntimeError('fallback_char_unit')
+
+                # Determine sizes (map char→words when unit is unspecified and default method 'words')
+                chunk_size_val = int(cfg.chunk_size)
+                overlap_val = int(cfg.overlap)
+                if unit is None and method == 'words':
+                    chunk_size_val = max(1, chunk_size_val // 5)
+                    overlap_val = max(0, overlap_val // 5)
+
+                results = self._v2_chunker.chunk_text_with_metadata(
+                    text,
+                    method=method,
+                    max_size=chunk_size_val,
+                    overlap=overlap_val,
+                    language=language,
+                )
+                out2: List[tuple[str, int, int]] = []
+                for r in results:
+                    start_idx = int(getattr(r.metadata, 'start_char', 0) or 0)
+                    end_idx = int(getattr(r.metadata, 'end_char', start_idx + len(r.text)) or (start_idx + len(r.text)))
+                    if r.text and 0 <= start_idx <= end_idx <= len(text):
+                        out2.append((r.text, start_idx, end_idx))
+                if out2:
+                    return out2
+            except Exception as e:
+                logger.warning(f"v2 chunker failed; falling back to simple chunking. Error: {e}")
+
+        # Fallback: simple character-based chunking with optional separator awareness
+        return self._legacy_char_chunk(text, int(cfg.chunk_size), int(cfg.overlap), cfg.separator or '')
+
+    def _legacy_char_chunk(self, text: str, chunk_size: int, overlap: int, separator: str) -> List[tuple[str, int, int]]:
+        """Legacy character-based chunking with optional separator-awareness."""
+        chunks: List[tuple[str, int, int]] = []
+        if not text:
+            return chunks
         start = 0
         text_length = len(text)
-        
         while start < text_length:
-            # Calculate end position
-            end = min(start + chunk_size, text_length)
-            
-            # Try to find a good break point (separator)
+            end = min(start + max(1, chunk_size), text_length)
             if end < text_length and separator:
-                # Look for separator within last 20% of chunk
-                search_start = max(start, end - int(chunk_size * 0.2))
+                search_start = max(start, end - int(max(1, chunk_size) * 0.2))
                 last_separator = text.rfind(separator, search_start, end)
-                
                 if last_separator != -1:
                     end = last_separator + len(separator)
-            
-            # Extract chunk
             chunk = text[start:end].strip()
-            
-            if chunk:  # Only add non-empty chunks
+            if chunk:
                 chunks.append((chunk, start, end))
-            
-            # Move start position
-            start = end - overlap if end < text_length else text_length
-        
+            start = end - max(0, overlap) if end < text_length else text_length
         return chunks
     
     def _generate_chunk_id(self, job_id: str, chunk_index: int) -> str:

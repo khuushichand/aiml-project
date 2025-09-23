@@ -130,13 +130,21 @@ Each flattened chunk contains:
 - `metadata.paragraph_kind`: block classifier (paragraph, list_unordered, header_line, table_md, ...)
 - `metadata.start_offset` / `metadata.end_offset`: exact offsets in the original text
 
-If you need a nested structure (tree), use:
+If you need a nested structure (tree) or a flattened list using the current v2 Chunker, use:
 
 ```python
-from tldw_Server_API.app.core.Chunking.Chunk_Lib import Chunker
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
+
 ck = Chunker()
-tree = ck.chunk_text_hierarchical_deep(my_text, method='sentences')
-flat_chunks = ck.flatten_hierarchical(tree)
+
+# Build a hierarchical tree (sections/blocks with offsets)
+tree = ck.chunk_text_hierarchical_tree(my_text, method='sentences')
+
+# Or directly produce a flattened list of chunks with offsets and ancestry metadata
+flat_chunks = ck.chunk_text_hierarchical_flat(
+    my_text,
+    method='sentences',
+)
 ```
 
 ## Streaming (NDJSON)

@@ -34,6 +34,11 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
   - Params: `query`, `fields_of_study`, `publication_types`, `year_range`, `venue`, `min_citations`, `page`, `results_per_page`
   - Response: `{ query_echo, items: SemanticScholarPaper[], total_results, offset, limit, next_offset, page, total_pages }`
 
+- GET `/api/v1/paper-search/pubmed`
+  - Params: `q` (query), `from_year`, `to_year`, `free_full_text` (bool), `page`, `results_per_page`
+  - Response: `{ query_echo, items: PubMedPaper[], total_results, page, results_per_page, total_pages }`
+  - Notes: Uses E-utilities (ESearch + ESummary); abstracts are not included for performance. PMC links and PDF URLs are provided when available.
+
 ## Provider Adapters
 
 - `core/Third_Party/Arxiv.py` (existing)
