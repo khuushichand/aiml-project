@@ -40,6 +40,8 @@ class BioRxivSearchRequestForm:
             None, description="End date YYYY-MM-DD. Defaults to today if omitted."
         ),
         category: Optional[str] = Query(None, description="Optional subject category to filter."),
+        recent_days: Optional[int] = Query(None, ge=1, description="Use most recent N days (alternative to date range)."),
+        recent_count: Optional[int] = Query(None, ge=1, description="Use most recent N posts (alternative to date range)."),
         page: int = Query(1, ge=1, description="Page number (1-indexed)."),
         results_per_page: int = Query(10, ge=1, le=100, description="Results per page (max 100)."),
     ):
@@ -48,6 +50,8 @@ class BioRxivSearchRequestForm:
         self.from_date = from_date
         self.to_date = to_date
         self.category = category
+        self.recent_days = recent_days
+        self.recent_count = recent_count
         self.page = page
         self.results_per_page = results_per_page
 

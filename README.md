@@ -810,6 +810,7 @@ Providers API reference: `Docs/API-related/Providers_API_Documentation.md`
 - `GET /api/v1/paper-search/arxiv` - Search arXiv papers
 - `GET /api/v1/paper-search/biorxiv` - Search BioRxiv/MedRxiv papers
 - `GET /api/v1/paper-search/semantic-scholar` - Search Semantic Scholar
+ - `GET /api/v1/paper-search/biorxiv/by-doi` - Fetch BioRxiv/MedRxiv by DOI
 
 ### Example Usage
 

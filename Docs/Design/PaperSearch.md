@@ -18,6 +18,13 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
   - Params: `q`, `server` (biorxiv|medrxiv), `from_date` (YYYY-MM-DD), `to_date` (YYYY-MM-DD), `category`, `page`, `results_per_page`
   - Response: `{ query_echo, items: BioRxivPaper[], total_results, page, results_per_page, total_pages }`
   - Notes: The public API exposes date-window listing via `/details/{server}/{from}/{to}/{cursor}`; keyword and category filters are applied client-side over fetched batches (page fill guaranteed, but filtered totals are best-effort).
+  - Optional intervals: `recent_days` (maps to `Nd`), `recent_count` (maps to `N`) via `/details/{server}/{interval}/{cursor}`.
+  - Category query param is passed when provided and also enforced client-side for consistency.
+
+- GET `/api/v1/paper-search/biorxiv/by-doi`
+  - Params: `server` (biorxiv|medrxiv), `doi`
+  - Response: `BioRxivPaper`
+  - Uses `/details/{server}/{DOI}/na`.
 
 - GET `/api/v1/paper-search/semantic-scholar`
   - Params: `query`, `fields_of_study`, `publication_types`, `year_range`, `venue`, `min_citations`, `page`, `results_per_page`

@@ -197,6 +197,14 @@ def search_biorxiv(
         # Now slice according to within-batch offset and limit
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if query or category else total), None
+    except requests.exceptions.Timeout:
+        return None, 0, "Request to BioRxiv API timed out."
+    except requests.exceptions.HTTPError as e:
+        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+    except requests.exceptions.RequestException as e:
+        return None, 0, f"BioRxiv API Request Error: {str(e)}"
+    except Exception as e:
+        return None, 0, f"Unexpected error during BioRxiv search: {str(e)}"
 
 
 def get_biorxiv_by_doi(
@@ -233,14 +241,7 @@ def get_biorxiv_by_doi(
         return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
         return None, f"Unexpected error during BioRxiv DOI lookup: {str(e)}"
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
-    except Exception as e:
-        return None, 0, f"Unexpected error during BioRxiv search: {str(e)}"
+    
 
 
 # End of BioRxiv.py

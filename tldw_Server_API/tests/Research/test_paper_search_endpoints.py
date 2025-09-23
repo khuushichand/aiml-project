@@ -48,7 +48,7 @@ async def test_paper_search_arxiv_success(monkeypatch):
 async def test_paper_search_biorxiv_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
-    def _fake_bio(q, server, f, t, category, offset, limit):
+    def _fake_bio(q, server, f, t, category, offset, limit, recent_days=None, recent_count=None):
         items = [
             {
                 "doi": "10.1101/2020.01.01.123456",
@@ -97,3 +97,51 @@ async def test_paper_search_semantic_scholar_error_mapping(monkeypatch):
         # Expect 502 mapped from HTTP error
         assert r.status_code in (429, 502)
 
+
+@pytest.mark.asyncio
+async def test_biorxiv_by_doi_success(monkeypatch):
+    from tldw_Server_API.app.main import app
+
+    def _fake_by_doi(doi, server):
+        return {
+            "doi": doi,
+            "title": "A test preprint",
+            "authors": "A. Author; B. Author",
+            "category": "bioinformatics",
+            "date": "2024-09-01",
+            "abstract": "Test abstract",
+            "server": server,
+            "version": 1,
+            "url": f"https://www.{server}.org/content/{doi}v1",
+            "pdf_url": f"https://www.{server}.org/content/{doi}v1.full.pdf",
+        }, None
+
+    from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
+    monkeypatch.setattr(_Bio, "get_biorxiv_by_doi", _fake_by_doi)
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        r = await client.get(
+            "/api/v1/paper-search/biorxiv/by-doi",
+            params={"doi": "10.1101/2021.11.09.467936", "server": "biorxiv"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["doi"].startswith("10.1101/")
+
+
+@pytest.mark.asyncio
+async def test_biorxiv_by_doi_not_found(monkeypatch):
+    from tldw_Server_API.app.main import app
+
+    def _fake_by_doi_notfound(doi, server):
+        return None, None
+
+    from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
+    monkeypatch.setattr(_Bio, "get_biorxiv_by_doi", _fake_by_doi_notfound)
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        r = await client.get(
+            "/api/v1/paper-search/biorxiv/by-doi",
+            params={"doi": "10.1101/does.not.exist", "server": "biorxiv"},
+        )
+        assert r.status_code == 404

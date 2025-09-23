@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import (
 )
 from tldw_Server_API.app.core.Third_Party.BioRxiv import (
     search_biorxiv,
+    get_biorxiv_by_doi,
 )
 
 
@@ -117,6 +118,8 @@ async def paper_search_biorxiv(
             search_params.category,
             offset,
             search_params.results_per_page,
+            search_params.recent_days,
+            search_params.recent_count,
         )
         if error_message:
             logger.error(f"BioRxiv provider error: {error_message}")
@@ -148,6 +151,43 @@ async def paper_search_biorxiv(
         results_per_page=search_params.results_per_page,
         total_pages=total_pages,
     )
+
+
+@router.get(
+    "/biorxiv/by-doi",
+    response_model=BioRxivPaper,
+    summary="Get BioRxiv/MedRxiv paper by DOI",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_by_doi(
+    doi: str = Query(..., description="Preprint DOI (e.g., 10.1101/2021.11.09.467936)"),
+    server: str = Query("biorxiv", description="Server: biorxiv or medrxiv"),
+):
+    """Fetch a single preprint by DOI."""
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(
+            None,
+            get_biorxiv_by_doi,
+            doi,
+            server,
+        )
+        if error_message:
+            logger.error(f"BioRxiv DOI provider error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
+            # Map 404 style errors if provided
+            if "HTTP Error: 404" in error_message or "HTTP Error: 400" in error_message:
+                raise HTTPException(status_code=404, detail="Paper not found for DOI")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {error_message}")
+        if not item:
+            raise HTTPException(status_code=404, detail="Paper not found for DOI")
+        return BioRxivPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv DOI error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv DOI error: {str(e)}")
 
 
 @router.get(
@@ -232,4 +272,3 @@ async def paper_search_semantic_scholar(
 
 
 # End of paper_search.py
-

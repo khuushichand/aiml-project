@@ -133,6 +133,14 @@
                     <label for="bioRxivSearch_page">Page:</label>
                     <input type="number" id="bioRxivSearch_page" value="1" min="1">
                 </div>
+                <div class="form-group">
+                    <label for="bioRxivSearch_recent_days">Recent Days (optional):</label>
+                    <input type="number" id="bioRxivSearch_recent_days" min="1" placeholder="e.g., 7">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivSearch_recent_count">Recent Count (optional):</label>
+                    <input type="number" id="bioRxivSearch_recent_count" min="1" placeholder="e.g., 200">
+                </div>
             </div>
             <div class="column">
                 <div class="form-group">
@@ -159,5 +167,30 @@
 
         <h3>Response:</h3>
         <pre id="bioRxivSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="bioRxivByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/by-doi - Fetch by DOI</span>
+        </h2>
+        <p>Fetch a single BioRxiv/MedRxiv preprint by DOI.</p>
+        <div class="form-group">
+            <label for="bioRxivByDoi_doi">DOI:</label>
+            <input type="text" id="bioRxivByDoi_doi" placeholder="10.1101/2021.11.09.467936" value="10.1101/2021.11.09.467936">
+        </div>
+        <div class="form-group">
+            <label for="bioRxivByDoi_server">Server:</label>
+            <select id="bioRxivByDoi_server">
+                <option value="biorxiv" selected>biorxiv</option>
+                <option value="medrxiv">medrxiv</option>
+            </select>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivByDoi', 'GET', '/api/v1/paper-search/biorxiv/by-doi', 'query')">
+            Get by DOI
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivByDoi_response">---</pre>
     </div>
  </div>
