@@ -20,16 +20,23 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     BioRxivSearchRequestForm,
     BioRxivSearchResponse,
     BioRxivPaper,
+    BioRxivPubsSearchRequestForm,
+    BioRxivPubsSearchResponse,
+    BioRxivPublishedRecord,
 )
 from tldw_Server_API.app.core.Third_Party.Arxiv import (
     search_arxiv_custom_api,
+    get_arxiv_by_id,
 )
 from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import (
     search_papers_semantic_scholar,
+    get_paper_details_semantic_scholar,
 )
 from tldw_Server_API.app.core.Third_Party.BioRxiv import (
     search_biorxiv,
     get_biorxiv_by_doi,
+    search_biorxiv_pubs,
+    get_biorxiv_published_by_doi,
 )
 
 
@@ -149,7 +156,7 @@ async def paper_search_biorxiv(
         total_results=total_results,
         page=search_params.page,
         results_per_page=search_params.results_per_page,
-        total_pages=total_pages,
+    total_pages=total_pages,
     )
 
 
@@ -271,4 +278,169 @@ async def paper_search_semantic_scholar(
     )
 
 
+@router.get(
+    "/biorxiv-pubs",
+    response_model=BioRxivPubsSearchResponse,
+    summary="Search published article metadata (bioRxiv/medRxiv)",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_pubs(
+    search_params: BioRxivPubsSearchRequestForm = Depends(),
+):
+    offset = (search_params.page - 1) * search_params.results_per_page
+    logger.info(
+        f"/paper-search/biorxiv-pubs: server='{search_params.server}', page={search_params.page}, size={search_params.results_per_page}"
+    )
+    loop = asyncio.get_running_loop()
+    try:
+        items, total_results, error_message = await loop.run_in_executor(
+            None,
+            search_biorxiv_pubs,
+            search_params.server,
+            search_params.from_date,
+            search_params.to_date,
+            offset,
+            search_params.results_per_page,
+            search_params.recent_days,
+            search_params.recent_count,
+            search_params.q,
+        )
+        if error_message:
+            logger.error(f"BioRxiv pubs error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
+            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {error_message}")
+        if items is None:
+            raise HTTPException(status_code=500, detail="BioRxiv pubs search failed to return data.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv pubs search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pubs error: {str(e)}")
+
+    total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
+    if total_results == 0:
+        total_pages = 0
+    # Optionally strip abstracts for compact responses
+    if not search_params.include_abstracts:
+        for it in items:
+            if isinstance(it, dict):
+                it["preprint_abstract"] = None
+
+    return BioRxivPubsSearchResponse(
+        query_echo={
+            "server": search_params.server,
+            "from_date": search_params.from_date,
+            "to_date": search_params.to_date,
+            "recent_days": search_params.recent_days,
+            "recent_count": search_params.recent_count,
+            "q": search_params.q,
+            "include_abstracts": search_params.include_abstracts,
+        },
+        items=[BioRxivPublishedRecord(**it) for it in items],
+        total_results=total_results,
+        page=search_params.page,
+        results_per_page=search_params.results_per_page,
+        total_pages=total_pages,
+    )
+
+
+@router.get(
+    "/biorxiv-pubs/by-doi",
+    response_model=BioRxivPublishedRecord,
+    summary="Get published metadata by DOI (bioRxiv/medRxiv)",
+    tags=["paper-search"],
+)
+async def paper_search_biorxiv_pubs_by_doi(
+    doi: str = Query(..., description="Preprint or published DOI"),
+    server: str = Query("biorxiv", description="Server: biorxiv or medrxiv"),
+    include_abstracts: bool = Query(True, description="Include preprint_abstract field in result"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(
+            None,
+            get_biorxiv_published_by_doi,
+            doi,
+            server,
+        )
+        if error_message:
+            logger.error(f"BioRxiv pubs by-doi error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
+        if not item:
+            raise HTTPException(status_code=404, detail="Published record not found for DOI")
+        if not include_abstracts and isinstance(item, dict):
+            item["preprint_abstract"] = None
+        return BioRxivPublishedRecord(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected BioRxiv pubs by-doi error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pubs by-doi error: {str(e)}")
+
+
 # End of paper_search.py
+
+@router.get(
+    "/arxiv/by-id",
+    response_model=ArxivPaper,
+    summary="Get arXiv paper by arXiv ID",
+    tags=["paper-search"],
+)
+async def paper_search_arxiv_by_id(
+    id: str = Query(..., description="arXiv ID, e.g., 1706.03762"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(None, get_arxiv_by_id, id)
+        if error_message:
+            logger.error(f"arXiv by-id provider error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"arXiv API request timed out: {error_message}")
+            raise HTTPException(status_code=502, detail=f"arXiv API error: {error_message}")
+        if not item:
+            raise HTTPException(status_code=404, detail="Paper not found for arXiv ID")
+        return ArxivPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected arXiv by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected arXiv by-id error: {str(e)}")
+
+
+@router.get(
+    "/semantic-scholar/by-id",
+    response_model=SemanticScholarPaper,
+    summary="Get Semantic Scholar paper by paperId",
+    tags=["paper-search"],
+)
+async def paper_search_semantic_scholar_by_id(
+    paper_id: str = Query(..., description="Semantic Scholar paperId"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        data, error_message = await loop.run_in_executor(
+            None,
+            get_paper_details_semantic_scholar,
+            paper_id,
+        )
+        if error_message:
+            logger.error(f"Semantic Scholar by-id provider error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=f"Semantic Scholar API request timed out: {error_message}")
+            if "HTTP Error" in error_message:
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=f"Semantic Scholar API error: {error_message}")
+            raise HTTPException(status_code=502, detail=f"Semantic Scholar API error: {error_message}")
+        if not data:
+            raise HTTPException(status_code=404, detail="Paper not found for paperId")
+        if data.get("openAccessPdf") is None:
+            data.pop("openAccessPdf", None)
+        return SemanticScholarPaper(**data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected Semantic Scholar by-id error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected Semantic Scholar by-id error: {str(e)}")

@@ -41,12 +41,30 @@
         <button class="api-button" onclick="makeRequest('arxivSearch', 'GET', '/api/v1/paper-search/arxiv', 'query')">
             Search arXiv
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="arxivSearch_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="arxivSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="arxivById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/arxiv/by-id - Fetch by arXiv ID</span>
+        </h2>
+        <p>Fetch a single arXiv paper by its arXiv ID.</p>
+        <div class="form-group">
+            <label for="arxivById_id">arXiv ID:</label>
+            <input type="text" id="arxivById_id" placeholder="1706.03762" value="1706.03762">
+        </div>
+        <button class="api-button" onclick="makeRequest('arxivById', 'GET', '/api/v1/paper-search/arxiv/by-id', 'query')">
+            Get by ID
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="arxivById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="arxivById_response">---</pre>
     </div>
 </div>
 
@@ -99,6 +117,24 @@
         
         <h3>Response:</h3>
         <pre id="semanticSearch_response">---</pre>
+        <div class="endpoint-section" id="semanticById">
+            <h2>
+                <span class="endpoint-method get">GET</span>
+                <span class="endpoint-path">/api/v1/paper-search/semantic-scholar/by-id - Fetch by paperId</span>
+            </h2>
+            <p>Fetch a paper by Semantic Scholar `paperId`.</p>
+            <div class="form-group">
+                <label for="semanticById_paper_id">paperId:</label>
+                <input type="text" id="semanticById_paper_id" placeholder="abcdef" value="abcdef">
+            </div>
+            <button class="api-button" onclick="makeRequest('semanticById', 'GET', '/api/v1/paper-search/semantic-scholar/by-id', 'query')">
+                Get by paperId
+            </button>
+            <h3>cURL Command:</h3>
+            <pre id="semanticById_curl">---</pre>
+            <h3>Response:</h3>
+            <pre id="semanticById_response">---</pre>
+        </div>
     </div>
 </div>
 
@@ -192,5 +228,91 @@
         <pre id="bioRxivByDoi_curl">---</pre>
         <h3>Response:</h3>
         <pre id="bioRxivByDoi_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="bioRxivPubsSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv-pubs - Search Published (bioRxiv/medRxiv)</span>
+        </h2>
+        <p>Search published metadata for bioRxiv/medRxiv (source: /pubs API). Supports date range or recent intervals.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_server">Server:</label>
+                    <select id="bioRxivPubsSearch_server">
+                        <option value="biorxiv" selected>biorxiv</option>
+                        <option value="medrxiv">medrxiv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="bioRxivPubsSearch_include_abstracts" checked> Include Abstracts</label>
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="bioRxivPubsSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_page">Page:</label>
+                    <input type="number" id="bioRxivPubsSearch_page" value="1" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_recent_days">Recent Days (optional):</label>
+                    <input type="number" id="bioRxivPubsSearch_recent_days" min="1" placeholder="e.g., 30">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_recent_count">Recent Count (optional):</label>
+                    <input type="number" id="bioRxivPubsSearch_recent_count" min="1" placeholder="e.g., 200">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_from_date">From Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPubsSearch_from_date" placeholder="2024-01-01">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_to_date">To Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPubsSearch_to_date" placeholder="2024-12-31">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubsSearch_q">Keyword (client-side):</label>
+                    <input type="text" id="bioRxivPubsSearch_q" placeholder="LLM, cancer">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivPubsSearch', 'GET', '/api/v1/paper-search/biorxiv-pubs', 'query')">
+            Search Published
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivPubsSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivPubsSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="bioRxivPubsByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv-pubs/by-doi - Published by DOI</span>
+        </h2>
+        <p>Fetch published metadata by DOI from /pubs API.</p>
+        <div class="form-group">
+            <label for="bioRxivPubsByDoi_doi">DOI:</label>
+            <input type="text" id="bioRxivPubsByDoi_doi" placeholder="10.1101/2021.11.09.467936">
+        </div>
+        <div class="form-group">
+            <label for="bioRxivPubsByDoi_server">Server:</label>
+            <select id="bioRxivPubsByDoi_server">
+                <option value="biorxiv" selected>biorxiv</option>
+                <option value="medrxiv">medrxiv</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivPubsByDoi_include_abstracts" checked> Include Abstract</label>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivPubsByDoi', 'GET', '/api/v1/paper-search/biorxiv-pubs/by-doi', 'query')">
+            Get Published by DOI
+        </button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivPubsByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivPubsByDoi_response">---</pre>
     </div>
  </div>

@@ -79,6 +79,24 @@ def _normalize_item(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_published_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize /pubs record to a consistent shape for the API layer."""
+    return {
+        "biorxiv_doi": raw.get("biorxiv_doi") or raw.get("preprint_doi") or "",
+        "published_doi": raw.get("published_doi"),
+        "published_journal": raw.get("published_journal"),
+        "preprint_platform": raw.get("preprint_platform"),
+        "preprint_title": raw.get("preprint_title"),
+        "preprint_authors": raw.get("preprint_authors"),
+        "preprint_category": raw.get("preprint_category"),
+        "preprint_date": raw.get("preprint_date"),
+        "published_date": raw.get("published_date"),
+        "preprint_abstract": raw.get("preprint_abstract"),
+        "preprint_author_corresponding": raw.get("preprint_author_corresponding"),
+        "preprint_author_corresponding_institution": raw.get("preprint_author_corresponding_institution"),
+    }
+
+
 def search_biorxiv(
     query: Optional[str],
     server: str = "biorxiv",
@@ -245,3 +263,115 @@ def get_biorxiv_by_doi(
 
 
 # End of BioRxiv.py
+
+def search_biorxiv_pubs(
+    server: str = "biorxiv",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 10,
+    recent_days: Optional[int] = None,
+    recent_count: Optional[int] = None,
+    q: Optional[str] = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    """Search published article details via /pubs endpoint (bioRxiv/medRxiv)."""
+    try:
+        server_norm = server.lower().strip() if server else "biorxiv"
+        if server_norm not in {"biorxiv", "medrxiv"}:
+            server_norm = "biorxiv"
+
+        f = _validate_date(from_date)
+        t = _validate_date(to_date)
+        if not (f and t) and not (recent_days or recent_count):
+            f, t = _default_date_range()
+
+        BATCH = 100
+        first_cursor = (offset // BATCH) * BATCH
+        within_batch_offset = offset - first_cursor
+
+        session = _mk_session()
+
+        def _interval_path(cursor: int) -> str:
+            if recent_days and recent_days > 0:
+                interval = f"{recent_days}d"
+                return f"/pubs/{server_norm}/{interval}/{cursor}"
+            if recent_count and recent_count > 0:
+                interval = str(recent_count)
+                return f"/pubs/{server_norm}/{interval}/{cursor}"
+            return f"/pubs/{server_norm}/{f}/{t}/{cursor}"
+
+        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+            url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
+            resp = session.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            cnt = 0
+            msgs = data.get("messages") or []
+            if isinstance(msgs, list) and msgs:
+                try:
+                    cnt = int((msgs[0].get("count") or 0))
+                except Exception:
+                    cnt = 0
+            coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
+            time.sleep(0.2)
+            return coll, cnt
+
+        collected: List[Dict[str, Any]] = []
+        cursor = first_cursor
+        batches = 0
+        max_batches = 5
+        total_count = 0
+        while batches < max_batches and len(collected) < (within_batch_offset + limit):
+            items, cnt = _fetch(cursor)
+            if total_count == 0:
+                total_count = cnt
+            if q and q.strip():
+                ql = q.strip().lower()
+                items = [it for it in items if (it.get("preprint_title") or "").lower().find(ql) >= 0 or (it.get("preprint_abstract") or "").lower().find(ql) >= 0 or (it.get("preprint_authors") or "").lower().find(ql) >= 0]
+            collected.extend(items)
+            if len(items) < BATCH:
+                break
+            cursor += BATCH
+            batches += 1
+
+        page_items = collected[within_batch_offset:within_batch_offset + limit]
+        return page_items, (len(collected) if q else total_count), None
+    except requests.exceptions.Timeout:
+        return None, 0, "Request to BioRxiv API timed out."
+    except requests.exceptions.HTTPError as e:
+        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+    except requests.exceptions.RequestException as e:
+        return None, 0, f"BioRxiv API Request Error: {str(e)}"
+    except Exception as e:
+        return None, 0, f"Unexpected error during BioRxiv pubs search: {str(e)}"
+
+
+def get_biorxiv_published_by_doi(
+    doi: str,
+    server: str = "biorxiv",
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Fetch published metadata by DOI via /pubs/{server}/{DOI}/na."""
+    try:
+        if not doi or not doi.strip():
+            return None, "DOI cannot be empty"
+        server_norm = server.lower().strip() if server else "biorxiv"
+        if server_norm not in {"biorxiv", "medrxiv"}:
+            server_norm = "biorxiv"
+        session = _mk_session()
+        doi_enc = requests.utils.quote(doi.strip(), safe="/")
+        url = f"{BIO_RXIV_API_BASE}/pubs/{server_norm}/{doi_enc}/na"
+        resp = session.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        coll = data.get("collection") or []
+        if not coll:
+            return None, None
+        return _normalize_published_item(coll[0]), None
+    except requests.exceptions.Timeout:
+        return None, "Request to BioRxiv API timed out."
+    except requests.exceptions.HTTPError as e:
+        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+    except requests.exceptions.RequestException as e:
+        return None, f"BioRxiv API Request Error: {str(e)}"
+    except Exception as e:
+        return None, f"Unexpected error during BioRxiv published DOI lookup: {str(e)}"

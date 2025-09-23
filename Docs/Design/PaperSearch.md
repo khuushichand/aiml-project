@@ -13,6 +13,10 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
 - GET `/api/v1/paper-search/arxiv`
   - Params: `query`, `author`, `year`, `page` (>=1), `results_per_page` (1..100)
   - Response: `{ query_echo, items: ArxivPaper[], total_results, page, results_per_page, total_pages }`
+\n+- GET `/api/v1/paper-search/arxiv/by-id`
+  - Params: `id` (arXiv ID, e.g., `1706.03762`)
+  - Response: `ArxivPaper`
+  - Uses export API `id_list` under the hood and normalizes to our schema.
 
 - GET `/api/v1/paper-search/biorxiv`
   - Params: `q`, `server` (biorxiv|medrxiv), `from_date` (YYYY-MM-DD), `to_date` (YYYY-MM-DD), `category`, `page`, `results_per_page`
@@ -53,3 +57,18 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
 
 - Tests mock provider functions; no external network in CI.
 - Rate limiting via SlowAPI can be added per-route if needed; test mode bypass respected.
+- GET `/api/v1/paper-search/semantic-scholar/by-id`
+  - Params: `paper_id` (Semantic Scholar paperId)
+  - Response: `SemanticScholarPaper`
+  - Uses `graph/v1/paper/{paperId}`; removes `openAccessPdf` if null for validation.
+Published metadata (bioRxiv/medRxiv)
+
+- GET `/api/v1/paper-search/biorxiv-pubs`
+  - Params: `server`, `from_date`/`to_date` or `recent_days`/`recent_count`, optional `q` (client-side filter), `include_abstracts` (default true), `page`, `results_per_page`
+  - Response: `{ query_echo, items: BioRxivPublishedRecord[], total_results, page, results_per_page, total_pages }`
+  - Uses `/pubs/{server}/{interval}/{cursor}`; 100 items per page from source.
+
+- GET `/api/v1/paper-search/biorxiv-pubs/by-doi`
+  - Params: `server`, `doi`, `include_abstracts` (default true)
+  - Response: `BioRxivPublishedRecord`
+  - Uses `/pubs/{server}/{DOI}/na`.

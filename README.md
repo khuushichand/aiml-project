@@ -808,9 +808,13 @@ Providers API reference: `Docs/API-related/Providers_API_Documentation.md`
 - `GET /api/v1/mcp/status` - MCP server status
 \n+#### Paper Search (Provider-specific)
 - `GET /api/v1/paper-search/arxiv` - Search arXiv papers
+- `GET /api/v1/paper-search/arxiv/by-id` - Fetch arXiv by ID
 - `GET /api/v1/paper-search/biorxiv` - Search BioRxiv/MedRxiv papers
 - `GET /api/v1/paper-search/semantic-scholar` - Search Semantic Scholar
- - `GET /api/v1/paper-search/biorxiv/by-doi` - Fetch BioRxiv/MedRxiv by DOI
+- `GET /api/v1/paper-search/biorxiv/by-doi` - Fetch BioRxiv/MedRxiv by DOI
+- `GET /api/v1/paper-search/biorxiv-pubs` - Search published metadata (bioRxiv/medRxiv)
+- `GET /api/v1/paper-search/biorxiv-pubs/by-doi` - Fetch published metadata by DOI
+- `GET /api/v1/paper-search/semantic-scholar/by-id` - Fetch Semantic Scholar by paperId
 
 ### Example Usage
 

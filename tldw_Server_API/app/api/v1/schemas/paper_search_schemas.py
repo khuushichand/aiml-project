@@ -56,4 +56,52 @@ class BioRxivSearchRequestForm:
         self.results_per_page = results_per_page
 
 
+class BioRxivPublishedRecord(BaseModel):
+    biorxiv_doi: str
+    published_doi: Optional[str] = None
+    published_journal: Optional[str] = None
+    preprint_platform: Optional[str] = None
+    preprint_title: Optional[str] = None
+    preprint_authors: Optional[str] = None
+    preprint_category: Optional[str] = None
+    preprint_date: Optional[str] = None
+    published_date: Optional[str] = None
+    preprint_abstract: Optional[str] = None
+    preprint_author_corresponding: Optional[str] = None
+    preprint_author_corresponding_institution: Optional[str] = None
+
+
+class BioRxivPubsSearchResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[BioRxivPublishedRecord]
+    total_results: int
+    page: int
+    results_per_page: int
+    total_pages: int
+
+
+class BioRxivPubsSearchRequestForm:
+    def __init__(
+        self,
+        server: str = Query("biorxiv", description="Server: biorxiv or medrxiv"),
+        from_date: Optional[str] = Query(None, description="YYYY-MM-DD start (if recent params omitted)"),
+        to_date: Optional[str] = Query(None, description="YYYY-MM-DD end (if recent params omitted)"),
+        recent_days: Optional[int] = Query(None, ge=1, description="Use most recent N days."),
+        recent_count: Optional[int] = Query(None, ge=1, description="Use most recent N posts."),
+        q: Optional[str] = Query(None, description="Client-side filter over title/abstract/authors"),
+        include_abstracts: bool = Query(True, description="Include preprint_abstract field in results"),
+        page: int = Query(1, ge=1),
+        results_per_page: int = Query(10, ge=1, le=100),
+    ):
+        self.server = server
+        self.from_date = from_date
+        self.to_date = to_date
+        self.recent_days = recent_days
+        self.recent_count = recent_count
+        self.q = q
+        self.include_abstracts = include_abstracts
+        self.page = page
+        self.results_per_page = results_per_page
+
+
 # End of paper_search_schemas.py

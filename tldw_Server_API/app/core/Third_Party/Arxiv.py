@@ -236,6 +236,30 @@ def convert_xml_to_markdown(xml_content: str) -> tuple[str, str, List[str], List
 
     return markdown, title, authors, categories
 
+
+def get_arxiv_by_id(paper_id: str) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Fetch a single arXiv entry by its arXiv ID using export API and normalize to ArxivPaper shape.
+
+    Returns (item_dict, error_message). item_dict keys match ArxivPaper schema: id, title, authors,
+    published_date, abstract, pdf_url.
+    """
+    try:
+        if not paper_id or not str(paper_id).strip():
+            return None, "Paper ID cannot be empty"
+        xml_text = fetch_arxiv_xml(paper_id)
+        if not xml_text:
+            return None, None  # treat as not found
+        try:
+            parsed = parse_arxiv_feed(xml_text.encode("utf-8"))
+        except Exception as e:
+            return None, f"Failed to parse arXiv XML: {e}"
+        if not parsed:
+            return None, None
+        # parse_arxiv_feed already returns dict with required keys
+        return parsed[0], None
+    except Exception as e:
+        return None, f"Unexpected error fetching arXiv paper: {e}"
+
 #
 # End of Arxiv.py
 #######################################################################################################################
