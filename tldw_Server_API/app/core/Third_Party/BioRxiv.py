@@ -87,6 +87,8 @@ def search_biorxiv(
     category: Optional[str] = None,
     offset: int = 0,
     limit: int = 10,
+    recent_days: Optional[int] = None,
+    recent_count: Optional[int] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
     """
     Search BioRxiv/MedRxiv API and return (items, total_results, error_message).
@@ -114,10 +116,19 @@ def search_biorxiv(
 
         session = _mk_session()
 
+        def _details_path(cursor: int) -> str:
+            # Support date range or numeric intervals (N or Nd)
+            if recent_days and recent_days > 0:
+                interval = f"{recent_days}d"
+                return f"/details/{server_norm}/{interval}/{cursor}"
+            if recent_count and recent_count > 0:
+                interval = str(recent_count)
+                return f"/details/{server_norm}/{interval}/{cursor}"
+            return f"/details/{server_norm}/{f}/{t}/{cursor}"
+
         def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
-            # As of current API behavior, rely on /details and apply keyword/category filters client-side
-            # /details/{server}/{from}/{to}/{cursor}
-            path = f"/details/{server_norm}/{f}/{t}/{cursor}"
+            # Rely on /details; apply keyword/category filters client-side; pass category as query param too when possible
+            path = _details_path(cursor)
             url = f"{BIO_RXIV_API_BASE}{path}"
             params = None
             # Docs indicate the date-range details endpoint accepts category as querystring
@@ -162,7 +173,7 @@ def search_biorxiv(
             batch_items, total_val = _fetch(cursor)
             if total == 0:
                 total = total_val
-            # Apply client-side filters
+            # Apply client-side filters (ensure results reflect requested filters even if server ignores params)
             if query and query.strip():
                 ql = query.strip().lower()
                 def _match(item: Dict[str, Any]) -> bool:
@@ -172,6 +183,9 @@ def search_biorxiv(
                         or (item.get("authors") or "").lower().find(ql) >= 0
                     )
                 batch_items = [it for it in batch_items if _match(it)]
+            if category and category.strip():
+                cl = category.strip().lower()
+                batch_items = [it for it in batch_items if (item := (it.get("category") or "").lower()) == cl or item.replace(" ", "_") == cl]
 
             collected.extend(batch_items)
             if len(batch_items) < BATCH:
@@ -183,6 +197,42 @@ def search_biorxiv(
         # Now slice according to within-batch offset and limit
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if query or category else total), None
+
+
+def get_biorxiv_by_doi(
+    doi: str,
+    server: str = "biorxiv",
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Fetch a single manuscript by DOI via /details/{server}/{DOI}/na.
+
+    Returns (item_dict, error_message). item_dict is normalized to BioRxivPaper shape.
+    """
+    try:
+        if not doi or not doi.strip():
+            return None, "DOI cannot be empty"
+        server_norm = server.lower().strip() if server else "biorxiv"
+        if server_norm not in {"biorxiv", "medrxiv"}:
+            server_norm = "biorxiv"
+        session = _mk_session()
+        doi_enc = requests.utils.quote(doi.strip(), safe="/")  # keep slashes within DOI
+        url = f"{BIO_RXIV_API_BASE}/details/{server_norm}/{doi_enc}/na"
+        resp = session.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        coll = data.get("collection") or []
+        if not coll:
+            return None, None
+        # Take the first item
+        item = _normalize_item(coll[0])
+        return item, None
+    except requests.exceptions.Timeout:
+        return None, "Request to BioRxiv API timed out."
+    except requests.exceptions.HTTPError as e:
+        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
+    except requests.exceptions.RequestException as e:
+        return None, f"BioRxiv API Request Error: {str(e)}"
+    except Exception as e:
+        return None, f"Unexpected error during BioRxiv DOI lookup: {str(e)}"
     except requests.exceptions.Timeout:
         return None, 0, "Request to BioRxiv API timed out."
     except requests.exceptions.HTTPError as e:
