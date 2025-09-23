@@ -2,13 +2,15 @@
 # REST endpoints for Flashcards/Decks backed by ChaChaNotes DB (schema v5)
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from loguru import logger
 import re
 import os
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import require_admin
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -226,7 +228,14 @@ def get_flashcard_tags(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_
 
 
 @router.post("/import")
-def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
+def import_flashcards(
+    payload: FlashcardsImportRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    max_lines: Optional[int] = Query(None, ge=1, description="Admin override: max lines to import (cannot exceed env cap)"),
+    max_line_length: Optional[int] = Query(None, ge=1, description="Admin override: max line length in bytes (cannot exceed env cap)"),
+    max_field_length: Optional[int] = Query(None, ge=1, description="Admin override: max field length in bytes (cannot exceed env cap)"),
+    current_user: User = Depends(get_request_user)
+):
     try:
         delimiter = payload.delimiter or '\t'
         raw_lines = [ln for ln in (payload.content or '').splitlines()]
@@ -241,9 +250,15 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
                 return max(1, v)
             except Exception:
                 return default
-        MAX_LINES = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
-        MAX_LINE_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768)
-        MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
+        ENV_MAX_LINES = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
+        ENV_MAX_LINE_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768)
+        ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
+        # Effective caps: query param can only lower the env caps, and requires admin to use
+        if any(p is not None for p in (max_lines, max_line_length, max_field_length)):
+            require_admin(current_user)
+        MAX_LINES = min(ENV_MAX_LINES, max_lines) if max_lines else ENV_MAX_LINES
+        MAX_LINE_LENGTH = min(ENV_MAX_LINE_LENGTH, max_line_length) if max_line_length else ENV_MAX_LINE_LENGTH
+        MAX_FIELD_LENGTH = min(ENV_MAX_FIELD_LENGTH, max_field_length) if max_field_length else ENV_MAX_FIELD_LENGTH
         if payload.has_header and raw_lines:
             header = raw_lines[0]
             lines = raw_lines[1:]
@@ -393,6 +408,153 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
                 db.set_flashcard_tags(uuid, tags_list)
             processed += 1
         return {'imported': len(created), 'items': created, 'errors': errors}
+
+
+@router.post("/import/json")
+async def import_flashcards_json(
+    file: UploadFile = File(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    max_items: Optional[int] = Query(None, ge=1, description="Admin override: max JSON items to import (cannot exceed env cap)"),
+    max_field_length: Optional[int] = Query(None, ge=1, description="Admin override: max field length in bytes (cannot exceed env cap)"),
+    current_user: User = Depends(get_request_user)
+):
+    try:
+        raw = await file.read()
+        # Caps via env
+        def _int_env(name: str, default: int) -> int:
+            try:
+                return max(1, int(os.getenv(name, str(default))))
+            except Exception:
+                return default
+        ENV_MAX_ITEMS = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
+        ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
+        if any(p is not None for p in (max_items, max_field_length)):
+            require_admin(current_user)
+        MAX_ITEMS = min(ENV_MAX_ITEMS, max_items) if max_items else ENV_MAX_ITEMS
+        MAX_FIELD_LENGTH = min(ENV_MAX_FIELD_LENGTH, max_field_length) if max_field_length else ENV_MAX_FIELD_LENGTH
+
+        # Parse JSON: accept array or object with 'items' key
+        import json as _json
+        text = raw.decode('utf-8')
+        try:
+            data = _json.loads(text)
+        except Exception:
+            # Try JSON Lines: one JSON object per line
+            items = []
+            for ln in text.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    items.append(_json.loads(ln))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid JSON/JSONL upload: failed to parse a line")
+            data = {'items': items}
+
+        if isinstance(data, dict) and 'items' in data:
+            items = data.get('items')
+        else:
+            items = data
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="JSON content must be a list of objects or {'items': [...]} ")
+
+        # Deck cache
+        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        decks_cache: dict[str, int] = dict(existing_decks)
+        default_deck_name = 'Default'
+        if default_deck_name not in decks_cache:
+            did = db.add_deck(default_deck_name, description=None)
+            decks_cache[default_deck_name] = did
+            existing_decks[default_deck_name] = did
+
+        errors: list[dict] = []
+        created: list[dict] = []
+        processed = 0
+        for idx, obj in enumerate(items, start=1):
+            if processed >= MAX_ITEMS:
+                errors.append({'index': idx, 'error': f'Maximum import item limit reached ({MAX_ITEMS})'})
+                break
+            if not isinstance(obj, dict):
+                errors.append({'index': idx, 'error': 'Item must be a JSON object'})
+                continue
+            deck_name = (obj.get('deck') or obj.get('deck_name') or '').strip()
+            deck_desc = (obj.get('deck_description') or obj.get('deckdesc') or obj.get('deckDescription') or None)
+            front = (obj.get('front') or obj.get('question') or '').strip()
+            back = (obj.get('back') or obj.get('answer') or '').strip()
+            notes = (obj.get('notes') or obj.get('note') or '')
+            extra = obj.get('extra')
+            model_type = (obj.get('model_type') or obj.get('model') or obj.get('type') or '').lower() or None
+            reverse_flag = obj.get('reverse')
+            is_cloze_flag = obj.get('is_cloze')
+            tags_val = obj.get('tags')
+            if isinstance(tags_val, list):
+                tags_list = [str(t) for t in tags_val]
+            elif isinstance(tags_val, str):
+                tags_list = [t for t in tags_val.replace(',', ' ').split() if t]
+            else:
+                tags_list = []
+
+            # Validation
+            if not front:
+                errors.append({'index': idx, 'error': 'Missing required field: Front'})
+                continue
+            if deck_name == '':
+                eff_deck = default_deck_name
+            else:
+                eff_deck = deck_name
+            # Field caps
+            fields = {
+                'Deck': eff_deck,
+                'Front': front,
+                'Back': back,
+                'Notes': notes or '',
+                'Extra': extra or '',
+                'DeckDescription': deck_desc or ''
+            }
+            too_long = next(((k, v) for k, v in fields.items() if len(v) > MAX_FIELD_LENGTH), None)
+            if too_long:
+                errors.append({'index': idx, 'error': f'Field too long: {too_long[0]} (> {MAX_FIELD_LENGTH} bytes)'} )
+                continue
+            # Cloze validation
+            effective_is_cloze = ((model_type or '') == 'cloze') or (is_cloze_flag is True)
+            if effective_is_cloze and not re.search(r"\{\{c\d+::", front):
+                errors.append({'index': idx, 'error': 'Invalid cloze: Front must contain one or more {{cN::...}} patterns'})
+                continue
+
+            # Resolve/create deck
+            if eff_deck in decks_cache:
+                deck_id = decks_cache[eff_deck]
+            else:
+                deck_id = db.add_deck(eff_deck, description=deck_desc)
+                decks_cache[eff_deck] = deck_id
+                existing_decks[eff_deck] = deck_id
+
+            # Build card
+            data: dict = {
+                'deck_id': deck_id,
+                'front': front,
+                'back': back,
+                'notes': notes,
+                'tags_json': _json.dumps(tags_list) if tags_list else None,
+                'model_type': model_type or 'basic',
+                'reverse': bool(reverse_flag) if reverse_flag is not None else False,
+            }
+            if extra:
+                data['extra'] = extra
+            if effective_is_cloze:
+                data['is_cloze'] = True
+
+            uuid = db.add_flashcard(data)
+            created.append({'uuid': uuid, 'deck_id': deck_id})
+            if tags_list:
+                db.set_flashcard_tags(uuid, tags_list)
+            processed += 1
+
+        return {'imported': len(created), 'items': created, 'errors': errors}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"JSON import failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import JSON flashcards")
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import flashcards TSV: {e}")
         raise HTTPException(status_code=500, detail="Failed to import flashcards")

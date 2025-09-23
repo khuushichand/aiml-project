@@ -21,7 +21,9 @@ from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 #
 # Local Imports
-from tldw_Server_API.app.core.Utils.Utils import loaded_config_data, logging
+from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.config import load_and_log_configs
+loaded_config_data = load_and_log_configs()
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze

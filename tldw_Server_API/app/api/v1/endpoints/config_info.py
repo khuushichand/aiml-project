@@ -15,6 +15,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from loguru import logger
+import os
 
 router = APIRouter()
 
@@ -140,6 +141,31 @@ async def get_documentation_config():
                 config.get("api_key_for_docs", "default-secret-key-for-single-user"),
                 base_url
             )
+        }
+    }
+
+
+@router.get("/config/flashcards-import-limits")
+async def get_flashcards_import_limits():
+    """
+    Expose current flashcards import limits derived from environment or defaults.
+    These reflect server-enforced caps; per-request overrides can only lower these values.
+    """
+    def _int_env(name: str, default: int) -> int:
+        try:
+            return max(1, int(os.getenv(name, str(default))))
+        except Exception:
+            return default
+
+    return {
+        "max_lines": _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000),
+        "max_line_length": _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768),
+        "max_field_length": _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192),
+        "overrides": {
+            "query_params": [
+                "max_lines", "max_line_length", "max_field_length"
+            ],
+            "note": "Query overrides can only reduce, not increase caps"
         }
     }
 

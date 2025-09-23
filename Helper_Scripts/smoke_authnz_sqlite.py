@@ -75,9 +75,17 @@ def main():
 
     # Import app and create TestClient
     from fastapi.testclient import TestClient
-    from tldw_Server_API.app.main import app
-
-    client = TestClient(app)
+    # Use the full app to retain logger configuration and startup behavior
+    try:
+        from tldw_Server_API.app.main import app
+    except Exception as e:
+        print("FAILED TO IMPORT APP.MAIN: ", repr(e))
+        raise
+    try:
+        client = TestClient(app)
+    except Exception as e:
+        print("FAILED TO START APP (TestClient init): ", repr(e))
+        raise
 
     # Register user
     username = "smoke_user"
@@ -111,4 +119,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback, sys
+        traceback.print_exc()
+        sys.exit(2)

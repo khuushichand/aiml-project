@@ -544,6 +544,98 @@ def test_import_oversize_line_rejected(client_with_flashcards_db: TestClient):
     assert data.get('imported') == 0
     errs = data.get('errors', [])
     assert any('Line too long' in e.get('error', '') for e in errs)
+
+
+def test_import_respects_max_lines_cap(client_with_flashcards_db: TestClient, monkeypatch):
+    # Limit to 3 lines via env override
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINES', '3')
+    header = "Deck\tFront\tBack\tTags\tNotes\n"
+    rows = "".join([f"D\tF{i}\tB\tT\tN\n" for i in range(1, 6)])  # 5 rows
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 3
+    errs = data.get('errors', [])
+    # Should include a cap message
+    assert any('Maximum import line limit' in (e.get('error') or '') for e in errs)
+
+
+def test_import_respects_query_param_caps(client_with_flashcards_db: TestClient, monkeypatch):
+    # Env cap high, query lowers to 2
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINES', '10')
+    header = "Deck\tFront\tBack\tTags\tNotes\n"
+    rows = "".join([f"D\tF{i}\tB\tT\tN\n" for i in range(1, 5)])  # 4 rows
+    content = header + rows
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import",
+        params={"max_lines": 2},
+        json={"content": content, "has_header": True}
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 2
+    errs = data.get('errors', [])
+    assert any('Maximum import line limit' in (e.get('error') or '') for e in errs)
+
+
+def test_config_endpoint_flashcards_import_limits(client_with_flashcards_db: TestClient, monkeypatch):
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINES', '999')
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', '12345')
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', '2345')
+    r = client_with_flashcards_db.get("/api/v1/config/flashcards-import-limits")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('max_lines') == 999
+    assert data.get('max_line_length') == 12345
+    assert data.get('max_field_length') == 2345
+    assert 'query_params' in data.get('overrides', {})
+
+
+def test_import_json_file_basic(client_with_flashcards_db: TestClient):
+    import json as _json
+    payload = [
+        {"deck": "JDeck", "front": "JF1", "back": "JB1", "tags": ["jt1", "jt2"], "extra": "JE1", "reverse": True},
+        {"deck": "JDeck", "front": "Cloze {{c1::xx}}", "model_type": "cloze", "extra": "JCE"}
+    ]
+    files = {
+        'file': ('cards.json', _json.dumps(payload), 'application/json')
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files)
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 2
+    # Verify created
+    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    items = r.json().get('items', [])
+    assert any(it.get('deck_name') == 'JDeck' and it.get('front') == 'JF1' for it in items)
+    assert any(it.get('model_type') == 'cloze' and '{{c1::' in it.get('front') for it in items)
+
+
+def test_import_json_caps_and_errors(client_with_flashcards_db: TestClient, monkeypatch):
+    import json as _json
+    # Set env caps low
+    monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINES', '1')
+    payload = [
+        {"deck": "J1", "front": "F1", "back": "B1"},
+        {"deck": "J2", "front": "F2", "back": "B2"}
+    ]
+    files = {'file': ('cards.json', _json.dumps(payload), 'application/json')}
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files)
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 1
+    errs = data.get('errors', [])
+    assert any('Maximum import item limit' in (e.get('error') or '') for e in errs)
+    # Invalid cloze error
+    payload2 = [{"front": "not cloze", "model_type": "cloze"}]
+    files2 = {'file': ('cards.json', _json.dumps(payload2), 'application/json')}
+    r2 = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files2)
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert data2.get('imported') == 0
+    errs2 = data2.get('errors', [])
+    assert any('Invalid cloze' in (e.get('error') or '') for e in errs2)
     # Unicode preserved
     assert '😀' in cols[1]
 
