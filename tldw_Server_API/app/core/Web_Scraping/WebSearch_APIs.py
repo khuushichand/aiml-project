@@ -725,18 +725,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_baidu(search_query, None, None)
 
         elif search_engine.lower() == "bing":
-            # Prepare the arguments for search_web_bing
-            bing_args = {
-                "search_query": search_query,
-                "bing_lang": search_lang,
-                "bing_country": content_country,
-                "result_count": result_count,
-                "bing_api_key": loaded_config_data['search_engines'].get('bing_api_key'),  # Fetch Bing API key from config
-                "date_range": date_range,
-            }
-
-            # Call the search_web_bing function with the prepared arguments
-            web_search_results = search_web_bing(**bing_args)
+            # Provider deprecated
+            raise ValueError("Bing provider is deprecated and not supported")
 
         elif search_engine.lower() == "brave":
             web_search_results = search_web_brave(search_query, content_country, search_lang, output_lang, result_count, safesearch,
@@ -850,14 +840,8 @@ def test_perform_websearch_google():
 
 
 def test_perform_websearch_bing():
-    # Bing Searches
-    try:
-        test_4 = perform_websearch("bing", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 4: {test_4}")
-        test_5 = perform_websearch("bing", "What is the capital of France?", "US", "en", "en", 10, date_range="y")
-        print(f"Test 5: {test_5}")
-    except Exception as e:
-        print(f"Error performing bing searches: {str(e)}")
+    # Deprecated provider; no-op test placeholder
+    pass
 
 
 def test_perform_websearch_brave():
@@ -1080,146 +1064,17 @@ def search_parse_baidu_results():
 # https://learn.microsoft.com/en-us/bing/search-apis/bing-web-search/reference/query-parameters
 # Country/Language code: https://learn.microsoft.com/en-us/bing/search-apis/bing-web-search/reference/market-codes#country-codes
 # https://github.com/Azure-Samples/cognitive-services-REST-api-samples/tree/master/python/Search
-def search_web_bing(search_query, bing_lang, bing_country, result_count=None, bing_api_key=None,
-                    date_range=None):
-    # Load Search API URL from config file
-    search_url = loaded_config_data['search_engines']['bing_search_api_url']
-
-    if not bing_api_key:
-        # load key from config file
-        bing_api_key = loaded_config_data['search_engines']['bing_search_api_key']
-        if not bing_api_key:
-            raise ValueError("Please Configure a valid Bing Search API key")
-
-    if not result_count:
-        # Perform check in config file for default search result count
-        answer_count = loaded_config_data['search_engines']['search_result_max']
-    else:
-        answer_count = result_count
-
-    # date_range = "day", "week", "month", or `YYYY-MM-DD..YYYY-MM-DD`
-    if not date_range:
-         date_range = None
-
-    # Language settings
-    if not bing_lang:
-        # do config check for default search language
-        setlang = bing_lang
-
-    # Returns content for this Country market code
-    if not bing_country:
-        # do config check for default search country
-        bing_country = loaded_config_data['search_engines']['bing_country_code']
-    else:
-        setcountry = bing_country
-    # Construct a request
-    mkt = 'en-US'
-    params = {'q': search_query, 'mkt': mkt}
-#    params = {"q": search_query, "mkt": bing_country, "textDecorations": True, "textFormat": "HTML", "count": answer_count,
-#             "freshness": date_range, "promote": "webpages", "safeSearch": "Moderate"}
-    headers = {'Ocp-Apim-Subscription-Key': bing_api_key}
-
-    # Call the API
-    try:
-        response = requests.get(search_url, headers=headers, params=params)
-        response.raise_for_status()
-
-        logging.debug("Headers:  ")
-        logging.debug(response.headers)
-
-        logging.debug("JSON Response: ")
-        logging.debug(response.json())
-        bing_search_results = response.json()
-        return bing_search_results
-    except Exception as ex:
-        raise ex
+def search_web_bing(*args, **kwargs):
+    raise NotImplementedError("Bing provider is deprecated and has been removed")
 
 
 def test_search_web_bing():
-    search_query = "How can I get started learning machine learning?"
-    bing_lang = "en"
-    bing_country = "US"
-    result_count = 10
-    bing_api_key = None
-    date_range = None
-    result = search_web_bing(search_query, bing_lang, bing_country, result_count, bing_api_key, date_range)
-    # Unparsed results
-    print("Bing Search Results:")
-    print(result)
-    # Parsed results
-    output_dict = {"results": []}
-    parse_bing_results(result, output_dict)
-    print("Parsed Bing Results:")
-    print(json.dumps(output_dict, indent=2))
+    pass
 
 
 def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
-    """
-    Parse Bing search results and update the output dictionary
-
-    Args:
-        raw_results (Dict): Raw Bing API response
-        output_dict (Dict): Dictionary to store processed results
-    """
-    logging.info(f"Raw Bing results received: {json.dumps(raw_results, indent=2)}")
-    try:
-        # Initialize results list if not present
-        if "results" not in output_dict:
-            output_dict["results"] = []
-
-        # Extract web pages results
-        if "webPages" in raw_results:
-            web_pages = raw_results["webPages"]
-            output_dict["total_results_found"] = web_pages.get("totalEstimatedMatches", 0)
-
-            for result in web_pages.get("value", []):
-                processed_result = {
-                    "title": result.get("name", ""),
-                    "url": result.get("url", ""),
-                    "content": result.get("snippet", ""),
-                    "metadata": {
-                        "date_published": None,  # Bing doesn't typically provide this
-                        "author": None,  # Bing doesn't typically provide this
-                        "source": result.get("displayUrl", None),
-                        "language": None,  # Could be extracted from result.get("language") if available
-                        "relevance_score": None,  # Could be calculated from result.get("rank") if available
-                        "snippet": result.get("snippet", None)
-                    }
-                }
-                output_dict["results"].append(processed_result)
-
-        # Optionally process other result types
-        if "news" in raw_results:
-            for news_item in raw_results["news"].get("value", []):
-                processed_result = {
-                    "title": news_item.get("name", ""),
-                    "url": news_item.get("url", ""),
-                    "content": news_item.get("description", ""),
-                    "metadata": {
-                        "date_published": news_item.get("datePublished", None),
-                        "author": news_item.get("provider", [{}])[0].get("name", None),
-                        "source": news_item.get("provider", [{}])[0].get("name", None),
-                        "language": None,
-                        "relevance_score": None,
-                        "snippet": news_item.get("description", None)
-                    }
-                }
-                output_dict["results"].append(processed_result)
-
-        # Add spell suggestions if available
-        if "spellSuggestion" in raw_results:
-            output_dict["spell_suggestions"] = raw_results["spellSuggestion"]
-
-        # Add related searches if available
-        if "relatedSearches" in raw_results:
-            output_dict["related_searches"] = [
-                item.get("text", "")
-                for item in raw_results["relatedSearches"].get("value", [])
-            ]
-
-    except Exception as e:
-        logging.error(f"Error processing Bing results: {str(e)}")
-        output_dict["processing_error"] = f"Error processing Bing results: {str(e)}"
+    # Deprecated
+    output_dict.setdefault("processing_error", "Bing provider deprecated")
 
 
 ######################### Brave Search #########################
@@ -1234,10 +1089,9 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
         brave_api_key = loaded_config_data['search_engines']['brave_search_api_key']
         if not brave_api_key:
             raise ValueError("Please provide a valid Brave Search API subscription key")
+    # Respect provided country; fallback to config default
     if not country:
-        brave_country = loaded_config_data['search_engines']['search_engine_country_code_brave']
-    else:
-        country = "US"
+        country = loaded_config_data['search_engines']['search_engine_country_code_brave']
     if not search_lang:
         search_lang = "en"
     if not ui_lang:
@@ -1945,13 +1799,13 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         searx_url (str): Custom Searx instance URL (optional).
 
     Returns:
-        str: JSON string containing the search results or an error message.
+        Dict: Dictionary containing the search results or an error message.
     """
     # Use the provided Searx URL or fall back to the configured one
     if not searx_url:
         searx_url = loaded_config_data['search_engines']['searx_search_api_url']
     if not searx_url:
-        return json.dumps({"error": "SearX Search is disabled and no content was found. This functionality is disabled because the user has not set it up yet."})
+        return {"error": "SearX Search is disabled and no content was found. This functionality is disabled because the user has not set it up yet."}
 
     # Validate and construct URL
     try:
@@ -1967,7 +1821,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         search_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{urlencode(params)}"
         logging.info(f"Search URL: {search_url}")
     except Exception as e:
-        return json.dumps({"error": f"Invalid URL configuration: {str(e)}"})
+        return {"error": f"Invalid URL configuration: {str(e)}"}
 
     # Perform the search request
     try:
@@ -2010,13 +1864,13 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
             })
 
         if not data:
-            return json.dumps({"error": "No information was found online for the search query."})
+            return {"error": "No information was found online for the search query."}
 
-        return json.dumps(data)
+        return {"results": data}
 
     except requests.exceptions.RequestException as e:
         logging.error(f"Error searching for content: {str(e)}")
-        return json.dumps({"error": f"There was an error searching for content. {str(e)}"})
+        return {"error": f"There was an error searching for content. {str(e)}"}
 
 def test_search_searx():
     # Use a different Searx instance to avoid rate limiting

@@ -4491,7 +4491,8 @@ UPDATE db_schema_version
                               q: Optional[str] = None,
                               *,
                               delimiter: str = '\t',
-                              include_header: bool = False) -> bytes:
+                              include_header: bool = False,
+                              extended_header: bool = False) -> bytes:
         """Export flashcards to delimited text. Columns: Deck, Front, Back, Tags, Notes.
         Args:
             delimiter: field separator (default tab)
@@ -4500,7 +4501,10 @@ UPDATE db_schema_version
         rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
         output_lines: List[str] = []
         if include_header:
-            output_lines.append(delimiter.join(["Deck", "Front", "Back", "Tags", "Notes"]))
+            base_cols = ["Deck", "Front", "Back", "Tags", "Notes"]
+            if extended_header:
+                base_cols += ["Extra", "Reverse"]
+            output_lines.append(delimiter.join(base_cols))
         for r in rows:
             deck_name = r.get('deck_name') or ''
             front = r.get('front') or ''
@@ -4514,10 +4518,15 @@ UPDATE db_schema_version
                 except Exception:
                     tags = ''
             notes = r.get('notes') or ''
+            extra = r.get('extra') or ''
+            reverse = 'true' if bool(r.get('reverse')) else 'false'
             # Escape delimiter/tabs/newlines minimally
             def esc(s: str) -> str:
                 return s.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ').replace(delimiter, ' ').strip()
-            output_lines.append(delimiter.join([esc(deck_name), esc(front), esc(back), esc(tags), esc(notes)]))
+            row = [esc(deck_name), esc(front), esc(back), esc(tags), esc(notes)]
+            if extended_header:
+                row += [esc(extra), reverse]
+            output_lines.append(delimiter.join(row))
         csv_bytes = ("\n".join(output_lines) + ("\n" if output_lines else "")).encode('utf-8')
         return csv_bytes
 

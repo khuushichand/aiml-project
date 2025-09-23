@@ -705,6 +705,29 @@ Notes
 - This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
 - The auth page posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
 
+### Using config.txt for AuthNZ
+
+You can configure authentication and the AuthNZ database in `Config_Files/config.txt` (env still overrides):
+
+```
+[AuthNZ]
+auth_mode = multi_user
+# Option A: full URL
+database_url = postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
+# Option B: structured fields (used if DATABASE_URL not set)
+db_type = postgresql
+pg_host = localhost
+pg_port = 5432
+pg_db = tldw_users
+pg_user = tldw_user
+pg_password = ChangeMeStrong123!
+pg_sslmode = prefer
+enable_registration = true
+require_registration_code = false
+```
+
+Environment precedence and a complete list of environment variables is in `Env_Vars.md`.
+
 ---
 
 ## OCR Support

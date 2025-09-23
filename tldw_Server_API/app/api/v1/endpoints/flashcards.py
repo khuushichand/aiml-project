@@ -5,6 +5,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
+import re
+import os
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -230,6 +232,18 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
         raw_lines = [ln for ln in (payload.content or '').splitlines()]
         header_map: dict[str, int] = {}
         lines = raw_lines
+        errors: list[dict] = []
+        # Abuse caps
+        # Configurable caps via environment
+        def _int_env(name: str, default: int) -> int:
+            try:
+                v = int(os.getenv(name, str(default)))
+                return max(1, v)
+            except Exception:
+                return default
+        MAX_LINES = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
+        MAX_LINE_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768)
+        MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
         if payload.has_header and raw_lines:
             header = raw_lines[0]
             lines = raw_lines[1:]
@@ -242,9 +256,22 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
         decks_cache: dict[str, int] = {}
         # Preload existing decks once
         existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        default_deck_name = 'Default'
+        # Ensure default deck exists in cache
+        if default_deck_name not in existing_decks:
+            did = db.add_deck(default_deck_name, description=None)
+            existing_decks[default_deck_name] = did
+        decks_cache.update(existing_decks)
         created: list[dict] = []
-        for raw in lines:
+        processed = 0
+        for i, raw in enumerate(lines, start=1):
+            if processed >= MAX_LINES:
+                errors.append({'line': None, 'error': f'Maximum import line limit reached ({MAX_LINES})'})
+                break
             if not raw.strip():
+                continue
+            if len(raw) > MAX_LINE_LENGTH:
+                errors.append({'line': (i + 1 if payload.has_header else i), 'error': f'Line too long (>{MAX_LINE_LENGTH} bytes)'})
                 continue
             parts = raw.split(delimiter)
             # Default mapping: Deck, Front, Back, Tags, Notes
@@ -287,18 +314,61 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
                 reverse_flag = None
                 deck_desc = None
                 is_cloze_flag = None
-            # Resolve deck
+
+            # Basic validation: require front text (don't import empty rows)
+            if not (front and front.strip()):
+                errors.append({
+                    'line': (i + 1 if payload.has_header else i),
+                    'error': 'Missing required field: Front'
+                })
+                continue
+            # Field length caps
+            field_lengths = {
+                'Deck': deck_name or '',
+                'Front': front or '',
+                'Back': back or '',
+                'Tags': tags_s or '',
+                'Notes': notes or '',
+                'Extra': extra or '',
+                'DeckDescription': deck_desc or '',
+            }
+            too_long = next(((k, v) for k, v in field_lengths.items() if len(v) > MAX_FIELD_LENGTH), None)
+            if too_long:
+                errors.append({
+                    'line': (i + 1 if payload.has_header else i),
+                    'error': f'Field too long: {too_long[0]} (> {MAX_FIELD_LENGTH} bytes)'
+                })
+                continue
+
+            # If header explicitly contains a deck column, enforce non-empty deck
+            deck_keys = {'deck', 'deckname', 'deck_name'}
+            if header_map and any(k in header_map for k in deck_keys) and not deck_name:
+                errors.append({
+                    'line': (i + 1 if payload.has_header else i),
+                    'error': 'Missing required field: Deck'
+                })
+                continue
+
+            # Stricter cloze rule: if cloze model or flag, require cN pattern in front
+            effective_is_cloze = ((model_type or '') == 'cloze') or (is_cloze_flag is True)
+            if effective_is_cloze and not re.search(r"\{\{c\d+::", front):
+                errors.append({
+                    'line': (i + 1 if payload.has_header else i),
+                    'error': 'Invalid cloze: Front must contain one or more {{cN::...}} patterns'
+                })
+                continue
+            # Resolve deck; default to 'Default' when none provided
             deck_id = None
-            if deck_name:
-                if deck_name in decks_cache:
-                    deck_id = decks_cache[deck_name]
+            eff_deck_name = deck_name or default_deck_name
+            if eff_deck_name in decks_cache:
+                deck_id = decks_cache[eff_deck_name]
+            else:
+                if eff_deck_name in existing_decks:
+                    deck_id = existing_decks[eff_deck_name]
                 else:
-                    if deck_name in existing_decks:
-                        deck_id = existing_decks[deck_name]
-                    else:
-                        deck_id = db.add_deck(deck_name, description=deck_desc)
-                        existing_decks[deck_name] = deck_id
-                    decks_cache[deck_name] = deck_id
+                    deck_id = db.add_deck(eff_deck_name, description=deck_desc)
+                    existing_decks[eff_deck_name] = deck_id
+                decks_cache[eff_deck_name] = deck_id
             # Parse tags from space-delimited
             tags_list = [t for t in (tags_s or '').replace(',', ' ').split() if t]
             # Create card
@@ -321,7 +391,8 @@ def import_flashcards(payload: FlashcardsImportRequest, db: CharactersRAGDB = De
             # Also ensure keyword links reflect tags
             if tags_list:
                 db.set_flashcard_tags(uuid, tags_list)
-        return {'imported': len(created), 'items': created}
+            processed += 1
+        return {'imported': len(created), 'items': created, 'errors': errors}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import flashcards TSV: {e}")
         raise HTTPException(status_code=500, detail="Failed to import flashcards")
@@ -346,6 +417,7 @@ def export_flashcards(
     include_reverse: Optional[bool] = False,
     delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
     include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
+    extended_header: Optional[bool] = Query(False, description="Include Extra and Reverse columns"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
@@ -356,7 +428,7 @@ def export_flashcards(
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv
         dlm = delimiter or '\t'
-        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q, delimiter=dlm, include_header=bool(include_header))
+        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q, delimiter=dlm, include_header=bool(include_header), extended_header=bool(extended_header))
         media_type = "text/tab-separated-values; charset=utf-8" if dlm == '\t' else "text/csv; charset=utf-8"
         filename = "flashcards.tsv" if dlm == '\t' else "flashcards.csv"
         return StreamingResponse(iter([data]), media_type=media_type,

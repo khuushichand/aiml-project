@@ -91,7 +91,7 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
 - **Full Plaintext & RAG Search Capability** Search across all ingested content via RAG or 'old-fashioned non-LLM search' (RAG being BM25 + Vector Search/Contextual embeddings + Re-ranking + Contextual Retrieval).
   - Search by content, title, author, URL, or tags, with support for meta-tags, so that you can have the equivalent of 'folders' for your content (and tags).
   - If you'd like to see my notes on RAG: see `./Docs/RAG_Notes.md`
-  - Notes support, ala NotebookLM, so you can keep track of your thoughts and ideas while chatting/learning, with the ability to search across them or use them for RAG.
+  - Notes support (notebook-style), so you can keep track of your thoughts and ideas while chatting/learning, with the ability to search across them or use them for RAG.
 - **Local LLM inference for offline usage and chat** - via `llamafile`/`HuggingFace Transformers`.
 - **4 Different Chat UI styles** - Regular chat, Stacked chat, Multi-Response chat(1 Prompt, 3 APIs) and 4 Separate API chats on one page.
 - **Local Embeddings Generation for RAG Search** - via `llamafile`/`llama.cpp`/`HuggingFace Transformers`.
@@ -683,5 +683,4 @@ None of these companies exist to provide AI services in 2024. They’re only doi
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
   *Richard Feynman
-
 

@@ -319,7 +319,7 @@ class Settings(BaseSettings):
                         "Set a strong key via environment or .env. Example:\n"
                         "  export JWT_SECRET_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
                     )
-            logger.info("Using JWT secret from environment variable")
+            logger.info("Using configured JWT secret key")
             return
         
         # No JWT secret available - this is a configuration error
@@ -481,6 +481,24 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
+
+        # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
+        if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:
+            if cfg.has_option("AuthNZ", "db_type"):
+                db_type = cfg.get("AuthNZ", "db_type").strip().lower()
+                if db_type == "sqlite":
+                    # sqlite_path supports relative paths; default to Databases/users.db
+                    sqlite_path = cfg.get("AuthNZ", "sqlite_path", fallback="./Databases/users.db").strip()
+                    overrides["DATABASE_URL"] = f"sqlite:///{sqlite_path}"
+                elif db_type in {"postgres", "postgresql"}:
+                    host = cfg.get("AuthNZ", "pg_host", fallback="localhost").strip()
+                    port = cfg.get("AuthNZ", "pg_port", fallback="5432").strip()
+                    db   = cfg.get("AuthNZ", "pg_db", fallback="tldw_users").strip()
+                    user = cfg.get("AuthNZ", "pg_user", fallback="tldw_user").strip()
+                    pwd  = cfg.get("AuthNZ", "pg_password", fallback="ChangeMeStrong123!").strip()
+                    sslm = cfg.get("AuthNZ", "pg_sslmode", fallback="prefer").strip()
+                    overrides["DATABASE_URL"] = f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode={sslm}"
+                # else: ignore unknown types
     except Exception as e:
         logger.debug(f"AuthNZ settings: failed to load overrides from config.txt: {e}")
     return overrides

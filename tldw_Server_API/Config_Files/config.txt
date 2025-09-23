@@ -235,7 +235,21 @@ chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'm
 #
 # Authentication mode: single_user (API key) or multi_user (JWT)
 auth_mode = single_user
-# AuthNZ database (PostgreSQL recommended for production multi-user; SQLite OK for dev)
+# AuthNZ database can be configured in two ways (environment still wins):
+#   A) Provide a full URL (recommended):
+#      database_url = sqlite:///./Databases/users.db
+#      # or
+#      database_url = postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
+#   B) Use structured fields, and the server will synthesize DATABASE_URL if not set:
+#      db_type = sqlite            # sqlite | postgresql
+#      sqlite_path = ./Databases/users.db
+#      # Postgres fields (used when db_type=postgresql)
+#      pg_host = localhost
+#      pg_port = 5432
+#      pg_db = tldw_users
+#      pg_user = tldw_user
+#      pg_password = ChangeMeStrong123!
+#      pg_sslmode = prefer
 database_url = sqlite:///./Databases/users.db
 # Secrets (for dev only; prefer .env or real env in production)
 # jwt_secret_key = CHANGE_ME_MIN_32_CHARS

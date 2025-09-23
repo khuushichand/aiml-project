@@ -327,6 +327,223 @@ def test_import_tsv_with_header_modeltype_extra(client_with_flashcards_db: TestC
     cz = next(it for it in items if it.get('model_type') == 'cloze')
     assert '{{c1::x}}' in cz.get('front')
     assert cz.get('extra') == 'CE'
+
+
+def test_import_tsv_with_deckdescription_and_iscloze(client_with_flashcards_db: TestClient):
+    header = "Deck\tFront\tBack\tTags\tNotes\tDeckDescription\tIsCloze\n"
+    rows = (
+        "DeckD\tCloze {{c1::zz}}\t\tztag\tZN\tThis is a described deck\ttrue\n"
+    )
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    # Verify deck description persisted
+    r = client_with_flashcards_db.get("/api/v1/flashcards/decks")
+    assert r.status_code == 200
+    decks = r.json()
+    deck = next(d for d in decks if d.get('name') == 'DeckD')
+    assert deck.get('description') == 'This is a described deck'
+    # Verify imported card is cloze
+    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    items = r.json().get('items', [])
+    card = next(it for it in items if it.get('deck_name') == 'DeckD')
+    assert card.get('is_cloze') is True
+    assert card.get('model_type') == 'cloze'
+
+
+def test_export_csv_with_header_and_custom_delimiter(client_with_flashcards_db: TestClient):
+    # Create deck/card
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DelimDeck"})
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "F",
+        "back": "B",
+        "notes": "N",
+        "tags": ["t1", "t2"]
+    })
+    assert r.status_code == 200
+    # Export with delimiter ';' and header
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True})
+    assert r.status_code == 200
+    assert r.headers.get('content-type', '').startswith('text/csv')
+    text = r.content.decode('utf-8')
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    assert len(lines) >= 2
+    header = lines[0]
+    assert header == 'Deck;Front;Back;Tags;Notes'
+    cols = lines[1].split(';')
+    assert len(cols) == 5
+    assert cols[0] == 'DelimDeck'
+    # Ensure no tabs present
+    assert '\t' not in lines[0] and '\t' not in lines[1]
+
+
+def test_export_csv_extended_header_and_values(client_with_flashcards_db: TestClient):
+    # Create deck/card with extra + reverse
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "ExtDeck"})
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Fext",
+        "back": "Bext",
+        "extra": "Xtra",
+        "model_type": "basic_reverse"
+    })
+    assert r.status_code == 200
+    # Export with extended header
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True})
+    assert r.status_code == 200
+    text = r.content.decode('utf-8')
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    assert len(lines) >= 2
+    header = lines[0]
+    assert header == 'Deck;Front;Back;Tags;Notes;Extra;Reverse'
+    # Check row contains extra and reverse column values
+    cols = lines[1].split(';')
+    assert len(cols) == 7
+    assert cols[0] == 'ExtDeck'
+    assert cols[5] == 'Xtra'
+    assert cols[6] in ('true', 'false')
+
+
+def test_import_minimal_header_front_back_default_deck(client_with_flashcards_db: TestClient):
+    header = "Front\tBack\n"
+    rows = "Qmin\tAmin\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    # Default deck should exist and card should belong to it
+    r = client_with_flashcards_db.get("/api/v1/flashcards/decks")
+    decks = r.json()
+    assert any(d.get('name') == 'Default' for d in decks)
+    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    items = r.json().get('items', [])
+    found = next((it for it in items if it.get('front') == 'Qmin' and it.get('back') == 'Amin'), None)
+    assert found is not None
+    assert found.get('deck_name') == 'Default'
+
+
+def test_round_trip_import_export_extra_reverse(client_with_flashcards_db: TestClient):
+    # Import TSV with Extra and Reverse
+    header = "Deck\tFront\tBack\tTags\tNotes\tExtra\tReverse\n"
+    rows = "DeckR\tFr\tBk\ttr\tnt\tXVal\ttrue\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    # Export CSV extended
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True})
+    assert r.status_code == 200
+    txt = r.content.decode('utf-8')
+    lines = [ln for ln in txt.splitlines() if ln.strip()]
+    # Find the DeckR row and assert Extra/Reverse values
+    row = next(ln for ln in lines[1:] if ln.startswith('DeckR;'))
+    cols = row.split(';')
+    assert cols[0] == 'DeckR' and cols[1] == 'Fr' and cols[2] == 'Bk'
+    assert cols[5] == 'XVal' and cols[6] in ('true', 'false')
+    # Export APKG and assert two cards (reverse)
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"})
+    assert r.status_code == 200
+    import io, sqlite3, zipfile, tempfile, os
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    try:
+        with zf.open('collection.anki2') as f:
+            data = f.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, 'col.anki2')
+            with open(p, 'wb') as fh:
+                fh.write(data)
+            conn = sqlite3.connect(p)
+            try:
+                notes = conn.execute("SELECT id FROM notes").fetchall()
+                # At least one note for DeckR
+                assert len(notes) >= 1
+                # cards: ensure at least one note has two cards
+                nids = [n[0] for n in notes]
+                has_two = False
+                for nid in nids:
+                    cnt = conn.execute("SELECT COUNT(*) FROM cards WHERE nid=?", (nid,)).fetchone()[0]
+                    if cnt == 2:
+                        has_two = True
+                        break
+                assert has_two
+            finally:
+                conn.close()
+    finally:
+        zf.close()
+
+
+def test_import_malformed_rows_reported(client_with_flashcards_db: TestClient):
+    # Missing Front field entirely
+    header = "Deck\tBack\tTags\tNotes\n"
+    rows = "BadDeck\tOnlyBack\talpha\tSomeNote\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    # Should import 0 and report an error
+    assert data.get('imported') == 0
+    errs = data.get('errors', [])
+    assert len(errs) == 1
+    assert 'Missing required field' in errs[0].get('error', '')
+    # No cards created
+    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    assert r.status_code == 200
+    assert len(r.json().get('items', [])) == 0
+
+
+def test_import_malformed_missing_deck_with_header(client_with_flashcards_db: TestClient):
+    # Header includes Deck, but row has empty Deck
+    header = "Deck\tFront\tBack\tTags\tNotes\n"
+    rows = "\tFrontOnly\tB\ta\tn\n"  # first field empty deck
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 0
+    errs = data.get('errors', [])
+    assert any('Missing required field: Deck' in e.get('error', '') for e in errs)
+
+
+def test_import_malformed_invalid_cloze(client_with_flashcards_db: TestClient):
+    # Header declares cloze model, but front lacks cN pattern
+    header = "Deck\tFront\tBack\tTags\tNotes\tModelType\n"
+    rows = "CDeck\tNot a cloze\t\t\t\tcloze\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 0
+    errs = data.get('errors', [])
+    assert any('Invalid cloze' in e.get('error', '') for e in errs)
+
+
+def test_import_oversize_field_rejected(client_with_flashcards_db: TestClient):
+    # Front exceeds MAX_FIELD_LENGTH (8192)
+    long_front = 'F' * 9000
+    header = "Deck\tFront\tBack\tTags\tNotes\n"
+    rows = f"LD\t{long_front}\tB\tT\tN\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 0
+    errs = data.get('errors', [])
+    assert any('Field too long' in e.get('error', '') for e in errs)
+
+
+def test_import_oversize_line_rejected(client_with_flashcards_db: TestClient):
+    # Construct a very long single line (> 32768)
+    big = 'A' * 33000
+    header = "Deck\tFront\tBack\tTags\tNotes\n"
+    rows = f"LD\t{big}\tB\tT\tN\n"
+    content = header + rows
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get('imported') == 0
+    errs = data.get('errors', [])
+    assert any('Line too long' in e.get('error', '') for e in errs)
     # Unicode preserved
     assert '😀' in cols[1]
 

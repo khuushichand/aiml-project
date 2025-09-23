@@ -65,6 +65,7 @@ class UsersDB:
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id SERIAL PRIMARY KEY,
+                            uuid TEXT UNIQUE,
                             username VARCHAR(50) UNIQUE NOT NULL,
                             email VARCHAR(255) UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
@@ -75,6 +76,7 @@ class UsersDB:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             last_login TIMESTAMP,
                             email_verified BOOLEAN DEFAULT FALSE,
+                            is_verified BOOLEAN DEFAULT FALSE,
                             storage_quota_mb INTEGER DEFAULT 5120,
                             storage_used_mb INTEGER DEFAULT 0
                         )
@@ -90,6 +92,7 @@ class UsersDB:
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS users (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            uuid TEXT UNIQUE,
                             username TEXT UNIQUE NOT NULL,
                             email TEXT UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
@@ -100,6 +103,7 @@ class UsersDB:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             last_login TIMESTAMP,
                             email_verified INTEGER DEFAULT 0,
+                            is_verified INTEGER DEFAULT 0,
                             storage_quota_mb INTEGER DEFAULT 5120,
                             storage_used_mb INTEGER DEFAULT 0
                         )

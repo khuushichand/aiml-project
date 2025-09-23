@@ -29,6 +29,12 @@ from tldw_Server_API.app.core.Third_Party.Arxiv import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User  # For User dependency
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
+from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
+    WebSearchRequest, WebSearchRawResponse, WebSearchAggregateResponse
+)
+from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import (
+    generate_and_search, analyze_and_aggregate
+)
 
 #
 #########################################################################################################################
@@ -245,6 +251,71 @@ async def semantic_scholar_search_endpoint(
 #
 # End of semantic_scholar_search_endpoint
 ###############################################################################
+
+
+##############################################################################
+#
+# Web Search Endpoint
+
+from typing import Union
+
+
+@router.post(
+    "/websearch",
+    response_model=Union[WebSearchRawResponse, WebSearchAggregateResponse],
+    summary="Web search across providers with optional aggregation",
+    tags=["research"],
+)
+async def websearch_endpoint(
+    payload: WebSearchRequest,
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """
+    Runs the websearch pipeline: optional subqueries + provider search. If aggregate=True,
+    runs relevance evaluation and generates a final answer.
+    """
+    try:
+        search_params = {
+            "engine": payload.engine,
+            "content_country": payload.content_country,
+            "search_lang": payload.search_lang,
+            "output_lang": payload.output_lang,
+            "result_count": payload.result_count,
+            "date_range": payload.date_range,
+            "safesearch": payload.safesearch,
+            "site_blacklist": payload.site_blacklist,
+            "exactTerms": payload.exactTerms,
+            "excludeTerms": payload.excludeTerms,
+            "filter": payload.filter,
+            "geolocation": payload.geolocation,
+            "search_result_language": payload.search_result_language,
+            "sort_results_by": payload.sort_results_by,
+            "subquery_generation": payload.subquery_generation,
+            "subquery_generation_llm": payload.subquery_generation_llm,
+            "user_review": payload.user_review,
+            "relevance_analysis_llm": payload.relevance_analysis_llm,
+            "final_answer_llm": payload.final_answer_llm,
+        }
+
+        phase1 = generate_and_search(payload.query, search_params)
+
+        if payload.aggregate:
+            aggregated = await analyze_and_aggregate(
+                phase1["web_search_results_dict"],
+                phase1["sub_query_dict"],
+                search_params,
+            )
+            # Merge in sub_query_dict for completeness
+            aggregated["sub_query_dict"] = phase1["sub_query_dict"]
+            return aggregated
+
+        return phase1
+
+    except Exception as e:
+        logger.error(f"websearch endpoint failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Websearch failed: {str(e)}")
+
 
 #
 # End of research.py

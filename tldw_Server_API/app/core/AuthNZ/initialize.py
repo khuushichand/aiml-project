@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.DB_Management.Users_DB import (
     get_users_db,
     ensure_user_directories
 )
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
 from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
@@ -147,7 +148,65 @@ async def setup_database():
         else:
             print("✅ Database is up to date")
     else:
-        print("⚠️  Non-SQLite database detected - ensure migrations are run separately")
+        # Basic Postgres bootstrap: ensure required tables exist
+        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys)...")
+        try:
+            # Ensure connection pool and users table
+            users_db = await get_users_db()
+            await users_db.initialize()
+
+            # Ensure API key tables
+            api_mgr = APIKeyManager()
+            await api_mgr.initialize()
+
+            # Ensure sessions and registration_codes tables (if missing)
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            pool = await get_db_pool()
+            async with pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS sessions (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            token_hash VARCHAR(64) NOT NULL,
+                            refresh_token_hash VARCHAR(64),
+                            encrypted_token TEXT,
+                            encrypted_refresh TEXT,
+                            expires_at TIMESTAMP NOT NULL,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            device_id TEXT,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            revoked_at TIMESTAMP,
+                            revoked_by INTEGER,
+                            revoke_reason TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS registration_codes (
+                            id SERIAL PRIMARY KEY,
+                            code VARCHAR(128) UNIQUE NOT NULL,
+                            role_to_grant VARCHAR(50) DEFAULT 'user',
+                            max_uses INTEGER DEFAULT 1,
+                            uses INTEGER DEFAULT 0,
+                            expires_at TIMESTAMP,
+                            created_by INTEGER,
+                            metadata JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes)")
+        except Exception as e:
+            print(f"❌ Failed to bootstrap Postgres schema: {e}")
+            logger.exception("Postgres schema bootstrap error")
+            return False
     
     return True
 

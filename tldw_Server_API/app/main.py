@@ -647,7 +647,7 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Claims design", "url": "/docs-static/Design/ingestion_claims.md"}},
     {"name": "media-embeddings", "description": "Generate embeddings for uploaded/ingested media.",
      "externalDocs": {"description": "Embeddings docs", "url": "/docs-static/Embeddings/Embeddings-Documentation.md"}},
-    {"name": "notes", "description": "Notes and knowledge management (NotebookLM-style)."},
+    {"name": "notes", "description": "Notes and knowledge management."},
     {"name": "prompts", "description": "Prompt library management (import/export).",
      "externalDocs": {"description": "Prompts design", "url": "/docs-static/Design/Prompts.md"}},
     {"name": "Prompt Studio (Experimental)", "description": "Projects, prompts, tests, optimization, and background jobs (experimental).",

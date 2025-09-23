@@ -360,10 +360,14 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)")
     
-    # Add email verification timestamp to users if not exists
+    # Add columns to users if not exists
     cursor = conn.execute("PRAGMA table_info(users)")
     columns = [row[1] for row in cursor.fetchall()]
     
+    if 'uuid' not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+        logger.info("Added uuid column to users table")
+
     if 'email_verified_at' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMP")
         logger.info("Added email_verified_at column to users table")
@@ -394,6 +398,7 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(8, "Add password_history table", migration_008_add_password_history_table),
         Migration(9, "Add session encryption columns", migration_009_add_session_encryption_columns),
         Migration(10, "Add 2FA columns to users", migration_010_add_2fa_columns),
+        Migration(11, "Enhanced auth tables + uuid", migration_011_add_enhanced_auth_tables),
     ]
 
 
