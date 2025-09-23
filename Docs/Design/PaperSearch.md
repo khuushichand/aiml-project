@@ -39,6 +39,40 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
   - Response: `{ query_echo, items: PubMedPaper[], total_results, page, results_per_page, total_pages }`
   - Notes: Uses E-utilities (ESearch + ESummary); abstracts are not included for performance. PMC links and PDF URLs are provided when available.
 
+### PMC Harvesting
+
+- GET `/api/v1/paper-search/pmc-oai/identify`
+  - Response: `{ info }` – OAI-PMH Identify details
+
+- GET `/api/v1/paper-search/pmc-oai/list-sets`
+  - Params: `resumptionToken`
+  - Response: `{ query_echo, items: { setSpec, setName }[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/list-identifiers`
+  - Params: `metadataPrefix` (default `oai_dc`), `from`, `until`, `set`, `resumptionToken`
+  - Response: `{ query_echo, items: PMCOAIHeader[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/list-records`
+  - Params: `metadataPrefix` (default `oai_dc`), `from`, `until`, `set`, `resumptionToken`
+  - Response: `{ query_echo, items: PMCOAIRecord[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/get-record`
+  - Params: `identifier`, `metadataPrefix` (default `oai_dc`)
+  - Response: `PMCOAIRecord`
+
+### PMC OA Web Service
+
+- GET `/api/v1/paper-search/pmc-oa/identify`
+  - Response: `{ info }` – OA repository info and latest update
+
+- GET `/api/v1/paper-search/pmc-oa/query`
+  - Params: `from`, `until`, `format` (`pdf|tgz`), `resumptionToken`, `id`
+  - Response: `{ query_echo, items: PMCOARecord[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oa/fetch-pdf`
+  - Params: `pmcid` (e.g., `PMC1234567`)
+  - Response: PDF bytes (attachment); useful for integration with `/api/v1/media/process-pdfs`
+
 ## Provider Adapters
 
 - `core/Third_Party/Arxiv.py` (existing)

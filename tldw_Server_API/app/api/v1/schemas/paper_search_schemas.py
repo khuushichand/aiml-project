@@ -145,3 +145,82 @@ class PubMedSearchRequestForm:
         self.free_full_text = free_full_text
         self.page = page
         self.results_per_page = results_per_page
+
+
+# ---------------- PMC OAI-PMH Schemas ----------------
+
+class PMCOAIHeader(BaseModel):
+    identifier: Optional[str] = None
+    datestamp: Optional[str] = None
+    setSpecs: Optional[List[str]] = None
+
+
+class PMCOAIMetadata(BaseModel):
+    title: Optional[str] = None
+    creators: Optional[List[str]] = None
+    identifiers: Optional[List[str]] = None
+    rights: Optional[List[str]] = None
+    license_urls: Optional[List[str]] = None
+    date: Optional[str] = None
+    pmcid: Optional[str] = None
+    pmid: Optional[str] = None
+    doi: Optional[str] = None
+
+
+class PMCOAIRecord(BaseModel):
+    header: Optional[PMCOAIHeader] = None
+    metadata: Optional[PMCOAIMetadata] = None
+    raw_xml: Optional[str] = None
+
+
+class PMCOAIListResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[PMCOAIRecord]
+    resumption_token: Optional[str] = None
+
+
+class PMCOAIIdentifiersResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[PMCOAIHeader]
+    resumption_token: Optional[str] = None
+
+
+class PMCOAISet(BaseModel):
+    setSpec: Optional[str] = None
+    setName: Optional[str] = None
+
+
+class PMCOAIListSetsResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[PMCOAISet]
+    resumption_token: Optional[str] = None
+
+
+class PMCOAIIdentifyResponse(BaseModel):
+    info: Dict[str, Any]
+
+
+# ---------------- PMC OA Web Service Schemas ----------------
+
+class PMCOALink(BaseModel):
+    format: Optional[str] = None
+    updated: Optional[str] = None
+    href: Optional[str] = None
+
+
+class PMCOARecord(BaseModel):
+    id: str
+    citation: Optional[str] = None
+    license: Optional[str] = None
+    retracted: Optional[bool] = None
+    links: List[PMCOALink] = []
+
+
+class PMCOAQueryResponse(BaseModel):
+    query_echo: Dict[str, Any]
+    items: List[PMCOARecord]
+    resumption_token: Optional[str] = None
+
+
+class PMCOAIdentifyResponse(BaseModel):
+    info: Dict[str, Any]

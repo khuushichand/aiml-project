@@ -26,11 +26,22 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     PubMedSearchRequestForm,
     PubMedSearchResponse,
     PubMedPaper,
+    PMCOAIListResponse,
+    PMCOAIIdentifiersResponse,
+    PMCOAIListSetsResponse,
+    PMCOAIIdentifyResponse,
+    PMCOAQueryResponse,
+    PMCOAIdentifyResponse,
+    PMCOAIRecord,
+    PMCOAIHeader,
+    PMCOARecord,
 )
 from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
 from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
 from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
 from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
+from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
+from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
 
 
 router = APIRouter()
@@ -151,6 +162,258 @@ async def paper_search_biorxiv(
         results_per_page=search_params.results_per_page,
     total_pages=total_pages,
     )
+
+
+# -------------------- PMC OAI-PMH Endpoints --------------------
+
+@router.get(
+    "/pmc-oai/identify",
+    response_model=PMCOAIIdentifyResponse,
+    summary="PMC OAI-PMH Identify",
+    tags=["paper-search"],
+)
+async def pmc_oai_identify():
+    loop = asyncio.get_running_loop()
+    try:
+        info, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_identify)
+        if error_message:
+            logger.error(f"PMC OAI Identify error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if info is None:
+            raise HTTPException(status_code=500, detail="PMC OAI Identify returned no data.")
+        return PMCOAIIdentifyResponse(info=info)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI Identify error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-sets",
+    response_model=PMCOAIListSetsResponse,
+    summary="PMC OAI-PMH ListSets",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_list_sets, resumptionToken)
+        if error_message:
+            logger.error(f"PMC OAI ListSets error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIListSetsResponse(query_echo={"resumptionToken": resumptionToken}, items=[
+            {
+                "setSpec": it.get("setSpec"),
+                "setName": it.get("setName"),
+            } for it in items
+        ], resumption_token=next_token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListSets error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-identifiers",
+    response_model=PMCOAIIdentifiersResponse,
+    summary="PMC OAI-PMH ListIdentifiers",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_identifiers(
+    metadataPrefix: str = Query("oai_dc"),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    set_name: Optional[str] = Query(None, alias="set"),
+    resumptionToken: Optional[str] = Query(None),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(
+            None, PMC_OAI.pmc_oai_list_identifiers, metadataPrefix, from_date, until_date, set_name, resumptionToken
+        )
+        if error_message:
+            logger.error(f"PMC OAI ListIdentifiers error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIIdentifiersResponse(
+            query_echo={"metadataPrefix": metadataPrefix, "from": from_date, "until": until_date, "set": set_name, "resumptionToken": resumptionToken},
+            items=[PMCOAIHeader(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListIdentifiers error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-records",
+    response_model=PMCOAIListResponse,
+    summary="PMC OAI-PMH ListRecords",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_records(
+    metadataPrefix: str = Query("oai_dc"),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    set_name: Optional[str] = Query(None, alias="set"),
+    resumptionToken: Optional[str] = Query(None),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(
+            None, PMC_OAI.pmc_oai_list_records, metadataPrefix, from_date, until_date, set_name, resumptionToken
+        )
+        if error_message:
+            logger.error(f"PMC OAI ListRecords error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIListResponse(
+            query_echo={"metadataPrefix": metadataPrefix, "from": from_date, "until": until_date, "set": set_name, "resumptionToken": resumptionToken},
+            items=[PMCOAIRecord(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListRecords error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/get-record",
+    response_model=PMCOAIRecord,
+    summary="PMC OAI-PMH GetRecord",
+    tags=["paper-search"],
+)
+async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str = Query("oai_dc")):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, identifier, metadataPrefix)
+        if error_message:
+            logger.error(f"PMC OAI GetRecord error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not item:
+            raise HTTPException(status_code=404, detail="Record not found")
+        return PMCOAIRecord(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI GetRecord error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------- PMC OA Web Service Endpoints --------------------
+
+@router.get(
+    "/pmc-oa/identify",
+    response_model=PMCOAIdentifyResponse,
+    summary="PMC OA Web Service identification",
+    tags=["paper-search"],
+)
+async def pmc_oa_identify():
+    loop = asyncio.get_running_loop()
+    try:
+        info, error_message = await loop.run_in_executor(None, PMC_OA.pmc_oa_identify)
+        if error_message:
+            logger.error(f"PMC OA Identify error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if info is None:
+            raise HTTPException(status_code=500, detail="PMC OA Identify returned no data.")
+        return PMCOAIdentifyResponse(info=info)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA Identify error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oa/query",
+    response_model=PMCOAQueryResponse,
+    summary="PMC OA Web Service query with resumption",
+    tags=["paper-search"],
+)
+async def pmc_oa_query(
+    from_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    until_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    format: Optional[str] = Query(None, description="'pdf' or 'tgz'"),
+    resumptionToken: Optional[str] = Query(None),
+    id: Optional[str] = Query(None, description="PMC ID like PMC5334499"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(None, PMC_OA.pmc_oa_query, from_date, until_date, format, resumptionToken, id)
+        if error_message:
+            logger.error(f"PMC OA query error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAQueryResponse(
+            query_echo={"from": from_date, "until": until_date, "format": format, "resumptionToken": resumptionToken, "id": id},
+            items=[PMCOARecord(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA query error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+from fastapi.responses import StreamingResponse
+import io
+
+@router.get(
+    "/pmc-oa/fetch-pdf",
+    summary="Fetch PMC PDF by PMCID and return as attachment",
+    tags=["paper-search"],
+)
+async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or with 'PMC' prefix")):
+    loop = asyncio.get_running_loop()
+    try:
+        content, filename, error_message = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
+        if error_message:
+            logger.error(f"PMC OA fetch-pdf error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            if "http error" in error_message.lower():
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not content:
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+        stream = io.BytesIO(content)
+        resp = StreamingResponse(stream, media_type="application/pdf")
+        resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename or 'article.pdf'}\""
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA fetch-pdf error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get(
