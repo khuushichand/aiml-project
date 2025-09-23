@@ -802,11 +802,14 @@ Providers API reference: `Docs/API-related/Providers_API_Documentation.md`
 
 #### Advanced Features
 - `POST /api/v1/chunking/chunk` - Chunk text content
-- `POST /api/v1/research/arxiv` - Search arXiv papers
 - `POST /api/v1/research/websearch` - Web search across providers with optional aggregation
 - `POST /api/v1/evaluations/geval` - Run G-Eval
 - `POST /api/v1/evaluations/propositions` - Proposition extraction evaluation (precision/recall/F1)
 - `GET /api/v1/mcp/status` - MCP server status
+\n+#### Paper Search (Provider-specific)
+- `GET /api/v1/paper-search/arxiv` - Search arXiv papers
+- `GET /api/v1/paper-search/biorxiv` - Search BioRxiv/MedRxiv papers
+- `GET /api/v1/paper-search/semantic-scholar` - Search Semantic Scholar
 
 ### Example Usage
 

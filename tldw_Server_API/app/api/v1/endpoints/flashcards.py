@@ -408,6 +408,14 @@ def import_flashcards(
                 db.set_flashcard_tags(uuid, tags_list)
             processed += 1
         return {'imported': len(created), 'items': created, 'errors': errors}
+    except HTTPException:
+        raise
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to import flashcards: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards")
+    except Exception as e:
+        logger.error(f"TSV import failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import TSV flashcards")
 
 
 @router.post("/import/json")
@@ -552,12 +560,12 @@ async def import_flashcards_json(
         return {'imported': len(created), 'items': created, 'errors': errors}
     except HTTPException:
         raise
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to import JSON flashcards: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards")
     except Exception as e:
         logger.error(f"JSON import failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to import JSON flashcards")
-    except CharactersRAGDBError as e:
-        logger.error(f"Failed to import flashcards TSV: {e}")
-        raise HTTPException(status_code=500, detail="Failed to import flashcards")
 
 
 @router.post("/review", response_model=FlashcardReviewResponse)

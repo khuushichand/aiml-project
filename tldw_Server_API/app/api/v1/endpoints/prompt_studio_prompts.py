@@ -88,7 +88,7 @@ router = APIRouter(
                             "created": {
                                 "summary": "Prompt created response",
                                 "value": {
-                                    "success": true,
+                                    "success": True,
                                     "data": {
                                         "id": 12,
                                         "project_id": 1,
@@ -222,9 +222,38 @@ async def create_prompt(
             detail="Failed to create prompt"
         )
 
-@router.get("/list/{project_id}", response_model=ListResponse, openapi_extra={
-    "responses": {"200": {"description": "Prompts", "content": {"application/json": {"examples": {"list": {"summary": "Prompt list", "value": {"success": true, "data": [{"id": 12, "name": "Summarizer", "version_number": 2}], "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}}}}}}
-})
+@router.get(
+    "/list/{project_id}",
+    response_model=ListResponse,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Prompts",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "list": {
+                                "summary": "Prompt list",
+                                "value": {
+                                    "success": True,
+                                    "data": [
+                                        {"id": 12, "name": "Summarizer", "version_number": 2}
+                                    ],
+                                    "metadata": {
+                                        "page": 1,
+                                        "per_page": 20,
+                                        "total": 1,
+                                        "total_pages": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def list_prompts(
     project_id: int = Path(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -297,7 +326,7 @@ async def list_prompts(
         )
 
 @router.get("/get/{prompt_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Prompt", "content": {"application/json": {"examples": {"get": {"summary": "Prompt details", "value": {"success": true, "data": {"id": 12, "name": "Summarizer", "version_number": 2}}}}}}}}
+    "responses": {"200": {"description": "Prompt", "content": {"application/json": {"examples": {"get": {"summary": "Prompt details", "value": {"success": True, "data": {"id": 12, "name": "Summarizer", "version_number": 2}}}}}}}}
 })
 async def get_prompt(
     prompt_id: int = Path(..., description="Prompt ID"),
@@ -385,7 +414,7 @@ async def get_prompt(
                             "versioned": {
                                 "summary": "New version response",
                                 "value": {
-                                    "success": true,
+                                    "success": True,
                                     "data": {
                                         "id": 13,
                                         "project_id": 1,
@@ -522,7 +551,7 @@ async def update_prompt(
         )
 
 @router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "History", "content": {"application/json": {"examples": {"history": {"summary": "Versions", "value": {"success": true, "data": [{"id": 12, "version_number": 1}, {"id": 13, "version_number": 2}]}}}}}}}
+    "responses": {"200": {"description": "History", "content": {"application/json": {"examples": {"history": {"summary": "Versions", "value": {"success": True, "data": [{"id": 12, "version_number": 1}, {"id": 13, "version_number": 2}]}}}}}}}
 })
 async def get_prompt_history(
     prompt_id: int = Path(..., description="Prompt ID"),
@@ -588,7 +617,7 @@ async def get_prompt_history(
         )
 
 @router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Reverted", "content": {"application/json": {"examples": {"reverted": {"summary": "New version", "value": {"success": true, "data": {"id": 14, "version_number": 3}}}}}}}}
+    "responses": {"200": {"description": "Reverted", "content": {"application/json": {"examples": {"reverted": {"summary": "New version", "value": {"success": True, "data": {"id": 14, "version_number": 3}}}}}}}}
 })
 async def revert_prompt(
     prompt_id: int = Path(..., description="Current prompt ID"),

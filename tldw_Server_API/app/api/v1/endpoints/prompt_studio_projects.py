@@ -89,7 +89,7 @@ router = APIRouter(
                             "created": {
                                 "summary": "Project created response",
                                 "value": {
-                                    "success": true,
+                                    "success": True,
                                     "data": {
                                         "id": 1,
                                         "uuid": "f9e3...",
@@ -163,7 +163,7 @@ async def create_project(
                     "examples": {
                         "list": {
                             "summary": "List projects",
-                            "value": {"success": true, "data": [{"id": 1, "name": "Demo Project", "status": "active"}],
+                            "value": {"success": True, "data": [{"id": 1, "name": "Demo Project", "status": "active"}],
                                       "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}
                         }
                     }
@@ -223,7 +223,7 @@ async def list_projects(
         )
 
 @router.get("/get/{project_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Project details", "content": {"application/json": {"examples": {"get": {"summary": "Project", "value": {"success": true, "data": {"id": 1, "name": "Demo Project"}}}}}}}}
+    "responses": {"200": {"description": "Project details", "content": {"application/json": {"examples": {"get": {"summary": "Project", "value": {"success": True, "data": {"id": 1, "name": "Demo Project"}}}}}}}}
 })
 async def get_project(
     project_id: int = Path(..., description="Project ID"),
@@ -263,7 +263,7 @@ async def get_project(
 
 @router.put("/update/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Project updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated project", "value": {"success": true, "data": {"id": 1, "name": "Demo Project", "status": "active", "updated_at": "2024-09-21T12:00:00"}}}}}}},
+        "200": {"description": "Project updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated project", "value": {"success": True, "data": {"id": 1, "name": "Demo Project", "status": "active", "updated_at": "2024-09-21T12:00:00"}}}}}}},
         "400": {"description": "No fields to update"},
         "404": {"description": "Not found"}
     }
@@ -325,7 +325,7 @@ async def update_project(
 
 @router.delete("/delete/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"summary": "Deleted project", "value": {"success": true, "data": {"message": "Project soft deleted"}}}}}}},
+        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"summary": "Deleted project", "value": {"success": True, "data": {"message": "Project soft deleted"}}}}}}},
         "404": {"description": "Not found"}
     }
 })
@@ -376,7 +376,7 @@ async def delete_project(
 
 @router.post("/archive/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Archived", "content": {"application/json": {"examples": {"archived": {"summary": "Project archived", "value": {"success": true, "data": {"status": "archived"}}}}}}},
+        "200": {"description": "Archived", "content": {"application/json": {"examples": {"archived": {"summary": "Project archived", "value": {"success": True, "data": {"status": "archived"}}}}}}},
         "404": {"description": "Not found"}
     }
 })
@@ -422,7 +422,7 @@ async def archive_project(
 
 @router.post("/unarchive/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Unarchived", "content": {"application/json": {"examples": {"unarchived": {"summary": "Project unarchived", "value": {"success": true, "data": {"status": "active"}}}}}}},
+        "200": {"description": "Unarchived", "content": {"application/json": {"examples": {"unarchived": {"summary": "Project unarchived", "value": {"success": True, "data": {"status": "active"}}}}}}},
         "404": {"description": "Not found"}
     }
 })
@@ -470,7 +470,7 @@ async def unarchive_project(
 # Project Statistics Endpoint
 
 @router.get("/stats/{project_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Stats", "content": {"application/json": {"examples": {"stats": {"summary": "Counts", "value": {"success": true, "data": {"prompt_count": 3, "test_case_count": 12}}}}}}}}
+    "responses": {"200": {"description": "Stats", "content": {"application/json": {"examples": {"stats": {"summary": "Counts", "value": {"success": True, "data": {"prompt_count": 3, "test_case_count": 12}}}}}}}}
 })
 async def get_project_stats(
     project_id: int = Path(..., description="Project ID"),

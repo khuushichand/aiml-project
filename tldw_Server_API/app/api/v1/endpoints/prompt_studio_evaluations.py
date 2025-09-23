@@ -244,9 +244,32 @@ async def list_evaluations(
         logger.error(f"Failed to list evaluations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/evaluations/{evaluation_id}", response_model=EvaluationResponse, openapi_extra={
-    "responses": {"200": {"description": "Evaluation", "content": {"application/json": {"examples": {"get": {"summary": "Evaluation details", "value": {"id": 501, "project_id": 1, "prompt_id": 12, "status": "completed"}}}}}}}}
-})
+@router.get(
+    "/evaluations/{evaluation_id}",
+    response_model=EvaluationResponse,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Evaluation",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "get": {
+                                "summary": "Evaluation details",
+                                "value": {
+                                    "id": 501,
+                                    "project_id": 1,
+                                    "prompt_id": 12,
+                                    "status": "completed"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_evaluation(
     evaluation_id: int,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),

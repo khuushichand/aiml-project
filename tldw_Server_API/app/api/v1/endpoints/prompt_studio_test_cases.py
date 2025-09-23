@@ -71,7 +71,7 @@ router = APIRouter(
                                 "inputs": {"text": "Hello world"},
                                 "expected_outputs": {"summary": "Hello world."},
                                 "tags": ["smoke"],
-                                "is_golden": true
+                                "is_golden": True
                             }
                         }
                     }
@@ -87,12 +87,12 @@ router = APIRouter(
                             "created": {
                                 "summary": "Created test case",
                                 "value": {
-                                    "success": true,
+                                    "success": True,
                                     "data": {
                                         "id": 101,
                                         "project_id": 1,
                                         "name": "Short text",
-                                        "is_golden": true,
+                                        "is_golden": True,
                                         "created_at": "2024-09-20T10:00:00"
                                     }
                                 }
@@ -193,7 +193,7 @@ async def create_test_case(
                         "examples": {
                             "created": {
                                 "summary": "Bulk response",
-                                "value": {"success": true, "data": [{"id": 102}, {"id": 103}]}
+                                "value": {"success": True, "data": [{"id": 102}, {"id": 103}]}
                             }
                         }
                     }
@@ -257,9 +257,38 @@ async def create_bulk_test_cases(
             detail="Failed to create test cases"
         )
 
-@router.get("/list/{project_id}", response_model=ListResponse, openapi_extra={
-    "responses": {"200": {"description": "Test cases", "content": {"application/json": {"examples": {"list": {"summary": "Cases", "value": {"success": true, "data": [{"id": 101, "name": "Short text"}], "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}}}}}}
-})
+@router.get(
+    "/list/{project_id}",
+    response_model=ListResponse,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Test cases",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "list": {
+                                "summary": "Cases",
+                                "value": {
+                                    "success": True,
+                                    "data": [
+                                        {"id": 101, "name": "Short text"}
+                                    ],
+                                    "metadata": {
+                                        "page": 1,
+                                        "per_page": 20,
+                                        "total": 1,
+                                        "total_pages": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def list_test_cases(
     project_id: int = Path(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -321,7 +350,7 @@ async def list_test_cases(
         )
 
 @router.get("/get/{test_case_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Test case", "content": {"application/json": {"examples": {"get": {"summary": "Case", "value": {"success": true, "data": {"id": 101, "name": "Short text", "is_golden": true}}}}}}}}
+    "responses": {"200": {"description": "Test case", "content": {"application/json": {"examples": {"get": {"summary": "Case", "value": {"success": True, "data": {"id": 101, "name": "Short text", "is_golden": True}}}}}}}}
 })
 async def get_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
@@ -365,7 +394,7 @@ async def get_test_case(
 
 @router.put("/update/{test_case_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Test case updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated case", "value": {"success": true, "data": {"id": 101, "name": "Short text (v2)", "is_golden": true}}}}}}},
+        "200": {"description": "Test case updated", "content": {"application/json": {"examples": {"updated": {"summary": "Updated case", "value": {"success": True, "data": {"id": 101, "name": "Short text (v2)", "is_golden": True}}}}}}},
         "404": {"description": "Not found"}
     }
 })
@@ -426,7 +455,7 @@ async def update_test_case(
 
 @router.delete("/delete/{test_case_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
-        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"value": {"success": true, "data": {"message": "Test case soft deleted"}}}}}}},
+        "200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"value": {"success": True, "data": {"message": "Test case soft deleted"}}}}}}},
         "404": {"description": "Not found"}
     }
 })
@@ -504,8 +533,8 @@ async def delete_test_case(
                             "value": {
                                 "project_id": 1,
                                 "format": "json",
-                                "data": "[{\\"name\\":\\"Short\\",\\"inputs\\":{\\"text\\":\\"Hi\\"}}]",
-                                "auto_generate_names": true
+                                "data": '[{"name":"Short","inputs":{"text":"Hi"}}]',
+                                "auto_generate_names": True
                             }
                         },
                         "csv": {
@@ -513,7 +542,7 @@ async def delete_test_case(
                             "value": {
                                 "project_id": 1,
                                 "format": "csv",
-                                "data": "name,inputs,expected_outputs\\nShort,\\"{\\\\\"text\\\\\":\\\\\"Hi\\\\\"}\\",\\"{\\\\\"summary\\\\\":\\\\\"Hi.\\\\\"}\\""
+                                "data": 'name,inputs,expected_outputs\nShort,"{""text"":""Hi""}","{""summary"":""Hi.""}"'
                             }
                         }
                     }
@@ -528,7 +557,7 @@ async def delete_test_case(
                         "examples": {
                             "result": {
                                 "summary": "Imported count",
-                                "value": {"success": true, "data": {"imported": 2, "errors": [], "total_test_cases": 10}}
+                                "value": {"success": True, "data": {"imported": 2, "errors": [], "total_test_cases": 10}}
                             }
                         }
                     }
@@ -633,7 +662,7 @@ async def import_test_cases(
                         "examples": {
                             "result": {
                                 "summary": "CSV Import",
-                                "value": {"success": true, "data": {"imported": 3, "errors": [], "total_test_cases": 15}}
+                                "value": {"success": True, "data": {"imported": 3, "errors": [], "total_test_cases": 15}}
                             }
                         }
                     }
@@ -744,7 +773,7 @@ async def get_csv_import_template(
                             "summary": "Export as JSON",
                             "value": {
                                 "format": "json",
-                                "include_golden_only": false,
+                                "include_golden_only": False,
                                 "tag_filter": ["smoke"]
                             }
                         }
@@ -760,7 +789,7 @@ async def get_csv_import_template(
                         "examples": {
                             "json": {
                                 "summary": "JSON export",
-                                "value": {"success": true, "data": {"format": "json", "data": [{"name": "Short"}]}}
+                                "value": {"success": True, "data": {"format": "json", "data": [{"name": "Short"}]}}
                             }
                         }
                     }
@@ -855,7 +884,7 @@ async def export_test_cases(
                         "examples": {
                             "generated": {
                                 "summary": "Generated examples",
-                                "value": {"success": true, "data": [{"id": 110, "is_generated": true}]}
+                                "value": {"success": True, "data": [{"id": 110, "is_generated": True}]}
                             }
                         }
                     }

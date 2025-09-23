@@ -72,6 +72,8 @@ from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_r
 #
 # Research Endpoint
 from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+# Paper Search Endpoint (provider-specific)
+from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
 #
 # Evaluation Endpoint (OLD - to be removed)
 # Legacy evaluation endpoint - replaced by unified router
@@ -660,6 +662,8 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Workflows", "url": "/docs-static/Design/Workflows.md"}},
     {"name": "research", "description": "Research providers and web data collection.",
      "externalDocs": {"description": "Researcher", "url": "/docs-static/Design/Researcher.md"}},
+    {"name": "paper-search", "description": "Provider-specific paper search (arXiv, BioRxiv/MedRxiv, Semantic Scholar).",
+     "externalDocs": {"description": "Paper Search", "url": "/docs-static/Design/PaperSearch.md"}},
     {"name": "evaluations", "description": "Unified evaluation APIs (geval, batch, metrics).",
      "externalDocs": {"description": "Eval report", "url": "/docs-static/EVALUATION_TEST_REPORT.md"}},
     {"name": "benchmarks", "description": "Benchmarking endpoints and utilities.",
@@ -814,7 +818,7 @@ def custom_openapi():
         },
         {
             "name": "Media",
-            "tags": ["media", "audio", "media-embeddings", "web-scraping", "research"],
+            "tags": ["media", "audio", "media-embeddings", "web-scraping", "research", "paper-search"],
         },
         {
             "name": "Chat & TTS",
@@ -1166,6 +1170,9 @@ app.include_router(workflows_router, tags=["Workflows (Experimental)"])
 
 # Router for Research endpoint
 app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+
+# Router for Paper Search endpoints (arXiv, BioRxiv, Semantic Scholar)
+app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
 
 
 # Router for Unified Evaluation endpoint (combines both legacy endpoints)

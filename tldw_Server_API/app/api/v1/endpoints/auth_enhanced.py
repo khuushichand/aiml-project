@@ -448,8 +448,8 @@ async def setup_mfa(
 @router.post("/mfa/verify", status_code=status.HTTP_200_OK)
 async def verify_mfa_setup(
     data: MFAVerifyRequest,
+    request: Request,
     current_user=Depends(get_current_active_user),
-    request: Request
 ) -> Dict[str, str]:
     """
     Verify and enable MFA with TOTP token
@@ -560,8 +560,8 @@ async def disable_mfa(
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     data: LogoutRequest,
+    request: Request,
     current_user=Depends(get_current_active_user),
-    request: Request
 ) -> Dict[str, str]:
     """
     Logout current session or all sessions

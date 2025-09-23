@@ -49,8 +49,9 @@ router = APIRouter()
 @router.get(
     "/arxiv-search",
     response_model=ArxivSearchResponse,
-    summary="Search arXiv Papers",
+    summary="DEPRECATED: Use /api/v1/paper-search/arxiv",
     tags=["Research Tools - arXiv"],
+    deprecated=True,
 )
 async def arxiv_search_endpoint(
         # user: User = Depends(get_request_user), # Optional: if endpoint requires auth
@@ -62,6 +63,7 @@ async def arxiv_search_endpoint(
     Searches the arXiv repository based on query, author, and year.
     Returns a paginated list of matching papers.
     """
+    logger.warning("Deprecated endpoint /api/v1/research/arxiv-search called. Prefer /api/v1/paper-search/arxiv")
     start_index = (search_params.page - 1) * search_params.results_per_page
 
     logger.info(
@@ -154,8 +156,9 @@ def process_and_ingest_arxiv_paper(paper_id, additional_keywords):
 @router.get(
     "/semantic-scholar-search",
     response_model=SemanticScholarSearchResponse,
-    summary="Search Semantic Scholar",
+    summary="DEPRECATED: Use /api/v1/paper-search/semantic-scholar",
     tags=["Research Tools - Semantic Scholar"],
+    deprecated=True,
 )
 async def semantic_scholar_search_endpoint(
         # user: User = Depends(get_request_user), # Optional: if endpoint requires auth
@@ -164,6 +167,7 @@ async def semantic_scholar_search_endpoint(
     """
     Searches the Semantic Scholar database for papers based on various criteria.
     """
+    logger.warning("Deprecated endpoint /api/v1/research/semantic-scholar-search called. Prefer /api/v1/paper-search/semantic-scholar")
     offset = (search_params.page - 1) * search_params.results_per_page
 
     logger.info(

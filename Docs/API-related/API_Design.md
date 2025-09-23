@@ -181,14 +181,13 @@ Liberal in allowed input, strict in parsing/operations on parsed data. (If it is
 - `Search - /api/v1/search` (Optional as its own resource)
     * You may unify search under each resource (e.g., `GET /api/v1/media?search=foo`), or you can have a universal endpoint that queries multiple resources at once (e.g., `GET /api/v1/search?query=foo&type=media,chats,prompts`).
     * If you do unify, you might omit a “search” resource and just rely on query parameters. If you want a single endpoint searching across all data, you might define something like `GET /api/v1/search` with resource-type filters.
-- `3rd_party - /api/v1/3rd_party` (Optional as its own resource)
-    - What it covers: 
-        * Endpoints for 3rd party services or integrations.
-        * E.g. Arxiv, BioRxiv, etc.
+ - `Paper Search - /api/v1/paper-search` (Provider-specific)
+    - What it covers:
+        * Direct search endpoints per provider (arXiv, BioRxiv/MedRxiv, Semantic Scholar).
     - Endpoints:
-        - `GET /api/v1/3rd_party/arxiv` — search Arxiv
-        - `GET /api/v1/3rd_party/biorxiv` — search BioRxiv
-        - etc.
+        - `GET /api/v1/paper-search/arxiv` — search arXiv
+        - `GET /api/v1/paper-search/biorxiv` — search BioRxiv/MedRxiv
+        - `GET /api/v1/paper-search/semantic-scholar` — search Semantic Scholar
 ----------------------------------
 
 

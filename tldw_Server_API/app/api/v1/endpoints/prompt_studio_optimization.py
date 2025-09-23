@@ -76,7 +76,7 @@ router = APIRouter(
                                     "optimizer_type": "iterative",
                                     "max_iterations": 20,
                                     "target_metric": "accuracy",
-                                    "early_stopping": true
+                                    "early_stopping": True
                                 },
                                 "test_case_ids": [1, 2, 3],
                                 "name": "Refine Summarizer"
@@ -94,7 +94,7 @@ router = APIRouter(
                         "examples": {
                             "created": {
                                 "summary": "Created optimization",
-                                "value": {"success": true, "data": {"id": 701, "status": "pending", "job_id": 9001}}
+                                "value": {"success": True, "data": {"id": 701, "status": "pending", "job_id": 9001}}
                             }
                         }
                     }
@@ -229,9 +229,38 @@ async def create_optimization(
             detail="Failed to create optimization"
         )
 
-@router.get("/list/{project_id}", response_model=ListResponse, openapi_extra={
-    "responses": {"200": {"description": "Optimizations", "content": {"application/json": {"examples": {"list": {"summary": "Optimization list", "value": {"success": true, "data": [{"id": 701, "name": "Refine Summarizer", "status": "pending"}], "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}}}}}}}
-})
+@router.get(
+    "/list/{project_id}",
+    response_model=ListResponse,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Optimizations",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "list": {
+                                "summary": "Optimization list",
+                                "value": {
+                                    "success": True,
+                                    "data": [
+                                        {"id": 701, "name": "Refine Summarizer", "status": "pending"}
+                                    ],
+                                    "metadata": {
+                                        "page": 1,
+                                        "per_page": 20,
+                                        "total": 1,
+                                        "total_pages": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def list_optimizations(
     project_id: int = Path(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -311,7 +340,7 @@ async def list_optimizations(
         )
 
 @router.get("/get/{optimization_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Optimization details", "content": {"application/json": {"examples": {"get": {"summary": "Optimization", "value": {"success": true, "data": {"id": 701, "optimizer_type": "iterative", "status": "running"}}}}}}}}
+    "responses": {"200": {"description": "Optimization details", "content": {"application/json": {"examples": {"get": {"summary": "Optimization", "value": {"success": True, "data": {"id": 701, "optimizer_type": "iterative", "status": "running"}}}}}}}}
 })
 async def get_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
@@ -377,7 +406,7 @@ async def get_optimization(
         )
 
 @router.post("/cancel/{optimization_id}", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Cancelled", "content": {"application/json": {"examples": {"cancelled": {"value": {"success": true, "data": {"message": "Optimization cancelled"}}}}}}}, "400": {"description": "Invalid state"}, "404": {"description": "Not found"}}
+    "responses": {"200": {"description": "Cancelled", "content": {"application/json": {"examples": {"cancelled": {"value": {"success": True, "data": {"message": "Optimization cancelled"}}}}}}}, "400": {"description": "Invalid state"}, "404": {"description": "Not found"}}
 })
 async def cancel_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
@@ -469,7 +498,7 @@ async def cancel_optimization(
 # Optimization Strategy Endpoints
 
 @router.get("/strategies", response_model=StandardResponse, openapi_extra={
-    "responses": {"200": {"description": "Strategies", "content": {"application/json": {"examples": {"list": {"summary": "Available strategies", "value": {"success": true, "data": [{"name": "iterative", "display_name": "Iterative Refinement"}]}}}}}}}
+    "responses": {"200": {"description": "Strategies", "content": {"application/json": {"examples": {"list": {"summary": "Available strategies", "value": {"success": True, "data": [{"name": "iterative", "display_name": "Iterative Refinement"}]}}}}}}}
 })
 async def get_optimization_strategies() -> StandardResponse:
     """
@@ -557,7 +586,7 @@ async def get_optimization_strategies() -> StandardResponse:
                         "examples": {
                             "created": {
                                 "summary": "Comparison started",
-                                "value": {"success": true, "data": {"jobs": [{"id": 9002}, {"id": 9003}]}}
+                                "value": {"success": True, "data": {"jobs": [{"id": 9002}, {"id": 9003}]}}
                             }
                         }
                     }
@@ -578,7 +607,7 @@ async def get_optimization_strategies() -> StandardResponse:
                                     "history": {
                                         "summary": "Recent job and progress",
                                         "value": {
-                                            "success": true,
+                                            "success": True,
                                             "data": {
                                                 "optimization": {"id": 701, "status": "running", "iterations_completed": 3, "max_iterations": 20},
                                                 "job": {"id": 9001, "status": "processing"},
@@ -722,7 +751,7 @@ class OptimizationIterationCreate(BaseModel):
                  "responses": {
                      "200": {
                          "description": "Iteration persisted",
-                         "content": {"application/json": {"examples": {"ok": {"value": {"success": true, "data": {"id": 1001}}}}}}
+                         "content": {"application/json": {"examples": {"ok": {"value": {"success": True, "data": {"id": 1001}}}}}}
                      }
                  }
              })
@@ -771,10 +800,37 @@ async def add_optimization_iteration(
         raise HTTPException(status_code=500, detail="Failed to add iteration")
 
 
-@router.get("/iterations/{optimization_id}", response_model=ListResponse,
-            openapi_extra={
-                "responses": {"200": {"description": "Iteration list", "content": {"application/json": {"examples": {"list": {"value": {"success": true, "data": [{"iteration_number": 1, "metrics": {"accuracy": 0.7}}], "metadata": {"page": 1, "per_page": 50, "total": 1, "total_pages": 1}}}}}}}
-            })
+@router.get(
+    "/iterations/{optimization_id}",
+    response_model=ListResponse,
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Iteration list",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "list": {
+                                "value": {
+                                    "success": True,
+                                    "data": [
+                                        {"iteration_number": 1, "metrics": {"accuracy": 0.7}}
+                                    ],
+                                    "metadata": {
+                                        "page": 1,
+                                        "per_page": 50,
+                                        "total": 1,
+                                        "total_pages": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def list_optimization_iterations(
     optimization_id: int,
     page: int = Query(1, ge=1),

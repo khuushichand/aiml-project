@@ -553,6 +553,7 @@ async def create_translation(
 @limiter.limit("30/minute")
 async def segment_transcript(
     req: TranscriptSegmentationRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
 ):
     """
