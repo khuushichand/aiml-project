@@ -5,6 +5,7 @@
 #
 # Imports
 import asyncio
+import json
 from typing import Optional, List, Dict, Any
 #
 # Third-party Libraries
@@ -204,6 +205,15 @@ async def process_web_scraping_task(
                         content_text = article.get("content", "")
                         
                         # Fix the function call to match the actual signature
+                        # Build safe metadata
+                        safe_meta = {
+                            "title": article.get("title"),
+                            "author": article.get("author"),
+                            "url": article.get("url"),
+                            "source": "web",
+                        }
+                        safe_metadata_json = json.dumps({k: v for k, v in safe_meta.items() if v is not None}, ensure_ascii=False)
+
                         media_id, media_uuid, message = db.add_media_with_keywords(
                             url=article.get("url", ""),
                             title=article.get("title", "Untitled"),
@@ -212,6 +222,7 @@ async def process_web_scraping_task(
                             keywords=keywords.split(",") if keywords else [],
                             prompt=(system_prompt or "") + "\n\n" + (custom_prompt or "") if (system_prompt or custom_prompt) else None,
                             analysis_content=article.get("summary", None),
+                            safe_metadata=safe_metadata_json,
                             transcription_model="web-scraping-import",
                             author=article.get("author", None),
                             ingestion_date=None,

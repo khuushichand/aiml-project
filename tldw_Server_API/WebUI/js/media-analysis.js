@@ -570,12 +570,25 @@ class MediaAnalysisManager {
             return;
         }
 
-        const html = analyses.map(analysis => `
+        const html = analyses.map(analysis => {
+            const md = analysis.safe_metadata || {};
+            const idLine = [
+                md.doi ? `<span class="meta-pill">DOI: ${this.escapeHtml(md.doi)}</span>` : '',
+                md.pmid ? `<span class="meta-pill">PMID: ${this.escapeHtml(md.pmid)}</span>` : '',
+                md.pmcid ? `<span class="meta-pill">PMCID: ${this.escapeHtml(md.pmcid)}</span>` : '',
+                md.arxiv_id ? `<span class="meta-pill">arXiv: ${this.escapeHtml(md.arxiv_id)}</span>` : ''
+            ].filter(Boolean).join(' ');
+            const venue = md.journal || md.venue || '';
+            const license = md.license || md.license_url || '';
+            return `
             <div class="analysis-card" data-version-id="${analysis.version_number}">
                 <div class="analysis-header">
                     <h4>Version ${analysis.version_number}</h4>
                     <span class="analysis-date">${new Date(analysis.created_at).toLocaleDateString()}</span>
                 </div>
+                ${idLine ? `<div class="analysis-meta">${idLine}</div>` : ''}
+                ${venue ? `<div class="analysis-meta"><span class="meta-pill">${this.escapeHtml(venue)}</span></div>` : ''}
+                ${license ? `<div class="analysis-meta"><span class="meta-pill">${this.escapeHtml(license)}</span></div>` : ''}
                 <div class="analysis-preview">
                     ${this.escapeHtml((analysis.analysis_content || '').substring(0, 200))}...
                 </div>
@@ -584,7 +597,7 @@ class MediaAnalysisManager {
                     <button onclick="mediaAnalysisManager.deleteAnalysis(${analysis.version_number})" class="btn-small btn-danger">Delete</button>
                 </div>
             </div>
-        `).join('');
+        `;}).join('');
 
         container.innerHTML = html;
     }
@@ -596,12 +609,28 @@ class MediaAnalysisManager {
             });
             
             const resultsDiv = document.getElementById('analysisResults');
+            const md = analysis.safe_metadata || {};
+            const idLine = [
+                md.doi ? `<span class="meta-pill">DOI: ${this.escapeHtml(md.doi)}</span>` : '',
+                md.pmid ? `<span class="meta-pill">PMID: ${this.escapeHtml(md.pmid)}</span>` : '',
+                md.pmcid ? `<span class="meta-pill">PMCID: ${this.escapeHtml(md.pmcid)}</span>` : '',
+                md.arxiv_id ? `<span class="meta-pill">arXiv: ${this.escapeHtml(md.arxiv_id)}</span>` : ''
+            ].filter(Boolean).join(' ');
+            const venue = md.journal || md.venue || '';
+            const license = md.license || md.license_url || '';
             resultsDiv.innerHTML = `
                 <div class="analysis-result">
                     <div class="result-header">
                         <h3>Analysis Version ${versionNumber}</h3>
                         <span class="timestamp">${new Date(analysis.created_at).toLocaleString()}</span>
                     </div>
+                    ${(idLine || venue || license) ? `
+                    <div class="result-meta">
+                        ${idLine}
+                        ${venue ? `<span class=\"meta-pill\">${this.escapeHtml(venue)}</span>` : ''}
+                        ${license ? `<span class=\"meta-pill\">${this.escapeHtml(license)}</span>` : ''}
+                    </div>
+                    ` : ''}
                     ${analysis.prompt ? `
                         <div class="result-prompt">
                             <h4>Prompt Used:</h4>

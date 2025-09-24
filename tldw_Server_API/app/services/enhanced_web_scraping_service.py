@@ -8,6 +8,7 @@ import asyncio
 import uuid
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
+import json
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -439,6 +440,16 @@ class WebScrapingService:
                     summary = article.get("summary", "No summary available")
                     
                     # Add to database using the instance method
+                    # Build safe metadata
+                    safe_meta = {
+                        "title": article.get("title"),
+                        "author": article.get("author"),
+                        "url": article.get("url"),
+                        "date": article.get("date"),
+                        "source": "web",
+                    }
+                    safe_metadata_json = json.dumps({k: v for k, v in safe_meta.items() if v is not None}, ensure_ascii=False)
+
                     media_id, media_uuid, message = db.add_media_with_keywords(
                         url=article.get("url", ""),
                         title=article.get("title", "Untitled"),
@@ -447,6 +458,7 @@ class WebScrapingService:
                         keywords=keywords.split(",") if keywords else [],
                         prompt=None,  # Optional prompt parameter
                         analysis_content=article.get("summary", None),  # Store summary as analysis
+                        safe_metadata=safe_metadata_json,
                         transcription_model="web-scraping-import",
                         author=article.get("author", None),
                         ingestion_date=None,  # Will use current time

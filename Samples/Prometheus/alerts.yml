@@ -1,0 +1,28 @@
+groups:
+  - name: tldw_storage
+    interval: 1m
+    rules:
+      - alert: TLDWUserNearQuotaWarning
+        expr: (user_storage_used_mb / user_storage_quota_mb) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "User near storage quota ({{ $labels.user_id }})"
+          description: |
+            User {{ $labels.user_id }} is above 90% of storage quota.
+            Used: {{ printf "%.2f" $value }} of 1.00 (ratio).
+
+      - alert: TLDWUserNearQuotaCritical
+        expr: (user_storage_used_mb / user_storage_quota_mb) > 0.98
+        for: 5m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "User critically near storage quota ({{ $labels.user_id }})"
+          description: |
+            User {{ $labels.user_id }} is above 98% of storage quota.
+            Used: {{ printf "%.2f" $value }} of 1.00 (ratio). Consider cleanup or quota increase.
+

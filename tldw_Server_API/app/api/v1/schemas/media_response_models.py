@@ -68,6 +68,7 @@ class MediaProcessingDetail(BaseModel):
     """Details about the processing applied to the media."""
     prompt: Optional[str] = Field(None, description="The last prompt used for analysis or processing.", json_schema_extra={"example": "Summarize the key points."})
     analysis: Optional[str] = Field(None, description="The last analysis or summary generated.", json_schema_extra={"example": "The video discusses the fundamentals of AI..."})
+    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Safe metadata JSON associated with the latest document version (if available).")
     model: Optional[str] = Field(None, description="The transcription model used (if applicable).", json_schema_extra={"example": "whisper-large-v3"})
     timestamp_option: Optional[bool] = Field(None, description="Whether timestamps were requested/generated during transcription.", json_schema_extra={"example": True})
 
@@ -85,6 +86,7 @@ class VersionDetailResponse(BaseModel):
     #content_hash: Optional[str] = Field(None, description="SHA-256 hash of the content for this version.", json_schema_extra={"example": "a1b2c3d4..."})
     prompt: Optional[str] = Field(None, description="Prompt associated with this version.", json_schema_extra={"example": "Summarize the previous version."})
     analysis_content: Optional[str] = Field(None, description="Analysis content associated with this version.", json_schema_extra={"example": "This version focuses on..."})
+    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Safe metadata JSON captured for this version.")
     # Conditionally include content based on 'include_content' query param
     content: Optional[str] = Field(None, description="The full content of this version (if requested).", json_schema_extra={"example": "This is the text content for version 2..."})
 

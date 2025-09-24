@@ -78,6 +78,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.schemas.media_response_models import PaginationInfo, MediaListResponse, MediaListItem, \
     MediaDetailResponse, VersionDetailResponse
+from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter
 # Media Processing
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import process_epub
@@ -542,6 +543,13 @@ async def get_media_item(
                             # Handle as per Pydantic model requirements, maybe skip or use a default
                             pass # Pydantic will handle it if it's not a valid datetime
 
+                    # Parse safe_metadata for display
+                    safe_md = rv.get("safe_metadata")
+                    if isinstance(safe_md, str):
+                        try:
+                            safe_md = json.loads(safe_md)
+                        except Exception:
+                            safe_md = None
                     doc_versions_list.append(
                         VersionDetailResponse(
                             media_id=rv.get("media_id"),
@@ -549,12 +557,23 @@ async def get_media_item(
                             created_at=created_at_dt, # Pass datetime object
                             prompt=rv.get("prompt"),
                             analysis_content=rv.get("analysis_content"),
+                            safe_metadata=safe_md,
                             content=None # Don't include content in the list
                         )
                     )
                 logger.debug(f"Fetched {len(doc_versions_list)} document versions for media ID {media_id}")
             except Exception as e_vers:
                 logger.error(f"Error fetching document versions for media {media_id}: {e_vers}", exc_info=True)
+
+        # Parse safe_metadata if present
+        safe_metadata_dict = None
+        try:
+            if safe_metadata and isinstance(safe_metadata, str):
+                safe_metadata_dict = json.loads(safe_metadata)
+            elif isinstance(safe_metadata, dict):
+                safe_metadata_dict = safe_metadata
+        except Exception:
+            safe_metadata_dict = None
 
         response_data = {
             "media_id": media_id,
@@ -567,6 +586,7 @@ async def get_media_item(
             "processing": { # Corresponds to MediaProcessingDetail model
                 "prompt": prompt,
                 "analysis": analysis,
+                "safe_metadata": safe_metadata_dict,
                 "model": media_record.get('transcription_model'),
                 "timestamp_option": media_record.get('timestamp_option') # Assuming 'timestamp_option' exists
             },
@@ -644,11 +664,19 @@ async def create_version(
         # Use the Database instance method within a transaction context
         # The method handles its own sync logging
         with db.transaction():
+            import json as _json
+            smj = None
+            try:
+                if request_body.safe_metadata is not None:
+                    smj = _json.dumps(request_body.safe_metadata, ensure_ascii=False)
+            except Exception:
+                smj = None
             result_dict = db.create_document_version(
                 media_id=media_id,
                 content=request_body.content,
                 prompt=request_body.prompt,
                 analysis_content=request_body.analysis_content,
+                safe_metadata=smj,
             )
 
         # New method returns a dict with id, uuid, media_id, version_number
@@ -679,7 +707,7 @@ async def create_version(
     "/{media_id}/versions",
     tags=["Media Versioning"],
     summary="List Media Versions",
-    response_model=List[Dict[str, Any]], # Update if you create a specific Pydantic model
+    response_model=List[VersionDetailResponse],
 )
 async def list_versions(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -708,7 +736,7 @@ async def list_versions(
 
         # --- Query active versions directly ---
         select_cols_list = ["dv.id", "dv.uuid", "dv.media_id", "dv.version_number", "dv.created_at",
-                           "dv.prompt", "dv.analysis_content", "dv.last_modified", "dv.version"]
+                           "dv.prompt", "dv.analysis_content", "dv.safe_metadata", "dv.last_modified", "dv.version"]
         if include_content: select_cols_list.append("dv.content")
         select_cols = ", ".join(select_cols_list)
 
@@ -728,7 +756,34 @@ async def list_versions(
         """
         params = (media_id, limit, offset)
         cursor = db.execute_query(query, params)
-        versions = [dict(row) for row in cursor.fetchall()]
+        raw_rows = [dict(row) for row in cursor.fetchall()]
+
+        # Build typed response with parsed safe_metadata
+        versions: List[VersionDetailResponse] = []
+        for rv in raw_rows:
+            created_at_dt = rv.get("created_at")
+            if isinstance(created_at_dt, str):
+                try:
+                    created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
+                except Exception:
+                    pass
+            safe_md = rv.get("safe_metadata")
+            if isinstance(safe_md, str):
+                try:
+                    safe_md = json.loads(safe_md)
+                except Exception:
+                    safe_md = None
+            versions.append(
+                VersionDetailResponse(
+                    media_id=rv.get("media_id"),
+                    version_number=rv.get("version_number"),
+                    created_at=created_at_dt,
+                    prompt=rv.get("prompt"),
+                    analysis_content=rv.get("analysis_content"),
+                    safe_metadata=safe_md,
+                    content=rv.get("content") if include_content else None,
+                )
+            )
 
         # Optionally, add pagination info (total count) - requires another query
         count_cursor = db.execute_query("SELECT COUNT(*) FROM DocumentVersions WHERE media_id = ?", (media_id,))
@@ -747,10 +802,77 @@ async def list_versions(
 
 
 @router.get(
+    "/metadata-search",
+    tags=["Media Management"],
+    summary="Search media by safe metadata",
+)
+async def search_by_metadata(
+    filters: Optional[str] = Query(None, description="JSON list of {field, op, value}"),
+    field: Optional[str] = Query(None, description="Single filter field"),
+    op: Optional[str] = Query("icontains", description="Operator: eq|contains|icontains|startswith|endswith"),
+    value: Optional[str] = Query(None, description="Single filter value"),
+    match_mode: str = Query("all", description="all|any"),
+    group_by_media: bool = Query(True),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Search media items based on version safe_metadata fields and identifier indices.
+
+    Accepts either a JSON 'filters' param (list of {field, op, value}) or a single (field, op, value).
+    """
+    try:
+        flt_list: List[Dict[str, Any]] = []
+        import json as _json
+        if filters:
+            try:
+                parsed = _json.loads(filters)
+                if isinstance(parsed, list):
+                    for f in parsed:
+                        if isinstance(f, dict) and 'field' in f and 'value' in f:
+                            flt_list.append({'field': f['field'], 'op': f.get('op', 'icontains'), 'value': f['value']})
+            except Exception as je:
+                raise HTTPException(status_code=400, detail=f"Invalid 'filters' JSON: {je}")
+        elif field and value is not None:
+            flt_list.append({'field': field, 'op': op or 'icontains', 'value': value})
+
+        rows, total = db.search_by_safe_metadata(
+            filters=flt_list or None,
+            match_all=(match_mode.lower() == 'all'),
+            page=page,
+            per_page=per_page,
+            group_by_media=group_by_media,
+        )
+
+        # Parse safe_metadata JSON per row
+        for r in rows:
+            sm = r.get('safe_metadata')
+            if isinstance(sm, str):
+                try:
+                    r['safe_metadata'] = _json.loads(sm)
+                except Exception:
+                    r['safe_metadata'] = None
+        return {
+            'results': rows,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total,
+                'total_pages': (total + per_page - 1) // per_page,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Metadata search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error performing metadata search")
+
+
+@router.get(
     "/{media_id}/versions/{version_number}",
     tags=["Media Versioning"],
     summary="Get Specific Media Version",
-    response_model=Dict[str, Any], # Update if you create a specific Pydantic model
+    response_model=VersionDetailResponse,
 )
 async def get_version(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -781,7 +903,28 @@ async def get_version(
             logger.warning(f"Active version {version_number} not found for active media {media_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found or media/version is inactive")
 
-        return version_dict
+        # Parse into VersionDetailResponse with safe_metadata
+        created_at_dt = version_dict.get("created_at")
+        if isinstance(created_at_dt, str):
+            try:
+                created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
+            except Exception:
+                pass
+        safe_md = version_dict.get("safe_metadata")
+        if isinstance(safe_md, str):
+            try:
+                safe_md = json.loads(safe_md)
+            except Exception:
+                safe_md = None
+        return VersionDetailResponse(
+            media_id=version_dict.get("media_id"),
+            version_number=version_dict.get("version_number"),
+            created_at=created_at_dt,
+            prompt=version_dict.get("prompt"),
+            analysis_content=version_dict.get("analysis_content"),
+            safe_metadata=safe_md,
+            content=version_dict.get("content") if include_content else None,
+        )
 
     except ValueError as e: # Catch invalid version_number from standalone function
         logger.warning(f"Invalid input for get_document_version: {e}")
@@ -2049,6 +2192,33 @@ async def _process_batch_media(
                 try:
                     logger.info(f"Attempting DB persistence for item: {input_ref}")
                     # --- FIX 2: Use lambda for run_in_executor ---
+                    # Build a safe metadata subset for persistence
+                    safe_meta = {}
+                    try:
+                        allowed_keys = {
+                            'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                            'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                            'publisher','source','creators','rights'
+                        }
+                        for k, v in (metadata_for_db or {}).items():
+                            if k in allowed_keys and isinstance(v, (str, int, float, bool)):
+                                safe_meta[k] = v
+                            elif k in allowed_keys and isinstance(v, list):
+                                safe_meta[k] = [x for x in v if isinstance(x, (str, int, float, bool))]
+                        # Extract from externalIds if present
+                        ext = (metadata_for_db or {}).get('externalIds')
+                        if isinstance(ext, dict):
+                            for kk in ('DOI','ArXiv','PMID','PMCID'):
+                                if ext.get(kk):
+                                    safe_meta[kk.lower()] = ext.get(kk)
+                    except Exception:
+                        safe_meta = {}
+                    safe_metadata_json = None
+                    try:
+                        if safe_meta:
+                            safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
+                    except Exception:
+                        safe_metadata_json = None
                     db_add_kwargs = dict(
                         url=str(original_input_ref),
                         title=title_for_db,
@@ -2057,6 +2227,7 @@ async def _process_batch_media(
                         keywords=final_keywords_list,
                         prompt=form_data.custom_prompt,
                         analysis_content=analysis_for_db,
+                        safe_metadata=safe_metadata_json,
                         transcription_model=transcription_model_used,
                         author=author_for_db,
                         overwrite=form_data.overwrite_existing,
@@ -2249,6 +2420,13 @@ async def _process_document_like_item(
                                      f"Available: {info['available_mb']}MB"
                                  )
                              )
+                         # Record URL-download as upload metrics for observability
+                         try:
+                             reg = get_metrics_registry()
+                             reg.increment("uploads_total", 1, labels={"user_id": str(user_id), "media_type": str(media_type)})
+                             reg.increment("upload_bytes_total", float(size_bytes), labels={"user_id": str(user_id), "media_type": str(media_type)})
+                         except Exception:
+                             pass
                      except HTTPException:
                          raise
                      except Exception as _qerr:
@@ -2417,10 +2595,36 @@ async def _process_document_like_item(
         if content_for_db:
             try:
                 logger.info(f"Attempting DB persistence for item: {item_input_ref} using user DB")
+                # Build a safe metadata subset for persistence
+                safe_meta = {}
+                try:
+                    allowed_keys = {
+                        'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                        'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                        'publisher','source','creators','rights'
+                    }
+                    for k, v in (metadata_for_db or {}).items():
+                        if k in allowed_keys and isinstance(v, (str, int, float, bool)):
+                            safe_meta[k] = v
+                        elif k in allowed_keys and isinstance(v, list):
+                            safe_meta[k] = [x for x in v if isinstance(x, (str, int, float, bool))]
+                    ext = (metadata_for_db or {}).get('externalIds')
+                    if isinstance(ext, dict):
+                        for kk in ('DOI','ArXiv','PMID','PMCID'):
+                            if ext.get(kk):
+                                safe_meta[kk.lower()] = ext.get(kk)
+                except Exception:
+                    safe_meta = {}
+                safe_metadata_json = None
+                try:
+                    if safe_meta:
+                        safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
+                except Exception:
+                    safe_metadata_json = None
                 db_add_kwargs = dict(
                     url=item_input_ref, title=title_for_db, media_type=media_type,
                     content=content_for_db, keywords=final_keywords_list,
-                    prompt=form_data.custom_prompt, analysis_content=analysis_for_db,
+                    prompt=form_data.custom_prompt, analysis_content=analysis_for_db, safe_metadata=safe_metadata_json,
                     transcription_model=model_used, author=author_for_db,
                     overwrite=form_data.overwrite_existing, chunk_options=chunk_options,
                 )

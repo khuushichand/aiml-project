@@ -20,6 +20,7 @@
 - Nginx sample config: `Samples/Nginx/nginx.conf`
 - Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
 - Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
+ - Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
 
 ## QuickStart
 
@@ -368,6 +369,7 @@ Prebuilt configuration samples are included to speed up deployments:
 
 - Traefik dynamic config: `Samples/Traefik/traefik-dynamic.yml`
 - Grafana dashboard (security): `Samples/Grafana/security-dashboard.json`
+ - Prometheus alerts (near-quota): `Samples/Prometheus/alerts.yml`
   - Mount into Traefik file provider (e.g., `/etc/traefik/dynamic`)
   - Configure static settings for Docker provider, entrypoints, and LetsEncrypt
 
@@ -425,7 +427,7 @@ Example PromQL:
 
 ### Uploads & Storage
 - `uploads_total{user_id,media_type}`: Counter of uploaded files.
-- `upload_bytes_total{user_id,media_type}`: Counter of uploaded bytes.
+- `upload_bytes_total{user_id,media_type}`: Counter of uploaded bytes. Includes bytes ingested via URL downloads attributed to the user.
 - `user_storage_used_mb{user_id}`: Gauge of current storage used (MB).
 - `user_storage_quota_mb{user_id}`: Gauge of configured storage quota (MB).
 

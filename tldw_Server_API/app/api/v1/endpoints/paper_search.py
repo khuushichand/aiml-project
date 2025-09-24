@@ -42,6 +42,8 @@ from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
 from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
 from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
 from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
 
 router = APIRouter()
@@ -359,6 +361,8 @@ async def pmc_oa_query(
     format: Optional[str] = Query(None, description="'pdf' or 'tgz'"),
     resumptionToken: Optional[str] = Query(None),
     id: Optional[str] = Query(None, description="PMC ID like PMC5334499"),
+    pdf_only: bool = Query(False, description="Filter results to those with PDF links"),
+    license_contains: Optional[str] = Query(None, description="Case-insensitive substring match on license"),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -370,8 +374,19 @@ async def pmc_oa_query(
             raise HTTPException(status_code=502, detail=error_message)
         if items is None:
             items = []
+        # Server-side filters
+        if pdf_only:
+            def has_pdf(it: dict) -> bool:
+                for lk in it.get("links", []) or []:
+                    if (lk.get("format") or "").lower() == "pdf" or (lk.get("href") or "").lower().endswith(".pdf"):
+                        return True
+                return False
+            items = [it for it in items if has_pdf(it)]
+        if license_contains and isinstance(license_contains, str):
+            lc = license_contains.lower()
+            items = [it for it in items if (it.get("license") or "").lower().find(lc) >= 0]
         return PMCOAQueryResponse(
-            query_echo={"from": from_date, "until": until_date, "format": format, "resumptionToken": resumptionToken, "id": id},
+            query_echo={"from": from_date, "until": until_date, "format": format, "resumptionToken": resumptionToken, "id": id, "pdf_only": pdf_only, "license_contains": license_contains},
             items=[PMCOARecord(**it) for it in items],
             resumption_token=next_token,
         )
@@ -413,6 +428,177 @@ async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OA fetch-pdf error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/pmc-oa/ingest-pdf",
+    summary="Download PMC PDF by PMCID, process, and persist to DB",
+    tags=["paper-search"],
+)
+async def pmc_oa_ingest_pdf(
+    pmcid: str = Query(..., description="PMCID numeric or with 'PMC' prefix"),
+    title: Optional[str] = Query(None, description="Optional title override"),
+    author: Optional[str] = Query(None, description="Optional author override"),
+    keywords: Optional[str] = Query(None, description="Optional comma-separated keywords"),
+    perform_chunking: bool = Query(True, description="Enable chunking during processing"),
+    parser: Optional[str] = Query("pymupdf4llm", description="PDF parsing backend"),
+    # Analysis
+    api_name: Optional[str] = Query(None, description="LLM API name for analysis"),
+    custom_prompt: Optional[str] = Query(None, description="Custom prompt for analysis"),
+    system_prompt: Optional[str] = Query(None, description="System prompt for analysis"),
+    enable_ocr: bool = Query(False, description="Enable OCR for scanned PDFs"),
+    ocr_backend: Optional[str] = Query(None, description="OCR backend (e.g., 'tesseract', 'auto')"),
+    ocr_lang: Optional[str] = Query("eng", description="OCR language code"),
+    ocr_dpi: int = Query(300, ge=72, le=600, description="OCR render DPI"),
+    ocr_mode: Optional[str] = Query("fallback", description="OCR mode: 'always' or 'fallback'"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000, description="Min text chars/page to skip OCR"),
+    chunk_method: Optional[str] = Query(None, description="Chunking method (e.g., 'sentences', 'semantic')"),
+    chunk_size: int = Query(500, ge=50, le=4000, description="Target chunk size"),
+    chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
+    perform_analysis: bool = Query(True, description="Run analysis/summarization"),
+    summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
+    enrich_metadata: bool = Query(True, description="Enrich with PMC OAI-PMH oai_dc metadata"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Convenience endpoint: fetch PMC PDF and ingest into user's Media DB."""
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Download PDF
+        content, filename, error_message = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
+        if error_message:
+            logger.error(f"PMC OA download error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            if "http error" in error_message.lower():
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not content:
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+
+        # 2) Process PDF bytes
+        # Import locally to ease testing/monkeypatching
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+
+        kw_list = None
+        if keywords and isinstance(keywords, str):
+            kw_list = [k.strip() for k in keywords.split(',') if k.strip()]
+
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=filename or f"{pmcid}.pdf",
+            parser=parser or "pymupdf4llm",
+            title_override=title,
+            author_override=author,
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            summarize_recursively=summarize_recursively,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+
+        # 3) Optional OAI-PMH metadata enrichment (oai_dc)
+        enriched_oai = None
+        if enrich_metadata:
+            try:
+                pmcid_num = str(pmcid).strip().lstrip("PMC")
+                oai_id = f"oai:pubmedcentral.nih.gov:{pmcid_num}"
+                oai_item, oai_err = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, oai_id, "oai_dc")
+                if not oai_err and oai_item and isinstance(oai_item.get("metadata"), dict):
+                    enriched_oai = oai_item["metadata"]
+            except Exception as _oai_ex:
+                logger.warning(f"OAI-PMH enrichment failed: {_oai_ex}")
+
+        # 4) Persist to DB
+        content_for_db = result.get('transcript') or result.get('content')
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        metadata_for_db = result.get('metadata') or {}
+
+        # Merge in OAI metadata for title/author/ids if available
+        if enriched_oai:
+            if enriched_oai.get("title") and not title:
+                metadata_for_db["title"] = enriched_oai.get("title")
+            creators = enriched_oai.get("creators") or []
+            if creators and not author:
+                metadata_for_db["author"] = "; ".join(creators)
+            for key in ("pmcid", "pmid", "doi", "date", "license_urls", "rights"):
+                if enriched_oai.get(key) is not None:
+                    metadata_for_db[key] = enriched_oai.get(key)
+            try:
+                import json
+                enrich_txt = json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False, indent=2)
+                analysis_for_db = (analysis_for_db + "\n\nOAI Metadata:\n" + enrich_txt) if analysis_for_db else ("OAI Metadata:\n" + enrich_txt)
+            except Exception:
+                pass
+        extracted_keywords = metadata_for_db.get('keywords') or result.get('keywords') or []
+        combined_keywords = set(kw_list or [])
+        if isinstance(extracted_keywords, list):
+            combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and isinstance(k, str))
+        final_keywords = sorted(list(combined_keywords))
+
+        db_id = None
+        media_uuid = None
+        db_msg = "Skipped (no content)"
+        if content_for_db:
+            try:
+                safe_metadata_json = None
+                if enriched_oai:
+                    try:
+                        import json as _json
+                        safe_metadata_json = _json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False)
+                    except Exception:
+                        safe_metadata_json = None
+                db_id, media_uuid, db_msg = await loop.run_in_executor(
+                    None,
+                    lambda: db.add_media_with_keywords(
+                        url=f"pmcid:{pmcid}",
+                        title=metadata_for_db.get('title') or title or (filename or pmcid),
+                        media_type="pdf",
+                        content=content_for_db,
+                        keywords=final_keywords,
+                        prompt=None,
+                        analysis_content=analysis_for_db,
+                        transcription_model=metadata_for_db.get('parser_used') or 'Imported',
+                        author=metadata_for_db.get('author') or author,
+                        safe_metadata=safe_metadata_json,
+                        overwrite=False,
+                        chunk_options={
+                            "method": chunk_method if chunk_method else "sentences",
+                            "max_size": chunk_size,
+                            "overlap": chunk_overlap,
+                        } if perform_chunking else None,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"DB persistence failed for PMCID {pmcid}: {e}", exc_info=True)
+                db_msg = f"DB error: {e}"
+
+        return {
+            "pmcid": pmcid,
+            "filename": filename,
+            "status": result.get("status", "Unknown"),
+            "result": result,
+            "db_id": db_id,
+            "media_uuid": media_uuid,
+            "db_message": db_msg,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

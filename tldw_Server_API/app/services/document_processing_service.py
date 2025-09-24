@@ -202,6 +202,15 @@ async def process_documents(
                     db = MediaDatabase(db_path=db_path, client_id="document_processing_service")
                     try:
                         # Fix the function call to match the actual signature
+                        # Build safe metadata
+                        import json as _json
+                        _safe_meta = {
+                            "title": custom_title or os.path.basename(local_path),
+                            "source": "document",
+                            "url": url,
+                        }
+                        _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
+
                         db_id, _, _ = db.add_media_with_keywords(
                             url=url,
                             title=custom_title or os.path.basename(local_path),
@@ -210,6 +219,7 @@ async def process_documents(
                             keywords=custom_keywords,
                             prompt=custom_prompt_input,
                             analysis_content=summary_text,  # Store summary as analysis
+                            safe_metadata=_safe_json,
                             transcription_model="document-import",
                             author=None,
                             ingestion_date=None,
@@ -259,6 +269,15 @@ async def process_documents(
                     db = MediaDatabase(db_path=db_path, client_id="document_processing_service")
                     try:
                         # Fix the function call to match the actual signature
+                        # Build safe metadata
+                        import json as _json
+                        _safe_meta = {
+                            "title": custom_title or os.path.basename(file_path),
+                            "source": "document",
+                            "url": file_path,
+                        }
+                        _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
+
                         db_id, _, _ = db.add_media_with_keywords(
                             url=file_path,
                             title=custom_title or os.path.basename(file_path),
@@ -267,6 +286,7 @@ async def process_documents(
                             keywords=custom_keywords,
                             prompt=custom_prompt_input,
                             analysis_content=summary_text,  # Store summary as analysis
+                            safe_metadata=_safe_json,
                             transcription_model="document-import",
                             author=None,
                             ingestion_date=None,

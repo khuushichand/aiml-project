@@ -72,6 +72,7 @@ class VersionCreateRequest(BaseModel):
     content: str = Field(..., max_length=5000000, description="Content (max 5MB)")
     prompt: str = Field(..., max_length=10000, description="Prompt (max 10KB)")
     analysis_content: str = Field(..., max_length=100000, description="Analysis content (max 100KB)")
+    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Optional safe metadata JSON to store with this version.")
 
 class VersionResponse(BaseModel):
     id: int
@@ -92,6 +93,18 @@ class SearchRequest(BaseModel):
     must_not_have: Optional[List[str]] = None
     sort_by: Optional[str] = "relevance"
     boost_fields: Optional[Dict[str, float]] = None
+
+class MetadataFilter(BaseModel):
+    field: str = Field(..., description="Metadata key to search (e.g., doi, pmid, journal, license)")
+    op: Literal['eq','contains','icontains','startswith','endswith'] = Field('icontains', description="Match operator")
+    value: str = Field(..., description="Value to match")
+
+class MetadataSearchRequest(BaseModel):
+    filters: Optional[List[MetadataFilter]] = Field(None, description="List of metadata filters")
+    match_mode: Literal['all','any'] = Field('all', description="Combine filters with AND/OR")
+    group_by_media: bool = Field(True, description="Group results by media (latest matching version per media)")
+    page: int = Field(1, ge=1)
+    per_page: int = Field(20, ge=1, le=100)
 
 # Define allowed media types using Literal for validation
 MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook']

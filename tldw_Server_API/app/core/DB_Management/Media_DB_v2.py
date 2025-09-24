@@ -98,7 +98,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 4  # Schema includes removed UNIQUE constraint on content_hash but stays at v4 for compatibility
+    _CURRENT_SCHEMA_VERSION = 5  # Add safe_metadata column to DocumentVersions
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -227,6 +227,7 @@ class MediaDatabase:
         version_number INTEGER NOT NULL,
         prompt TEXT,
         analysis_content TEXT,
+        safe_metadata TEXT,
         content TEXT NOT NULL,
         created_at DATETIME,
         uuid TEXT UNIQUE NOT NULL,
@@ -1670,6 +1671,115 @@ class MediaDatabase:
             raise DatabaseError(f"An unexpected error occurred during media search: {e}") from e
 
     # --- Public Mutating Methods (Modified for Python Sync/FTS Logging) ---
+
+    def search_by_safe_metadata(
+        self,
+        filters: Optional[List[Dict[str, Any]]] = None,
+        match_all: bool = True,
+        page: int = 1,
+        per_page: int = 20,
+        group_by_media: bool = True,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Search by fields inside DocumentVersions.safe_metadata and identifiers table.
+
+        - filters: [{field, op, value}] where op in (eq, contains, icontains, startswith, endswith)
+        - Known identifier fields (doi, pmid, pmcid, arxiv_id, s2_paper_id) are matched via DocumentVersionIdentifiers.
+        - Other fields fallback to LIKE search against the JSON string in dv.safe_metadata.
+        - When group_by_media, returns latest matching version per media.
+        """
+        try:
+            offset = (max(1, page) - 1) * per_page
+            clauses: List[str] = ["dv.deleted = 0", "m.deleted = 0"]
+            params: List[Any] = []
+            join_ident = False
+
+            id_fields = {"doi","pmid","pmcid","arxiv_id","s2_paper_id"}
+            ops_sql = {
+                'eq': lambda col: (f"{col} = ?", lambda v: v),
+                'contains': lambda col: (f"{col} LIKE ?", lambda v: f"%{v}%"),
+                'icontains': lambda col: (f"LOWER({col}) LIKE ?", lambda v: f"%{str(v).lower()}%"),
+                'startswith': lambda col: (f"{col} LIKE ?", lambda v: f"{v}%"),
+                'endswith': lambda col: (f"{col} LIKE ?", lambda v: f"%{v}"),
+            }
+
+            filter_exprs: List[str] = []
+            if filters:
+                for flt in filters:
+                    field = (flt.get('field') or '').strip()
+                    op = (flt.get('op') or 'icontains').lower()
+                    val = flt.get('value')
+                    if not field or val is None:
+                        continue
+                    if field in id_fields:
+                        join_ident = True
+                        col = f"dvi.{field}"
+                        sql_tpl, xform = ops_sql.get(op, ops_sql['icontains'])(col)
+                        filter_exprs.append(sql_tpl)
+                        params.append(xform(val))
+                    else:
+                        # Fallback LIKE on JSON text
+                        if op == 'eq':
+                            frag = f'"{field}":"{val}"'
+                            filter_exprs.append("dv.safe_metadata LIKE ?")
+                            params.append(f"%{frag}%")
+                        elif op == 'icontains':
+                            filter_exprs.append("LOWER(dv.safe_metadata) LIKE ?")
+                            params.append(f"%{str(val).lower()}%")
+                        else:
+                            filter_exprs.append("dv.safe_metadata LIKE ?")
+                            like_val = val
+                            if op == 'contains': like_val = f"%{val}%"
+                            elif op == 'startswith': like_val = f"{val}%"
+                            elif op == 'endswith': like_val = f"%{val}"
+                            else: like_val = f"%{val}%"
+                            params.append(like_val)
+
+            where_filters = ""
+            if filter_exprs:
+                join_op = " AND " if match_all else " OR "
+                where_filters = f" AND (" + join_op.join(filter_exprs) + ")"
+
+            base_from = "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id"
+            if join_ident:
+                base_from += " LEFT JOIN DocumentVersionIdentifiers dvi ON dvi.dv_id = dv.id"
+
+            # Count
+            count_sql = f"SELECT COUNT(DISTINCT m.id) {base_from} WHERE {' AND '.join(clauses)}{where_filters}" if group_by_media else \
+                        f"SELECT COUNT(*) {base_from} WHERE {' AND '.join(clauses)}{where_filters}"
+            count_cursor = self.execute_query(count_sql, tuple(params))
+            total = count_cursor.fetchone()[0]
+
+            if total == 0:
+                return [], 0
+
+            select_cols = "m.id AS media_id, m.title, m.type, dv.version_number, dv.created_at, dv.safe_metadata"
+            order_clause = "ORDER BY m.last_modified DESC"
+            if group_by_media:
+                results_sql = f"""
+                    SELECT {select_cols}
+                    {base_from}
+                    WHERE {' AND '.join(clauses)}{where_filters}
+                    GROUP BY m.id
+                    {order_clause}
+                    LIMIT ? OFFSET ?
+                """
+                res_params = tuple(params + [per_page, offset])
+            else:
+                results_sql = f"""
+                    SELECT {select_cols}
+                    {base_from}
+                    WHERE {' AND '.join(clauses)}{where_filters}
+                    {order_clause}
+                    LIMIT ? OFFSET ?
+                """
+                res_params = tuple(params + [per_page, offset])
+
+            cur = self.execute_query(results_sql, res_params)
+            rows = [dict(r) for r in cur.fetchall()]
+            return rows, total
+        except Exception as e:
+            logging.error(f"Metadata search failed: {e}", exc_info=True)
+            raise DatabaseError(f"Failed metadata search: {e}")
     def add_keyword(self, keyword: str) -> Tuple[Optional[int], Optional[str]]:
         """
         Adds a new keyword or undeletes an existing soft-deleted one.
@@ -2118,6 +2228,7 @@ class MediaDatabase:
             keywords: Optional[List[str]] = None,
             prompt: Optional[str] = None,
             analysis_content: Optional[str] = None,
+            safe_metadata: Optional[str] = None,
             transcription_model: Optional[str] = None,
             author: Optional[str] = None,
             ingestion_date: Optional[str] = None,
@@ -2378,7 +2489,7 @@ class MediaDatabase:
                     self._update_fts_media(conn, media_id, payload["title"], payload["content"])
                     self.update_keywords_for_media(media_id, keywords_norm)
                     self.create_document_version(
-                        media_id=media_id, content=content, prompt=prompt, analysis_content=analysis_content
+                        media_id=media_id, content=content, prompt=prompt, analysis_content=analysis_content, safe_metadata=safe_metadata
                     )
                     _persist_chunks(conn, media_id)
                     if chunk_options:
@@ -2395,7 +2506,7 @@ class MediaDatabase:
             raise DatabaseError(f"Unexpected error processing media: {exc}") from exc
 
 
-    def create_document_version(self, media_id: int, content: str, prompt: Optional[str] = None, analysis_content: Optional[str] = None) -> Dict[str, Any]:
+    def create_document_version(self, media_id: int, content: str, prompt: Optional[str] = None, analysis_content: Optional[str] = None, safe_metadata: Optional[str] = None) -> Dict[str, Any]:
         """
         Creates a new version entry in the DocumentVersions table.
 
@@ -2445,25 +2556,69 @@ class MediaDatabase:
             insert_data = {  # Prepare dict for easier payload generation
                 'media_id': media_id, 'version_number': local_version_number, 'content': content, 'prompt': prompt,
                 'analysis_content': analysis_content,
+                'safe_metadata': safe_metadata,
                 'created_at': current_time,  # Set created_at
                 'uuid': new_uuid,
                 'last_modified': current_time,  # Set last_modified
                 'version': new_version, 'client_id': client_id, 'deleted': 0,
                 'media_uuid': media_uuid  # Add parent uuid for context in payload
             }
-            cursor.execute(
-                """INSERT INTO DocumentVersions (media_id, version_number, content, prompt, analysis_content, created_at,
-                   uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (insert_data['media_id'], insert_data['version_number'], insert_data['content'], insert_data['prompt'],
-                 insert_data['analysis_content'],
-                 insert_data['created_at'],  # Pass created_at
-                 insert_data['uuid'],
-                 insert_data['last_modified'],  # Pass last_modified
-                 insert_data['version'], insert_data['client_id'], insert_data['deleted'])
-            )
+            try:
+                cursor.execute(
+                    """INSERT INTO DocumentVersions (media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
+                       uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (insert_data['media_id'], insert_data['version_number'], insert_data['content'], insert_data['prompt'],
+                     insert_data['analysis_content'], insert_data['safe_metadata'],
+                     insert_data['created_at'],
+                     insert_data['uuid'],
+                     insert_data['last_modified'],
+                     insert_data['version'], insert_data['client_id'], insert_data['deleted'])
+                )
+            except sqlite3.OperationalError as oe:
+                if "no column named safe_metadata" in str(oe).lower():
+                    cursor.execute(
+                        """INSERT INTO DocumentVersions (media_id, version_number, content, prompt, analysis_content, created_at,
+                           uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (insert_data['media_id'], insert_data['version_number'], insert_data['content'], insert_data['prompt'],
+                         insert_data['analysis_content'],
+                         insert_data['created_at'],
+                         insert_data['uuid'],
+                         insert_data['last_modified'],
+                         insert_data['version'], insert_data['client_id'], insert_data['deleted'])
+                    )
+                else:
+                    raise
             version_id = cursor.lastrowid
             if not version_id:
                 raise DatabaseError("Failed to get last row ID for new document version.")
+
+            # Populate identifiers table if present
+            try:
+                if insert_data.get('safe_metadata'):
+                    import json as _json
+                    try:
+                        smd = _json.loads(insert_data['safe_metadata']) if isinstance(insert_data['safe_metadata'], str) else insert_data['safe_metadata']
+                    except Exception:
+                        smd = None
+                    if isinstance(smd, dict):
+                        doi = smd.get('doi') or smd.get('DOI')
+                        pmid = smd.get('pmid') or smd.get('PMID')
+                        pmcid = smd.get('pmcid') or smd.get('PMCID')
+                        arxiv_id = smd.get('arxiv_id') or smd.get('arxiv') or smd.get('ArXiv')
+                        s2id = smd.get('s2_paper_id') or smd.get('paperId')
+                        try:
+                            cursor.execute(
+                                """
+                                INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                                (version_id, doi, pmid, pmcid, arxiv_id, s2id)
+                            )
+                        except sqlite3.OperationalError:
+                            # Table may not exist; ignore
+                            pass
+            except Exception as _ident_ex:
+                logging.warning(f"Could not populate identifiers for version_id={version_id}: {_ident_ex}")
 
             self._log_sync_event(conn, 'DocumentVersions', new_uuid, 'create', new_version, insert_data)
             return {'id': version_id, 'uuid': new_uuid, 'media_id': media_id, 'version_number': local_version_number}
@@ -4602,7 +4757,7 @@ def get_document_version(db_instance: MediaDatabase, media_id: int, version_numb
     logger.debug(f"{log_msg} (active only) from DB: {db_instance.db_path_str}")
     try:
         select_cols_list = ["dv.id", "dv.uuid", "dv.media_id", "dv.version_number", "dv.created_at",
-                           "dv.prompt", "dv.analysis_content", "dv.last_modified", "dv.version",
+                           "dv.prompt", "dv.analysis_content", "dv.safe_metadata", "dv.last_modified", "dv.version",
                            "dv.client_id", "dv.deleted"]
         if include_content:
             select_cols_list.append("dv.content")
