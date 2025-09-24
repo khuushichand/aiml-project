@@ -77,6 +77,14 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates/apply" \
   }'
 ```
 
+#### Option 3: Auto-Match a Template
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chunking/templates/match?filename=paper_v12.pdf&title=An%20Empirical%20Study%20of%20...&media_type=document"
+```
+
+The response lists candidate templates ranked by score and priority. Select a top match and apply it.
+
 ### Using Templates in Python
 
 ```python
@@ -178,6 +186,24 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates/validate" \
     }
   }'
 ```
+
+### Step 4 (New): Generate a Template from a Seed Document
+
+Learn hierarchical boundary rules from a sample (“seed”) document:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chunking/templates/learn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my_seeded_template",
+    "example_text": "# Abstract\nThis paper ...\n# Introduction\n...",
+    "description": "Learned from sample paper",
+    "save": true,
+    "classifier": {"media_types": ["document"], "title_regex": "(paper|study)"}
+  }'
+```
+
+This produces a template with `chunking.config.hierarchical=true` and a `hierarchical_template.boundaries` list tailored to your example.
 
 ### Step 4: Use Your Template
 

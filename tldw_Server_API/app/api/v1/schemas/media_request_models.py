@@ -106,6 +106,19 @@ class MetadataSearchRequest(BaseModel):
     page: int = Field(1, ge=1)
     per_page: int = Field(20, ge=1, le=100)
 
+class MetadataPatchRequest(BaseModel):
+    safe_metadata: Dict[str, Any] = Field(..., description="Safe metadata JSON to set or merge")
+    merge: bool = Field(True, description="Merge with existing metadata if present")
+    new_version: bool = Field(False, description="Create a new version with updated metadata")
+
+class AdvancedVersionUpsertRequest(BaseModel):
+    content: Optional[str] = Field(None, description="Optional content; if omitted and new_version=true, uses latest content")
+    prompt: Optional[str] = Field(None, description="Optional prompt; if omitted and new_version=true, uses latest prompt")
+    analysis_content: Optional[str] = Field(None, description="Optional analysis; if omitted and new_version=true, uses latest analysis")
+    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Optional safe metadata JSON to set or merge")
+    merge: bool = Field(True, description="Merge safe metadata when updating or creating new version")
+    new_version: bool = Field(True, description="Create a new version (default). If false, only safe_metadata may be updated in place")
+
 # Define allowed media types using Literal for validation
 MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook']
 

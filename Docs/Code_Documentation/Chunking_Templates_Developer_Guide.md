@@ -249,6 +249,34 @@ async def apply_template(...)
 async def validate_template(...)
 ```
 
+#### Additional Endpoints
+
+```python
+# Rank templates by simple metadata-based classifier
+@router.post("/match")
+async def match_templates(media_type: Optional[str] = Query(None),
+                          title: Optional[str] = Query(None),
+                          url: Optional[str] = Query(None),
+                          filename: Optional[str] = Query(None)) -> Dict:
+    ...
+
+# Learn hierarchical boundary rules from a seed document
+class LearnTemplateRequest(BaseModel):
+    name: str
+    example_text: Optional[str] = None
+    description: Optional[str] = None
+    save: bool = False
+    classifier: Optional[Dict[str, Any]] = None
+
+@router.post("/learn")
+async def learn_template(req: LearnTemplateRequest) -> Dict:
+    ...
+```
+
+Notes:
+- `/match` uses POST with query parameters for convenience (e.g., `?filename=...&title=...`).
+- `/learn` returns a minimal template with `chunking.config.hierarchical_template.boundaries`; set `save=true` to persist.
+
 ### Schema Definitions
 
 Pydantic schemas in `/api/v1/schemas/chunking_templates_schemas.py`:

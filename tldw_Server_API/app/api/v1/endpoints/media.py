@@ -78,7 +78,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.schemas.media_response_models import PaginationInfo, MediaListResponse, MediaListItem, \
     MediaDetailResponse, VersionDetailResponse
-from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter
+from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter, MetadataPatchRequest, AdvancedVersionUpsertRequest
+from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 # Media Processing
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import process_epub
@@ -819,7 +820,12 @@ async def search_by_metadata(
 ):
     """Search media items based on version safe_metadata fields and identifier indices.
 
-    Accepts either a JSON 'filters' param (list of {field, op, value}) or a single (field, op, value).
+    Examples:
+    - Single filter by DOI (exact):
+      GET /api/v1/media/metadata-search?field=doi&op=eq&value=10.1234/xyz
+
+    - Multiple filters (journal contains, license contains) via JSON:
+      GET /api/v1/media/metadata-search?filters=%5B%7B%22field%22%3A%22journal%22%2C%22op%22%3A%22icontains%22%2C%22value%22%3A%22Nature%22%7D%2C%7B%22field%22%3A%22license%22%2C%22op%22%3A%22icontains%22%2C%22value%22%3A%22CC%20BY%22%7D%5D
     """
     try:
         flt_list: List[Dict[str, Any]] = []
@@ -836,8 +842,24 @@ async def search_by_metadata(
         elif field and value is not None:
             flt_list.append({'field': field, 'op': op or 'icontains', 'value': value})
 
+        # Normalize identifier filters where applicable (doi/pmid/pmcid/arxiv_id)
+        norm_fields = {"doi", "pmid", "pmcid", "arxiv_id", "DOI", "PMID", "PMCID", "arXiv", "ArXiv"}
+        normalized_filters = []
+        for f in (flt_list or []):
+            try:
+                if f.get('field') in norm_fields:
+                    norm = normalize_safe_metadata({f['field']: f.get('value')})
+                    # Map canonical key if different (e.g., DOI->doi)
+                    key = next(iter(norm.keys())) if norm else f['field']
+                    val = norm.get(key, f.get('value'))
+                    normalized_filters.append({'field': key, 'op': f.get('op', 'icontains'), 'value': val})
+                else:
+                    normalized_filters.append(f)
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+
         rows, total = db.search_by_safe_metadata(
-            filters=flt_list or None,
+            filters=normalized_filters or None,
             match_all=(match_mode.lower() == 'all'),
             page=page,
             per_page=per_page,
@@ -867,6 +889,284 @@ async def search_by_metadata(
         logger.error(f"Metadata search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error performing metadata search")
 
+
+@router.patch(
+    "/{media_id}/metadata",
+    tags=["Media Management"],
+    summary="Update safe metadata for the latest version",
+)
+async def patch_metadata(
+    media_id: int = Path(..., description="The ID of the media item"),
+    body: MetadataPatchRequest = Body(...),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Update the safe_metadata JSON on the latest active version, or create a new version with merged metadata.
+
+    Examples:
+    - Merge in new DOI and journal on latest version:
+      PATCH /api/v1/media/123/metadata
+      {"safe_metadata": {"doi": "10.1234/xyz", "journal": "Nature"}, "merge": true, "new_version": false}
+
+    - Create a new version with updated metadata:
+      PATCH /api/v1/media/123/metadata
+      {"safe_metadata": {"license": "CC BY 4.0"}, "merge": true, "new_version": true}
+    """
+    import json as _json
+    try:
+        latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
+        if not latest:
+            raise HTTPException(status_code=404, detail="No active version found for this media.")
+
+        existing = latest.get('safe_metadata')
+        if isinstance(existing, str):
+            try:
+                existing = _json.loads(existing)
+            except Exception:
+                existing = None
+        if not isinstance(existing, dict):
+            existing = {}
+
+        # Normalize incoming safe_metadata payload to enforce identifier rules
+        try:
+            normalized = normalize_safe_metadata(body.safe_metadata or {})
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
+        new_meta = dict(existing)
+        if body.merge:
+            new_meta.update(normalized)
+        else:
+            new_meta = dict(normalized)
+
+        new_meta_json = None
+        try:
+            new_meta_json = _json.dumps(new_meta, ensure_ascii=False)
+        except Exception:
+            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
+
+        if body.new_version:
+            with db.transaction():
+                res = db.create_document_version(
+                    media_id=media_id,
+                    content=latest.get('content') or '',
+                    prompt=latest.get('prompt'),
+                    analysis_content=latest.get('analysis_content'),
+                    safe_metadata=new_meta_json,
+                )
+            return {"message": "New version created with updated metadata.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+        else:
+            # Update in place on latest version
+            dv_id = latest.get('id')
+            if not dv_id:
+                raise HTTPException(status_code=500, detail="Latest version record missing identifier")
+            with db.transaction():
+                conn = db.get_connection()
+                conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (new_meta_json, dv_id))
+                conn.commit()
+            return {"message": "Metadata updated on latest version."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error patching safe metadata for media {media_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update metadata")
+
+
+@router.put(
+    "/{media_id}/versions/{version_number}/metadata",
+    tags=["Media Versioning"],
+    summary="Set safe metadata for a specific version",
+)
+async def put_version_metadata(
+    media_id: int = Path(..., description="The ID of the media item"),
+    version_number: int = Path(..., description="The version number"),
+    body: MetadataPatchRequest = Body(...),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Set or merge safe_metadata JSON on a specific active version.
+
+    Example:
+      PUT /api/v1/media/123/versions/2/metadata
+      {"safe_metadata": {"pmid": "123456"}, "merge": true}
+    """
+    import json as _json
+    try:
+        version_dict = get_document_version(db, media_id=media_id, version_number=version_number, include_content=False)
+        if not version_dict:
+            raise HTTPException(status_code=404, detail="Version not found")
+        dv_id = version_dict.get('id')
+        existing = version_dict.get('safe_metadata')
+        if isinstance(existing, str):
+            try:
+                existing = _json.loads(existing)
+            except Exception:
+                existing = None
+        if not isinstance(existing, dict):
+            existing = {}
+        # Normalize incoming safe_metadata payload to enforce identifier rules
+        try:
+            normalized = normalize_safe_metadata(body.safe_metadata or {})
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
+        new_meta = dict(existing)
+        if body.merge:
+            new_meta.update(normalized)
+        else:
+            new_meta = dict(normalized)
+        try:
+            smj = _json.dumps(new_meta, ensure_ascii=False)
+        except Exception:
+            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
+        with db.transaction():
+            conn = db.get_connection()
+            conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
+            conn.commit()
+        return {"message": "Version metadata updated."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating metadata for media {media_id} v{version_number}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update version metadata")
+
+
+@router.get(
+    "/by-identifier",
+    tags=["Media Management"],
+    summary="Find media by standard identifier (DOI/PMID/PMCID/arXiv/S2)",
+)
+async def get_by_identifier(
+    doi: Optional[str] = Query(None),
+    pmid: Optional[str] = Query(None),
+    pmcid: Optional[str] = Query(None),
+    arxiv_id: Optional[str] = Query(None),
+    s2_paper_id: Optional[str] = Query(None),
+    group_by_media: bool = Query(True),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Quick lookup by canonical identifiers. Returns latest matching version per media by default.
+
+    Example:
+      GET /api/v1/media/by-identifier?doi=10.1234/xyz
+    """
+    try:
+        flt_list = []
+        # Build and normalize identifier filters
+        raw_filters = []
+        if doi: raw_filters.append({'field': 'doi', 'op': 'eq', 'value': doi})
+        if pmid: raw_filters.append({'field': 'pmid', 'op': 'eq', 'value': pmid})
+        if pmcid: raw_filters.append({'field': 'pmcid', 'op': 'eq', 'value': pmcid})
+        if arxiv_id: raw_filters.append({'field': 'arxiv_id', 'op': 'eq', 'value': arxiv_id})
+        if s2_paper_id: raw_filters.append({'field': 's2_paper_id', 'op': 'eq', 'value': s2_paper_id})
+        for f in raw_filters:
+            try:
+                norm = normalize_safe_metadata({f['field']: f['value']}) if f['field'] != 's2_paper_id' else {f['field']: f['value']}
+                key = next(iter(norm.keys())) if norm else f['field']
+                val = norm.get(key, f['value'])
+                flt_list.append({'field': key, 'op': f['op'], 'value': val})
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+        if not flt_list:
+            raise HTTPException(status_code=400, detail="Provide at least one identifier")
+        rows, total = db.search_by_safe_metadata(filters=flt_list, match_all=True, page=1, per_page=50, group_by_media=group_by_media)
+        import json as _json
+        for r in rows:
+            sm = r.get('safe_metadata')
+            if isinstance(sm, str):
+                try:
+                    r['safe_metadata'] = _json.loads(sm)
+                except Exception:
+                    r['safe_metadata'] = None
+        return {'results': rows, 'total': total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Identifier lookup error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error in identifier lookup")
+
+
+@router.post(
+    "/{media_id}/versions/advanced",
+    tags=["Media Versioning"],
+    summary="Create or update version with content + safe metadata",
+)
+async def create_or_update_version_advanced(
+    media_id: int,
+    body: AdvancedVersionUpsertRequest,
+    db: MediaDatabase = Depends(get_media_db_for_user)
+):
+    """Convenience endpoint to create a new version (default) or update latest metadata.
+
+    Rules:
+    - If new_version=true (default):
+        - content/prompt/analysis_content use provided values or fall back to latest.
+        - safe_metadata: if provided and merge=true, merged with latest; else replaces.
+    - If new_version=false:
+        - Only safe_metadata updates are allowed (content/prompt/analysis_content forbidden).
+    """
+    import json as _json
+    try:
+        latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
+        if not latest:
+            raise HTTPException(status_code=404, detail="No active version found for this media.")
+
+        if not body.new_version and (body.content is not None or body.prompt is not None or body.analysis_content is not None):
+            raise HTTPException(status_code=400, detail="When new_version=false, only safe_metadata updates are allowed")
+
+        # Prepare safe_metadata
+        latest_sm = latest.get('safe_metadata')
+        if isinstance(latest_sm, str):
+            try:
+                latest_sm = _json.loads(latest_sm)
+            except Exception:
+                latest_sm = None
+        if not isinstance(latest_sm, dict):
+            latest_sm = {}
+        merged_sm = None
+        if body.safe_metadata is not None:
+            # Normalize incoming safe_metadata first
+            try:
+                normalized = normalize_safe_metadata(body.safe_metadata)
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+            if body.merge:
+                merged_sm = dict(latest_sm)
+                merged_sm.update(normalized)
+            else:
+                merged_sm = dict(normalized)
+        else:
+            merged_sm = dict(latest_sm)
+        try:
+            smj = _json.dumps(merged_sm, ensure_ascii=False) if merged_sm else None
+        except Exception:
+            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
+
+        if body.new_version:
+            # Determine fields for new version
+            content = body.content if body.content is not None else (latest.get('content') or '')
+            prompt = body.prompt if body.prompt is not None else latest.get('prompt')
+            analysis = body.analysis_content if body.analysis_content is not None else latest.get('analysis_content')
+            with db.transaction():
+                res = db.create_document_version(
+                    media_id=media_id,
+                    content=content,
+                    prompt=prompt,
+                    analysis_content=analysis,
+                    safe_metadata=smj,
+                )
+            return {"message": "New version created.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+        else:
+            # Update latest safe_metadata only
+            dv_id = latest.get('id')
+            with db.transaction():
+                conn = db.get_connection()
+                conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
+                conn.commit()
+            return {"message": "Metadata updated on latest version."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Advanced version upsert error for media {media_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process advanced version upsert")
 
 @router.get(
     "/{media_id}/versions/{version_number}",
@@ -2216,6 +2516,12 @@ async def _process_batch_media(
                     safe_metadata_json = None
                     try:
                         if safe_meta:
+                            from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata as _norm_sm
+                            try:
+                                safe_meta = _norm_sm(safe_meta)
+                            except Exception:
+                                # Best-effort normalization; ignore failures here
+                                pass
                             safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                     except Exception:
                         safe_metadata_json = None
@@ -2618,6 +2924,11 @@ async def _process_document_like_item(
                 safe_metadata_json = None
                 try:
                     if safe_meta:
+                        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                        try:
+                            safe_meta = normalize_safe_metadata(safe_meta)
+                        except Exception:
+                            pass
                         safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                 except Exception:
                     safe_metadata_json = None

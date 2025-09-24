@@ -486,6 +486,11 @@ async def validate_template(
                             message='Pattern too long (max 256)'
                         ))
                     flags_str = str(rule.get('flags') or '').lower()
+                    if len(flags_str) > 10:
+                        errors.append(TemplateValidationError(
+                            field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
+                            message='Flags too long (max 10)'
+                        ))
                     if any(f not in {'i','m',''} for f in list(flags_str)):
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',

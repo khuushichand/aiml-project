@@ -74,6 +74,66 @@
                     <pre id="getMediaItem_response">---</pre>
                 </div>
 
+                <!-- GET /api/v1/media/metadata-search -->
+                <div class="endpoint-section" id="metadataSearch">
+                    <h2>GET /api/v1/media/metadata-search - Search by Safe Metadata</h2>
+                    <div class="form-group">
+                        <label for="metadataSearch_filters">filters (JSON list of {field, op, value}):</label>
+                        <input type="text" id="metadataSearch_filters" placeholder='[{"field":"doi","op":"eq","value":"10.1234/xyz"}]'>
+                    </div>
+                    <div class="form-group">
+                        <label for="metadataSearch_field">Single Field:</label>
+                        <input type="text" id="metadataSearch_field" placeholder="doi">
+                    </div>
+                    <div class="form-group">
+                        <label for="metadataSearch_op">Operator:</label>
+                        <input type="text" id="metadataSearch_op" value="icontains">
+                    </div>
+                    <div class="form-group">
+                        <label for="metadataSearch_value">Value:</label>
+                        <input type="text" id="metadataSearch_value" placeholder="Nature">
+                    </div>
+                    <div class="form-group">
+                        <label for="metadataSearch_match_mode">Match Mode:</label>
+                        <input type="text" id="metadataSearch_match_mode" value="all">
+                    </div>
+                    <button class="api-button" onclick="makeRequest('metadataSearch', 'GET', '/api/v1/media/metadata-search', 'query')">Send Request</button>
+                    <h3>cURL Command:</h3>
+                    <pre id="metadataSearch_curl">---</pre>
+                    <h3>Response:</h3>
+                    <pre id="metadataSearch_response">---</pre>
+                </div>
+
+                <!-- GET /api/v1/media/by-identifier -->
+                <div class="endpoint-section" id="byIdentifier">
+                    <h2>GET /api/v1/media/by-identifier - Find by DOI/PMID/PMCID/arXiv/S2</h2>
+                    <div class="form-group">
+                        <label for="byIdentifier_doi">DOI:</label>
+                        <input type="text" id="byIdentifier_doi">
+                    </div>
+                    <div class="form-group">
+                        <label for="byIdentifier_pmid">PMID:</label>
+                        <input type="text" id="byIdentifier_pmid">
+                    </div>
+                    <div class="form-group">
+                        <label for="byIdentifier_pmcid">PMCID:</label>
+                        <input type="text" id="byIdentifier_pmcid">
+                    </div>
+                    <div class="form-group">
+                        <label for="byIdentifier_arxiv">arXiv ID:</label>
+                        <input type="text" id="byIdentifier_arxiv">
+                    </div>
+                    <div class="form-group">
+                        <label for="byIdentifier_s2">S2 paperId:</label>
+                        <input type="text" id="byIdentifier_s2">
+                    </div>
+                    <button class="api-button" onclick="makeRequest('byIdentifier', 'GET', '/api/v1/media/by-identifier', 'query')">Send Request</button>
+                    <h3>cURL Command:</h3>
+                    <pre id="byIdentifier_curl">---</pre>
+                    <h3>Response:</h3>
+                    <pre id="byIdentifier_response">---</pre>
+                </div>
+
                 <!-- PUT /api/v1/media/{media_id} -->
                 <div class="endpoint-section" id="updateMediaItem">
                     <h2>PUT /api/v1/media/{media_id} - Update Media Item</h2>
@@ -123,6 +183,78 @@
                     <pre id="createVersion_curl">---</pre>
                     <h3>Response:</h3>
                     <pre id="createVersion_response">---</pre>
+                </div>
+
+                <!-- POST /api/v1/media/{media_id}/versions/advanced -->
+                <div class="endpoint-section" id="createVersionAdvanced">
+                    <h2>POST /api/v1/media/{media_id}/versions/advanced - Create/Update Version (Content + Metadata)</h2>
+                    <div class="form-group">
+                        <label for="createVersionAdvanced_media_id">Media ID:</label>
+                        <input type="number" id="createVersionAdvanced_media_id" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="createVersionAdvanced_payload">Payload (AdvancedVersionUpsertRequest JSON):</label>
+                        <textarea id="createVersionAdvanced_payload">{
+    "content": "Optional new content (if new_version=true)",
+    "prompt": "Optional new prompt",
+    "analysis_content": "Optional new analysis",
+    "safe_metadata": { "doi": "10.1234/example", "journal": "Nature" },
+    "merge": true,
+    "new_version": true
+}</textarea>
+                    </div>
+                    <button class="api-button" onclick="makeRequest('createVersionAdvanced', 'POST', '/api/v1/media/{media_id}/versions/advanced', 'json')">Send Request</button>
+                    <h3>cURL Command:</h3>
+                    <pre id="createVersionAdvanced_curl">---</pre>
+                    <h3>Response:</h3>
+                    <pre id="createVersionAdvanced_response">---</pre>
+                </div>
+
+                <!-- PATCH /api/v1/media/{media_id}/metadata -->
+                <div class="endpoint-section" id="patchMetadataLatest">
+                    <h2>PATCH /api/v1/media/{media_id}/metadata - Update Latest Version Metadata</h2>
+                    <div class="form-group">
+                        <label for="patchMetadataLatest_media_id">Media ID:</label>
+                        <input type="number" id="patchMetadataLatest_media_id" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="patchMetadataLatest_payload">Payload (MetadataPatchRequest JSON):</label>
+                        <textarea id="patchMetadataLatest_payload">{
+    "safe_metadata": { "journal": "Nature", "license": "CC BY 4.0" },
+    "merge": true,
+    "new_version": false
+}</textarea>
+                    </div>
+                    <button class="api-button" onclick="makeRequest('patchMetadataLatest', 'PATCH', '/api/v1/media/{media_id}/metadata', 'json')">Send Request</button>
+                    <h3>cURL Command:</h3>
+                    <pre id="patchMetadataLatest_curl">---</pre>
+                    <h3>Response:</h3>
+                    <pre id="patchMetadataLatest_response">---</pre>
+                </div>
+
+                <!-- PUT /api/v1/media/{media_id}/versions/{version_number}/metadata -->
+                <div class="endpoint-section" id="putVersionMetadata">
+                    <h2>PUT /api/v1/media/{media_id}/versions/{version_number}/metadata - Update Specific Version Metadata</h2>
+                    <div class="form-group">
+                        <label for="putVersionMetadata_media_id">Media ID:</label>
+                        <input type="number" id="putVersionMetadata_media_id" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="putVersionMetadata_version_number">Version Number:</label>
+                        <input type="number" id="putVersionMetadata_version_number" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="putVersionMetadata_payload">Payload (MetadataPatchRequest JSON):</label>
+                        <textarea id="putVersionMetadata_payload">{
+    "safe_metadata": { "pmid": "123456" },
+    "merge": true
+}</textarea>
+                    </div>
+                    <button class="api-button" onclick="makeRequest('putVersionMetadata', 'PUT', '/api/v1/media/{media_id}/versions/{version_number}/metadata', 'json')">Send Request</button>
+                    <h3>cURL Command:</h3>
+                    <pre id="putVersionMetadata_curl">---</pre>
+                    <h3>Response:</h3>
+                    <pre id="putVersionMetadata_response">---</pre>
                 </div>
 
                 <!-- GET /api/v1/media/{media_id}/versions -->
@@ -1631,6 +1763,19 @@
                         <label for="analysisMediaSearch">Search Media:</label>
                         <input type="text" id="analysisMediaSearch" placeholder="Search by title, author, or keywords..." />
                         <button class="api-button" onclick="searchMediaForAnalysis()">Search</button>
+                    </div>
+
+                    <!-- Quick Identifier Lookup -->
+                    <div class="form-group">
+                        <h4>Or Find by Identifier:</h4>
+                        <div style="display:flex; gap:8px; flex-wrap: wrap;">
+                            <input type="text" id="analysisLookup_doi" placeholder="DOI">
+                            <input type="text" id="analysisLookup_pmid" placeholder="PMID">
+                            <input type="text" id="analysisLookup_pmcid" placeholder="PMCID">
+                            <input type="text" id="analysisLookup_arxiv" placeholder="arXiv ID">
+                            <input type="text" id="analysisLookup_s2" placeholder="S2 paperId">
+                            <button class="api-button" onclick="byIdentifierSelectForAnalysis()">Find & Load</button>
+                        </div>
                     </div>
                     
                     <!-- Browse All Media Section -->

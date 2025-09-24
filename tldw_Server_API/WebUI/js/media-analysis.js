@@ -331,6 +331,39 @@ class MediaAnalysisManager {
         }
     }
 
+    // Quick load by standard identifier
+}
+
+async function byIdentifierSelectForAnalysis() {
+    try {
+        const doi = document.getElementById('analysisLookup_doi').value || undefined;
+        const pmid = document.getElementById('analysisLookup_pmid').value || undefined;
+        const pmcid = document.getElementById('analysisLookup_pmcid').value || undefined;
+        const arxiv = document.getElementById('analysisLookup_arxiv').value || undefined;
+        const s2 = document.getElementById('analysisLookup_s2').value || undefined;
+        const params = {};
+        if (doi) params.doi = doi;
+        if (pmid) params.pmid = pmid;
+        if (pmcid) params.pmcid = pmcid;
+        if (arxiv) params.arxiv_id = arxiv;
+        if (s2) params.s2_paper_id = s2;
+        if (Object.keys(params).length === 0) {
+            alert('Enter at least one identifier');
+            return;
+        }
+        const res = await apiClient.get('/api/v1/media/by-identifier', params);
+        if (res && res.results && res.results.length > 0) {
+            const mediaId = res.results[0].media_id;
+            await mediaAnalysisManager.loadMediaForAnalysis(mediaId);
+        } else {
+            alert('No matching media found');
+        }
+    } catch (e) {
+        console.error('Identifier lookup failed', e);
+        alert('Identifier lookup failed');
+    }
+}
+
     async runMediaAnalysis() {
         if (!this.selectedMediaId) {
             alert('Please select a media item first');

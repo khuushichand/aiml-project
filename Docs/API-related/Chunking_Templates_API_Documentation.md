@@ -10,6 +10,8 @@ The Chunking Templates API provides a powerful way to define, manage, and apply 
 - **Built-in Templates**: Pre-configured templates for common document types
 - **Template Application**: Apply templates to text content via API
 - **Template Validation**: Validate template configurations before saving
+- **Seed-Based Learning**: Learn hierarchical boundary rules from a seed document (`/learn`)
+- **Auto-Match**: Rank templates by filename/title/url/media type (`/match`)
 - **Integration**: Use templates with the existing chunking API
 
 ## Base URL
@@ -280,6 +282,96 @@ Validate a template configuration without saving it.
 }
 ```
 
+### 8. Match Templates (Auto-select)
+
+**POST** `/api/v1/chunking/templates/match`
+
+Return templates ranked by a simple metadata-based score.
+
+#### Query Parameters (sent via query string)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| media_type | string | No | e.g., `document`, `ebook`, `web_document` |
+| title | string | No | Document title to test regex matches |
+| url | string | No | Source URL to test regex matches |
+| filename | string | No | Filename to test regex matches |
+
+#### Response
+
+```json
+{
+  "matches": [
+    { "name": "academic_paper", "score": 0.83, "priority": 2 },
+    { "name": "code_documentation", "score": 0.5, "priority": 1 }
+  ]
+}
+```
+
+Notes:
+- Scores combine media type match and regex hits; results are sorted by score then `priority`.
+- Classifier block can be placed top-level or under `chunking.config`:
+  ```json
+  {
+    "classifier": {
+      "media_types": ["document"],
+      "filename_regex": ".*\\.(md|pdf)$",
+      "title_regex": "(guide|paper)",
+      "min_score": 0.3,
+      "priority": 1
+    }
+  }
+  ```
+
+### 9. Learn Template (from seed document)
+
+**POST** `/api/v1/chunking/templates/learn`
+
+Learn a minimal hierarchical boundary configuration from an example (“seed”) text. Optionally save it.
+
+#### Request Body
+
+```json
+{
+  "name": "my_seeded_template",
+  "example_text": "# Abstract\nThis paper...\n# Introduction\n...",
+  "description": "Learned from sample paper",
+  "save": true,
+  "classifier": { "media_types": ["document"], "title_regex": "(paper|study)" }
+}
+```
+
+#### Response
+
+```json
+{
+  "template": {
+    "name": "my_seeded_template",
+    "description": "Learned template",
+    "chunking": {
+      "method": "sentences",
+      "config": {
+        "hierarchical": true,
+        "hierarchical_template": {
+          "boundaries": [
+            { "kind": "chapter", "pattern": "^\\s*(Chapter\\s+\\d+\\b)", "flags": "im" },
+            { "kind": "abstract", "pattern": "^\\s*Abstract\\b", "flags": "im" },
+            { "kind": "references", "pattern": "^\\s*References\\b", "flags": "im" },
+            { "kind": "header_atx", "pattern": "^\\s*#{1,6}\\s+.+$", "flags": "m" }
+          ]
+        },
+        "classifier": { "media_types": ["document"] }
+      }
+    }
+  },
+  "saved": true
+}
+```
+
+Validation limits:
+- Max 20 boundary rules; `pattern` ≤ 1000 chars; `flags` ≤ 10 chars.
+- Prefer anchored, case-insensitive rules for stability (e.g., `^\\s*Abstract\\b`, flags `im`).
+
 ## Built-in Templates
 
 The system comes with several pre-configured templates:
@@ -342,6 +434,12 @@ The system comes with several pre-configured templates:
     "config": {
       "max_size": 100,
       "overlap": 20,
+      "hierarchical": true,
+      "hierarchical_template": {
+        "boundaries": [
+          { "kind": "header_atx", "pattern": "^\\s*#{1,6}\\s+.+$", "flags": "m" }
+        ]
+      },
       // Method-specific options
     }
   },

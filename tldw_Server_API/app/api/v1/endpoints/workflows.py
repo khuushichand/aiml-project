@@ -759,10 +759,18 @@ async def workflows_ws(
         )
         while True:
             events = db.get_events(run_id, since=last_seq)
-            for e in events:
-                payload = e.get("payload_json") or {}
-                await websocket.send_json({"event_seq": e["event_seq"], "event_type": e["event_type"], "payload": payload, "ts": e["created_at"]})
-                last_seq = e["event_seq"]
+            if events:
+                for e in events:
+                    payload = e.get("payload_json") or {}
+                    await websocket.send_json({"event_seq": e["event_seq"], "event_type": e["event_type"], "payload": payload, "ts": e["created_at"]})
+                    last_seq = e["event_seq"]
+            else:
+                # Send a lightweight heartbeat so clients using blocking receive_json() don't hang indefinitely
+                try:
+                    await websocket.send_json({"type": "heartbeat", "ts": _utcnow_iso()})
+                except Exception:
+                    # If sending heartbeat fails (e.g., client disconnect), let outer exception handling close
+                    raise
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         logger.info("Workflows WS disconnected")
