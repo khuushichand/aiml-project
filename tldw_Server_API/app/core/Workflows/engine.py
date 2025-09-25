@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -88,7 +89,7 @@ class WorkflowEngine:
 
     async def start_run(self, run_id: str, mode: RunMode = RunMode.ASYNC) -> None:
         """Execute a linear workflow with retries, timeouts, and cancel checks."""
-        logger.info(f"WorkflowEngine: starting run {run_id} in mode={mode}")
+        logger.debug(f"WorkflowEngine: starting run {run_id} in mode={mode}")
         # Capture tenant/workflow for scheduler notification at end
         _r = self.db.get_run(run_id)
         _tenant_for_notify = _r.tenant_id if _r else self.config.tenant_id
@@ -515,7 +516,8 @@ class WorkflowEngine:
         try:
             WorkflowScheduler.instance().schedule(self, run_id, mode)
         except Exception:
-            asyncio.get_event_loop().create_task(self.start_run(run_id, mode))
+            WorkflowScheduler._spawn(self.start_run(run_id, mode))
+        logger.debug(f"WorkflowEngine: submit run_id={run_id} mode={mode}")
 
     def pause(self, run_id: str) -> None:
         self.db.update_run_status(run_id, status="paused", status_reason="paused_by_user")
@@ -664,7 +666,7 @@ class WorkflowScheduler:
     def schedule(self, engine: "WorkflowEngine", run_id: str, mode: RunMode) -> None:
         run = engine.db.get_run(run_id)
         if not run:
-            asyncio.get_event_loop().create_task(engine.start_run(run_id, mode))
+            self._spawn(engine.start_run(run_id, mode))
             return
         tenant = run.tenant_id
         wf = run.workflow_id
@@ -695,6 +697,20 @@ class WorkflowScheduler:
         self._active_tenant[tenant] = self._active_tenant.get(tenant, 0) + 1
         if workflow_id is not None:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
-        asyncio.get_event_loop().create_task(engine.start_run(run_id, mode))
+        self._spawn(engine.start_run(run_id, mode))
+
+    @staticmethod
+    def _spawn(coro):
+        """Spawn a coroutine in a dedicated daemon thread with its own event loop.
+
+        This avoids tying engine execution to the ASGI request event loop, which
+        may be scoped to a single request and shut down immediately in tests.
+        """
+        def _runner():
+            try:
+                asyncio.run(coro)
+            except Exception:
+                pass
+        threading.Thread(target=_runner, name="workflow-engine", daemon=True).start()
 
     

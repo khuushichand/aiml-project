@@ -57,6 +57,21 @@ router = APIRouter(
 ########################################################################################################################
 # Prompt CRUD Endpoints
 
+# Compatibility: simple POST on base path returns prompt object directly
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_prompt_simple(
+    prompt_data: PromptCreate,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    security_config: SecurityConfig = Depends(get_security_config),
+    user_context: Dict = Depends(get_prompt_studio_user)
+) -> Dict[str, Any]:
+    resp = await create_prompt(prompt_data, db, security_config, user_context)  # type: ignore[arg-type]
+    # Unwrap StandardResponse
+    if isinstance(resp, dict) and resp.get("data"):
+        data = resp["data"]
+        return data if isinstance(data, dict) else data.model_dump()  # type: ignore[attr-defined]
+    return resp
+
 @router.post(
     "/create",
     response_model=StandardResponse,
@@ -325,12 +340,49 @@ async def list_prompts(
             detail="Failed to list prompts"
         )
 
+# Compatibility: GET on base path returns {"prompts": [...]}
+@router.get("")
+async def list_prompts_simple(
+    project_id: int = Query(..., description="Project ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    include_deleted: bool = Query(False, description="Include deleted prompts"),
+    _: bool = Depends(require_project_access),
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+) -> Dict[str, Any]:
+    lr = await list_prompts(project_id, page, per_page, include_deleted, True, db)  # type: ignore[arg-type]
+    if isinstance(lr, dict) and lr.get("data") is not None:
+        items = lr["data"]
+        prompts = [i if isinstance(i, dict) else i.model_dump() for i in items]
+        return {"prompts": prompts}
+    return lr
+
+# Simple execute endpoint used by tests
+@router.post("/execute")
+async def execute_prompt_simple(
+    payload: Dict[str, Any],
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+) -> Dict[str, Any]:
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
+    executor = PromptExecutor(db)
+    prompt_id = int(payload.get("prompt_id", 0))
+    inputs = payload.get("inputs") or {}
+    provider = payload.get("provider", "openai")
+    model = payload.get("model", "gpt-3.5-turbo")
+    result = executor.execute(prompt_id, inputs=inputs, provider=provider, model=model)
+    return {
+        "output": result.get("raw_output") or result.get("parsed_output") or "",
+        "tokens_used": result.get("tokens_used", 0),
+        "execution_time": result.get("execution_time_ms", 0) / 1000.0
+    }
+
 @router.get("/get/{prompt_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Prompt", "content": {"application/json": {"examples": {"get": {"summary": "Prompt details", "value": {"success": True, "data": {"id": 12, "name": "Summarizer", "version_number": 2}}}}}}}}
 })
 async def get_prompt(
     prompt_id: int = Path(..., description="Prompt ID"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get a specific prompt by ID.
@@ -364,7 +416,6 @@ async def get_prompt(
         prompt = db._row_to_dict(cursor, row)
         
         # Check access
-        user_context = await get_prompt_studio_user(None, None, None)
         if prompt["project_user_id"] != user_context["user_id"] and not user_context["is_admin"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

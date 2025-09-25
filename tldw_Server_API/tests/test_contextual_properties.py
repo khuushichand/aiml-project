@@ -5,6 +5,7 @@ Uses hypothesis to test invariants and properties of the contextual retrieval sy
 """
 
 import pytest
+import asyncio
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 from hypothesis import given, strategies as st, settings
@@ -175,35 +176,33 @@ class TestContextualRetrievalProperties:
         if not context.documents:
             return
         
-        # Store original scores by position (not ID, since IDs may be duplicated in generated data)
-        original_scores = [doc.score for doc in context.documents]
-        
+        # Snapshot original docs' expected scores BEFORE mutation/sorting
+        original_info = []  # list of tuples: (id, expected_score, orig_score)
+        for d in context.documents:
+            chunk_type = d.metadata.get("chunk_type", "text")
+            orig_score = d.score
+            expected_score = orig_score * priorities.get(chunk_type, 1.0)
+            original_info.append((d.id, expected_score, orig_score))
+
         result = await prioritize_by_chunk_type(context, type_priorities=priorities)
-        
-        # Build a mapping of original scores to new scores
-        score_mapping = {}
-        for i, doc in enumerate(context.documents):
-            chunk_type = doc.metadata.get("chunk_type", "text")
-            orig_score = original_scores[i]
-            
-            if chunk_type in priorities:
-                expected_score = orig_score * priorities[chunk_type]
-            else:
-                expected_score = orig_score
-            
-            # The document may have moved due to sorting, but its score should be correct
-            found = False
-            for result_doc in result.documents:
-                if result_doc.id == doc.id and abs(result_doc.score - expected_score) < 0.0001:
-                    found = True
-                    break
-            
-            # Skip documents with duplicate IDs - hypothesis may generate these
-            if doc.id in [d.id for d in context.documents[:i]]:
-                continue
-                
-            if not found and orig_score > 0:  # Only check non-zero scores
-                assert False, f"Doc {doc.id} score mismatch: expected {expected_score}, not found in results"
+
+        # Verify each original, non-duplicate document's score was adjusted as expected
+        seen_ids = set()
+        for doc_id, expected_score, orig_score in original_info:
+            if doc_id in seen_ids:
+                continue  # skip duplicates from hypothesis generation
+            seen_ids.add(doc_id)
+
+            if orig_score <= 0:
+                continue  # only check non-zero scores
+
+            found = any(
+                (rd.id == doc_id) and (abs(rd.score - expected_score) < 1e-4)
+                for rd in result.documents
+            )
+
+            if not found:
+                assert False, f"Doc {doc_id} score mismatch: expected {expected_score}, not found in results"
     
     @given(documents=document_list_strategy(min_size=1, max_size=50))
     @settings(max_examples=100, deadline=1000)
@@ -280,20 +279,18 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         self.original_doc_count = len(self.context.documents)
     
     @rule()
-    @pytest.mark.asyncio
-    async def apply_expansion(self):
-        """Rule: Apply parent context expansion."""
-        result = await expand_with_parent_context(self.context)
+    def apply_expansion(self):
+        """Rule: Apply parent context expansion (sync wrapper)."""
+        result = asyncio.run(expand_with_parent_context(self.context))
         self.context = result
         self.expansion_applied = True
     
     @rule(
         include_types=st.lists(st.sampled_from(["text", "code", "table"]), min_size=1, max_size=2)
     )
-    @pytest.mark.asyncio
-    async def apply_filter(self, include_types):
-        """Rule: Apply type filtering."""
-        result = await filter_chunks_by_type(self.context, include_types=include_types)
+    def apply_filter(self, include_types):
+        """Rule: Apply type filtering (sync wrapper)."""
+        result = asyncio.run(filter_chunks_by_type(self.context, include_types=include_types))
         self.context = result
         self.filter_applied = True
     
@@ -305,10 +302,9 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
             max_size=3
         )
     )
-    @pytest.mark.asyncio
-    async def apply_prioritization(self, priorities):
-        """Rule: Apply type prioritization."""
-        result = await prioritize_by_chunk_type(self.context, type_priorities=priorities)
+    def apply_prioritization(self, priorities):
+        """Rule: Apply type prioritization (sync wrapper)."""
+        result = asyncio.run(prioritize_by_chunk_type(self.context, type_priorities=priorities))
         self.context = result
         self.prioritization_applied = True
     

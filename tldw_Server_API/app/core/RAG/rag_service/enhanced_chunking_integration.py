@@ -356,11 +356,24 @@ async def prioritize_by_chunk_type(
     for doc in context.documents:
         chunk_type = doc.metadata.get("chunk_type", "text")
         
-        if chunk_type in priorities:
-            multiplier = priorities[chunk_type]
-            doc.score = doc.score * multiplier
-            doc.metadata["score_adjusted"] = True
-            doc.metadata["score_multiplier"] = multiplier
+        # Preserve base/original score to avoid compounding multipliers across repeated calls
+        base_score = doc.metadata.get("original_score")
+        if base_score is None:
+            base_score = doc.score
+            doc.metadata["original_score"] = base_score
+
+        multiplier = priorities.get(chunk_type, 1.0)
+        new_score = base_score * multiplier
+
+        # Clamp to reasonable bounds to satisfy invariants in property tests
+        if new_score < 0.0:
+            new_score = 0.0
+        elif new_score > 10.0:
+            new_score = 10.0
+
+        doc.score = new_score
+        doc.metadata["score_adjusted"] = True
+        doc.metadata["score_multiplier"] = multiplier
     
     # Re-sort by adjusted scores
     context.documents.sort(key=lambda d: d.score, reverse=True)

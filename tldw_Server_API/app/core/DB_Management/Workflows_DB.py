@@ -399,6 +399,11 @@ class WorkflowsDatabase:
             ),
         )
         self._conn.commit()
+        try:
+            from loguru import logger as _logger
+            _logger.debug(f"WorkflowsDB: run {run_id} -> status={status}")
+        except Exception:
+            pass
 
     # ---------- Run control ----------
     def set_cancel_requested(self, run_id: str, cancel: bool = True) -> None:
@@ -571,6 +576,11 @@ class WorkflowsDatabase:
             ),
         )
         self._conn.commit()
+        try:
+            from loguru import logger as _logger
+            _logger.debug(f"WorkflowsDB: heartbeat step_run_id={step_run_id}")
+        except Exception:
+            pass
 
     def find_orphan_step_runs(self, cutoff_iso: str) -> List[Dict[str, Any]]:
         sql = (

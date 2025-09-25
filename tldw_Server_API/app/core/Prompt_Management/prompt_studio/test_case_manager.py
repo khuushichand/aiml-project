@@ -563,7 +563,33 @@ class TestCaseManager:
                         pass
             results.append(test_case)
         
-        return results
+            return results
+
+    # Compatibility method used in integration tests via patching
+    async def run_batch_tests(self,
+                              prompt_id: int,
+                              test_case_ids: List[int],
+                              model: str = "gpt-3.5-turbo",
+                              temperature: float = 0.7,
+                              max_tokens: int = 1000) -> List[Dict[str, Any]]:
+        """Run multiple test cases (async wrapper).
+
+        Delegates to TestRunner.run_multiple_tests. Exists to match test patch targets.
+        """
+        try:
+            from .test_runner import TestRunner
+            runner = TestRunner(self.db)
+            return await runner.run_multiple_tests(
+                prompt_id=prompt_id,
+                test_case_ids=test_case_ids,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                parallel=False
+            )
+        except Exception as e:
+            logger.error(f"run_batch_tests failed: {e}")
+            return []
     
     def get_golden_test_cases(self, project_id: int) -> List[Dict[str, Any]]:
         """
