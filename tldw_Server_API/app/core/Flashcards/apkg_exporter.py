@@ -194,10 +194,12 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
     factor = int(round(ef * 1000)) if ef else 2500
     reps_val = int(repetitions or 0)
     lapses_val = int(lapses or 0)
-    if reps_val == 0 or interval_days == 0:
-        # New
+    # New: never studied yet
+    if reps_val == 0:
         return (0, 0, 0, 0, factor, reps_val, lapses_val)
-    if reps_val in (1, 2):
+
+    # Learning: studied at least once, no interval yet
+    if interval_days == 0 or reps_val in (1, 2):
         # Learning
         due_secs = _now_secs()
         if due_at_iso:

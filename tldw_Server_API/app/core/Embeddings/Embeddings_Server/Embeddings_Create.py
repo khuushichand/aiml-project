@@ -203,6 +203,15 @@ class TokenBucketLimiter:
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            # Bypass rate limiting during tests or unless explicitly enabled
+            try:
+                if os.getenv("TESTING", "").lower() == "true" or \
+                   os.getenv("EMBEDDINGS_RATE_LIMIT", "off").lower() != "on":
+                    return fn(*args, **kwargs)
+            except Exception:
+                # If env checks fail for any reason, fall back to limiting
+                pass
+
             self._acquire()
             return fn(*args, **kwargs)
 

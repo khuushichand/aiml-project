@@ -476,13 +476,28 @@ class ChromaDBManager:
                 raise RuntimeError(f"Failed to access or create collection '{name_to_use}': {e}") from e
 
     # Point 4: Situate Context - generates a succinct header for each chunk using an LLM
-    def situate_context(self, provider: str, model_override: Optional[str], doc_content: str, chunk_content: str, temperature: Optional[float]) -> str:
+    def situate_context(self,
+                        provider: Optional[str] = None,
+                        model_override: Optional[str] = None,
+                        doc_content: str = "",
+                        chunk_content: str = "",
+                        temperature: Optional[float] = None,
+                        **kwargs) -> str:
         """Generate a succinct context header situating a chunk within its document.
 
         Constructs a single custom prompt that includes both the document slice (or full doc/outline)
         and the chunk content, followed by the situate instruction. Uses the configured provider and
         optional model override via the unified analyze() function.
         """
+        # Backward/alias compatibility: tests may pass api_name_for_context as the model name
+        try:
+            alias_model = kwargs.get("api_name_for_context")
+            if alias_model and not model_override:
+                model_override = alias_model
+        except Exception:
+            pass
+
+        provider = provider or "openai"
         # Load instruction from prompts with safe fallback
         situate_instr = load_prompt("embeddings", "Situate Context Prompt") or (
             "Please give a short succinct context to situate this chunk within the overall document\n"

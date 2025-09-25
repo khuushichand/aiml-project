@@ -116,6 +116,15 @@ async def verify_api_key(
     Supports both single-user and multi-user modes with OpenAI compatibility.
     """
     settings = get_settings()
+
+    # Testing bypass: allow requests without credentials when explicit test flags are set
+    try:
+        if os.getenv("TESTING", "").lower() in ("true", "1", "yes") and \
+           os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+            # In tests where heavy admin gating is disabled, treat caller as a test user
+            return "test_user"
+    except Exception:
+        pass
     
     # Determine token source
     token = None

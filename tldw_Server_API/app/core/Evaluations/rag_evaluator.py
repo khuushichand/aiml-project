@@ -226,26 +226,32 @@ class RAGEvaluator:
                     # Always record canonical key
                     results["metrics"][metric_name] = metric_result
 
-                    # Decide when to also record alias keys
-                    # Decide when to add alias keys alongside canonical names
-                    if explicit_metrics:
-                        # Only add aliases if explicitly requested in metrics list
-                        # or when weights reference alias keys (back-compat for weighting)
-                        add_aliases = bool(requested_aliases) or alias_by_weights
-                    else:
-                        # Using default metric set: add aliases only when ground truth present
-                        add_aliases = bool(ground_truth)
-
-                    if add_aliases:
-                        if metric_name == "relevance":
-                            results["metrics"]["answer_relevance"] = metric_result
-                        elif metric_name == "faithfulness":
-                            results["metrics"]["answer_faithfulness"] = metric_result
+                    # Always include alias keys for relevance/faithfulness alongside canonical names
+                    # Do not overwrite if already explicitly provided
+                    if metric_name == "relevance":
+                        results["metrics"].setdefault("answer_relevance", metric_result)
+                    elif metric_name == "faithfulness":
+                        results["metrics"].setdefault("answer_faithfulness", metric_result)
             
             # Add information about failed metrics
             if failed_metrics:
                 results["failed_metrics"] = failed_metrics
                 results["partial_results"] = True
+
+            # For default metric set (caller did not explicitly request metrics),
+            # prefer alias keys for relevance/faithfulness and drop canonical keys
+            if not explicit_metrics:
+                if "answer_relevance" in results["metrics"] and "relevance" in results["metrics"]:
+                    try:
+                        # Remove canonical to keep metric set compact and OpenAI-style
+                        results["metrics"].pop("relevance", None)
+                    except Exception:
+                        pass
+                if "answer_faithfulness" in results["metrics"] and "faithfulness" in results["metrics"]:
+                    try:
+                        results["metrics"].pop("faithfulness", None)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.error(f"Critical failure in evaluation: {e}")
             raise ValueError(f"Evaluation failed: {str(e)}")

@@ -58,6 +58,21 @@ def _get_db_path_for_user(user_id: int) -> Path:
     user_dir_name = str(user_id)
     # Resolve base dir dynamically: prefer env override, then settings
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
+    # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
+    if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        try:
+            import tempfile, time
+            run_tag = f"pid{os.getpid()}"
+            # Use project Databases/user_databases_test/<run_tag> to keep nearby but isolated
+            project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
+            if project_root:
+                base_dir_env = str(Path(project_root) / "Databases" / "user_databases_test" / run_tag)
+            else:
+                base_dir_env = tempfile.mkdtemp(prefix="user_databases_test_")
+            # Set env so subsequent calls use the same directory
+            os.environ["USER_DB_BASE_DIR"] = base_dir_env
+        except Exception:
+            pass
     base_dir = Path(base_dir_env) if base_dir_env else Path(settings["USER_DB_BASE_DIR"])  # type: ignore[index]
     user_dir = base_dir / user_dir_name
     db_file = user_dir / "Media_DB_v2.db" # Using standard Media_DB_v2.db naming

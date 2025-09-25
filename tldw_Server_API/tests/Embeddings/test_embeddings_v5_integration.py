@@ -8,6 +8,10 @@ import pytest
 pytestmark = pytest.mark.integration
 import numpy as np
 
+# Skip real-embedding integration tests in CI unless explicitly enabled
+RUN_REAL_EMBEDDINGS = os.getenv("RUN_REAL_EMBEDDINGS", "").lower() == "true"
+IN_CI = os.getenv("CI", "").lower() == "true"
+
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 from tldw_Server_API.app.main import app
@@ -62,6 +66,7 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_huggingface_embedding(self, setup):
         """Test actual HuggingFace embedding creation (no mocks)"""
         async def override_user():
@@ -145,6 +150,7 @@ class TestEmbeddingsIntegration:
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.asyncio
+    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_real_cache_persistence(self, setup):
         """Test cache persistence across requests (no mocks)"""
         async def override_user():
@@ -190,6 +196,7 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_different_providers_produce_different_embeddings(self, setup):
         """Test that different providers produce different embeddings for same text"""
         async def override_user():
@@ -248,7 +255,7 @@ class TestEmbeddingsIntegration:
         app.dependency_overrides[get_request_user] = override_user
         
         async def make_real_request(idx):
-            async with AsyncClient(app=app, base_url="http://test") as ac:
+            async with AsyncClient(app=app, base_url="http://test", timeout=30.0) as ac:
                 # Set CSRF token in cookie
                 ac.cookies.set("csrf_token", "test-csrf-token-12345")
                 response = await ac.post(
@@ -263,7 +270,8 @@ class TestEmbeddingsIntegration:
         
         # Make real concurrent requests
         tasks = [make_real_request(i) for i in range(20)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Apply an overall timeout to prevent hangs in CI
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=120.0)
         
         # Count successful requests
         successful = sum(1 for r in results if isinstance(r, int) and r == 200)
@@ -281,6 +289,7 @@ class TestEmbeddingsIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(IN_CI and not RUN_REAL_EMBEDDINGS, reason="Skipped in CI to prevent model downloads/hangs; set RUN_REAL_EMBEDDINGS=true to enable")
     async def test_batch_processing(self, setup):
         """Test batch processing with real embeddings"""
         async def override_user():
