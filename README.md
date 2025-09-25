@@ -47,6 +47,222 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 # Your API key will be shown in console (single-user mode)
 ```
 
+### RAG Quickstart
+
+- Unified RAG search (all options shown):
+
+```bash
+# Required: query; choose sources and search_mode
+# Optional groups to toggle:
+# - Query Enhancement (expand_query, expansion_strategies, spell_check)
+# - Caching (enable_cache, cache_threshold, adaptive_cache)
+# - Security (enable_security_filter, detect_pii, redact_pii, sensitivity_level, content_filter)
+# - Table Processing (enable_table_processing, table_method)
+# - Context (chunk_type_filter, enable_parent_expansion, parent_context_size, include_sibling_chunks, sibling_window, include_parent_document, parent_max_tokens)
+# - Claims/APS (enable_claims, claim_extractor, claim_verifier, claims_top_k, claims_conf_threshold, claims_max, nli_model)
+# - Reranking (enable_reranking, reranking_strategy, rerank_top_k)
+# - Citations (enable_citations, citation_style, include_page_numbers, enable_chunk_citations)
+# - Generation (enable_generation, generation_model, generation_prompt, max_generation_tokens)
+# - Feedback/Analytics/Monitoring (collect_feedback, feedback_user_id, apply_feedback_boost, enable_monitoring, enable_analytics)
+# - Observability/Performance (use_connection_pool, use_embedding_cache, enable_observability, trace_id, enable_performance_analysis, timeout_seconds)
+# - Quick Wins (highlight_results, highlight_query_terms, track_cost, debug_mode)
+# - Batch flags (enable_batch, batch_queries, batch_concurrent)
+# - Resilience (enable_resilience, retry_attempts, circuit_breaker)
+# - User Context (user_id, session_id)
+curl -X POST "http://127.0.0.1:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "query": "Comprehensive unified RAG example",
+    "sources": ["media_db", "notes", "characters", "chats"],
+    "search_mode": "hybrid",
+    "hybrid_alpha": 0.7,
+    "top_k": 10,
+    "min_score": 0.0,
+
+    "expand_query": true,
+    "expansion_strategies": ["acronym", "synonym", "domain", "entity", "semantic"],
+    "spell_check": true,
+
+    "enable_cache": true,
+    "cache_threshold": 0.85,
+    "adaptive_cache": true,
+
+    "keyword_filter": ["neural", "training"],
+
+    "enable_security_filter": true,
+    "detect_pii": true,
+    "redact_pii": true,
+    "sensitivity_level": "internal",
+    "content_filter": true,
+
+    "enable_table_processing": true,
+    "table_method": "markdown",
+
+    "chunk_type_filter": ["text", "code", "table", "list"],
+    "enable_parent_expansion": true,
+    "parent_context_size": 800,
+    "include_sibling_chunks": true,
+    "sibling_window": 2,
+    "include_parent_document": false,
+    "parent_max_tokens": 1200,
+
+    "enable_claims": true,
+    "claim_extractor": "aps",
+    "claim_verifier": "hybrid",
+    "claims_top_k": 5,
+    "claims_conf_threshold": 0.7,
+    "claims_max": 25,
+    "nli_model": "roberta-large-mnli",
+
+    "enable_reranking": true,
+    "reranking_strategy": "hybrid",
+    "rerank_top_k": 20,
+
+    "enable_citations": true,
+    "citation_style": "apa",
+    "include_page_numbers": true,
+    "enable_chunk_citations": true,
+
+    "enable_generation": true,
+    "generation_model": "gpt-4o",
+    "generation_prompt": "You are a helpful assistant. Provide a concise, grounded answer.",
+    "max_generation_tokens": 500,
+
+    "collect_feedback": true,
+    "feedback_user_id": "user123",
+    "apply_feedback_boost": true,
+
+    "enable_monitoring": true,
+    "enable_analytics": true,
+    "use_connection_pool": true,
+    "use_embedding_cache": true,
+    "enable_observability": false,
+    "trace_id": "trace-abc-123",
+
+    "enable_performance_analysis": false,
+    "timeout_seconds": 10.0,
+
+    "highlight_results": true,
+    "highlight_query_terms": true,
+    "track_cost": false,
+    "debug_mode": false,
+
+    "enable_batch": false,
+    "batch_queries": ["extra question 1", "extra question 2"],
+    "batch_concurrent": 3,
+
+    "enable_resilience": true,
+    "retry_attempts": 3,
+    "circuit_breaker": true,
+
+    "user_id": "user123",
+    "session_id": "session-456"
+  }'
+```
+Remove optional blocks you don’t need; unspecified fields use sensible defaults.
+
+More: see `tldw_Server_API/app/core/RAG/README.md` and `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`.
+
+### RAG Capabilities
+
+Discover available features, defaults, and limits at runtime:
+
+```bash
+curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
+```
+
+Sample response (abridged but complete in structure):
+
+```json
+{
+  "pipeline": "unified",
+  "version": "1.0.0",
+  "features": {
+    "query_expansion": {
+      "supported": true,
+      "methods": ["acronym", "synonym", "domain", "entity"]
+    },
+    "claims": {
+      "supported": true,
+      "extractors": ["aps", "claimify", "auto"],
+      "verifiers": ["nli", "llm", "hybrid"],
+      "defaults": {"top_k": 5, "confidence_threshold": 0.7, "max": 25},
+      "nli": {"env": ["RAG_NLI_MODEL", "RAG_NLI_MODEL_PATH"], "override_param": "nli_model"}
+    },
+    "semantic_cache": {
+      "supported": true,
+      "adaptive_thresholds": true,
+      "config": {"similarity_threshold": 0.85}
+    },
+    "sources": {
+      "supported": true,
+      "datastores": ["media_db", "notes_db", "character_db"]
+    },
+    "security_filtering": {"supported": true, "pii_detection": true},
+    "citation_generation": {
+      "supported": true,
+      "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
+      "include_page_numbers": true
+    },
+    "answer_generation": {"supported": true, "configurable_model": true},
+    "reranking": {
+      "supported": true,
+      "strategies": ["flashrank", "cross_encoder", "hybrid"],
+      "models": ["flashrank", "cross-encoder/ms-marco-MiniLM-L-12-v2"]
+    },
+    "table_processing": {"supported": true, "methods": ["markdown", "html", "hybrid"]},
+    "enhanced_chunking": {
+      "supported": true,
+      "parent_context": true,
+      "sibling_context": true,
+      "parameters": [
+        "parent_context_size",
+        "include_parent_document",
+        "parent_max_tokens",
+        "include_sibling_chunks",
+        "sibling_window",
+        "chunk_type_filter"
+      ]
+    },
+    "feedback": {"supported": true, "apply_feedback_boost": true},
+    "monitoring": {"supported": true, "observability": true, "trace_id": true},
+    "analytics": {"supported": true},
+    "batch_processing": {"supported": true, "concurrent": true, "defaults": {"max_concurrent": 5}, "limits": {"max_concurrent_max": 20}},
+    "resilience": {"supported": true, "retries": true, "circuit_breakers": true},
+    "streaming": {"supported": true, "endpoint": "/api/v1/rag/search/stream", "media_type": "application/x-ndjson", "events": ["delta", "claims_overlay", "final_claims"]},
+    "quick_wins": {"supported": true, "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode"]},
+    "user_context": {"supported": true, "fields": ["user_id", "session_id"]}
+  },
+  "search": {
+    "modes": ["hybrid", "semantic", "fulltext"],
+    "hybrid": {
+      "alpha_default": 0.7,
+      "alpha_range": [0.0, 1.0],
+      "normalize_scores": true
+    },
+    "vector": {"top_k_default": 10, "top_k_max": 100},
+    "fts": {"top_k_default": 10, "query_expansion": true, "fuzzy_matching": true}
+  },
+  "defaults": {
+    "retriever": {"hybrid_alpha": 0.7, "vector_top_k": 10, "fts_top_k": 10},
+    "processor": {},
+    "cache": {"similarity_threshold": 0.85},
+    "batch_size": 32,
+    "num_workers": 4,
+    "min_score": 0.0,
+    "use_connection_pool": true,
+    "use_embedding_cache": true
+  },
+  "limits": {"top_k_max": 100, "documents_per_db_max": 1000, "answer_tokens_max": 2048, "timeout_seconds_max": 60.0},
+  "auth": {"mode": "single_user", "user_scoped": true}
+}
+```
+
+Notes:
+- Capability labels “fulltext” and “semantic” correspond to request values `"fts"` and `"vector"` for `search_mode`.
+- Source values `"characters"` and `"chats"` both map to the `character_db` datastore internally.
+
 ## Auth Quickstart
 
 - Single-user mode:
@@ -128,6 +344,7 @@ It has now been rewritten as a FastAPI Python server to support larger deploymen
 - Core module guides:
   - Chat Module: `Docs/Code_Documentation/Chat_Developer_Guide.md`
   - Chunking Module: `Docs/Code_Documentation/Chunking-Module.md`
+  - RAG Module: `tldw_Server_API/app/core/RAG/README.md` and `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`
 
 ### Ingestion & Media Processing Docs
 - Overview: `Docs/Code_Documentation/Ingestion_Media_Processing.md`
@@ -180,13 +397,13 @@ See the [Migration Guide](#migration-guide) if upgrading from a previous version
 - **Flexible Analysis**: Multiple chunking strategies and prompt customization
 - **Evaluation System**: G-Eval, RAG evaluation, response quality metrics
 
-### Search & Retrieval (RAG v2)
-- **Production-Ready RAG**: 100% test coverage, fully async architecture
+### Search & Retrieval (Unified RAG)
+- **Unified Pipeline**: Async architecture with a single, parameter-driven pipeline
 - **Hybrid Search**: BM25 (SQLite FTS5) + vector embeddings (ChromaDB) with Reciprocal Rank Fusion
 - **Advanced Strategies**: Query Fusion, HyDE (Hypothetical Document Embeddings), vanilla search
 - **Multi-Source Retrieval**: Search across media, notes, characters, and chat history simultaneously
 - **Smart Caching**: LRU cache with semantic matching and TTL management
-- **Flexible Configuration**: Fine-tune semantic/fulltext weights, similarity thresholds, and reranking
+- **Flexible Configuration**: Tune FTS/vector weights, thresholds, and reranking
 
 ### API Capabilities
 - **OpenAI Compatible**: `/chat/completions` endpoint for drop-in replacement
@@ -777,6 +994,7 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 - `GET /api/v1/rag/simple` - Simplified search interface
 - `GET /api/v1/rag/advanced` - Advanced search with common features
 - `GET /api/v1/rag/features` - List available features
+- `GET /api/v1/rag/capabilities` - Feature defaults, limits, and supported options
 - `GET /api/v1/rag/health` - RAG service health status
 
 #### Content Management
@@ -808,7 +1026,7 @@ Providers API reference: `Docs/API-related/Providers_API_Documentation.md`
 - `POST /api/v1/evaluations/geval` - Run G-Eval
 - `POST /api/v1/evaluations/propositions` - Proposition extraction evaluation (precision/recall/F1)
 - `GET /api/v1/mcp/status` - MCP server status
-\n+#### Paper Search (Provider-specific)
+#### Paper Search (Provider-specific)
 - `GET /api/v1/paper-search/arxiv` - Search arXiv papers
 - `GET /api/v1/paper-search/arxiv/by-id` - Fetch arXiv by ID
 - `GET /api/v1/paper-search/biorxiv` - Search BioRxiv/MedRxiv papers

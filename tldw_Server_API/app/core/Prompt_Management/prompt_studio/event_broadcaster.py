@@ -112,6 +112,37 @@ class EventBroadcaster:
             await self.connection_manager.broadcast_to_all(message)
         
         logger.debug(f"Broadcast {event_type.value} to {client_ids or 'all'}")
+
+    # Backward-compat: some tests patch EventBroadcaster.broadcast; provide a thin wrapper
+    async def broadcast(self, *args, **kwargs):  # noqa: D401 - compatibility wrapper
+        """Compatibility wrapper that delegates to broadcast_event when possible."""
+        try:
+            # Support calling with explicit kwargs: event_type, data, client_ids, project_id
+            if "event_type" in kwargs and "data" in kwargs:
+                et = kwargs.get("event_type")
+                if isinstance(et, str):
+                    try:
+                        et = EventType(et)
+                    except Exception:
+                        et = EventType.SYSTEM_MESSAGE
+                await self.broadcast_event(
+                    event_type=et if isinstance(et, EventType) else EventType.SYSTEM_MESSAGE,
+                    data=kwargs.get("data", {}),
+                    client_ids=kwargs.get("client_ids"),
+                    project_id=kwargs.get("project_id")
+                )
+                return
+            # Support a single positional dict message
+            if args and isinstance(args[0], dict):
+                message = args[0]
+                et = message.get("type", "system_message")
+                try:
+                    et_enum = EventType(et)
+                except Exception:
+                    et_enum = EventType.SYSTEM_MESSAGE
+                await self.broadcast_event(et_enum, message.get("data", {}), None, message.get("project_id"))
+        except Exception as e:
+            logger.debug(f"Compatibility broadcast ignored error: {e}")
     
     async def broadcast_job_event(self, job_id: int, event_type: EventType,
                                  additional_data: Optional[Dict] = None):

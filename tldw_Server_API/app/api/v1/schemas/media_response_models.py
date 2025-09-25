@@ -80,6 +80,7 @@ class MediaContentDetail(BaseModel):
 
 class VersionDetailResponse(BaseModel):
     """Represents the details of a single media version."""
+    uuid: Optional[str] = Field(None, description="UUID of this version.")
     media_id: int = Field(..., description="ID of the parent media item.", json_schema_extra={"example": 123})
     version_number: int = Field(..., description="Sequential version number.", json_schema_extra={"example": 2})
     created_at: datetime = Field(..., description="Timestamp when this version was created.")

@@ -417,7 +417,10 @@ result = await unified_rag_pipeline(
 print(result.citations[0])  # "Smith, J. (2024). Introduction to Machine Learning. Tech Publications."
 ```
 
-Chunk‑level citation details are being unified in the response; for now, use the primary `citations` list. Advanced breakdown will be documented when exposed in the response model.
+Both formats are exposed in the unified response:
+- `academic_citations`: list of formatted strings (APA/MLA/Chicago/Harvard/IEEE)
+- `chunk_citations`: per‑chunk evidence objects for verification
+- `citations`: combined convenience list containing both types
 
 ### Combined Usage
 Both citation types can be enabled simultaneously:
@@ -443,39 +446,114 @@ The RAG module exposes a comprehensive unified API:
 
 ### Primary Endpoints
 - `POST /api/v1/rag/search` - Unified pipeline with all features accessible
+- `POST /api/v1/rag/search/stream` - Stream generated answer with optional claim overlay (NDJSON)
 - `POST /api/v1/rag/batch` - Batch processing for multiple queries
 - `GET /api/v1/rag/simple` - Simplified interface for basic use cases
 - `GET /api/v1/rag/advanced` - Pre-configured advanced search
 - `GET /api/v1/rag/features` - List all available features and parameters
+- `GET /api/v1/rag/capabilities` - Feature defaults, supported options, and limits
 - `GET /api/v1/rag/health` - Health check with detailed component status
 
-### Example API Usage
+### Example API Usage (unified search with all options)
 
 ```bash
-# Unified search with citations
+# Required: query; choose sources and search_mode
+# Optional groups:
+# - Query Enhancement, Caching, Security, Table Processing
+# - Context (parent/sibling), Claims/APS, Reranking, Citations, Generation
+# - Feedback/Analytics/Monitoring, Observability/Performance, Quick Wins
+# - Batch flags, Resilience, User Context
 curl -X POST "http://localhost:8000/api/v1/rag/search" \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "What is machine learning?",
-    "sources": ["media_db", "notes"],
+    "query": "Comprehensive unified RAG example",
+    "sources": ["media_db", "notes", "characters", "chats"],
     "search_mode": "hybrid",
+    "hybrid_alpha": 0.7,
+    "top_k": 10,
+    "min_score": 0.0,
+
+    "expand_query": true,
+    "expansion_strategies": ["acronym", "synonym", "domain", "entity", "semantic"],
+    "spell_check": true,
+
+    "enable_cache": true,
+    "cache_threshold": 0.85,
+    "adaptive_cache": true,
+
+    "keyword_filter": ["neural", "training"],
+
+    "enable_security_filter": true,
+    "detect_pii": true,
+    "redact_pii": true,
+    "sensitivity_level": "internal",
+    "content_filter": true,
+
+    "enable_table_processing": true,
+    "table_method": "markdown",
+
+    "chunk_type_filter": ["text", "code", "table", "list"],
+    "enable_parent_expansion": true,
+    "parent_context_size": 800,
+    "include_sibling_chunks": true,
+    "sibling_window": 2,
+    "include_parent_document": false,
+    "parent_max_tokens": 1200,
+
+    "enable_claims": true,
+    "claim_extractor": "aps",
+    "claim_verifier": "hybrid",
+    "claims_top_k": 5,
+    "claims_conf_threshold": 0.7,
+    "claims_max": 25,
+    "nli_model": "roberta-large-mnli",
+
+    "enable_reranking": true,
+    "reranking_strategy": "hybrid",
+    "rerank_top_k": 20,
+
     "enable_citations": true,
     "citation_style": "apa",
+    "include_page_numbers": true,
     "enable_chunk_citations": true,
-    "enable_answer_generation": true,
-    "top_k": 10
-  }'
 
-# Batch processing
-curl -X POST "http://localhost:8000/api/v1/rag/batch" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "queries": ["What is AI?", "Explain ML?", "Define neural networks?"],
-    "sources": ["media_db"],
-    "max_concurrent": 3,
-    "enable_citations": true
+    "enable_generation": true,
+    "generation_model": "gpt-4o",
+    "generation_prompt": "You are a helpful assistant. Provide a concise, grounded answer.",
+    "max_generation_tokens": 500,
+
+    "collect_feedback": true,
+    "feedback_user_id": "user123",
+    "apply_feedback_boost": true,
+
+    "enable_monitoring": true,
+    "enable_analytics": true,
+    "use_connection_pool": true,
+    "use_embedding_cache": true,
+    "enable_observability": false,
+    "trace_id": "trace-abc-123",
+
+    "enable_performance_analysis": false,
+    "timeout_seconds": 10.0,
+
+    "highlight_results": true,
+    "highlight_query_terms": true,
+    "track_cost": false,
+    "debug_mode": false,
+
+    "enable_batch": false,
+    "batch_queries": ["extra question 1", "extra question 2"],
+    "batch_concurrent": 3,
+
+    "enable_resilience": true,
+    "retry_attempts": 3,
+    "circuit_breaker": true,
+
+    "user_id": "user123",
+    "session_id": "session-456"
   }'
 ```
+Remove optional blocks you don’t need; unspecified fields use sensible defaults.
 
 ## Testing
 
@@ -483,8 +561,10 @@ curl -X POST "http://localhost:8000/api/v1/rag/batch" \
 # Run unified RAG tests
 python -m pytest tldw_Server_API/tests/RAG_NEW/ -v
 
-# Run with coverage
-python -m pytest tests/RAG/ --cov=app.core.RAG --cov-report=html
+# Run with coverage (module paths)
+python -m pytest tldw_Server_API/tests/RAG_NEW/ \
+  --cov=tldw_Server_API.app.core.RAG \
+  --cov-report=html
 ```
 
 ## Advanced Features
@@ -499,7 +579,7 @@ Automatically detect and handle personally identifiable information:
 ```python
 result = await unified_rag_pipeline(
     query="Show me user emails",
-    enable_pii_detection=True,
+    detect_pii=True,
     sources=["media_db"]
 )
 
@@ -516,8 +596,8 @@ Filter content based on sensitivity levels:
 ```python
 result = await unified_rag_pipeline(
     query="Research sensitive topics",
-    enable_content_filtering=True,
-    content_filter_level="medium",  # none, low, medium, high
+    content_filter=True,
+    sensitivity_level="internal",
     sources=["media_db"]
 )
 ```
@@ -563,7 +643,7 @@ results = await unified_batch_pipeline(
     # All unified pipeline features available
     enable_citations=True,
     citation_style="apa",
-    enable_answer_generation=True,
+    enable_generation=True,
     enable_analytics=True,
     search_mode="hybrid",
     top_k=15
@@ -613,15 +693,7 @@ print(f"Rate this result: /feedback/{feedback_id}")
 The unified pipeline includes several performance enhancements:
 
 ### Connection Pooling
-Reduces database connection overhead by up to 70%:
-
-```python
-result = await unified_rag_pipeline(
-    query="Performance test",
-    enable_connection_pooling=True,  # Enabled by default
-    sources=["media_db", "notes"]
-)
-```
+Connection pooling is handled internally by the service; no explicit flag is required.
 
 ### Embedding Cache
 LRU cache for embeddings with 90%+ hit rates:
@@ -629,7 +701,7 @@ LRU cache for embeddings with 90%+ hit rates:
 ```python
 result = await unified_rag_pipeline(
     query="Repeated query",
-    enable_embedding_cache=True,  # Enabled by default
+    use_embedding_cache=True,
     search_mode="vector"
 )
 ```
@@ -737,7 +809,6 @@ When extending the RAG module:
 
 - [Implementation Status](IMPLEMENTATION_STATUS.md) - Current feature availability
 - [API Documentation](API_DOCUMENTATION.md) - Comprehensive parameter reference
-- [Migration Guide](MIGRATION_GUIDE.md) - Upgrade from previous versions
 - [RAG Service Implementation](rag_service/README.md) - Internal architecture
 - [Deprecation Notice](DEPRECATION_NOTICE.md) - Deprecated features and timelines
 

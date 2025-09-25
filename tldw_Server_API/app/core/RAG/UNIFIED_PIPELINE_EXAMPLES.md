@@ -7,7 +7,7 @@ The unified RAG pipeline provides a single function where ALL features are contr
 ## API Endpoint
 
 ```
-POST /api/v1/rag/unified/search
+POST /api/v1/rag/search
 ```
 
 ## Basic Examples
@@ -237,7 +237,7 @@ POST /api/v1/rag/unified/search
 
 ### Process Multiple Queries
 ```python
-POST /api/v1/rag/unified/batch
+POST /api/v1/rag/batch
 
 {
     "queries": [

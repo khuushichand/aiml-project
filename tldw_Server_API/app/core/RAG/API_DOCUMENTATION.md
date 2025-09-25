@@ -272,15 +272,13 @@ Quick search with common parameters only.
 
 #### Query Parameters
 
-- `q` (required): Search query
-- `sources`: Comma-separated sources (default: "media_db")
-- `limit`: Max results (default: 10)
-- `mode`: Search mode ("fts", "vector", "hybrid", default: "hybrid")
+- `query` (required): Search query
+- `top_k`: Max results (default: 10)
 
 #### Example
 
 ```bash
-curl "http://localhost:8000/api/v1/rag/simple?q=machine%20learning&sources=media_db,notes&limit=5&mode=hybrid"
+curl "http://localhost:8000/api/v1/rag/simple?query=machine%20learning&top_k=5"
 ```
 
 ### GET `/advanced` - Pre-configured Advanced Search
@@ -304,30 +302,19 @@ Get list of all available features and parameters.
 ```json
 {
   "features": {
-    "search_modes": ["fts", "vector", "hybrid"],
-    "sources": ["media_db", "notes", "characters", "chats"],
-    "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
-    "reranking_strategies": ["flashrank", "cross_encoder", "hybrid"],
-    "citation_styles": ["mla", "apa", "chicago", "harvard", "ieee"],
-    "llm_providers": ["openai", "anthropic", "cohere", "groq"],
-    "content_filter_levels": ["none", "low", "medium", "high"],
-    "pii_types": ["email", "ssn", "credit_card", "phone", "address"]
+    "query_expansion": {"description": "Synonyms, acronyms, domain, entity", "parameters": ["expand_query", "expansion_strategies", "spell_check"]},
+    "caching": {"description": "Semantic cache with adaptive thresholds", "parameters": ["enable_cache", "cache_threshold", "adaptive_cache"]},
+    "security": {"description": "PII detection and content filtering", "parameters": ["enable_security_filter", "detect_pii", "redact_pii", "sensitivity_level"]},
+    "citations": {"description": "Academic + chunk-level citations", "parameters": ["enable_citations", "citation_style", "include_page_numbers", "enable_chunk_citations"]},
+    "generation": {"description": "LLM answer generation", "parameters": ["enable_generation", "generation_model", "generation_prompt", "max_generation_tokens"]},
+    "reranking": {"description": "FlashRank, Cross-Encoder, Hybrid", "parameters": ["enable_reranking", "reranking_strategy", "rerank_top_k"]},
+    "table_processing": {"description": "Serializable tables", "parameters": ["enable_table_processing", "table_method"]},
+    "enhanced_chunking": {"description": "Parent/sibling context controls", "parameters": ["enable_parent_expansion", "include_sibling_chunks", "sibling_window", "include_parent_document", "parent_max_tokens"]},
+    "batch_processing": {"description": "Concurrent multi-query"},
+    "resilience": {"description": "Retries + circuit breakers", "parameters": ["enable_resilience", "retry_attempts", "circuit_breaker"]}
   },
-  "parameters": {
-    "query": {
-      "type": "string",
-      "required": true,
-      "min_length": 1,
-      "max_length": 2000
-    },
-    "top_k": {
-      "type": "integer",
-      "default": 10,
-      "min": 1,
-      "max": 100
-    }
-    // ... all parameter specifications
-  }
+  "total_features": 12,
+  "total_parameters": 50
 }
 ```
 
@@ -341,25 +328,13 @@ Check health status of all RAG components.
 {
   "status": "healthy",
   "components": {
-    "databases": {
-      "media_db": "healthy",
-      "notes_db": "healthy",
-      "characters_db": "healthy"
-    },
-    "embedding_service": "healthy",
-    "cache": "healthy",
-    "llm_providers": {
-      "openai": "healthy",
-      "anthropic": "degraded"
-    }
+    "circuit_breaker_retrieval": {"status": "healthy", "state": "closed", "failure_rate": 0.0},
+    "cache": {"status": "healthy", "hit_rate": 0.75, "size": 123},
+    "metrics": {"status": "healthy", "recent_queries": 42},
+    "batch_processor": {"status": "healthy", "active_jobs": 0, "success_rate": 1.0}
   },
-  "performance": {
-    "avg_response_time": 0.156,
-    "cache_hit_rate": 0.78,
-    "error_rate": 0.02
-  },
-  "version": "4.0",
-  "timestamp": "2024-08-30T10:00:00Z"
+  "version": "1.0.0",
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -378,20 +353,16 @@ Check health status of all RAG components.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_query_expansion` | boolean | false | Enable query expansion |
+| `expand_query` | boolean | false | Enable query expansion |
 | `expansion_strategies` | array | ["acronym"] | Expansion strategies |
-| `enable_spell_check` | boolean | false | Correct query spelling |
-| `spell_check_language` | string | "en" | Language for spell check |
+| `spell_check` | boolean | false | Correct query spelling |
 
 ### Filtering
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `keyword_filter` | array | [] | Required keywords |
-| `exclude_keywords` | array | [] | Excluded keywords |
-| `date_range` | object | null | Date range filter |
-| `source_filter` | array | [] | Content source types |
-| `similarity_threshold` | float | 0.3 | Vector similarity threshold |
+|  |  |  |  |
 
 ### Caching
 
@@ -407,9 +378,13 @@ Check health status of all RAG components.
 |-----------|------|---------|-------------|
 | `enable_reranking` | boolean | true | Enable document reranking |
 | `reranking_strategy` | string | "hybrid" | Reranking algorithm |
-| `reranking_top_k` | integer | 20 | Candidates before reranking |
+| `rerank_top_k` | integer | null | Candidates to rerank (defaults to top_k) |
 | `enable_table_processing` | boolean | false | Process table content |
-| `enable_parent_retrieval` | boolean | false | Include parent context |
+| `enable_parent_expansion` | boolean | false | Include parent context |
+| `include_sibling_chunks` | boolean | false | Include adjacent chunk context |
+| `sibling_window` | integer | 1 | Sibling window size per side |
+| `include_parent_document` | boolean | false | Include full parent when under token limit |
+| `parent_max_tokens` | integer | 1200 | Parent inclusion max tokens |
 
 ### Citations
 
@@ -418,34 +393,30 @@ Check health status of all RAG components.
 | `enable_citations` | boolean | false | Generate academic citations |
 | `citation_style` | string | "apa" | Citation format |
 | `enable_chunk_citations` | boolean | true | Include chunk citations |
-| `citation_threshold` | float | 0.7 | Min confidence for citations |
 
 ### Answer Generation
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_answer_generation` | boolean | false | Generate LLM responses |
-| `llm_provider` | string | "openai" | LLM provider |
-| `model` | string | "gpt-4o" | Model name |
-| `max_tokens` | integer | 1000 | Max response tokens |
-| `temperature` | float | 0.1 | Generation temperature |
+| `enable_generation` | boolean | false | Generate answer from retrieved context |
+| `generation_model` | string | null | LLM model name |
+| `generation_prompt` | string | null | Custom prompt template |
+| `max_generation_tokens` | integer | 500 | Max tokens for generated answer |
 
 ### Security & Privacy
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_pii_detection` | boolean | false | Detect PII in results |
-| `pii_types` | array | ["email", "ssn"] | PII types to detect |
-| `enable_content_filtering` | boolean | false | Filter inappropriate content |
-| `content_filter_level` | string | "medium" | Filter sensitivity |
+| `detect_pii` | boolean | false | Detect PII in results |
+| `content_filter` | boolean | false | Filter inappropriate/sensitive content |
+| `sensitivity_level` | string | "public" | Max sensitivity allowed |
 | `redact_pii` | boolean | false | Redact detected PII |
 
 ### Performance & Monitoring
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_connection_pooling` | boolean | true | Use connection pooling |
-| `enable_embedding_cache` | boolean | true | Cache embeddings |
+| `use_embedding_cache` | boolean | true | Cache embeddings (vector search) |
 | `enable_monitoring` | boolean | false | Collect performance metrics |
 | `enable_debug_mode` | boolean | false | Include debug information |
 
@@ -486,19 +457,18 @@ Check health status of all RAG components.
 
 ## Rate Limits
 
-- **Search endpoint**: 60 requests per minute per user
-- **Batch endpoint**: 10 requests per minute per user
-- **Health endpoint**: 120 requests per minute per user
+- **Search endpoint** (`POST /search`): 30 requests per minute per client
+- **Read endpoints** (e.g., `GET /simple`, `GET /advanced`, `GET /features`): 60 requests per minute per client
+- **Batch endpoint** (`POST /batch`): 10 requests per minute per client
 
 ## Best Practices
 
 ### Performance Optimization
 
-1. **Use Caching**: Enable `enable_cache=true` for repeated queries
-2. **Connection Pooling**: Keep `enable_connection_pooling=true`
-3. **Embedding Cache**: Keep `enable_embedding_cache=true`
-4. **Limit Results**: Use appropriate `top_k` values (don't over-fetch)
-5. **Batch Processing**: Use `/batch` endpoint for multiple queries
+1. **Use Caching**: Enable `enable_cache=true` for repeated/similar queries
+2. **Embedding Cache**: Keep `use_embedding_cache=true` for semantic search
+3. **Limit Results**: Use appropriate `top_k` values (don't over-fetch)
+4. **Batch Processing**: Use `/batch` endpoint for multiple queries
 
 ### Security Considerations
 
@@ -543,7 +513,7 @@ result = await search_rag(
     sources=["media_db", "notes"],
     enable_citations=True,
     citation_style="apa",
-    enable_answer_generation=True,
+    enable_generation=True,
     top_k=10
 )
 ```
@@ -601,5 +571,4 @@ const result = await searchRAG("Explain neural networks", {
 
 For more information, see:
 - [Implementation Status](IMPLEMENTATION_STATUS.md)
-- [Migration Guide](MIGRATION_GUIDE.md) 
 - [Main README](README.md)

@@ -744,6 +744,7 @@ async def create_version(
     tags=["Media Versioning"],
     summary="List Media Versions",
     response_model=List[VersionDetailResponse],
+    response_model_exclude_none=True,
 )
 async def list_versions(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -811,6 +812,7 @@ async def list_versions(
                     safe_md = None
             versions.append(
                 VersionDetailResponse(
+                    uuid=rv.get("uuid"),
                     media_id=rv.get("media_id"),
                     version_number=rv.get("version_number"),
                     created_at=created_at_dt,
@@ -1213,6 +1215,7 @@ async def create_or_update_version_advanced(
     tags=["Media Versioning"],
     summary="Get Specific Media Version",
     response_model=VersionDetailResponse,
+    response_model_exclude_none=True,
 )
 async def get_version(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -1257,6 +1260,7 @@ async def get_version(
             except Exception:
                 safe_md = None
         return VersionDetailResponse(
+            uuid=version_dict.get("uuid"),
             media_id=version_dict.get("media_id"),
             version_number=version_dict.get("version_number"),
             created_at=created_at_dt,

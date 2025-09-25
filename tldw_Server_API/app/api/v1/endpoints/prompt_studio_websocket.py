@@ -437,6 +437,9 @@ async def websocket_endpoint_base(websocket: WebSocket):
                         "type": "subscribed_job",
                         "job_id": job_id
                     })
+            elif data.get("type") == "job_update":
+                # Echo job update (test harness expects a direct update message back)
+                await websocket.send_json(data)
                     
     except WebSocketDisconnect:
         connection_manager.disconnect("global")

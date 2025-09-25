@@ -42,6 +42,33 @@ from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import (
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
+# Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
+# replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
+# importing the heavy embeddings stack at module import time.
+create_embeddings_batch = None  # type: ignore[assignment]
+
+def _get_embeddings_fn():
+    """Return the embeddings batch function, preferring a patched module attribute.
+
+    - If tests monkeypatched `create_embeddings_batch`, use that.
+    - Else, lazily import the production function and cache it in the module global.
+    """
+    fn = globals().get("create_embeddings_batch")
+    if callable(fn):
+        return fn
+    try:
+        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+            create_embeddings_batch as _impl,
+        )
+        globals()["create_embeddings_batch"] = _impl
+        return _impl
+    except Exception as e:
+        def _err(*_args, **_kwargs):
+            raise RuntimeError(
+                "Embeddings service not available; patch _get_embeddings_fn() or create_embeddings_batch"
+            ) from e
+        return _err
+
 router = APIRouter(
     tags=["vector-stores"],
 )
@@ -676,7 +703,8 @@ async def upsert_vectors(
             )
         try:
             loop = asyncio.get_running_loop()
-            embedded = await loop.run_in_executor(None, create_embeddings_batch, texts_to_embed, app_config, model_id)
+            embed_fn = _get_embeddings_fn()
+            embedded = await loop.run_in_executor(None, embed_fn, texts_to_embed, app_config, model_id)
         except Exception as e:
             logger.error(f"Embedding generation failed for vectors upsert: {e}")
             raise HTTPException(500, detail="Failed to generate embeddings for provided content")
@@ -1242,7 +1270,8 @@ async def create_store_from_media(
             })
         try:
             loop = asyncio.get_running_loop()
-            vecs = await loop.run_in_executor(None, create_embeddings_batch, subtexts, app_config, model_id)
+            embed_fn = _get_embeddings_fn()
+            vecs = await loop.run_in_executor(None, embed_fn, subtexts, app_config, model_id)
         except Exception as e:
             db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='failed', error=str(e))
             raise HTTPException(500, detail=f"Embedding failed: {e}")

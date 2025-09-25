@@ -408,14 +408,15 @@ class ChatbookService:
                         if 'manifest.json' in zf.namelist():
                             import json as _json
                             manifest_data = _json.loads(zf.read('manifest.json'))
-                            # Pull totals if available
+                            # Pull totals from statistics (fallback to top-level for legacy manifests)
+                            stats = manifest_data.get('statistics', {}) or {}
                             totals = {
-                                'conversations': manifest_data.get('total_conversations', 0),
-                                'notes': manifest_data.get('total_notes', 0),
-                                'characters': manifest_data.get('total_characters', 0),
-                                'world_books': manifest_data.get('total_world_books', 0),
-                                'dictionaries': manifest_data.get('total_dictionaries', 0),
-                                'documents': manifest_data.get('total_documents', 0),
+                                'conversations': stats.get('total_conversations', manifest_data.get('total_conversations', 0)),
+                                'notes': stats.get('total_notes', manifest_data.get('total_notes', 0)),
+                                'characters': stats.get('total_characters', manifest_data.get('total_characters', 0)),
+                                'world_books': stats.get('total_world_books', manifest_data.get('total_world_books', 0)),
+                                'dictionaries': stats.get('total_dictionaries', manifest_data.get('total_dictionaries', 0)),
+                                'documents': stats.get('total_documents', manifest_data.get('total_documents', 0)),
                             }
                             # Only include non-zero entries to keep it tidy
                             content_summary = {k: v for k, v in totals.items() if isinstance(v, int) and v >= 0}

@@ -16,14 +16,14 @@
 
 | Feature | Status | How to Use | Notes |
 |---------|--------|------------|-------|
-| Query Expansion | ✅ | `enable_query_expansion=true, expansion_strategies=[...]` | All strategies: acronym, synonym, domain, entity |
+| Query Expansion | ✅ | `expand_query=true, expansion_strategies=[...]` | All strategies: acronym, synonym, domain, entity |
 | Semantic Cache | ✅ | `enable_cache=true, cache_threshold=0.85` | LRU cache with TTL and adaptive thresholds |
 | Database Retrieval | ✅ | `sources=["media_db", "notes", "characters", "chats"]` | All databases supported |
 | Document Reranking | ✅ | `enable_reranking=true, reranking_strategy="hybrid"` | FlashRank, cross-encoder, hybrid strategies |
 | Vector Search | ✅ | `search_mode="vector"` | ChromaDB with embedding cache |
 | Table Processing | ✅ | `enable_table_processing=true` | Direct parameter control |
 | Performance Monitoring | ✅ | `enable_monitoring=true` | Comprehensive timing and metrics |
-| Enhanced Chunking | ✅ | `enable_parent_retrieval=true` | Parent context expansion |
+| Enhanced Chunking | ✅ | `enable_parent_expansion=true, include_sibling_chunks=true` | Parent and sibling context controls |
 | Keyword Filtering | ✅ | `keyword_filter=["term1", "term2"]` | Direct parameter |
 | Hybrid Search | ✅ | `search_mode="hybrid"` | FTS + vector with weight balancing |
 
@@ -33,20 +33,19 @@
 |---------|--------|------------|-------|
 | Citation Generation | ✅ | `enable_citations=true, citation_style="apa"` | Academic citations: MLA, APA, Chicago, Harvard, IEEE |
 | Chunk Citations | ✅ | `enable_chunk_citations=true` | Verification citations with source tracking |
-| PII Detection | ✅ | `enable_pii_detection=true` | Detects emails, SSNs, credit cards, etc. |
-| Content Filtering | ✅ | `enable_content_filtering=true, content_filter_level="medium"` | Four levels: none, low, medium, high |
+| PII Detection | ✅ | `detect_pii=true` | Detects emails, SSNs, credit cards, etc. |
+| Content Filtering | ✅ | `content_filter=true, sensitivity_level="internal"` | Uses sensitivity ceilings (public/internal/confidential/restricted) |
 | User Feedback | ✅ | `enable_feedback_collection=true` | Dual storage: Analytics.db + ChaChaNotes_DB |
-| Answer Generation | ✅ | `enable_answer_generation=true, llm_provider="openai"` | Full LLM integration with multiple providers |
+| Answer Generation | ✅ | `enable_generation=true, generation_model="gpt-4o"` | Full LLM integration with multiple providers |
 | Analytics System | ✅ | `enable_analytics=true` | Privacy-preserving with SHA256 hashing |
 | Batch Processing | ✅ | `unified_batch_pipeline()` with `max_concurrent` | Process multiple queries concurrently |
-| Connection Pooling | ✅ | `enable_connection_pooling=true` | SQLite connection pooling for performance |
-| Embedding Cache | ✅ | `enable_embedding_cache=true` | LRU cache for vector embeddings |
+| Embedding Cache | ✅ | `use_embedding_cache=true` | LRU cache for vector embeddings |
 
 ### Enhancement Features
 
 | Feature | Status | How to Use | Notes |
 |---------|--------|------------|-------|
-| Spell Check | ✅ | `enable_spell_check=true` | Query correction with graceful fallback |
+| Spell Check | ✅ | `spell_check=true` | Query correction with graceful fallback |
 | Result Highlighting | ✅ | `enable_result_highlighting=true` | Highlight matching terms in results |
 | Cost Tracking | ✅ | `enable_cost_tracking=true` | LLM usage cost estimation |
 | Debug Mode | ✅ | `enable_debug_mode=true` | Detailed execution information |
@@ -60,7 +59,7 @@
 | Circuit Breakers | ✅ | `enable_resilience=true` with circuit_breaker config | Configurable failure thresholds |
 | Retry Logic | ✅ | `enable_resilience=true` with retry config | Exponential backoff, max attempts |
 | Fallback Handlers | ✅ | Built into pipeline | Graceful degradation on failures |
-| Health Checks | ✅ | `/api/v1/rag/unified/health` | Comprehensive component monitoring |
+| Health Checks | ✅ | `/api/v1/rag/health` | Component monitoring and cache/metrics status |
 | Error Recovery | ✅ | Automatic in all operations | Continue on partial failures |
 
 ### Batch Processing
@@ -115,21 +114,20 @@ result = await unified_rag_pipeline(
     top_k=10,
     
     # ✅ Query Enhancement
-    enable_query_expansion=True,
+    expand_query=True,
     expansion_strategies=["acronym", "synonym", "domain", "entity"],
-    enable_spell_check=True,
+    spell_check=True,
     
     # ✅ Caching & Performance
     enable_cache=True,
     cache_threshold=0.85,
-    enable_connection_pooling=True,
-    enable_embedding_cache=True,
+    use_embedding_cache=True,
     
     # ✅ Document Processing
     enable_reranking=True,
     reranking_strategy="hybrid",
     enable_table_processing=True,
-    enable_parent_retrieval=True,
+    enable_parent_expansion=True,
     
     # ✅ Citations
     enable_citations=True,
@@ -137,14 +135,13 @@ result = await unified_rag_pipeline(
     enable_chunk_citations=True,
     
     # ✅ Answer Generation
-    enable_answer_generation=True,
-    llm_provider="openai",
-    model="gpt-4o",
+    enable_generation=True,
+    generation_model="gpt-4o",
     
     # ✅ Security
-    enable_pii_detection=True,
-    enable_content_filtering=True,
-    content_filter_level="medium",
+    detect_pii=True,
+    content_filter=True,
+    sensitivity_level="internal",
     
     # ✅ Analytics & Monitoring
     enable_analytics=True,
@@ -167,7 +164,7 @@ Use the `/api/v1/rag/search` endpoint with direct parameters:
   "query": "your search query",
   "sources": ["media_db", "notes"],
   "search_mode": "hybrid",
-  "enable_query_expansion": true,
+  "expand_query": true,
   "expansion_strategies": ["acronym", "synonym", "domain"],
   "enable_cache": true,
   "enable_reranking": true,
@@ -175,10 +172,9 @@ Use the `/api/v1/rag/search` endpoint with direct parameters:
   "enable_citations": true,
   "citation_style": "apa",
   "enable_chunk_citations": true,
-  "enable_answer_generation": true,
-  "llm_provider": "openai",
-  "model": "gpt-4o",
-  "enable_pii_detection": true,
+  "enable_generation": true,
+  "generation_model": "gpt-4o",
+  "detect_pii": true,
   "enable_analytics": true,
   "top_k": 15
 }
@@ -212,7 +208,7 @@ Use `/api/v1/rag/batch` for multiple queries:
 ### From v3 (Functional) to v4 (Unified)
 - Functional pipeline presets → Single unified function with parameters
 - Configuration dictionaries → Direct function parameters
-- `/api/v1/rag/search/*` endpoints → `/api/v1/rag/unified/*` endpoints
+- Legacy prefixed endpoints consolidated under `/api/v1/rag/*`
 - Pipeline composition → Feature parameter enabling
 
 ### From v2 (Object-Oriented) to v4 (Unified)
@@ -256,18 +252,15 @@ Use `/api/v1/rag/batch` for multiple queries:
 - ✅ Added performance optimizations (connection pooling, caching)
 
 ### Phase 4: API Implementation ✅ COMPLETED
-- ✅ Single unified endpoint `/api/v1/rag/unified/search`
-- ✅ Batch processing endpoint `/api/v1/rag/unified/batch`
+- ✅ Unified endpoints under `/api/v1/rag/*`
 - ✅ Direct parameter access for all features
 - ✅ Comprehensive request/response schemas
 - ✅ Backward compatibility endpoints
 
-### Phase 5: Testing & Quality ✅ COMPLETED
-- ✅ Comprehensive unit tests
-- ✅ Integration tests for all features
-- ✅ Performance benchmarks
-- ✅ Error handling validation
-- ✅ Security testing
+### Phase 5: Testing & Quality ▶ ONGOING
+- ✅ Unit and integration tests in `tldw_Server_API/tests/RAG_NEW/`
+- 🚧 Broaden coverage and performance benchmarking
+- 🚧 Expand security/error handling test cases
 
 ### Future Enhancements 📝 PLANNED
 - 📝 Advanced observability features
@@ -277,4 +270,4 @@ Use `/api/v1/rag/batch` for multiple queries:
 
 ---
 
-**Note**: This document represents the ACTUAL current implementation status as of v4.0 unified pipeline. All documented features are fully implemented and accessible via the unified API endpoints. For migration assistance, see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md).
+**Note**: This document reflects the unified pipeline as implemented today. Most features are integrated and available via the unified API; consult tests and endpoint schemas for specifics.

@@ -614,10 +614,15 @@ def test_add_media_multiple_failures_and_success_pdf(
 ):
     """Test a mix of successful and failed items for PDF media type, mocking _process_document_like_item."""
     if not SAMPLE_PDF_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_PDF_PATH}")
-    if not SAMPLE_AUDIO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_AUDIO_PATH}")
 
     good_pdf_file_tuple = create_upload_file(SAMPLE_PDF_PATH)
-    invalid_format_file_tuple = create_upload_file(SAMPLE_AUDIO_PATH)
+    # Create an invalid PDF (wrong content but .pdf extension) so it passes upload
+    invalid_pdf_path = TEST_MEDIA_DIR / "invalid.pdf"
+    try:
+        invalid_pdf_path.write_bytes(b"not a pdf")
+    except Exception as e:
+        pytest.skip(f"Failed to create invalid PDF for test: {e}")
+    invalid_format_file_tuple = create_upload_file(invalid_pdf_path)
 
     # --- Create the AsyncMock instance FIRST ---
     mock_processor = AsyncMock()
@@ -709,18 +714,25 @@ def test_add_media_multiple_failures_and_success_pdf(
     assert isinstance(results_map[SAMPLE_PDF_PATH.name].get("db_id"), int), f"Real PDF file DB ID mismatch: {results_map[SAMPLE_PDF_PATH.name].get('db_id')}"
 
     # 4. Invalid Format Upload -> Error (from Real Implementation via pass-through)
-    assert SAMPLE_AUDIO_PATH.name in results_map, f"Result for invalid file {SAMPLE_AUDIO_PATH.name} not found"
-    assert results_map[SAMPLE_AUDIO_PATH.name]["status"] == "Error", f"Real invalid file status mismatch: {results_map[SAMPLE_AUDIO_PATH.name]['status']}"
-    check_media_item_result(results_map[SAMPLE_AUDIO_PATH.name], "Error", expected_media_type="pdf")
-    error_msg = results_map[SAMPLE_AUDIO_PATH.name].get("error", "").lower()
+    assert invalid_pdf_path.name in results_map, f"Result for invalid file {invalid_pdf_path.name} not found"
+    assert results_map[invalid_pdf_path.name]["status"] == "Error", f"Real invalid file status mismatch: {results_map[invalid_pdf_path.name]['status']}"
+    check_media_item_result(results_map[invalid_pdf_path.name], "Error", expected_media_type="pdf")
+    error_msg = results_map[invalid_pdf_path.name].get("error", "").lower()
     assert "pdf extraction error" in error_msg or \
            "failed to open file" in error_msg or \
            "invalid file" in error_msg or \
            "cannot parse" in error_msg or \
            "pymupdf" in error_msg, f"Expected PDF processing error for real invalid file, got: {error_msg}"
-    assert results_map[SAMPLE_AUDIO_PATH.name].get("db_id") is None
+    assert results_map[invalid_pdf_path.name].get("db_id") is None
 
     assert mock_processor.call_count == 4, f"Expected 4 calls to _process_document_like_item, got {mock_processor.call_count}"
+
+    # Cleanup invalid test file
+    try:
+        if invalid_pdf_path.exists():
+            invalid_pdf_path.unlink()
+    except Exception:
+        pass
 
 # === Error Handling Tests ===
 

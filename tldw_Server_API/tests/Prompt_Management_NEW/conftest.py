@@ -497,7 +497,7 @@ def prompts_service(tmp_path_factory) -> Generator[PromptsInteropService, None, 
         # Cleanup
         service.close()
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def mock_prompts_db():
     """Create a mock PromptsDB for unit tests."""
     db = MagicMock(spec=PromptsDB)
@@ -533,7 +533,7 @@ def mock_prompts_db():
     
     return db
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def mock_prompts_service(mock_prompts_db):
     """Create a PromptsInteropService with mocked database for unit tests."""
     temp_dir = tempfile.mkdtemp()
