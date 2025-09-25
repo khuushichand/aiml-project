@@ -7,6 +7,11 @@ import asyncio # Added
 import random
 import time
 from pathlib import Path
+import os
+import shutil
+import wave
+import struct
+import math
 from typing import Dict, Any, Tuple, Optional, Union  # Added Tuple
 from unittest.mock import patch, MagicMock, AsyncMock, ANY  # Refined imports
 import gc
@@ -65,7 +70,7 @@ def create_dummy_file(path: Path, content: str = "dummy content"):
 
 # Define paths
 SAMPLE_VIDEO_PATH = TEST_MEDIA_DIR / "sample.mp4"
-SAMPLE_AUDIO_PATH = TEST_MEDIA_DIR / "sample.mp3"
+SAMPLE_AUDIO_PATH = TEST_MEDIA_DIR / "sample.wav"
 SAMPLE_PDF_PATH = TEST_MEDIA_DIR / "sample.pdf"
 SAMPLE_EPUB_PATH = TEST_MEDIA_DIR / "sample.epub"
 SAMPLE_TXT_PATH = TEST_MEDIA_DIR / "sample.txt"
@@ -77,7 +82,26 @@ SAMPLE_XML_PATH = TEST_MEDIA_DIR / "sample.xml"
 
 # Create dummy files
 create_dummy_file(SAMPLE_VIDEO_PATH, "dummy video data") # Content doesn't need to be valid video
-create_dummy_file(SAMPLE_AUDIO_PATH, "dummy audio data") # Content doesn't need to be valid audio
+# Create a small, valid mono PCM WAV file for audio tests
+def create_valid_wav(path: Path, duration_sec: float = 1.0, sample_rate: int = 16000, freq: float = 440.0):
+    if path.exists():
+        return
+    try:
+        n_samples = int(duration_sec * sample_rate)
+        with wave.open(str(path), 'w') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit PCM
+            wf.setframerate(sample_rate)
+            amplitude = 0.1
+            for i in range(n_samples):
+                sample = int(32767.0 * amplitude * math.sin(2 * math.pi * freq * (i / sample_rate)))
+                wf.writeframes(struct.pack('<h', sample))
+        logger.info(f"Created valid WAV test file: {path}")
+    except Exception as e:
+        logger.error(f"Failed to create WAV file {path}: {e}")
+        pytest.skip(f"Failed to create valid audio file: {path}")
+
+create_valid_wav(SAMPLE_AUDIO_PATH)
 create_dummy_file(SAMPLE_PDF_PATH, "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0>>endobj\nxref\n0 3\n0000000000 65535 f \n0000000010 00000 n \n0000000059 00000 n \ntrailer<</Size 3/Root 1 0 R>>\nstartxref\n114\n%%EOF") # Minimal PDF
 create_dummy_file(SAMPLE_EPUB_PATH, "dummy epub data") # Content doesn't need to be valid epub
 create_dummy_file(SAMPLE_TXT_PATH, "Sample TXT content.")
@@ -244,7 +268,7 @@ def create_upload_file(dummy_file_content):
         if not filepath.exists():
             pytest.skip(f"Required test file missing: {filepath}")
         mime_map = {
-            ".mp4": "video/mp4", ".mp3": "audio/mpeg", ".pdf": "application/pdf",
+            ".mp4": "video/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".pdf": "application/pdf",
             # Add other types as needed
         }
         mime_type = mime_map.get(filepath.suffix.lower(), "application/octet-stream")
@@ -377,6 +401,10 @@ def create_add_media_form_data(**overrides) -> Dict[str, Any]:
 
 # === Validation Tests ===
 
+# Capability flags for conditional skipping
+HAS_FFMPEG = bool(shutil.which('ffmpeg') or os.path.exists('/opt/homebrew/bin/ffmpeg') or os.path.exists('/usr/local/bin/ffmpeg') or os.path.exists('/usr/bin/ffmpeg'))
+NETWORK_TESTS_ENABLED = os.getenv('ENABLE_NETWORK_TESTS', '').lower() in {"1", "true", "yes", "on"}
+
 def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
     """Test sending an invalid value for the media_type enum."""
     form_data = create_add_media_form_data(media_type="picture", urls=["http://a.com"])
@@ -429,7 +457,7 @@ def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
 # === Basic Success Path Tests (URL & Upload) ===
 
 @pytest.mark.parametrize("media_type, valid_url, expected_content_present", [
-    ("video", VALID_VIDEO_URL, True),
+    pytest.param("video", VALID_VIDEO_URL, True, marks=pytest.mark.skipif(not (HAS_FFMPEG and NETWORK_TESTS_ENABLED), reason="Requires network + ffmpeg for video URL")),
     ("audio", VALID_AUDIO_URL, True),
     ("pdf", VALID_PDF_URL, True),
     # Skip Ebook URL test for now due to potential download size/time
@@ -464,7 +492,7 @@ def test_add_media_single_url_success(test_api_client, db_session, media_type, v
     assert "added" in result.get("db_message", "").lower() or "updated" in result.get("db_message", "").lower()
 
 @pytest.mark.parametrize("media_type, sample_path, expected_content_present", [
-    ("video", SAMPLE_VIDEO_PATH, True),
+    pytest.param("video", SAMPLE_VIDEO_PATH, True, marks=pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not available for local video processing")),
     ("audio", SAMPLE_AUDIO_PATH, True),
     ("pdf", SAMPLE_PDF_PATH, True),
     ("ebook", SAMPLE_EPUB_PATH, True),
@@ -488,12 +516,23 @@ def test_add_media_single_file_upload_success(test_api_client, db_session, creat
 
     # --- CORRECTED TestClient Call ---
     # Pass form data via `data` and files via `files` in the same call
-    response = test_api_client.post(
-        ADD_MEDIA_ENDPOINT,
-        data=form_data,
-        files={"files": file_tuple}, # Key must match the File(..., alias="files") parameter name
-        headers=dummy_headers
-    )
+    if media_type == "audio":
+        # Avoid heavy dependencies by mocking conversion + transcription
+        with patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav", side_effect=lambda p, **kw: p), \
+             patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "test", "start_seconds": 0, "end_seconds": 1}]):
+            response = test_api_client.post(
+                ADD_MEDIA_ENDPOINT,
+                data=form_data,
+                files={"files": file_tuple}, # Key must match the File(..., alias="files") parameter name
+                headers=dummy_headers
+            )
+    else:
+        response = test_api_client.post(
+            ADD_MEDIA_ENDPOINT,
+            data=form_data,
+            files={"files": file_tuple}, # Key must match the File(..., alias="files") parameter name
+            headers=dummy_headers
+        )
     # -----------------------------------
 
     expected_code = status.HTTP_200_OK
@@ -526,6 +565,7 @@ def test_add_media_single_file_upload_success(test_api_client, db_session, creat
 # === Mixed Success/Failure Tests ===
 
 @pytest.mark.timeout(180) # Increased timeout
+@pytest.mark.skipif(not (HAS_FFMPEG and NETWORK_TESTS_ENABLED), reason="Requires network + ffmpeg for video URL + local video processing")
 def test_add_media_mixed_url_file_success(test_api_client, db_session, create_upload_file, dummy_headers): # Added db_session
     """Test adding one valid video URL and one valid video file."""
     if not SAMPLE_VIDEO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_VIDEO_PATH}")
@@ -987,12 +1027,15 @@ def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_se
     form_data_dict['urls'] = None
 
     file_tuple = create_upload_file(SAMPLE_AUDIO_PATH)
-    response = test_api_client.post(
-        PROCESS_AUDIO_ENDPOINT,
-        data=form_data_dict,
-        files={"files": file_tuple},
-        headers=dummy_headers
-    )
+    # Avoid real conversion/transcription during tests
+    with patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav", side_effect=lambda p, **kw: p), \
+         patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "hello", "start_seconds": 0, "end_seconds": 1}]):
+        response = test_api_client.post(
+            PROCESS_AUDIO_ENDPOINT,
+            data=form_data_dict,
+            files={"files": file_tuple},
+            headers=dummy_headers
+        )
 
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS], \
         f"Request failed: {response.status_code} - {response.text}"

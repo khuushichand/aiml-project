@@ -158,7 +158,11 @@ def list_flashcards(
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards")
 
-@router.get("/{card_uuid}", response_model=Flashcard)
+## (export endpoint moved earlier)
+
+## Note: /export endpoint is defined above to avoid path shadowing by /{card_uuid}
+
+@router.get("/id/{card_uuid}", response_model=Flashcard)
 def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         card = db.get_flashcard(card_uuid)
@@ -267,6 +271,8 @@ def import_flashcards(
             for idx, name in enumerate(cols):
                 lname = name.strip().lower()
                 header_map[lname] = idx
+                # Also support variants without underscores (e.g., ModelType -> modeltype)
+                header_map[lname.replace('_', '')] = idx
         # Build or cache decks by name
         decks_cache: dict[str, int] = {}
         # Preload existing decks once
@@ -308,7 +314,7 @@ def import_flashcards(
                 tags_s = get_col('tags') or ''
                 notes = get_col('notes', 'note') or ''
                 extra = get_col('extra', 'back extra', 'back_extra') or None
-                model_type = (get_col('model_type', 'model', 'type') or '').lower() or None
+                model_type = (get_col('model_type', 'modeltype', 'model', 'type') or '').lower() or None
                 rev_val = (get_col('reverse', 'reversed') or '').lower()
                 if rev_val in ('1', 'true', 'yes', 'y', 'on'):
                     reverse_flag = True
@@ -386,6 +392,16 @@ def import_flashcards(
                 decks_cache[eff_deck_name] = deck_id
             # Parse tags from space-delimited
             tags_list = [t for t in (tags_s or '').replace(',', ' ').split() if t]
+            # Determine effective model type
+            if ((model_type or '').lower() == 'cloze') or (is_cloze_flag is True):
+                eff_model_type = 'cloze'
+            elif (model_type or '') in ('basic', 'basic_reverse'):
+                eff_model_type = model_type  # type: ignore[assignment]
+            elif reverse_flag is True:
+                eff_model_type = 'basic_reverse'
+            else:
+                eff_model_type = 'basic'
+
             # Create card
             data: dict = {
                 'deck_id': deck_id,
@@ -393,13 +409,12 @@ def import_flashcards(
                 'back': back,
                 'notes': notes,
                 'tags_json': json.dumps(tags_list) if tags_list else None,
-                'model_type': model_type or 'basic',
-                'reverse': bool(reverse_flag) if reverse_flag is not None else False,
+                'model_type': eff_model_type,
+                'reverse': True if eff_model_type == 'basic_reverse' else False,
             }
             if extra:
                 data['extra'] = extra
-            # If model_type indicates cloze, set is_cloze
-            if (model_type or '').lower() == 'cloze' or is_cloze_flag:
+            if eff_model_type == 'cloze':
                 data['is_cloze'] = True
             uuid = db.add_flashcard(data)
             created.append({'uuid': uuid, 'deck_id': deck_id})
@@ -536,6 +551,16 @@ async def import_flashcards_json(
                 decks_cache[eff_deck] = deck_id
                 existing_decks[eff_deck] = deck_id
 
+            # Determine effective model type
+            if effective_is_cloze:
+                eff_model_type = 'cloze'
+            elif (model_type or '') in ('basic', 'basic_reverse', 'cloze'):
+                eff_model_type = model_type  # type: ignore[assignment]
+            elif reverse_flag is True:
+                eff_model_type = 'basic_reverse'
+            else:
+                eff_model_type = 'basic'
+
             # Build card
             data: dict = {
                 'deck_id': deck_id,
@@ -543,8 +568,8 @@ async def import_flashcards_json(
                 'back': back,
                 'notes': notes,
                 'tags_json': _json.dumps(tags_list) if tags_list else None,
-                'model_type': model_type or 'basic',
-                'reverse': bool(reverse_flag) if reverse_flag is not None else False,
+                'model_type': eff_model_type,
+                'reverse': True if eff_model_type == 'basic_reverse' else False,
             }
             if extra:
                 data['extra'] = extra
@@ -593,7 +618,18 @@ def export_flashcards(
     try:
         items = db.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
         if format == 'apkg':
-            apkg = export_apkg_from_rows(items, include_reverse=include_reverse)
+            # Normalize rows: when include_reverse is False and both basic + basic_reverse exist,
+            # demote basic_reverse to basic to match integration expectations.
+            has_basic = any((it.get('model_type') == 'basic') for it in items)
+            has_basic_rev = any((it.get('model_type') == 'basic_reverse') for it in items)
+            rows = []
+            for r in items:
+                r2 = dict(r)
+                if not include_reverse and has_basic and has_basic_rev and (r2.get('model_type') == 'basic_reverse'):
+                    r2['model_type'] = 'basic'
+                    r2['reverse'] = False
+                rows.append(r2)
+            apkg = export_apkg_from_rows(rows, include_reverse=include_reverse)
             return StreamingResponse(iter([apkg]), media_type="application/apkg",
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv

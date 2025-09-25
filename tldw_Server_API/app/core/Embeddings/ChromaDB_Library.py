@@ -25,7 +25,19 @@ from chromadb.api.types import QueryResult
 #
 # Local Imports:
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding  # Using V2 through compatibility layer
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding, create_embeddings_batch
+# Import embeddings creation lazily/safely to avoid hard dependency at import time
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embedding,
+        create_embeddings_batch,
+    )
+    _EMBEDDINGS_BACKEND_AVAILABLE = True
+except Exception:
+    _EMBEDDINGS_BACKEND_AVAILABLE = False
+    def create_embedding(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
+    def create_embeddings_batch(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
 from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger

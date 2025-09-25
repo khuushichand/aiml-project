@@ -71,7 +71,8 @@ from prometheus_client import Counter, Histogram, Gauge
 from fnmatch import fnmatch
 
 # ============================================================================
-# CRITICAL: Embeddings Implementation Import with Explicit Failure
+# Embeddings Implementation Import (Safe/Lazy)
+# Avoid hard-failing on import so non-embedding tests can import the app.
 # ============================================================================
 
 try:
@@ -84,15 +85,11 @@ try:
         LocalAPICfg
     )
     EMBEDDINGS_AVAILABLE = True
-except ImportError as e:
-    logger.error(f"CRITICAL: Failed to import embeddings implementation: {e}")
-    logger.error("Embeddings service cannot start without proper dependencies")
+except Exception as e:
+    # Do not raise here; allow the API to import and mark the embeddings service as unavailable.
+    logger.error(f"Embeddings implementation unavailable: {e}")
+    logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
     EMBEDDINGS_AVAILABLE = False
-    
-    raise RuntimeError(
-        f"Embeddings service dependencies not available: {e}. "
-        "Please install required packages: transformers, sentence-transformers, onnxruntime"
-    )
 
 # ============================================================================
 # Metrics and Monitoring
@@ -975,6 +972,12 @@ async def create_embedding_endpoint(
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
     
+    if not EMBEDDINGS_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Embeddings service unavailable; dependencies not installed"
+        )
+
     active_embedding_requests.inc()
     start_time = time.time()
     

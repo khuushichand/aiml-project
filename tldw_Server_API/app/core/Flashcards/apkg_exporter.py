@@ -257,7 +257,8 @@ def _extract_media_from_html(html: str, media_accum: List[Tuple[str, bytes]], me
     pattern = re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
     # We need to handle both capturing groups; easier: custom parser for img/src and audio/src separately
     def replace_tag_src(tag_name: str, s: str) -> str:
-        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*(["\"])(.*?)\1' % tag_name, re.IGNORECASE)
+        # Match src with either single or double quotes
+        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1' % tag_name, re.IGNORECASE)
         return rgx.sub(lambda m: m.group(0).replace(m.group(2), _handle_src(m.group(2))), s)
 
     def _handle_src(src: str) -> str:

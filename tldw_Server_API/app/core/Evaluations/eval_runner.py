@@ -28,10 +28,19 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_ra
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    create_embeddings_batch,
-    get_embedding_config,
-)
+# Safe import of embeddings backend to avoid heavy deps at app import time
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embeddings_batch,
+        get_embedding_config,
+    )
+    _EVAL_EMBEDDINGS_AVAILABLE = True
+except Exception:
+    _EVAL_EMBEDDINGS_AVAILABLE = False
+    def get_embedding_config():  # type: ignore[misc]
+        return {"embedding_config": {"default_model_id": ""}}
+    def create_embeddings_batch(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("Embeddings backend unavailable; install required dependencies")
 
 
 

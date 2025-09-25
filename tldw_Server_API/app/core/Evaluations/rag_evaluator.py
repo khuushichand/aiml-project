@@ -17,10 +17,19 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    create_embedding, 
-    get_embedding_config
-)
+# Safe import of embeddings helpers to avoid heavy deps during app import
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embedding, 
+        get_embedding_config,
+    )
+    _RAG_EMBEDDINGS_AVAILABLE = True
+except Exception:
+    _RAG_EMBEDDINGS_AVAILABLE = False
+    def create_embedding(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("Embeddings backend unavailable; install required dependencies")
+    def get_embedding_config():  # type: ignore[misc]
+        return {"embedding_config": {"default_model_id": ""}}
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     llm_circuit_breaker,
     CircuitOpenError
@@ -72,8 +81,6 @@ class RAGEvaluator:
     
     def _setup_embedding_config(self) -> Dict[str, Any]:
         """Setup embedding configuration."""
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import OpenAIModelCfg, HFModelCfg
-        
         config = get_embedding_config()
         
         # Override model if specified
@@ -106,7 +113,6 @@ class RAGEvaluator:
                 oa = config.setdefault("openai_api", {})
                 oa.setdefault("api_key", self.api_key)
             except Exception:
-                # Never break initialization due to config dict shape
                 pass
         
         return config

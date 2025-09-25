@@ -21,9 +21,6 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter imp
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 import pathlib
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    create_embeddings_batch,
-)
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 import asyncio
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod

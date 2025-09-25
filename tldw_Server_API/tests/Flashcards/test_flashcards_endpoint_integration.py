@@ -649,8 +649,20 @@ def test_import_json_caps_and_errors(client_with_flashcards_db: TestClient, monk
     assert data2.get('imported') == 0
     errs2 = data2.get('errors', [])
     assert any('Invalid cloze' in (e.get('error') or '') for e in errs2)
-    # Unicode preserved
-    assert '😀' in cols[1]
+
+
+def test_import_json_unicode_preserved(client_with_flashcards_db: TestClient):
+    import json as _json
+    payload = [
+        {"deck": "JUnicode", "front": "Hello 😀", "back": "World"}
+    ]
+    files = {'file': ('cards.json', _json.dumps(payload), 'application/json')}
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    items = r2.json().get('items', [])
+    assert any('😀' in (it.get('front') or '') for it in items)
 
 
 def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashcards_db: TestClient):
