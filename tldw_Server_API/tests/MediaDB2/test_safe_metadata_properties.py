@@ -20,9 +20,11 @@ def test_pmid_property_digits_only(n):
     assert sm.get("pmid") == str(n)
 
 
+_DOI_ALLOWED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._;()/:"
+
 @given(
     st.integers(min_value=1000, max_value=999999).map(lambda p: f"10.{p}"),
-    st.text(alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd")) | st.sampled_from(list("-._;()/:")), min_size=1, max_size=20),
+    st.text(alphabet=st.sampled_from(list(_DOI_ALLOWED)), min_size=1, max_size=20),
 )
 def test_doi_property_accepts_simple_valids(prefix, suffix):
     from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata

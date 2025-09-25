@@ -1,5 +1,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
+import sys, types
+
+# Stub heavy modules before importing the full app
+sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
+sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 @pytest.mark.asyncio
@@ -75,4 +80,3 @@ async def test_pmc_oa_fetch_pdf_http_error_mapping(monkeypatch):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         r = await client.get("/api/v1/paper-search/pmc-oa/fetch-pdf", params={"pmcid": "PMC123"})
         assert r.status_code == 404
-

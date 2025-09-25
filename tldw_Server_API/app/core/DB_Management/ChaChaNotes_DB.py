@@ -37,7 +37,7 @@ changes in the `sync_log` and in individual records.
 import sqlite3
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import threading
 import logging

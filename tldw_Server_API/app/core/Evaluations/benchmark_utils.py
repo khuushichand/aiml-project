@@ -1106,7 +1106,7 @@ def load_dataset_from_url(url: str, format: str = "auto") -> List[Dict[str, Any]
     """Load dataset from URL."""
     import requests
     
-    response = requests.get(url)
+    response = requests.get(url, timeout=15)
     response.raise_for_status()
     
     if format == "auto":

@@ -319,11 +319,13 @@ class PromptsDatabase:
                     self.db_path_str,
                     detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                     check_same_thread=False,  # Required for threading.local
-                    timeout=30  # seconds
+                    timeout=1.0  # seconds; keep short to avoid long blocking on locks
                 )
                 conn.row_factory = sqlite3.Row
                 if not self.is_memory_db:
                     conn.execute("PRAGMA journal_mode=WAL;")
+                # Keep lock waits short so concurrent tests don't hang
+                conn.execute("PRAGMA busy_timeout=1000")  # 1000 ms
                 conn.execute("PRAGMA foreign_keys = ON;")
                 self._local.conn = conn
                 logging.debug(

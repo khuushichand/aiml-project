@@ -1,5 +1,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
+import sys, types
+
+# Stub heavy modules before importing the full app
+sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
+sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 class _FakeConn:
@@ -73,4 +78,3 @@ async def test_by_identifier_invalid_doi_returns_400(monkeypatch):
             params={"doi": "nope"},
         )
         assert r.status_code == 400
-

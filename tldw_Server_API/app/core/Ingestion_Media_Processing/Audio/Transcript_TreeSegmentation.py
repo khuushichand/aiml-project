@@ -360,8 +360,9 @@ class TreeSegmenter:
             return self.transitions_hat
 
         leaves_heap: List[Tuple[int, SegNode]] = []
-        boundary: List[Tuple[float, SegNode]] = []
-        heapq.heappush(boundary, (root.split_loss_delta(), root))
+        # Use a numeric tiebreaker (start index) to avoid comparing SegNode on equal loss
+        boundary: List[Tuple[float, int, SegNode]] = []
+        heapq.heappush(boundary, (root.split_loss_delta(), root.segment[0], root))
 
         total_loss = root.negative_log_likelihood
         min_impr_ratio = float(self.configs.get("MIN_IMPROVEMENT_RATIO", 0.0) or 0.0)
@@ -371,12 +372,12 @@ class TreeSegmenter:
             if len(boundary) + len(leaves_heap) == K:
                 logger.warning(f"Reached maximum of {K} segments; stopping further splits")
                 while boundary:
-                    _, node = heapq.heappop(boundary)
+                    _, _, node = heapq.heappop(boundary)
                     node.is_leaf = True
                     heapq.heappush(leaves_heap, (node.segment[0], node))
                 break
 
-            loss_delta, node = heapq.heappop(boundary)
+            loss_delta, _, node = heapq.heappop(boundary)
 
             # Evaluate improvement ratio; if too small, stop splitting this node
             improvement_ratio = max(0.0, -loss_delta / (abs(total_loss) + eps))
@@ -393,7 +394,7 @@ class TreeSegmenter:
                 if child.is_leaf:
                     heapq.heappush(leaves_heap, (child.segment[0], child))
                 else:
-                    heapq.heappush(boundary, (child.split_loss_delta(), child))
+                    heapq.heappush(boundary, (child.split_loss_delta(), child.segment[0], child))
 
         # Sort leaves by first index to produce ordered segments
         ordered_leaves: List[SegNode] = []

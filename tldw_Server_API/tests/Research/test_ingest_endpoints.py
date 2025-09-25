@@ -1,5 +1,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
+import sys, types
+
+# Stub heavy modules before importing the full app
+sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
+sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 class _FakeResp:
@@ -128,4 +133,3 @@ async def test_s2_ingest_success(monkeypatch):
         assert '"s2_paper_id": "abcdef"' in saved.get("safe_metadata", "")
 
     app.dependency_overrides.pop(get_media_db_for_user, None)
-

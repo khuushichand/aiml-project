@@ -54,9 +54,12 @@ async def _stub_embedder(chunks):
 def test_segment_transcript_endpoint(monkeypatch):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import TreeSegmenter
 
+    # Preserve original classmethod to avoid recursion
+    orig_create = TreeSegmenter.create_async
+
     async def _create_async(configs, entries, embedder=None):
-        # Force stub embedder
-        return await TreeSegmenter.create_async(
+        # Force stub embedder by delegating to the original implementation
+        return await orig_create(
             configs=configs, entries=entries, embedder=_stub_embedder
         )
 
@@ -83,4 +86,3 @@ def test_segment_transcript_endpoint(monkeypatch):
         ones = [i for i, v in enumerate(j["transitions"]) if v == 1]
         assert len(ones) == 1 and ones[0] in (6, 7)  # allow slight variation
         assert len(j["segments"]) == 2
-

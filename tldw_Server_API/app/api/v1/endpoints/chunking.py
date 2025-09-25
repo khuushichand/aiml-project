@@ -45,7 +45,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse,
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
 from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
 # Dependencies for user-specific database access
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
@@ -72,7 +72,7 @@ chunking_router = APIRouter()
 async def process_text_for_chunking_json(
     request_data: ChunkingTextRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user)
+    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user)
 ):
     """
     Accepts text content and chunking options in a JSON body.
@@ -102,6 +102,9 @@ async def process_text_for_chunking_json(
         try:
             # Use the injected user-specific database instance
             # Get template from database
+            if not media_db:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Chunking template requested but user database is unavailable.")
             template_data = media_db.get_chunking_template(name=request_data.options.template_name)
             if template_data:
                 logger.info(f"Using chunking template: {request_data.options.template_name}")

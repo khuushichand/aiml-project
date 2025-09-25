@@ -1,5 +1,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
+import sys, types
+
+# Stub heavy modules before importing the full app
+sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
+sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 @pytest.mark.asyncio
@@ -68,4 +73,3 @@ async def test_pmc_oai_get_record_success(monkeypatch):
         assert r.status_code == 200
         data = r.json()
         assert data["header"]["identifier"].endswith(":456")
-

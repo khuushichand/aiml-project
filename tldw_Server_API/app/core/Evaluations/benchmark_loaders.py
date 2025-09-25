@@ -26,7 +26,7 @@ class DatasetLoader:
     def load_json(source: str) -> List[Dict[str, Any]]:
         """Load JSON dataset from file or URL."""
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source)
+            response = requests.get(source, timeout=15)
             response.raise_for_status()
             data = response.json()
         else:
@@ -52,7 +52,7 @@ class DatasetLoader:
         data = []
         
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source, stream=True)
+            response = requests.get(source, stream=True, timeout=30)
             response.raise_for_status()
             for line in response.iter_lines():
                 if line:
@@ -71,7 +71,7 @@ class DatasetLoader:
         data = []
         
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source)
+            response = requests.get(source, timeout=15)
             response.raise_for_status()
             lines = response.text.strip().split('\n')
             reader = csv.DictReader(lines, delimiter=delimiter)
@@ -123,7 +123,7 @@ class DatasetLoader:
             chunk = []
             
             if source.startswith(('http://', 'https://')):
-                response = requests.get(source, stream=True)
+                response = requests.get(source, stream=True, timeout=60)
                 response.raise_for_status()
                 
                 for line in response.iter_lines():
