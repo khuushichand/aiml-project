@@ -47,6 +47,65 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 # Your API key will be shown in console (single-user mode)
 ```
 
+## Modules & Status
+
+- Legend: Stable = production‑ready; WIP = actively evolving; Planned = not yet implemented
+
+### Core Platform
+- AuthNZ: Stable — Single‑user API key and multi‑user JWT (`app/core/AuthNZ/`); endpoints in `/api/v1/auth/*`.
+- Security & Rate Limiting: Stable — CORS, headers, request limiters (`app/core/Security/`, `app/core/RateLimiting/`).
+- DB Management: Stable — SQLite defaults, FTS5, versioning, sync log (`app/core/DB_Management/`).
+- Web UI: Stable — Integrated UI at `/webui` (`tldw_Server_API/WebUI/`).
+
+### Media & Ingestion
+- Ingestion Pipeline: Stable — Video/Audio/PDF/EPUB/DOCX/HTML/Markdown/XML, yt‑dlp, metadata (`app/core/Ingestion_Media_Processing/`).
+- Chunking: Stable — Enhanced structure‑aware chunker + parent/sibling context (`app/core/Chunking/`).
+- Media Management: Stable — Utilities and helpers for media organization (`app/core/Media_Management/`).
+
+### Retrieval & Knowledge
+- Embeddings: Stable — ChromaDB integration, batching, cache (`app/core/Embeddings/`, `POST /api/v1/embeddings`).
+- RAG Service: Stable — Hybrid FTS5 + vector + re‑ranking, contextual expansion (`app/core/RAG/`, `POST /api/v1/rag/search`).
+- Re‑ranking: Stable — FlashRank/cross‑encoder/Hybrid options within RAG.
+- Notes/Knowledge: Stable — Notes DB, tagging, soft delete (`app/core/Notes/`, Chatbooks import/export).
+
+### Chat & LLM
+- Chat API: Stable — OpenAI‑compatible chat, history, dictionaries (`/api/v1/chat/completions`, `app/core/Chat/`).
+- Chat Dictionaries: Stable — CRUD + processing endpoints (`/api/v1/chat/*dictionaries*`).
+- Character Chat: Stable — Character cards and sessions (`app/core/Character_Chat/`).
+- Providers: Stable — 16+ providers + local backends; listing/health (`/api/v1/llm/*`, `app/core/LLM_Calls/`, `app/core/Local_LLM/`).
+
+### Audio
+- Speech‑to‑Text: Stable — faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`).
+- File Transcription: Stable — OpenAI‑compatible file API (`/api/v1/audio/transcriptions`).
+- Text‑to‑Speech: Stable — OpenAI‑compatible TTS + local Kokoro ONNX (`/api/v1/audio/speech`, `app/core/TTS/`).
+
+### Evaluations
+- Unified Evaluations: Stable — Geval/RAG/batch/metrics (`/api/v1/evaluations/*`, `app/core/Evaluations/`).
+- Prompt Studio (Experimental): WIP — Projects, Prompts, Test Cases, Evaluations, Optimizations (`/api/v1/prompt-studio/*`, `app/core/Prompt_Management/`).
+- Prompt Studio Jobs: WIP — Lightweight background execution + polling.
+
+### Research & Web
+- Web Scraping: Stable — Scrapers/utilities (`app/core/Web_Scraping/`).
+- Paper Search: Stable — arXiv and related endpoints (`/api/v1/paper-search/*`).
+- Web Search Aggregator: WIP — Multi‑provider search + aggregation (`app/core/Search_and_Research/`, `/api/v1/research/websearch`).
+- Browser Extension: Planned — Direct web capture into pipeline.
+
+### Tooling & Integration
+- MCP Unified: Stable — Production‑grade MCP server + endpoints/WS (`app/core/MCP_unified/`).
+- Metrics/Observability: Stable — Prometheus/OTel metrics & logging (`app/core/Metrics/`, Loguru throughout).
+- Scheduler/Services: Stable — Background services & job helpers (`app/core/Scheduler/`, `app/services/`).
+- Sync & Workflows: Stable — Sync logging and higher‑level flows (`app/core/Sync/`, `app/core/Workflows/`).
+- Utilities & Third‑Party: Stable — Helpers and vendor shims (`app/core/Utils/`, `app/core/Third_Party/`).
+- Flashcards: WIP — Early features for study workflows (`app/core/Flashcards/`).
+- Writing Tools: Planned — Expanded drafting/editing utilities (`app/core/Writing/`).
+
+### Deployment & Ops
+- Config & Env: Stable — `.env`, `config.txt`, examples (`tldw_Server_API/Config_Files/`).
+- Containers: Stable — Dockerfiles, compose, samples (`tldw_Server_API/Dockerfiles/`, `docker-compose.yml`).
+- Samples & Docs: Stable — Reverse proxy, Prometheus, Grafana (`Samples/*`, `Docs/*`).
+
+Note: If a module has both stable and experimental parts, the most frequently used paths are stable; experimental pieces are called out as WIP above. This table aims to cover all major directories under `app/core` and key API surfaces.
+
 ### RAG Quickstart
 
 - Unified RAG search (all options shown):

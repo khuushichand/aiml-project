@@ -66,11 +66,15 @@ async def create_prompt_simple(
     user_context: Dict = Depends(get_prompt_studio_user)
 ) -> Dict[str, Any]:
     resp = await create_prompt(prompt_data, db, security_config, user_context)  # type: ignore[arg-type]
-    # Unwrap StandardResponse
-    if isinstance(resp, dict) and resp.get("data"):
-        data = resp["data"]
-        return data if isinstance(data, dict) else data.model_dump()  # type: ignore[attr-defined]
-    return resp
+    # Unwrap StandardResponse regardless of Pydantic/dict
+    if hasattr(resp, "model_dump"):
+        obj = resp.model_dump()
+    else:
+        obj = resp if isinstance(resp, dict) else {}
+    data = obj.get("data", obj)
+    if hasattr(data, "model_dump"):
+        return data.model_dump()
+    return data
 
 @router.post(
     "/create",

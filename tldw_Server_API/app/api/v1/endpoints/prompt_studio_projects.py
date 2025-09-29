@@ -59,6 +59,29 @@ router = APIRouter(
 ########################################################################################################################
 # Project CRUD Endpoints
 
+# Compatibility: simple POST on base path returns project object directly
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_project_simple(
+    project_data: ProjectCreate,
+    user_context: Dict = Depends(get_prompt_studio_user),
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+) -> Dict[str, Any]:
+    """
+    Compatibility helper to support POST without trailing slash returning a plain project object.
+    Mirrors the pattern used by test-cases simple create.
+    """
+    # Delegate to the primary creation endpoint to keep behavior consistent
+    resp = await create_project(project_data, user_context, db)  # type: ignore[arg-type]
+    # Unwrap StandardResponse regardless of Pydantic/dict
+    if hasattr(resp, "model_dump"):
+        obj = resp.model_dump()
+    else:
+        obj = resp if isinstance(resp, dict) else {}
+    data = obj.get("data", obj)
+    if hasattr(data, "model_dump"):
+        return data.model_dump()
+    return data
+
 @router.post(
     "/",
     response_model=StandardResponse,
@@ -242,6 +265,27 @@ async def list_projects(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list projects"
         )
+
+# Compatibility: GET on base path without trailing slash
+@router.get("", response_model=None)
+async def list_projects_simple(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    include_deleted: bool = Query(False, description="Include deleted projects"),
+    search: Optional[str] = Query(None, description="Search in name and description"),
+    user_context: Dict = Depends(get_prompt_studio_user),
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+) -> ListResponse:
+    return await list_projects(
+        page=page,
+        per_page=per_page,
+        status=status,
+        include_deleted=include_deleted,
+        search=search,
+        user_context=user_context,
+        db=db,
+    )
 
 @router.get("/get/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Project details", "content": {"application/json": {"examples": {"get": {"summary": "Project", "value": {"success": True, "data": {"id": 1, "name": "Demo Project"}}}}}}}}

@@ -3,6 +3,7 @@ Integration tests for Prompt Studio projects and prompts basic flows.
 No internal mocks; uses dependency overrides already configured by app.
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,9 +15,16 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user():
+def client_with_user(tmp_path, monkeypatch):
+    # Isolate Prompt Studio DB per test to avoid cross-run state and locks
+    from tldw_Server_API.app.core import config as cfg
+    monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
+    # Hint endpoints to use deterministic test-mode behavior where applicable
+    monkeypatch.setenv('TEST_MODE', 'true')
+
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+
     app.dependency_overrides[get_request_user] = override_user
     with TestClient(app) as client:
         yield client

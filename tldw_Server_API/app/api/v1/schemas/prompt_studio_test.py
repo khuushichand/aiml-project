@@ -61,8 +61,10 @@ class TestCaseImportRequest(BaseModel):
     auto_generate_names: bool = Field(default=True, description="Auto-generate names if missing")
 
 class TestCaseExportRequest(BaseModel):
-    """Test case export request"""
-    project_id: int
+    """Test case export request
+    Note: project_id is optional when provided via path param.
+    """
+    project_id: Optional[int] = None
     format: str = Field(default="json", pattern="^(csv|json)$", description="Export format")
     include_golden_only: bool = Field(default=False, description="Export only golden test cases")
     tag_filter: Optional[List[str]] = Field(None, description="Filter by tags")
