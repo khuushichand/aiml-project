@@ -19,9 +19,9 @@ https://github.com/st3v3nmw/sourcerer-mcp
 
 https://github.com/pi22by7/In-Memoria
 https://github.com/kruskal-labs/toolfront
+https://vercel.com/blog/the-second-wave-of-mcp-building-for-llms-not-developers
 
-
-
+https://thealliance.ai/blog/building-a-deep-research-agent-using-mcp-agent
 
 
 

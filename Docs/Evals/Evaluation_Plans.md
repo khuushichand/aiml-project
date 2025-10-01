@@ -39,7 +39,9 @@ https://github.com/princeton-pli/hal-harness
 https://huggingface.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0
 https://www.kaggle.com/benchmarks/deepmind/simpleqa-verified
 https://softwaredoug.com/blog/2025/06/22/grug-brained-search-eval
-
+https://tongyi-agent.github.io/blog/introducing-tongyi-deep-research/
+https://arxiv.org/abs/2509.13313
+https://arxiv.org/html/2505.24575v1
 https://github.com/OpenGVLab/GenExam
 
 
@@ -399,7 +401,10 @@ Links:
 - **Confabulation-Rate**
     - https://arxiv.org/abs/2409.11353
     - https://github.com/sylinrl/TruthfulQA
-- **Context**
+  - **Context**
+      - https://huggingface.co/datasets/openai/mrcr
+      - https://arxiv.org/abs/2406.16264
+      - https://arxiv.org/abs/2309.16575
     - RULER
     - InfiniteBench
         - https://arxiv.org/abs/2402.13718
