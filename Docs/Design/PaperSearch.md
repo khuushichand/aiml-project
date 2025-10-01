@@ -39,6 +39,51 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
   - Response: `{ query_echo, items: PubMedPaper[], total_results, page, results_per_page, total_pages }`
   - Notes: Uses E-utilities (ESearch + ESummary); abstracts are not included for performance. PMC links and PDF URLs are provided when available.
 
+### PMC Harvesting
+
+- GET `/api/v1/paper-search/pmc-oai/identify`
+  - Response: `{ info }` – OAI-PMH Identify details
+
+- GET `/api/v1/paper-search/pmc-oai/list-sets`
+  - Params: `resumptionToken`
+  - Response: `{ query_echo, items: { setSpec, setName }[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/list-identifiers`
+  - Params: `metadataPrefix` (default `oai_dc`), `from`, `until`, `set`, `resumptionToken`
+  - Response: `{ query_echo, items: PMCOAIHeader[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/list-records`
+  - Params: `metadataPrefix` (default `oai_dc`), `from`, `until`, `set`, `resumptionToken`
+  - Response: `{ query_echo, items: PMCOAIRecord[], resumption_token }`
+
+- GET `/api/v1/paper-search/pmc-oai/get-record`
+  - Params: `identifier`, `metadataPrefix` (default `oai_dc`)
+  - Response: `PMCOAIRecord`
+
+### PMC OA Web Service
+
+- GET `/api/v1/paper-search/pmc-oa/identify`
+  - Response: `{ info }` – OA repository info and latest update
+
+- GET `/api/v1/paper-search/pmc-oa/query`
+  - Params: `from`, `until`, `format` (`pdf|tgz`), `resumptionToken`, `id`, `pdf_only` (bool), `license_contains` (str)
+  - Response: `{ query_echo, items: PMCOARecord[], resumption_token }`
+  - Notes: `pdf_only` returns only records with a PDF link; `license_contains` performs a case-insensitive substring filter over the `license` field.
+
+- GET `/api/v1/paper-search/pmc-oa/fetch-pdf`
+  - Params: `pmcid` (e.g., `PMC1234567`)
+  - Response: PDF bytes (attachment); useful for integration with `/api/v1/media/process-pdfs`
+
+- POST `/api/v1/paper-search/pmc-oa/ingest-pdf`
+  - Params: `pmcid` (required), optional `title`, `author`, `keywords` (comma-separated), `perform_chunking` (bool), `parser` (default `pymupdf4llm`)
+  - Behavior: Downloads the PMC PDF, runs the standard PDF processing pipeline, and persists content to the user's Media DB via `add_media_with_keywords`.
+  - Response: `{ pmcid, filename, status, result, db_id, media_uuid, db_message }`
+  - Advanced processing options:
+    - OCR: `enable_ocr` (bool), `ocr_backend` (e.g., `tesseract`), `ocr_lang` (e.g., `eng`), `ocr_dpi`, `ocr_mode`, `ocr_min_page_text_chars`
+    - Chunking: `chunk_method` (e.g., `sentences`, `semantic`), `chunk_size`, `chunk_overlap`
+    - Analysis: `perform_analysis` (bool), `summarize_recursively` (bool), `api_name`, `custom_prompt`, `system_prompt`
+    - Metadata: `enrich_metadata` (bool; defaults true) — fetches `oai_dc` from PMC OAI-PMH to enrich `title/author/ids/license`, embeds the JSON in analysis content, and stores a safe JSON payload in `DocumentVersions.safe_metadata`
+
 ## Provider Adapters
 
 - `core/Third_Party/Arxiv.py` (existing)

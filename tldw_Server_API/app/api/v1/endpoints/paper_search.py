@@ -26,11 +26,27 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     PubMedSearchRequestForm,
     PubMedSearchResponse,
     PubMedPaper,
+    PMCOAIListResponse,
+    PMCOAIIdentifiersResponse,
+    PMCOAIListSetsResponse,
+    PMCOAIIdentifyResponse,
+    PMCOAQueryResponse,
+    PMCOAIdentifyResponse,
+    PMCOAIRecord,
+    PMCOAIHeader,
+    PMCOARecord,
 )
 from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
 from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
 from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
 from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
+from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
+from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 router = APIRouter()
@@ -151,6 +167,796 @@ async def paper_search_biorxiv(
         results_per_page=search_params.results_per_page,
     total_pages=total_pages,
     )
+
+
+# -------------------- PMC OAI-PMH Endpoints --------------------
+
+@router.get(
+    "/pmc-oai/identify",
+    response_model=PMCOAIIdentifyResponse,
+    summary="PMC OAI-PMH Identify",
+    tags=["paper-search"],
+)
+async def pmc_oai_identify():
+    loop = asyncio.get_running_loop()
+    try:
+        info, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_identify)
+        if error_message:
+            logger.error(f"PMC OAI Identify error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if info is None:
+            raise HTTPException(status_code=500, detail="PMC OAI Identify returned no data.")
+        return PMCOAIIdentifyResponse(info=info)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI Identify error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-sets",
+    response_model=PMCOAIListSetsResponse,
+    summary="PMC OAI-PMH ListSets",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_list_sets, resumptionToken)
+        if error_message:
+            logger.error(f"PMC OAI ListSets error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIListSetsResponse(query_echo={"resumptionToken": resumptionToken}, items=[
+            {
+                "setSpec": it.get("setSpec"),
+                "setName": it.get("setName"),
+            } for it in items
+        ], resumption_token=next_token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListSets error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-identifiers",
+    response_model=PMCOAIIdentifiersResponse,
+    summary="PMC OAI-PMH ListIdentifiers",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_identifiers(
+    metadataPrefix: str = Query("oai_dc"),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    set_name: Optional[str] = Query(None, alias="set"),
+    resumptionToken: Optional[str] = Query(None),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(
+            None, PMC_OAI.pmc_oai_list_identifiers, metadataPrefix, from_date, until_date, set_name, resumptionToken
+        )
+        if error_message:
+            logger.error(f"PMC OAI ListIdentifiers error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIIdentifiersResponse(
+            query_echo={"metadataPrefix": metadataPrefix, "from": from_date, "until": until_date, "set": set_name, "resumptionToken": resumptionToken},
+            items=[PMCOAIHeader(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListIdentifiers error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/list-records",
+    response_model=PMCOAIListResponse,
+    summary="PMC OAI-PMH ListRecords",
+    tags=["paper-search"],
+)
+async def pmc_oai_list_records(
+    metadataPrefix: str = Query("oai_dc"),
+    from_date: Optional[str] = Query(None, alias="from"),
+    until_date: Optional[str] = Query(None, alias="until"),
+    set_name: Optional[str] = Query(None, alias="set"),
+    resumptionToken: Optional[str] = Query(None),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(
+            None, PMC_OAI.pmc_oai_list_records, metadataPrefix, from_date, until_date, set_name, resumptionToken
+        )
+        if error_message:
+            logger.error(f"PMC OAI ListRecords error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        return PMCOAIListResponse(
+            query_echo={"metadataPrefix": metadataPrefix, "from": from_date, "until": until_date, "set": set_name, "resumptionToken": resumptionToken},
+            items=[PMCOAIRecord(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI ListRecords error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oai/get-record",
+    response_model=PMCOAIRecord,
+    summary="PMC OAI-PMH GetRecord",
+    tags=["paper-search"],
+)
+async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str = Query("oai_dc")):
+    loop = asyncio.get_running_loop()
+    try:
+        item, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, identifier, metadataPrefix)
+        if error_message:
+            logger.error(f"PMC OAI GetRecord error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not item:
+            raise HTTPException(status_code=404, detail="Record not found")
+        return PMCOAIRecord(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OAI GetRecord error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------- PMC OA Web Service Endpoints --------------------
+
+@router.get(
+    "/pmc-oa/identify",
+    response_model=PMCOAIdentifyResponse,
+    summary="PMC OA Web Service identification",
+    tags=["paper-search"],
+)
+async def pmc_oa_identify():
+    loop = asyncio.get_running_loop()
+    try:
+        info, error_message = await loop.run_in_executor(None, PMC_OA.pmc_oa_identify)
+        if error_message:
+            logger.error(f"PMC OA Identify error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if info is None:
+            raise HTTPException(status_code=500, detail="PMC OA Identify returned no data.")
+        return PMCOAIdentifyResponse(info=info)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA Identify error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/pmc-oa/query",
+    response_model=PMCOAQueryResponse,
+    summary="PMC OA Web Service query with resumption",
+    tags=["paper-search"],
+)
+async def pmc_oa_query(
+    from_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    until_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    format: Optional[str] = Query(None, description="'pdf' or 'tgz'"),
+    resumptionToken: Optional[str] = Query(None),
+    id: Optional[str] = Query(None, description="PMC ID like PMC5334499"),
+    pdf_only: bool = Query(False, description="Filter results to those with PDF links"),
+    license_contains: Optional[str] = Query(None, description="Case-insensitive substring match on license"),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        items, next_token, error_message = await loop.run_in_executor(None, PMC_OA.pmc_oa_query, from_date, until_date, format, resumptionToken, id)
+        if error_message:
+            logger.error(f"PMC OA query error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if items is None:
+            items = []
+        # Server-side filters
+        if pdf_only:
+            def has_pdf(it: dict) -> bool:
+                for lk in it.get("links", []) or []:
+                    if (lk.get("format") or "").lower() == "pdf" or (lk.get("href") or "").lower().endswith(".pdf"):
+                        return True
+                return False
+            items = [it for it in items if has_pdf(it)]
+        if license_contains and isinstance(license_contains, str):
+            lc = license_contains.lower()
+            items = [it for it in items if (it.get("license") or "").lower().find(lc) >= 0]
+        return PMCOAQueryResponse(
+            query_echo={"from": from_date, "until": until_date, "format": format, "resumptionToken": resumptionToken, "id": id, "pdf_only": pdf_only, "license_contains": license_contains},
+            items=[PMCOARecord(**it) for it in items],
+            resumption_token=next_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA query error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+from fastapi.responses import StreamingResponse
+import io
+
+@router.get(
+    "/pmc-oa/fetch-pdf",
+    summary="Fetch PMC PDF by PMCID and return as attachment",
+    tags=["paper-search"],
+)
+async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or with 'PMC' prefix")):
+    loop = asyncio.get_running_loop()
+    try:
+        content, filename, error_message = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
+        if error_message:
+            logger.error(f"PMC OA fetch-pdf error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            if "http error" in error_message.lower():
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not content:
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+        stream = io.BytesIO(content)
+        resp = StreamingResponse(stream, media_type="application/pdf")
+        resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename or 'article.pdf'}\""
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA fetch-pdf error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/pmc-oa/ingest-pdf",
+    summary="Download PMC PDF by PMCID, process, and persist to DB",
+    tags=["paper-search"],
+)
+async def pmc_oa_ingest_pdf(
+    pmcid: str = Query(..., description="PMCID numeric or with 'PMC' prefix"),
+    title: Optional[str] = Query(None, description="Optional title override"),
+    author: Optional[str] = Query(None, description="Optional author override"),
+    keywords: Optional[str] = Query(None, description="Optional comma-separated keywords"),
+    perform_chunking: bool = Query(True, description="Enable chunking during processing"),
+    parser: Optional[str] = Query("pymupdf4llm", description="PDF parsing backend"),
+    # Analysis
+    api_name: Optional[str] = Query(None, description="LLM API name for analysis"),
+    custom_prompt: Optional[str] = Query(None, description="Custom prompt for analysis"),
+    system_prompt: Optional[str] = Query(None, description="System prompt for analysis"),
+    enable_ocr: bool = Query(False, description="Enable OCR for scanned PDFs"),
+    ocr_backend: Optional[str] = Query(None, description="OCR backend (e.g., 'tesseract', 'auto')"),
+    ocr_lang: Optional[str] = Query("eng", description="OCR language code"),
+    ocr_dpi: int = Query(300, ge=72, le=600, description="OCR render DPI"),
+    ocr_mode: Optional[str] = Query("fallback", description="OCR mode: 'always' or 'fallback'"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000, description="Min text chars/page to skip OCR"),
+    chunk_method: Optional[str] = Query(None, description="Chunking method (e.g., 'sentences', 'semantic')"),
+    chunk_size: int = Query(500, ge=50, le=4000, description="Target chunk size"),
+    chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
+    perform_analysis: bool = Query(True, description="Run analysis/summarization"),
+    summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
+    enrich_metadata: bool = Query(True, description="Enrich with PMC OAI-PMH oai_dc metadata"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Convenience endpoint: fetch PMC PDF and ingest into user's Media DB."""
+    loop = asyncio.get_running_loop()
+    try:
+        # 1) Download PDF
+        content, filename, error_message = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
+        if error_message:
+            logger.error(f"PMC OA download error: {error_message}")
+            if "timed out" in error_message.lower():
+                raise HTTPException(status_code=504, detail=error_message)
+            if "http error" in error_message.lower():
+                nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
+                code = nums[0] if nums else 502
+                raise HTTPException(status_code=code, detail=error_message)
+            raise HTTPException(status_code=502, detail=error_message)
+        if not content:
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+
+        # 2) Process PDF bytes
+        # Import locally to ease testing/monkeypatching
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+
+        kw_list = None
+        if keywords and isinstance(keywords, str):
+            kw_list = [k.strip() for k in keywords.split(',') if k.strip()]
+
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=filename or f"{pmcid}.pdf",
+            parser=parser or "pymupdf4llm",
+            title_override=title,
+            author_override=author,
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            summarize_recursively=summarize_recursively,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+
+        # 3) Optional OAI-PMH metadata enrichment (oai_dc)
+        enriched_oai = None
+        if enrich_metadata:
+            try:
+                pmcid_num = str(pmcid).strip().lstrip("PMC")
+                oai_id = f"oai:pubmedcentral.nih.gov:{pmcid_num}"
+                oai_item, oai_err = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, oai_id, "oai_dc")
+                if not oai_err and oai_item and isinstance(oai_item.get("metadata"), dict):
+                    enriched_oai = oai_item["metadata"]
+            except Exception as _oai_ex:
+                logger.warning(f"OAI-PMH enrichment failed: {_oai_ex}")
+
+        # 4) Persist to DB
+        content_for_db = result.get('transcript') or result.get('content')
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        metadata_for_db = result.get('metadata') or {}
+
+        # Merge in OAI metadata for title/author/ids if available
+        if enriched_oai:
+            if enriched_oai.get("title") and not title:
+                metadata_for_db["title"] = enriched_oai.get("title")
+            creators = enriched_oai.get("creators") or []
+            if creators and not author:
+                metadata_for_db["author"] = "; ".join(creators)
+            for key in ("pmcid", "pmid", "doi", "date", "license_urls", "rights"):
+                if enriched_oai.get(key) is not None:
+                    metadata_for_db[key] = enriched_oai.get(key)
+            try:
+                import json
+                enrich_txt = json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False, indent=2)
+                analysis_for_db = (analysis_for_db + "\n\nOAI Metadata:\n" + enrich_txt) if analysis_for_db else ("OAI Metadata:\n" + enrich_txt)
+            except Exception:
+                pass
+        extracted_keywords = metadata_for_db.get('keywords') or result.get('keywords') or []
+        combined_keywords = set(kw_list or [])
+        if isinstance(extracted_keywords, list):
+            combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and isinstance(k, str))
+        final_keywords = sorted(list(combined_keywords))
+
+        db_id = None
+        media_uuid = None
+        db_msg = "Skipped (no content)"
+        if content_for_db:
+            try:
+                safe_metadata_json = None
+                if enriched_oai:
+                    try:
+                        import json as _json
+                        safe_metadata_json = _json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False)
+                    except Exception:
+                        safe_metadata_json = None
+                db_id, media_uuid, db_msg = await loop.run_in_executor(
+                    None,
+                    lambda: db.add_media_with_keywords(
+                        url=f"pmcid:{pmcid}",
+                        title=metadata_for_db.get('title') or title or (filename or pmcid),
+                        media_type="pdf",
+                        content=content_for_db,
+                        keywords=final_keywords,
+                        prompt=None,
+                        analysis_content=analysis_for_db,
+                        transcription_model=metadata_for_db.get('parser_used') or 'Imported',
+                        author=metadata_for_db.get('author') or author,
+                        safe_metadata=safe_metadata_json,
+                        overwrite=False,
+                        chunk_options={
+                            "method": chunk_method if chunk_method else "sentences",
+                            "max_size": chunk_size,
+                            "overlap": chunk_overlap,
+                        } if perform_chunking else None,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"DB persistence failed for PMCID {pmcid}: {e}", exc_info=True)
+                db_msg = f"DB error: {e}"
+
+        return {
+            "pmcid": pmcid,
+            "filename": filename,
+            "status": result.get("status", "Unknown"),
+            "result": result,
+            "db_id": db_id,
+            "media_uuid": media_uuid,
+            "db_message": db_msg,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected PMC OA ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _http_session():
+    retry_strategy = Retry(total=3, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=1)
+    s = requests.Session()
+    s.headers.update({"Accept-Encoding": "gzip, deflate"})
+    s.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+    s.mount("http://", HTTPAdapter(max_retries=retry_strategy))
+    return s
+
+
+@router.post(
+    "/arxiv/ingest",
+    summary="Download arXiv PDF by arXiv ID, process, and persist",
+    tags=["paper-search"],
+)
+async def arxiv_ingest(
+    arxiv_id: str = Query(..., description="arXiv ID, e.g., 1706.03762"),
+    keywords: Optional[str] = Query(None, description="Comma-separated keywords"),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        """Download an arXiv PDF, process it, and persist to the Media DB.
+
+        Example:
+          POST /api/v1/paper-search/arxiv/ingest?arxiv_id=1706.03762&perform_analysis=true
+        """
+        # Metadata & PDF URL
+        xml_text = Arxiv.fetch_arxiv_xml(arxiv_id) or ""
+        meta = {}
+        if xml_text:
+            try:
+                parsed = Arxiv.parse_arxiv_feed(xml_text.encode("utf-8"))
+                if parsed:
+                    meta = parsed[0]
+            except Exception:
+                meta = {}
+        pdf_url = Arxiv.fetch_arxiv_pdf_url(arxiv_id)
+        if not pdf_url:
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        content = r.content
+
+        # Process PDF
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"{arxiv_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+
+        # Persist with safe_metadata
+        content_for_db = result.get('transcript') or result.get('content')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "arxiv_id": arxiv_id,
+            "title": meta.get('title'),
+            "authors": meta.get('authors'),
+            "date": meta.get('published_date'),
+            "pdf_url": meta.get('pdf_url') or pdf_url,
+            "source": "arxiv",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = meta.get('title') or arxiv_id
+        author_for_db = meta.get('authors')
+
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"arxiv:{arxiv_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+    except Exception as e:
+        logger.error(f"arXiv ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="arXiv ingest failed")
+
+
+@router.post(
+    "/pubmed/ingest",
+    summary="Download PubMed-linked PMC PDF by PMID, process, and persist",
+    tags=["paper-search"],
+)
+async def pubmed_ingest(
+    pmid: str = Query(..., description="PubMed PMID"),
+    keywords: Optional[str] = Query(None),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        """Download an OA PMC PDF linked to a PubMed PMID, process it, and persist.
+
+        Example:
+          POST /api/v1/paper-search/pubmed/ingest?pmid=12345678&perform_analysis=true
+        """
+        meta, err = PubMed.get_pubmed_by_id(pmid)
+        if err:
+            raise HTTPException(status_code=502, detail=err)
+        if not meta:
+            raise HTTPException(status_code=404, detail="PMID not found")
+        pmcid = meta.get('pmcid')
+        if not pmcid:
+            raise HTTPException(status_code=400, detail="No PMC Open Access PMCID available for this PMID")
+        content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
+        if d_err or not content:
+            raise HTTPException(status_code=502, detail=d_err or "Failed to download PMC PDF")
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=filename or f"PMC{pmcid}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "pmid": pmid,
+            "pmcid": pmcid,
+            "doi": (meta.get('externalIds') or {}).get('DOI') if isinstance(meta.get('externalIds'), dict) else meta.get('doi'),
+            "title": meta.get('title'),
+            "authors": ', '.join(a.get('name') for a in (meta.get('authors') or []) if a.get('name')) if isinstance(meta.get('authors'), list) else meta.get('authors'),
+            "journal": meta.get('journal'),
+            "venue": meta.get('journal'),
+            "date": meta.get('pub_date'),
+            "pmc_url": meta.get('pmc_url'),
+            "pdf_url": meta.get('pdf_url'),
+            "source": "pubmed",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = meta.get('title') or f"PMID {pmid}"
+        author_for_db = sm.get('authors')
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"pmid:{pmid}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PubMed ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="PubMed ingest failed")
+
+
+@router.post(
+    "/semantic-scholar/ingest",
+    summary="Download Semantic Scholar open-access PDF by paperId, process, and persist",
+    tags=["paper-search"],
+)
+async def s2_ingest(
+    paper_id: str = Query(..., description="Semantic Scholar paperId"),
+    keywords: Optional[str] = Query(None),
+    perform_chunking: bool = Query(True),
+    parser: Optional[str] = Query("pymupdf4llm"),
+    chunk_method: Optional[str] = Query(None),
+    chunk_size: int = Query(500, ge=50, le=4000),
+    chunk_overlap: int = Query(200, ge=0, le=1000),
+    perform_analysis: bool = Query(True),
+    custom_prompt: Optional[str] = Query(None),
+    system_prompt: Optional[str] = Query(None),
+    api_name: Optional[str] = Query(None),
+    enable_ocr: bool = Query(False),
+    ocr_backend: Optional[str] = Query(None),
+    ocr_lang: Optional[str] = Query("eng"),
+    ocr_dpi: int = Query(300, ge=72, le=600),
+    ocr_mode: Optional[str] = Query("fallback"),
+    ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    loop = asyncio.get_running_loop()
+    try:
+        """Download an open-access PDF from Semantic Scholar, process it, and persist.
+
+        Example:
+          POST /api/v1/paper-search/semantic-scholar/ingest?paper_id=abcdef&perform_analysis=true
+        """
+        meta, err = Semantic_Scholar.get_paper_details_semantic_scholar(paper_id)
+        if err:
+            raise HTTPException(status_code=502, detail=err)
+        if not meta:
+            raise HTTPException(status_code=404, detail="paperId not found")
+        oap = meta.get('openAccessPdf') or {}
+        pdf_url = oap.get('url')
+        if not pdf_url:
+            raise HTTPException(status_code=400, detail="No open access PDF available for this paper")
+        sess = _http_session()
+        r = sess.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        content = r.content
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+        kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
+        result = await process_pdf_task(
+            file_bytes=content,
+            filename=f"{paper_id}.pdf",
+            parser=parser or "pymupdf4llm",
+            keywords=kw_list,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            max_chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            perform_analysis=perform_analysis,
+            api_name=api_name,
+            custom_prompt=custom_prompt,
+            system_prompt=system_prompt,
+            enable_ocr=enable_ocr or None,
+            ocr_backend=ocr_backend or None,
+            ocr_lang=ocr_lang or None,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+        )
+        content_for_db = result.get('transcript') or result.get('content')
+        if not content_for_db:
+            raise HTTPException(status_code=500, detail="Processing did not produce content")
+        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+        sm = normalize_safe_metadata({
+            "s2_paper_id": paper_id,
+            "title": meta.get('title'),
+            "authors": ', '.join(a.get('name') for a in (meta.get('authors') or []) if a.get('name')) if isinstance(meta.get('authors'), list) else None,
+            "venue": meta.get('venue'),
+            "date": meta.get('publicationDate') or meta.get('year'),
+            "doi": (meta.get('externalIds') or {}).get('DOI') if isinstance(meta.get('externalIds'), dict) else None,
+            "pdf_url": pdf_url,
+            "source": "semantic_scholar",
+        })
+        import json as _json
+        smj = _json.dumps({k: v for k, v in sm.items() if v}, ensure_ascii=False)
+        analysis_for_db = result.get('summary') or result.get('analysis')
+        title_for_db = meta.get('title') or f"S2 {paper_id}"
+        author_for_db = sm.get('authors')
+        media_id, media_uuid, msg = await loop.run_in_executor(
+            None,
+            lambda: db.add_media_with_keywords(
+                url=f"s2:{paper_id}",
+                title=title_for_db,
+                media_type="pdf",
+                content=content_for_db,
+                keywords=kw_list or [],
+                prompt=custom_prompt,
+                analysis_content=analysis_for_db,
+                safe_metadata=smj,
+                transcription_model='Imported',
+                author=author_for_db,
+                overwrite=False,
+                chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+            )
+        )
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Semantic Scholar ingest error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Semantic Scholar ingest failed")
 
 
 @router.get(

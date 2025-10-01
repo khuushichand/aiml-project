@@ -499,6 +499,85 @@ class TestAPIEndpoints:
         assert data["valid"] is False
         assert data["errors"] is not None
 
+    def test_validate_template_with_hierarchical_boundaries_valid(self, test_client, auth_headers):
+        """Validate accepts hierarchical_template with a small set of safe boundaries."""
+        payload = {
+            "chunking": {
+                "method": "sentences",
+                "config": {
+                    "max_size": 5,
+                    "hierarchical": True,
+                    "hierarchical_template": {
+                        "boundaries": [
+                            {"kind": "header_atx", "pattern": r"^\s*#{1,6}\s+.+$", "flags": "m"},
+                            {"kind": "abstract", "pattern": r"^\s*Abstract\b", "flags": "im"}
+                        ]
+                    }
+                }
+            }
+        }
+        resp = test_client.post("/api/v1/chunking/templates/validate", json=payload, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is True
+        assert body.get("errors") in (None, [])
+
+    def test_validate_template_with_hierarchical_boundaries_limits(self, test_client, auth_headers):
+        """Validation rejects too many boundaries and overlong patterns/flags."""
+        # >20 boundaries should trigger an error
+        many_boundaries = [{"kind": f"k{i}", "pattern": r"^X$", "flags": "m"} for i in range(25)]
+        payload_too_many = {
+            "chunking": {
+                "method": "sentences",
+                "config": {
+                    "hierarchical": True,
+                    "hierarchical_template": {"boundaries": many_boundaries}
+                }
+            }
+        }
+        resp = test_client.post("/api/v1/chunking/templates/validate", json=payload_too_many, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is False
+        assert any("boundaries" in (err.get("field") or "") for err in body.get("errors", []))
+
+        # Overlong pattern
+        long_pattern = "^" + ("a" * 1200) + "$"
+        payload_long_pattern = {
+            "chunking": {
+                "method": "sentences",
+                "config": {
+                    "hierarchical": True,
+                    "hierarchical_template": {
+                        "boundaries": [{"kind": "x", "pattern": long_pattern, "flags": "m"}]
+                    }
+                }
+            }
+        }
+        resp2 = test_client.post("/api/v1/chunking/templates/validate", json=payload_long_pattern, headers=auth_headers)
+        assert resp2.status_code == 200
+        body2 = resp2.json()
+        assert body2["valid"] is False
+        assert any("pattern" in (err.get("field") or "") for err in body2.get("errors", []))
+
+        # Overlong flags
+        payload_long_flags = {
+            "chunking": {
+                "method": "sentences",
+                "config": {
+                    "hierarchical": True,
+                    "hierarchical_template": {
+                        "boundaries": [{"kind": "x", "pattern": r"^.$", "flags": "i" * 50}]
+                    }
+                }
+            }
+        }
+        resp3 = test_client.post("/api/v1/chunking/templates/validate", json=payload_long_flags, headers=auth_headers)
+        assert resp3.status_code == 200
+        body3 = resp3.json()
+        assert body3["valid"] is False
+        assert any("flags" in (err.get("field") or "") for err in body3.get("errors", []))
+
 
 # Template Processing Tests
 class TestTemplateProcessing:

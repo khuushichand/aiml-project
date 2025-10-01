@@ -251,7 +251,21 @@ class TestMetadataProperties:
         # In the new API, simple methods return strings; verify sequential order by occurrence
         chunk_texts = _to_text_list(chunks)
         if len(chunk_texts) > 1:
-            positions = [text.find(ct.split()[0]) if ct.split() else -1 for ct in chunk_texts]
+            # Use forward scanning to avoid false negatives when first words repeat earlier in the text
+            positions = []
+            cursor = 0
+            for ct in chunk_texts:
+                tokens = ct.split()
+                first_word = tokens[0] if tokens else ""
+                if not first_word:
+                    positions.append(-1)
+                    continue
+                idx = text.find(first_word, cursor)
+                if idx == -1:
+                    idx = text.find(first_word)
+                positions.append(idx)
+                if idx >= 0:
+                    cursor = max(cursor, idx)
             assert positions == sorted(p for p in positions if p >= 0)
     
     @pytest.mark.property

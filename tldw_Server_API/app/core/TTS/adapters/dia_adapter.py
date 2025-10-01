@@ -489,7 +489,7 @@ class DiaAdapter(TTSAdapter):
         
         return full_text
     
-    def _decode_dia_output(self, tokens: torch.Tensor) -> np.ndarray:
+    def _decode_dia_output(self, tokens: Any) -> np.ndarray:
         """
         Decode Dia output tokens to audio waveform.
         This is a placeholder - actual Dia uses custom decoding.

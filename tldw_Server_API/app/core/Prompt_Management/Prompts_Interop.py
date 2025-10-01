@@ -339,10 +339,15 @@ class PromptsInteropService:
             # Only pass supported arguments expected by tests/mocks
             return int(db.create_prompt(name=name, content=content, author=author, keywords=keywords or []))
         # Fallback to PromptsDatabase API with de-duplication to avoid resurrecting deleted prompts
-        # Build used name set to prevent collisions
+        # Build used name set to prevent collisions, using raw DB names (including deleted) if available
         try:
-            existing = self.list_prompts() or []
-            used_names = {str(it.get('name')) for it in existing if isinstance(it.get('name'), str)}
+            used_names = set()
+            if hasattr(db, "fetch_all_prompt_names"):
+                existing_names = db.fetch_all_prompt_names(include_deleted=True) or []
+                used_names = {str(n) for n in existing_names if isinstance(n, str)}
+            else:
+                existing = self.list_prompts() or []
+                used_names = {str(it.get('name')) for it in existing if isinstance(it.get('name'), str)}
         except Exception:
             used_names = set()
 
@@ -664,8 +669,20 @@ class PromptsInteropService:
                         'keywords': list(p.get('keywords') or []),
                     })
         else:
-            if filter_criteria and hasattr(self._ensure_db(), "filter_prompts"):
-                items = self._ensure_db().filter_prompts(**filter_criteria) or []
+            # Merge explicit filter_criteria with supported kwargs (excluding prompt_ids)
+            merged_criteria: Dict[str, Any] = {}
+            if isinstance(filter_criteria, dict):
+                merged_criteria.update({k: v for k, v in filter_criteria.items() if v is not None})
+            # Treat remaining kwargs as filter criteria inputs (common fields like author, keywords, etc.)
+            if isinstance(kwargs, dict):
+                for k, v in kwargs.items():
+                    if k == "prompt_ids":
+                        continue
+                    if v is not None and k not in merged_criteria:
+                        merged_criteria[k] = v
+
+            if merged_criteria and hasattr(self._ensure_db(), "filter_prompts"):
+                items = self._ensure_db().filter_prompts(**merged_criteria) or []
             else:
                 items = self.list_prompts() or []
             for it in items:
@@ -692,16 +709,17 @@ class PromptsInteropService:
         if not isinstance(data, dict):
             raise TypeError("import data must be a dict")
         prompts = data.get("prompts") or []
-        # Build a set of existing names to avoid overwriting
+        # Build a set of existing names to avoid overwriting, using raw DB names (including deleted) if available
+        db = self._ensure_db()
         try:
-            existing_items = self.list_prompts() or []
+            if hasattr(db, "fetch_all_prompt_names"):
+                existing_names = db.fetch_all_prompt_names(include_deleted=True) or []
+                used_names = {str(n) for n in existing_names if isinstance(n, str)}
+            else:
+                existing_items = self.list_prompts() or []
+                used_names = {str(it.get('name')) for it in existing_items if isinstance(it.get('name'), str)}
         except Exception:
-            existing_items = []
-        used_names = set()
-        for it in existing_items:
-            name_val = it.get("name")
-            if isinstance(name_val, str):
-                used_names.add(name_val)
+            used_names = set()
 
         name_counts: Dict[str, int] = {}
         new_ids = []

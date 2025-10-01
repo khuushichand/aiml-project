@@ -48,8 +48,8 @@ class PromptStudioDatabase(PromptsDatabase):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Don't use WAL mode as it can cause corruption in some cases
-            cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for locked database
+            # Keep SQLite lock wait short to avoid long blocking during concurrent tests
+            cursor.execute("PRAGMA busy_timeout=1000")  # 1 second timeout for locked database
             conn.commit()
         except Exception as e:
             logger.debug(f"Could not set pragmas: {e}")

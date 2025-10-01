@@ -26,9 +26,16 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB_V2 import PromptsDB
 # Property Strategies
 # ========================================================================
 
-# Valid prompt name strategy
-prompt_name_strategy = st.text(min_size=1, max_size=200).filter(
-    lambda x: x.strip() and not x.startswith(' ') and not x.endswith(' ')
+# Alphabets to avoid heavy filtering
+ascii_printable = st.characters(min_codepoint=32, max_codepoint=126)
+ascii_nonspace = st.characters(min_codepoint=33, max_codepoint=126)  # excludes space
+
+# Valid prompt name strategy (no leading/trailing space, ASCII)
+prompt_name_strategy = st.builds(
+    lambda a, mid, b: a + mid + b,
+    a=st.text(alphabet=ascii_nonspace, min_size=1, max_size=1),
+    mid=st.text(alphabet=ascii_printable, min_size=0, max_size=198),
+    b=st.text(alphabet=ascii_nonspace, min_size=1, max_size=1),
 )
 
 # Valid prompt content strategy  
@@ -41,17 +48,19 @@ template_strategy = st.builds(
     vars=st.integers(min_value=0, max_value=5)
 )
 
-# Keywords strategy
+# Keywords strategy (ASCII printable, unique)
 keywords_strategy = st.lists(
-    st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
+    st.text(alphabet=ascii_printable, min_size=1, max_size=50),
     min_size=0,
     max_size=10,
-    unique=True
+    unique=True,
 )
 
-# Author name strategy
-author_strategy = st.text(min_size=1, max_size=100).filter(
-    lambda x: x.strip() and x.isascii()
+# Author name strategy (ASCII, no leading space)
+author_strategy = st.builds(
+    lambda h, t: h + t,
+    h=st.text(alphabet=ascii_nonspace, min_size=1, max_size=1),
+    t=st.text(alphabet=ascii_printable, min_size=0, max_size=99),
 )
 
 # ========================================================================

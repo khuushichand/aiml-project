@@ -25,7 +25,19 @@ from chromadb.api.types import QueryResult
 #
 # Local Imports:
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding  # Using V2 through compatibility layer
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding, create_embeddings_batch
+# Import embeddings creation lazily/safely to avoid hard dependency at import time
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embedding,
+        create_embeddings_batch,
+    )
+    _EMBEDDINGS_BACKEND_AVAILABLE = True
+except Exception:
+    _EMBEDDINGS_BACKEND_AVAILABLE = False
+    def create_embedding(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
+    def create_embeddings_batch(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
 from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
@@ -181,6 +193,10 @@ class ChromaDBManager:
 
         chroma_client_settings_config = self.user_embedding_config.get("chroma_client_settings", {})
 
+        # Initialize embedding configuration early so it's available even if we return early (stub client)
+        self.embedding_config = self.user_embedding_config.get("embedding_config", {})
+        self.default_embedding_model_id = self.embedding_config.get('default_model_id')
+
         def _is_test_mode() -> bool:
             try:
                 if os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
@@ -195,10 +211,9 @@ class ChromaDBManager:
 
         # Option: force use of internal in-memory stub (useful for CI/sandboxed tests)
         try:
-            if os.getenv("CHROMADB_FORCE_STUB", "").lower() in ("true", "1", "yes") or (
-                _is_test_mode() and os.getenv("CHROMADB_FORCE_STUB", "") == ""
-            ):
-                # If CHROMADB_FORCE_STUB not set explicitly, default to True in test mode
+            # Only enable stub when explicitly requested via environment variable.
+            # Do NOT auto-enable in test mode to allow tests to patch PersistentClient.
+            if os.getenv("CHROMADB_FORCE_STUB", "").lower() in ("true", "1", "yes"):
                 # Scope the stub client key by user and base dir to avoid cross-test leakage.
                 stub_key = f"{self.user_id}::{str(user_db_base_path)}"
                 cli = _TEST_STUB_CLIENTS.get(stub_key)
@@ -209,8 +224,19 @@ class ChromaDBManager:
                 logger.warning(
                     f"CHROMADB_FORCE_STUB enabled; using internal in-memory client for user '{self.user_id}'."
                 )
-                # Continue setup without touching PersistentClient
+                # Continue setup without touching PersistentClient, but ensure embedding config is set
                 chroma_client_settings_config = {}
+                if not self.default_embedding_model_id:
+                    logger.warning(
+                        f"User '{self.user_id}': No 'default_model_id' found in 'embedding_config'. "
+                        "Operations will require explicit 'embedding_model_id_override'."
+                    )
+                model_details = self.embedding_config.get("models", {}).get(self.default_embedding_model_id, {})
+                logger.info(
+                    f"User '{self.user_id}' ChromaDBManager configured. "
+                    f"Default Embedding Model ID: {self.default_embedding_model_id or 'Not Set (Override Required)'} "
+                    f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
+                )
                 return
         except Exception:
             pass
@@ -275,13 +301,7 @@ class ChromaDBManager:
                 raise RuntimeError(f"ChromaDB client initialization failed: {e}") from e
 
         # Default embedding model_id for this manager instance.
-        # This can be set by the user/application when creating the ChromaDBManager instance
-        # or fall back to a system default from user_embedding_config.
-        self.embedding_config = self.user_embedding_config.get("embedding_config", {})
-        # Point 3: Allow user to choose their default model for this manager instance.
-        # This can be passed in via user_embedding_config specifically for this user, or a more direct param.
-        # For now, let's assume it's derived from a general default if not specified for the user.
-        self.default_embedding_model_id = self.embedding_config.get('default_model_id')
+        # Already initialized above; keep values consistent for non-stub client path.
 
         if not self.default_embedding_model_id:
             logger.warning(  # Changed to warning, operations might still succeed if model_id is always overridden
@@ -468,13 +488,28 @@ class ChromaDBManager:
                 raise RuntimeError(f"Failed to access or create collection '{name_to_use}': {e}") from e
 
     # Point 4: Situate Context - generates a succinct header for each chunk using an LLM
-    def situate_context(self, provider: str, model_override: Optional[str], doc_content: str, chunk_content: str, temperature: Optional[float]) -> str:
+    def situate_context(self,
+                        provider: Optional[str] = None,
+                        model_override: Optional[str] = None,
+                        doc_content: str = "",
+                        chunk_content: str = "",
+                        temperature: Optional[float] = None,
+                        **kwargs) -> str:
         """Generate a succinct context header situating a chunk within its document.
 
         Constructs a single custom prompt that includes both the document slice (or full doc/outline)
         and the chunk content, followed by the situate instruction. Uses the configured provider and
         optional model override via the unified analyze() function.
         """
+        # Backward/alias compatibility: tests may pass api_name_for_context as the model name
+        try:
+            alias_model = kwargs.get("api_name_for_context")
+            if alias_model and not model_override:
+                model_override = alias_model
+        except Exception:
+            pass
+
+        provider = provider or "openai"
         # Load instruction from prompts with safe fallback
         situate_instr = load_prompt("embeddings", "Situate Context Prompt") or (
             "Please give a short succinct context to situate this chunk within the overall document\n"
@@ -1420,7 +1455,9 @@ class _InMemoryCollection:
         return None
 
     def get(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
-        include = include or []
+        # Mirror Chroma's default behavior: include documents and metadatas when include is not specified
+        if include is None:
+            include = ["documents", "metadatas"]
         keys = []
         if ids:
             keys = [k for k in ids if k in self._docs]
@@ -1452,7 +1489,9 @@ class _InMemoryCollection:
         return out
 
     def query(self, query_embeddings: List[List[float]], n_results: int = 10, where: Optional[Dict[str, Any]] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
-        include = include or []
+        # Mirror common defaults: when include is omitted, return documents, metadatas, and distances
+        if include is None:
+            include = ["documents", "metadatas", "distances"]
         q = query_embeddings[0] if query_embeddings else []
         def match(m: Dict[str, Any]) -> bool:
             if not where:

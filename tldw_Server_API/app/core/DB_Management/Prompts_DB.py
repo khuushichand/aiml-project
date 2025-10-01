@@ -319,11 +319,13 @@ class PromptsDatabase:
                     self.db_path_str,
                     detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                     check_same_thread=False,  # Required for threading.local
-                    timeout=30  # seconds
+                    timeout=1.0  # seconds; keep short to avoid long blocking on locks
                 )
                 conn.row_factory = sqlite3.Row
                 if not self.is_memory_db:
                     conn.execute("PRAGMA journal_mode=WAL;")
+                # Keep lock waits short so concurrent tests don't hang
+                conn.execute("PRAGMA busy_timeout=1000")  # 1000 ms
                 conn.execute("PRAGMA foreign_keys = ON;")
                 self._local.conn = conn
                 logging.debug(
@@ -1118,18 +1120,33 @@ class PromptsDatabase:
                 self._log_sync_event(conn, 'Prompts', prompt_uuid, 'delete', new_version, delete_payload)
                 self._delete_fts_prompt(conn, prompt_id)
 
-                # Optional: rename the deleted prompt to free the original name for future creates
+                # Rename the deleted prompt to free the original name for future creates
+                # Strategy: prepend 'Deleted-' to the original name. If that collides, append an incrementing
+                # counter in the style 'Deleted 2 - <name>', 'Deleted 3 - <name>', etc., until unique.
                 try:
                     cursor.execute("SELECT name FROM Prompts WHERE id = ?", (prompt_id,))
                     rown = cursor.fetchone()
-                    if rown and rown['name']:
-                        new_name = f"{rown['name']} [deleted:{prompt_uuid[:8]}]"
-                        # Best-effort rename; ignore uniqueness violations if rare
+                    if rown and isinstance(rown['name'], str) and rown['name'].strip():
+                        original_name = rown['name']
+                        base_candidate = f"Deleted-{original_name}"
+                        candidate = base_candidate
+                        suffix = 1
+                        # Ensure uniqueness across all records (active and deleted)
+                        while True:
+                            cursor.execute("SELECT id FROM Prompts WHERE name = ? AND id != ?", (candidate, prompt_id))
+                            conflict = cursor.fetchone()
+                            if not conflict:
+                                break
+                            suffix += 1
+                            candidate = f"Deleted {suffix} - {original_name}"
                         try:
-                            cursor.execute("UPDATE Prompts SET name = ? WHERE id = ?", (new_name, prompt_id))
-                        except sqlite3.Error:
-                            pass
+                            cursor.execute("UPDATE Prompts SET name = ? WHERE id = ?", (candidate, prompt_id))
+                        except sqlite3.IntegrityError:
+                            # In the unlikely event of a race, fall back to a UUID-suffixed name
+                            fallback = f"Deleted-{original_name}-{prompt_uuid[:8]}"
+                            cursor.execute("UPDATE Prompts SET name = ? WHERE id = ?", (fallback, prompt_id))
                 except sqlite3.Error:
+                    # Non-fatal: name renaming is a best-effort to free original name
                     pass
 
                 # Explicitly unlink keywords and log those events
@@ -1338,6 +1355,30 @@ class PromptsDatabase:
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching all prompt keywords: {e}")
             raise DatabaseError("Failed to fetch all prompt keywords") from e
+
+    def fetch_all_prompt_names(self, include_deleted: bool = True) -> List[str]:
+        """
+        Returns all prompt names from the Prompts table.
+
+        Args:
+            include_deleted: If True, include soft-deleted prompts; otherwise only active prompts.
+
+        Returns:
+            A list of prompt names (strings).
+
+        Raises:
+            DatabaseError: If the query fails.
+        """
+        query = "SELECT name FROM Prompts"
+        if not include_deleted:
+            query += " WHERE deleted = 0"
+        query += " ORDER BY name COLLATE NOCASE"
+        try:
+            cursor = self.execute_query(query)
+            return [row['name'] for row in cursor.fetchall()]
+        except (DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error fetching all prompt names: {e}")
+            raise DatabaseError("Failed to fetch all prompt names") from e
 
     def fetch_keywords_for_prompt(self, prompt_id: int, include_deleted: bool = False) -> List[str]:
         # Note: include_deleted here refers to the keyword itself, not the link or prompt

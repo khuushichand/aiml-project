@@ -13,6 +13,7 @@ https://github.com/randombk/chatterbox-vllm
 https://generativeai.pub/glm-4-voice-9b-real-time-multilingual-voice-conversation-ai-install-locally-in-minutes-ce2fcd6c8fd8
 https://github.com/KartDriver/mira_converse?tab=readme-ov-file
 https://huggingface.co/kyutai
+github.com/wwang1110/kokoro_batch
 https://github.com/bytedance/MegaTTS3
     https://modelscope.cn/models/ACoderPassBy/MegaTTS-SFT/files
 https://github.com/petermg/Chatterbox-TTS-Extended/tree/main

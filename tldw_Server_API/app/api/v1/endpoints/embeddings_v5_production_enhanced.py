@@ -71,7 +71,8 @@ from prometheus_client import Counter, Histogram, Gauge
 from fnmatch import fnmatch
 
 # ============================================================================
-# CRITICAL: Embeddings Implementation Import with Explicit Failure
+# Embeddings Implementation Import (Safe/Lazy)
+# Avoid hard-failing on import so non-embedding tests can import the app.
 # ============================================================================
 
 try:
@@ -84,15 +85,11 @@ try:
         LocalAPICfg
     )
     EMBEDDINGS_AVAILABLE = True
-except ImportError as e:
-    logger.error(f"CRITICAL: Failed to import embeddings implementation: {e}")
-    logger.error("Embeddings service cannot start without proper dependencies")
+except Exception as e:
+    # Do not raise here; allow the API to import and mark the embeddings service as unavailable.
+    logger.error(f"Embeddings implementation unavailable: {e}")
+    logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
     EMBEDDINGS_AVAILABLE = False
-    
-    raise RuntimeError(
-        f"Embeddings service dependencies not available: {e}. "
-        "Please install required packages: transformers, sentence-transformers, onnxruntime"
-    )
 
 # ============================================================================
 # Metrics and Monitoring
@@ -490,7 +487,78 @@ async def startup_event():
     
     if not EMBEDDINGS_AVAILABLE:
         logger.error("Embeddings implementation not available - service will not function")
-        
+    
+    # In CI/CD (or when AUTO_DOWNLOAD_MODELS=true), proactively download/preload models
+    try:
+        ci = os.getenv("CI", "").lower() == "true"
+        auto_dl = os.getenv("AUTO_DOWNLOAD_MODELS", "true").lower() == "true"
+        if ci and auto_dl:
+            async def _preload_models_on_startup():
+                try:
+                    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+                    # Collect candidate models to preload
+                    preload_list = []
+                    # 1) From env PRELOAD_EMBEDDING_MODELS (comma-separated, supports provider:model)
+                    env_models = os.getenv("PRELOAD_EMBEDDING_MODELS")
+                    if env_models:
+                        preload_list.extend([m.strip() for m in env_models.split(",") if m.strip()])
+                    # 2) From config key 'preload_models' (list)
+                    try:
+                        cfg_preload = cfg.get("preload_models", []) or []
+                        if isinstance(cfg_preload, list):
+                            preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
+                    except Exception:
+                        pass
+                    # 3) Always include default model
+                    default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
+                    default_provider = cfg.get("embedding_provider") or "huggingface"
+                    if default_model:
+                        if ":" in default_model:
+                            preload_list.append(default_model)
+                        else:
+                            preload_list.append(f"{default_provider}:{default_model}")
+                    # De-duplicate while preserving order
+                    seen = set()
+                    final_models = []
+                    for m in preload_list:
+                        if m and m not in seen:
+                            seen.add(m)
+                            final_models.append(m)
+                    if not final_models:
+                        logger.info("No models specified for preload in CI; skipping preload")
+                        return
+                    logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
+                    for full in final_models:
+                        try:
+                            if ":" in full:
+                                prov, mdl = full.split(":", 1)
+                                provider = prov.strip().lower()
+                                model = mdl.strip()
+                            else:
+                                model = full.strip()
+                                provider = guess_provider_for_model(model)
+                            if not is_model_allowed(provider, model):
+                                logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
+                                continue
+                            if provider == "openai" and not settings.get("OPENAI_API_KEY"):
+                                logger.info("Skipping OpenAI preload due to missing OPENAI_API_KEY")
+                                continue
+                            # Trigger a tiny embedding to force download
+                            await create_embeddings_batch_async(
+                                texts=["ci preload"],
+                                provider=provider,
+                                model_id=model
+                            )
+                            logger.info(f"Preloaded model {provider}:{model}")
+                        except Exception as e:
+                            logger.warning(f"Failed to preload model {full}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error during preload task: {e}")
+            # Fire and forget
+            asyncio.create_task(_preload_models_on_startup())
+    except Exception as e:
+        logger.error(f"Failed to schedule model preloads: {e}")
+    
     logger.info("Embeddings service started successfully")
 
 @router.on_event("shutdown")
@@ -814,32 +882,47 @@ async def create_embeddings_batch_async(
             dimensions
         )
         
-        # Process in batches with circuit breaker
+        # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
-        for batch_start in range(0, len(uncached_texts), MAX_BATCH_SIZE):
-            batch_end = min(batch_start + MAX_BATCH_SIZE, len(uncached_texts))
-            batch_texts = uncached_texts[batch_start:batch_end]
-            
-            try:
-                batch_embeddings = await create_embeddings_with_circuit_breaker(
-                    batch_texts,
-                    provider,
-                    model_id,
-                    config
-                )
-                all_new_embeddings.extend(batch_embeddings)
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to create embeddings for batch: {e}")
+        if provider == "openai" and os.getenv("TESTING", "").lower() == "true" and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true":
+            import numpy as _np
+            mdl = (model_id or "text-embedding-3-small").lower()
+            dim = 1536
+            if "3-large" in mdl:
+                dim = 3072
+            for t in uncached_texts:
+                seed = int(hashlib.sha256(((model_id or "") + "|" + t).encode("utf-8")).hexdigest()[:16], 16)
+                rng = _np.random.default_rng(seed)
+                vec = rng.standard_normal(dim, dtype=_np.float32)
+                nrm = _np.linalg.norm(vec)
+                if nrm > 0:
+                    vec = vec / nrm
+                all_new_embeddings.append(vec.tolist())
+        else:
+            for batch_start in range(0, len(uncached_texts), MAX_BATCH_SIZE):
+                batch_end = min(batch_start + MAX_BATCH_SIZE, len(uncached_texts))
+                batch_texts = uncached_texts[batch_start:batch_end]
                 
-                # Try to close and recreate connection for this provider
-                await connection_manager.remove_provider(provider)
-                
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Embedding service error: {str(e)}"
-                )
+                try:
+                    batch_embeddings = await create_embeddings_with_circuit_breaker(
+                        batch_texts,
+                        provider,
+                        model_id,
+                        config
+                    )
+                    all_new_embeddings.extend(batch_embeddings)
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Failed to create embeddings for batch: {e}")
+                    
+                    # Try to close and recreate connection for this provider
+                    await connection_manager.remove_provider(provider)
+                    
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Embedding service error: {str(e)}"
+                    )
         
         # Update results and cache
         for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
@@ -889,6 +972,12 @@ async def create_embedding_endpoint(
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
     
+    if not EMBEDDINGS_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Embeddings service unavailable; dependencies not installed"
+        )
+
     active_embedding_requests.inc()
     start_time = time.time()
     

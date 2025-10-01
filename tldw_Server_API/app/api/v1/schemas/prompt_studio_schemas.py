@@ -46,7 +46,7 @@ class EvaluationCreate(BaseModel):
     """Create evaluation request"""
     project_id: int = Field(..., description="Project ID")
     prompt_id: int = Field(..., description="Prompt ID to evaluate")
-    test_run_id: Optional[int] = Field(None, description="Test run ID if part of a test run")
+    test_run_id: Optional[Union[int, str]] = Field(None, description="Test run ID if part of a test run")
     name: Optional[str] = Field(None, max_length=200, description="Evaluation name")
     description: Optional[str] = Field(None, max_length=1000, description="Evaluation description")
     metrics: Optional[EvaluationMetrics] = Field(None, description="Metrics to track")

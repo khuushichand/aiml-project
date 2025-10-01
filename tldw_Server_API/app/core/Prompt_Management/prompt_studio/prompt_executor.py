@@ -358,6 +358,29 @@ class PromptExecutor:
                 )
         
         return template
+
+    # Compatibility alias used by tests
+    def execute(self, prompt_id: int, inputs: Dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
+                parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Execute prompt using simplified signature.
+
+        Args:
+            prompt_id: Prompt ID
+            inputs: Input values
+            provider: Provider name
+            model: Model name
+            parameters: Additional parameters
+
+        Returns:
+            Execution result dict used in tests.
+        """
+        model_config = {
+            "provider": provider,
+            "model": model,
+            "parameters": parameters or {}
+        }
+        return self.execute_prompt(prompt_id, inputs, model_config)
     
     def _parse_output(self, output: str, signature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """

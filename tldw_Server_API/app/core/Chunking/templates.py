@@ -178,6 +178,9 @@ class TemplateProcessor:
         # Get chunking parameters
         chunk_ops = stage.operations[0] if stage.operations else {}
         method = chunk_ops.get("method", base_method)
+        # Allow runtime override of method (apply-time)
+        if isinstance(options.get('method'), str):
+            method = options['method']  # override template/base method
 
         # Options can be top-level or nested under "config"
         nested_cfg = chunk_ops.get("config", {}) or {}
@@ -194,14 +197,22 @@ class TemplateProcessor:
             if isinstance(extra_params, dict) and k in extra_params:
                 extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
 
-        # Perform chunking (supports hierarchical via config)
+        # Perform chunking (supports hierarchical via config and overrides)
         chunker = self._get_chunker()
         hierarchical = False
         hier_template = None
         try:
             cfg = chunk_ops.get('config', {}) if isinstance(chunk_ops, dict) else {}
-            hierarchical = bool(cfg.get('hierarchical')) or bool((extra_params or {}).get('hierarchical'))
-            hier_template = cfg.get('hierarchical_template') or (extra_params or {}).get('hierarchical_template')
+            hierarchical = (
+                bool(options.get('hierarchical')) or
+                bool(cfg.get('hierarchical')) or
+                bool((extra_params or {}).get('hierarchical'))
+            )
+            hier_template = (
+                options.get('hierarchical_template') or
+                cfg.get('hierarchical_template') or
+                (extra_params or {}).get('hierarchical_template')
+            )
         except Exception:
             hierarchical = False
             hier_template = None
@@ -221,6 +232,7 @@ class TemplateProcessor:
                 method=method,
                 max_size=max_size,
                 overlap=overlap,
+                language=options.get('language'),
                 **(extra_params or {})
             )
             # Normalize to dict structure

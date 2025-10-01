@@ -17,10 +17,19 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    create_embedding, 
-    get_embedding_config
-)
+# Safe import of embeddings helpers to avoid heavy deps during app import
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embedding, 
+        get_embedding_config,
+    )
+    _RAG_EMBEDDINGS_AVAILABLE = True
+except Exception:
+    _RAG_EMBEDDINGS_AVAILABLE = False
+    def create_embedding(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("Embeddings backend unavailable; install required dependencies")
+    def get_embedding_config():  # type: ignore[misc]
+        return {"embedding_config": {"default_model_id": ""}}
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     llm_circuit_breaker,
     CircuitOpenError
@@ -72,8 +81,6 @@ class RAGEvaluator:
     
     def _setup_embedding_config(self) -> Dict[str, Any]:
         """Setup embedding configuration."""
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import OpenAIModelCfg, HFModelCfg
-        
         config = get_embedding_config()
         
         # Override model if specified
@@ -106,7 +113,6 @@ class RAGEvaluator:
                 oa = config.setdefault("openai_api", {})
                 oa.setdefault("api_key", self.api_key)
             except Exception:
-                # Never break initialization due to config dict shape
                 pass
         
         return config
@@ -226,26 +232,32 @@ class RAGEvaluator:
                     # Always record canonical key
                     results["metrics"][metric_name] = metric_result
 
-                    # Decide when to also record alias keys
-                    # Decide when to add alias keys alongside canonical names
-                    if explicit_metrics:
-                        # Only add aliases if explicitly requested in metrics list
-                        # or when weights reference alias keys (back-compat for weighting)
-                        add_aliases = bool(requested_aliases) or alias_by_weights
-                    else:
-                        # Using default metric set: add aliases only when ground truth present
-                        add_aliases = bool(ground_truth)
-
-                    if add_aliases:
-                        if metric_name == "relevance":
-                            results["metrics"]["answer_relevance"] = metric_result
-                        elif metric_name == "faithfulness":
-                            results["metrics"]["answer_faithfulness"] = metric_result
+                    # Always include alias keys for relevance/faithfulness alongside canonical names
+                    # Do not overwrite if already explicitly provided
+                    if metric_name == "relevance":
+                        results["metrics"].setdefault("answer_relevance", metric_result)
+                    elif metric_name == "faithfulness":
+                        results["metrics"].setdefault("answer_faithfulness", metric_result)
             
             # Add information about failed metrics
             if failed_metrics:
                 results["failed_metrics"] = failed_metrics
                 results["partial_results"] = True
+
+            # For default metric set (caller did not explicitly request metrics),
+            # prefer alias keys for relevance/faithfulness and drop canonical keys
+            if not explicit_metrics:
+                if "answer_relevance" in results["metrics"] and "relevance" in results["metrics"]:
+                    try:
+                        # Remove canonical to keep metric set compact and OpenAI-style
+                        results["metrics"].pop("relevance", None)
+                    except Exception:
+                        pass
+                if "answer_faithfulness" in results["metrics"] and "faithfulness" in results["metrics"]:
+                    try:
+                        results["metrics"].pop("faithfulness", None)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.error(f"Critical failure in evaluation: {e}")
             raise ValueError(f"Evaluation failed: {str(e)}")

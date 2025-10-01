@@ -379,7 +379,7 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
             if os.path.exists(temp_path):
                 resume_header = {'Range': f'bytes={os.path.getsize(temp_path)}-'}
 
-            response = requests.get(url, stream=True, headers=resume_header)
+            response = requests.get(url, stream=True, headers=resume_header, timeout=60)
             response.raise_for_status()
 
             # Get the total file size from headers
@@ -424,7 +424,7 @@ def download_file_if_missing(url: str, local_path: str) -> None:
         return
     logging.info(f"Downloading from {url} to {local_path}")
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    r = requests.get(url, stream=True)
+    r = requests.get(url, stream=True, timeout=60)
     r.raise_for_status()
     with open(local_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=8192):

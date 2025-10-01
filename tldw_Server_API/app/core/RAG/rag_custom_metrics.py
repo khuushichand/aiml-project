@@ -18,10 +18,19 @@ from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-    create_embedding,
-    get_embedding_config
-)
+# Safe import of embeddings helpers to avoid heavy deps during app import
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embedding,
+        get_embedding_config,
+    )
+    _RAG_METRICS_EMBEDDINGS_AVAILABLE = True
+except Exception:
+    _RAG_METRICS_EMBEDDINGS_AVAILABLE = False
+    def create_embedding(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("Embeddings backend unavailable; install required dependencies")
+    def get_embedding_config():  # type: ignore[misc]
+        return {"embedding_config": {"default_model_id": ""}}
 
 
 class MetricType(Enum):

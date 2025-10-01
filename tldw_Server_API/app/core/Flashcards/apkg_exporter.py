@@ -194,10 +194,12 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
     factor = int(round(ef * 1000)) if ef else 2500
     reps_val = int(repetitions or 0)
     lapses_val = int(lapses or 0)
-    if reps_val == 0 or interval_days == 0:
-        # New
+    # New: never studied yet
+    if reps_val == 0:
         return (0, 0, 0, 0, factor, reps_val, lapses_val)
-    if reps_val in (1, 2):
+
+    # Learning: studied at least once, no interval yet
+    if interval_days == 0 or reps_val in (1, 2):
         # Learning
         due_secs = _now_secs()
         if due_at_iso:
@@ -255,7 +257,8 @@ def _extract_media_from_html(html: str, media_accum: List[Tuple[str, bytes]], me
     pattern = re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
     # We need to handle both capturing groups; easier: custom parser for img/src and audio/src separately
     def replace_tag_src(tag_name: str, s: str) -> str:
-        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*(["\"])(.*?)\1' % tag_name, re.IGNORECASE)
+        # Match src with either single or double quotes
+        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1' % tag_name, re.IGNORECASE)
         return rgx.sub(lambda m: m.group(0).replace(m.group(2), _handle_src(m.group(2))), s)
 
     def _handle_src(src: str) -> str:

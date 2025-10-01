@@ -8,16 +8,10 @@ from enum import Enum
 #
 # Third-party Imports
 from loguru import logger
+import importlib
 #
 # Local Imports
 from .adapters.base import TTSAdapter, TTSCapabilities, ProviderStatus, AudioFormat
-from .adapters.openai_adapter import OpenAITTSAdapter
-from .adapters.kokoro_adapter import KokoroAdapter
-from .adapters.higgs_adapter import HiggsAdapter
-from .adapters.dia_adapter import DiaAdapter
-from .adapters.chatterbox_adapter import ChatterboxAdapter
-from .adapters.elevenlabs_adapter import ElevenLabsTTSAdapter
-from .adapters.vibevoice_adapter import VibeVoiceAdapter
 from .tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSProviderInitializationError,
@@ -50,15 +44,15 @@ class TTSAdapterRegistry:
     Manages registration, initialization, and access to TTS providers.
     """
     
-    # Default adapter mappings
-    DEFAULT_ADAPTERS: Dict[TTSProvider, Type[TTSAdapter]] = {
-        TTSProvider.OPENAI: OpenAITTSAdapter,
-        TTSProvider.KOKORO: KokoroAdapter,
-        TTSProvider.HIGGS: HiggsAdapter,
-        TTSProvider.DIA: DiaAdapter,
-        TTSProvider.CHATTERBOX: ChatterboxAdapter,
-        TTSProvider.ELEVENLABS: ElevenLabsTTSAdapter,
-        TTSProvider.VIBEVOICE: VibeVoiceAdapter
+    # Default adapter mappings (lazy, via dotted paths to avoid heavy imports at module import time)
+    DEFAULT_ADAPTERS: Dict["TTSProvider", "str|Type[TTSAdapter]"] = {
+        TTSProvider.OPENAI: "tldw_Server_API.app.core.TTS.adapters.openai_adapter.OpenAITTSAdapter",
+        TTSProvider.KOKORO: "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.KokoroAdapter",
+        TTSProvider.HIGGS: "tldw_Server_API.app.core.TTS.adapters.higgs_adapter.HiggsAdapter",
+        TTSProvider.DIA: "tldw_Server_API.app.core.TTS.adapters.dia_adapter.DiaAdapter",
+        TTSProvider.CHATTERBOX: "tldw_Server_API.app.core.TTS.adapters.chatterbox_adapter.ChatterboxAdapter",
+        TTSProvider.ELEVENLABS: "tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.ElevenLabsTTSAdapter",
+        TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
     }
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -88,21 +82,37 @@ class TTSAdapterRegistry:
             self.config = self.tts_config.dict()
         
         self._adapters: Dict[TTSProvider, TTSAdapter] = {}
-        self._adapter_classes: Dict[TTSProvider, Type[TTSAdapter]] = self.DEFAULT_ADAPTERS.copy()
+        # Store either classes or dotted paths; resolve lazily when needed
+        self._adapter_specs: Dict[TTSProvider, Any] = self.DEFAULT_ADAPTERS.copy()
         self._init_lock = asyncio.Lock()
         self._initialized_providers: Set[TTSProvider] = set()
         self._failed_providers: Set[TTSProvider] = set()  # Track failed providers to avoid retrying
     
-    def register_adapter(self, provider: TTSProvider, adapter_class: Type[TTSAdapter]):
+    def register_adapter(self, provider: TTSProvider, adapter: Any):
         """
         Register a custom adapter class for a provider.
         
         Args:
             provider: The provider enum
-            adapter_class: The adapter class to register
+            adapter: Adapter class or dotted import path string to register
         """
-        self._adapter_classes[provider] = adapter_class
-        logger.info(f"Registered adapter {adapter_class.__name__} for provider {provider.value}")
+        self._adapter_specs[provider] = adapter
+        try:
+            name = adapter.__name__  # type: ignore[attr-defined]
+        except Exception:
+            name = str(adapter)
+        logger.info(f"Registered adapter {name} for provider {provider.value}")
+
+    def _resolve_adapter_class(self, spec: Any) -> Type[TTSAdapter]:
+        """Resolve an adapter class from a class object or dotted path string."""
+        if isinstance(spec, str):
+            module_path, _, class_name = spec.rpartition(".")
+            if not module_path:
+                raise ImportError(f"Invalid adapter spec '{spec}'")
+            module = importlib.import_module(module_path)
+            cls = getattr(module, class_name)
+            return cls
+        return spec
     
     async def get_adapter(self, provider: TTSProvider) -> Optional[TTSAdapter]:
         """
@@ -117,7 +127,7 @@ class TTSAdapterRegistry:
         Raises:
             TTSProviderNotConfiguredError: If provider is not registered
         """
-        if provider not in self._adapter_classes:
+        if provider not in self._adapter_specs:
             error_msg = f"No adapter registered for provider {provider.value}"
             logger.error(error_msg)
             raise TTSProviderNotConfiguredError(
@@ -165,8 +175,9 @@ class TTSAdapterRegistry:
             TTSProviderInitializationError: If initialization fails
         """
         try:
-            # Get adapter class
-            adapter_class = self._adapter_classes[provider]
+            # Get adapter class (lazily resolve to avoid heavy imports during module import)
+            adapter_spec = self._adapter_specs[provider]
+            adapter_class = self._resolve_adapter_class(adapter_spec)
             
             # Get provider-specific config
             provider_config = self._get_provider_config(provider)

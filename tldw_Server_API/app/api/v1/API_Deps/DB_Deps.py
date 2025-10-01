@@ -3,6 +3,7 @@
 #
 # Imports
 import threading
+import os
 from pathlib import Path
 import logging
 from typing import Dict, Optional
@@ -27,12 +28,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, Da
 
 #######################################################################################################################
 
-# --- Configuration (using imported settings dictionary) ---
-# Assign to module-level vars for convenience or use settings["KEY"] directly
-USER_DB_BASE_DIR = settings["USER_DB_BASE_DIR"]
-SERVER_CLIENT_ID = settings["SERVER_CLIENT_ID"]
-
-# Base directory existence is now checked within config.py
+# Note: Do not cache USER_DB_BASE_DIR at import time. Tests may set USER_DB_BASE_DIR
+# via environment after module import. We will resolve it at request time in helpers.
 
 # --- Global Cache for User DB Instances ---
 MAX_CACHED_DB_INSTANCES = 100  # Adjust as needed
@@ -59,8 +56,25 @@ def _get_db_path_for_user(user_id: int) -> Path:
     """
     # user_id will be settings["SINGLE_USER_FIXED_ID"] in single-user mode
     user_dir_name = str(user_id)
-    # Use the variable assigned from settings dict
-    user_dir = USER_DB_BASE_DIR / user_dir_name
+    # Resolve base dir dynamically: prefer env override, then settings
+    base_dir_env = os.environ.get("USER_DB_BASE_DIR")
+    # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
+    if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        try:
+            import tempfile, time
+            run_tag = f"pid{os.getpid()}"
+            # Use project Databases/user_databases_test/<run_tag> to keep nearby but isolated
+            project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
+            if project_root:
+                base_dir_env = str(Path(project_root) / "Databases" / "user_databases_test" / run_tag)
+            else:
+                base_dir_env = tempfile.mkdtemp(prefix="user_databases_test_")
+            # Set env so subsequent calls use the same directory
+            os.environ["USER_DB_BASE_DIR"] = base_dir_env
+        except Exception:
+            pass
+    base_dir = Path(base_dir_env) if base_dir_env else Path(settings["USER_DB_BASE_DIR"])  # type: ignore[index]
+    user_dir = base_dir / user_dir_name
     db_file = user_dir / "Media_DB_v2.db" # Using standard Media_DB_v2.db naming
 
     try:
@@ -159,6 +173,26 @@ async def get_media_db_for_user(
 
     # Return the newly created and cached instance
     return db_instance
+
+
+async def try_get_media_db_for_user(
+    current_user: User = Depends(get_request_user)
+) -> Optional[MediaDatabase]:
+    """
+    Optional version of get_media_db_for_user for endpoints that can operate without DB.
+    Returns None instead of raising on initialization failures.
+    """
+    try:
+        return await get_media_db_for_user(current_user=current_user)
+    except HTTPException as e:
+        logging.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
+        return None
+    except Exception as e:
+        logging.warning(
+            f"Optional Media DB unexpected error for user {getattr(current_user, 'id', '?')}: {e}",
+            exc_info=True
+        )
+        return None
 
 #
 # End of DB_Deps.py

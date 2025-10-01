@@ -58,6 +58,24 @@ router = APIRouter(
 ########################################################################################################################
 # Optimization CRUD Endpoints
 
+# Compatibility: base POST returns job info directly
+@router.post("")
+async def create_optimization_simple(
+    payload: Dict[str, Any],
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
+) -> Dict[str, Any]:
+    # Minimal creation: create a job with provided payload
+    prompt_id = int(payload.get("prompt_id") or payload.get("initial_prompt_id") or 0)
+    job_manager = JobManager(db)
+    job = job_manager.create_job(
+        job_type=JobType.OPTIMIZATION,
+        entity_id=prompt_id if prompt_id else 0,
+        payload={"prompt_id": prompt_id, "config": payload.get("config", {})},
+        priority=5,
+    )
+    return {"id": job.get("id"), "status": job.get("status", "pending")}
+
 @router.post(
     "/create",
     response_model=StandardResponse,
@@ -404,6 +422,15 @@ async def get_optimization(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get optimization"
         )
+
+# Compatibility: GET job status by job_id returning direct job data
+@router.get("/{job_id}")
+async def get_optimization_job_status(job_id: str, db: PromptStudioDatabase = Depends(get_prompt_studio_db)) -> Dict[str, Any]:
+    jm = JobManager(db)
+    job = jm.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 @router.post("/cancel/{optimization_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Cancelled", "content": {"application/json": {"examples": {"cancelled": {"value": {"success": True, "data": {"message": "Optimization cancelled"}}}}}}}, "400": {"description": "Invalid state"}, "404": {"description": "Not found"}}

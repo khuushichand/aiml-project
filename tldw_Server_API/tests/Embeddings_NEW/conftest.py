@@ -7,6 +7,7 @@ vector generation, worker orchestration, and ChromaDB integration.
 
 import os
 import tempfile
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Generator, Optional
 from unittest.mock import MagicMock, AsyncMock, Mock
@@ -17,6 +18,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 import chromadb
 from chromadb.config import Settings
 
@@ -71,11 +73,22 @@ def test_env_vars():
     os.environ["EMBEDDING_BATCH_SIZE"] = "32"
     os.environ["MAX_WORKERS"] = "2"
     
+    # Isolate user DB base dir to a temporary location to avoid migrating/using repo DBs
+    tmp_user_base = tempfile.mkdtemp(prefix="emb_user_db_base_")
+    os.environ["USER_DB_BASE_DIR"] = tmp_user_base
+    # Also isolate AuthNZ main DB to the same temp base (not strictly required here but safer)
+    os.environ["DATABASE_URL"] = f"sqlite:///{os.path.join(tmp_user_base, 'users.db')}"
+    
     yield
     
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
+    # Cleanup temporary base dir
+    try:
+        shutil.rmtree(tmp_user_base, ignore_errors=True)
+    except Exception:
+        pass
 
 # =====================================================================
 # Vector/Embedding Fixtures
@@ -502,9 +515,32 @@ def mock_rate_limiter():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app (no dependency overrides)."""
+    """Create a test client for the FastAPI app with DB override to isolate per-user database."""
     from tldw_Server_API.app.main import app
-    return TestClient(app, raise_server_exceptions=False)
+
+    # Prepare a clean per-user database to avoid repo-level migrations
+    base_dir = os.environ.get("USER_DB_BASE_DIR") or tempfile.mkdtemp(prefix="emb_user_db_base_client_")
+    user_dir = Path(base_dir) / "1"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    per_user_db_path = user_dir / "Media_DB_v2.db"
+
+    db = MediaDatabase(db_path=str(per_user_db_path), client_id="test_client")
+    db.initialize_db()
+
+    async def _override_db(current_user=None):
+        return db
+
+    app.dependency_overrides[get_media_db_for_user] = _override_db
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        yield client
+    finally:
+        # Clean up override and close DB
+        app.dependency_overrides.pop(get_media_db_for_user, None)
+        try:
+            db.close_connection()
+        except Exception:
+            pass
 
 @pytest.fixture
 def auth_headers():

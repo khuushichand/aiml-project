@@ -9,7 +9,11 @@ from loguru import logger
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.tests.test_config import TestConfig
+
+# Explicit auth headers for single-user mode (required by get_request_user)
+AUTH_HEADERS = {"X-API-KEY": TestConfig.TEST_API_KEY}
 
 
 @pytest.fixture(scope="function")
@@ -29,16 +33,24 @@ def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
             yield flashcards_db
         finally:
             pass
+    # Also bypass AuthNZ in tests by returning a fixed user
+    async def override_user():
+        return User(id=1, username="testuser", email="test@example.com", is_active=True)
+
+    # Apply dependency overrides
     app.dependency_overrides[get_chacha_db_for_user] = override_get_db
-    with TestClient(app) as c:
-        c.headers["X-API-KEY"] = TestConfig.TEST_API_KEY
+    app.dependency_overrides[get_request_user] = override_user
+
+    # Provide a TestClient with default X-API-KEY header for all requests
+    default_headers = {"X-API-KEY": TestConfig.TEST_API_KEY}
+    with TestClient(app, headers=default_headers) as c:
         yield c
     app.dependency_overrides.clear()
 
 
 def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
     # Create deck
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckOne", "description": "d1"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckOne", "description": "d1"}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     deck = r.json()
     deck_id = deck["id"]
@@ -49,7 +61,7 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
         "front": "What is 2+2?",
         "back": "4",
         "tags": ["math"]
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
     # Create reverse card
@@ -58,7 +70,7 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
         "front": "USA capital?",
         "back": "Washington, D.C.",
         "model_type": "basic_reverse"
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
     # Create cloze card with two clozes and embedded data URI image in Extra
@@ -71,11 +83,11 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
         "model_type": "cloze",
         "extra": extra_html,
         "tags": ["geo"]
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
     # Export APKG
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     assert r.headers.get("content-type", "").startswith("application/apkg")
     apkg = r.content
@@ -114,19 +126,19 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
 
 def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcards_db: TestClient):
     # Create deck and a plain basic card (no reverse/model_type)
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckTwo"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckTwo"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
         "front": "Capital of Japan?",
         "back": "Tokyo"
-    })
+    }, headers=AUTH_HEADERS)
     card = r.json()
     assert card["model_type"] == "basic"
     assert card["reverse"] is False
 
     # Export with include_reverse=true
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg", "include_reverse": True})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg", "include_reverse": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     try:
@@ -156,7 +168,7 @@ def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcar
 
 def test_export_csv_shape_and_content(client_with_flashcards_db: TestClient):
     # Create deck and two cards with tags and notes
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "CSVDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "CSVDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
@@ -164,7 +176,7 @@ def test_export_csv_shape_and_content(client_with_flashcards_db: TestClient):
         "back": "A1",
         "notes": "N1",
         "tags": ["alpha", "beta"]
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
@@ -172,11 +184,11 @@ def test_export_csv_shape_and_content(client_with_flashcards_db: TestClient):
         "back": "A2",
         "notes": "N2",
         "tags": ["gamma"]
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
     # Export CSV (TSV)
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export")
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", headers=AUTH_HEADERS)
     assert r.status_code == 200
     text = r.content.decode('utf-8')
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -193,18 +205,18 @@ def test_export_csv_shape_and_content(client_with_flashcards_db: TestClient):
 
 def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
     # Create deck and a card
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "TagDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "TagDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
         "front": "Tagged Q",
         "back": "Tagged A"
-    })
+    }, headers=AUTH_HEADERS)
     card = r.json()
     uuid = card["uuid"]
 
     # Set tags via endpoint
-    r = client_with_flashcards_db.put(f"/api/v1/flashcards/{uuid}/tags", json={"tags": ["alpha", "beta"]})
+    r = client_with_flashcards_db.put(f"/api/v1/flashcards/{uuid}/tags", json={"tags": ["alpha", "beta"]}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     updated = r.json()
     # tags_json returns JSON string
@@ -214,7 +226,7 @@ def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
     assert set(tags) == {"alpha", "beta"}
 
     # Verify keyword linkage
-    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid}/tags")
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid}/tags", headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     items = data.get("items", [])
@@ -224,18 +236,18 @@ def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
 
 def test_export_apkg_include_reverse_no_duplication_for_basic_reverse(client_with_flashcards_db: TestClient):
     # Create deck and a basic_reverse card
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckThree"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckThree"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
         "front": "Alpha",
         "back": "Omega",
         "model_type": "basic_reverse"
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
     # Export with include_reverse=true; still should be only two cards (ord 0 and 1)
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg", "include_reverse": True})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg", "include_reverse": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     try:
@@ -262,7 +274,7 @@ def test_export_apkg_include_reverse_no_duplication_for_basic_reverse(client_wit
 
 
 def test_export_csv_escapes_specials_and_multiline(client_with_flashcards_db: TestClient):
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "SpecDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "SpecDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     special_front = "Line1\nLine\t2\nEmoji: 😀"
     special_back = "Tab\tSeparated\nNewline"
@@ -272,10 +284,10 @@ def test_export_csv_escapes_specials_and_multiline(client_with_flashcards_db: Te
         "back": special_back,
         "notes": "Note\nWith\tTabs",
         "tags": ["spec"]
-    })
+    }, headers=AUTH_HEADERS)
     assert r.status_code == 200
 
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export")
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", headers=AUTH_HEADERS)
     assert r.status_code == 200
     text = r.content.decode('utf-8')
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -293,12 +305,12 @@ def test_import_tsv_creates_cards_and_decks(client_with_flashcards_db: TestClien
         "DeckA\tFront A\tBack A\talpha beta\tNote A\n"
         "DeckB\tFront B\tBack B\tgamma\tNote B\n"
     )
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 2
     # List flashcards and verify deck names and tags present in list output
-    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    r = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
     assert r.status_code == 200
     items = r.json().get('items', [])
     # We expect at least two entries from import
@@ -313,10 +325,10 @@ def test_import_tsv_with_header_modeltype_extra(client_with_flashcards_db: TestC
         "DeckC\tCloze {{c1::x}}\t\tctag\tCN\tCE\tcloze\tfalse\n"
     )
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     # List back
-    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    r = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
     items = r.json().get('items', [])
     # Find basic_reverse card
     br = next(it for it in items if it.get('front') == 'F1')
@@ -335,10 +347,10 @@ def test_import_tsv_with_deckdescription_and_iscloze(client_with_flashcards_db: 
         "DeckD\tCloze {{c1::zz}}\t\tztag\tZN\tThis is a described deck\ttrue\n"
     )
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     # Verify deck description persisted
-    r = client_with_flashcards_db.get("/api/v1/flashcards/decks")
+    r = client_with_flashcards_db.get("/api/v1/flashcards/decks", headers=AUTH_HEADERS)
     assert r.status_code == 200
     decks = r.json()
     deck = next(d for d in decks if d.get('name') == 'DeckD')
@@ -353,7 +365,7 @@ def test_import_tsv_with_deckdescription_and_iscloze(client_with_flashcards_db: 
 
 def test_export_csv_with_header_and_custom_delimiter(client_with_flashcards_db: TestClient):
     # Create deck/card
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DelimDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DelimDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
@@ -364,7 +376,7 @@ def test_export_csv_with_header_and_custom_delimiter(client_with_flashcards_db: 
     })
     assert r.status_code == 200
     # Export with delimiter ';' and header
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     assert r.headers.get('content-type', '').startswith('text/csv')
     text = r.content.decode('utf-8')
@@ -381,7 +393,7 @@ def test_export_csv_with_header_and_custom_delimiter(client_with_flashcards_db: 
 
 def test_export_csv_extended_header_and_values(client_with_flashcards_db: TestClient):
     # Create deck/card with extra + reverse
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "ExtDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "ExtDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
@@ -392,7 +404,7 @@ def test_export_csv_extended_header_and_values(client_with_flashcards_db: TestCl
     })
     assert r.status_code == 200
     # Export with extended header
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     text = r.content.decode('utf-8')
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -411,10 +423,10 @@ def test_import_minimal_header_front_back_default_deck(client_with_flashcards_db
     header = "Front\tBack\n"
     rows = "Qmin\tAmin\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     # Default deck should exist and card should belong to it
-    r = client_with_flashcards_db.get("/api/v1/flashcards/decks")
+    r = client_with_flashcards_db.get("/api/v1/flashcards/decks", headers=AUTH_HEADERS)
     decks = r.json()
     assert any(d.get('name') == 'Default' for d in decks)
     r = client_with_flashcards_db.get("/api/v1/flashcards")
@@ -429,10 +441,10 @@ def test_round_trip_import_export_extra_reverse(client_with_flashcards_db: TestC
     header = "Deck\tFront\tBack\tTags\tNotes\tExtra\tReverse\n"
     rows = "DeckR\tFr\tBk\ttr\tnt\tXVal\ttrue\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     # Export CSV extended
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"delimiter": ";", "include_header": True, "extended_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     txt = r.content.decode('utf-8')
     lines = [ln for ln in txt.splitlines() if ln.strip()]
@@ -442,7 +454,7 @@ def test_round_trip_import_export_extra_reverse(client_with_flashcards_db: TestC
     assert cols[0] == 'DeckR' and cols[1] == 'Fr' and cols[2] == 'Bk'
     assert cols[5] == 'XVal' and cols[6] in ('true', 'false')
     # Export APKG and assert two cards (reverse)
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"})
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     import io, sqlite3, zipfile, tempfile, os
     zf = zipfile.ZipFile(io.BytesIO(r.content))
@@ -478,7 +490,7 @@ def test_import_malformed_rows_reported(client_with_flashcards_db: TestClient):
     header = "Deck\tBack\tTags\tNotes\n"
     rows = "BadDeck\tOnlyBack\talpha\tSomeNote\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     # Should import 0 and report an error
@@ -497,7 +509,7 @@ def test_import_malformed_missing_deck_with_header(client_with_flashcards_db: Te
     header = "Deck\tFront\tBack\tTags\tNotes\n"
     rows = "\tFrontOnly\tB\ta\tn\n"  # first field empty deck
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 0
@@ -510,7 +522,7 @@ def test_import_malformed_invalid_cloze(client_with_flashcards_db: TestClient):
     header = "Deck\tFront\tBack\tTags\tNotes\tModelType\n"
     rows = "CDeck\tNot a cloze\t\t\t\tcloze\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 0
@@ -524,7 +536,7 @@ def test_import_oversize_field_rejected(client_with_flashcards_db: TestClient):
     header = "Deck\tFront\tBack\tTags\tNotes\n"
     rows = f"LD\t{long_front}\tB\tT\tN\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 0
@@ -538,7 +550,7 @@ def test_import_oversize_line_rejected(client_with_flashcards_db: TestClient):
     header = "Deck\tFront\tBack\tTags\tNotes\n"
     rows = f"LD\t{big}\tB\tT\tN\n"
     content = header + rows
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import", json={"content": content, "has_header": True}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 0
@@ -570,7 +582,8 @@ def test_import_respects_query_param_caps(client_with_flashcards_db: TestClient,
     r = client_with_flashcards_db.post(
         "/api/v1/flashcards/import",
         params={"max_lines": 2},
-        json={"content": content, "has_header": True}
+        json={"content": content, "has_header": True},
+        headers=AUTH_HEADERS
     )
     assert r.status_code == 200
     data = r.json()
@@ -583,7 +596,7 @@ def test_config_endpoint_flashcards_import_limits(client_with_flashcards_db: Tes
     monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINES', '999')
     monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', '12345')
     monkeypatch.setenv('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', '2345')
-    r = client_with_flashcards_db.get("/api/v1/config/flashcards-import-limits")
+    r = client_with_flashcards_db.get("/api/v1/config/flashcards-import-limits", headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('max_lines') == 999
@@ -601,12 +614,12 @@ def test_import_json_file_basic(client_with_flashcards_db: TestClient):
     files = {
         'file': ('cards.json', _json.dumps(payload), 'application/json')
     }
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files)
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 2
     # Verify created
-    r = client_with_flashcards_db.get("/api/v1/flashcards")
+    r = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
     items = r.json().get('items', [])
     assert any(it.get('deck_name') == 'JDeck' and it.get('front') == 'JF1' for it in items)
     assert any(it.get('model_type') == 'cloze' and '{{c1::' in it.get('front') for it in items)
@@ -621,7 +634,7 @@ def test_import_json_caps_and_errors(client_with_flashcards_db: TestClient, monk
         {"deck": "J2", "front": "F2", "back": "B2"}
     ]
     files = {'file': ('cards.json', _json.dumps(payload), 'application/json')}
-    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files)
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files, headers=AUTH_HEADERS)
     assert r.status_code == 200
     data = r.json()
     assert data.get('imported') == 1
@@ -630,18 +643,30 @@ def test_import_json_caps_and_errors(client_with_flashcards_db: TestClient, monk
     # Invalid cloze error
     payload2 = [{"front": "not cloze", "model_type": "cloze"}]
     files2 = {'file': ('cards.json', _json.dumps(payload2), 'application/json')}
-    r2 = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files2)
+    r2 = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files2, headers=AUTH_HEADERS)
     assert r2.status_code == 200
     data2 = r2.json()
     assert data2.get('imported') == 0
     errs2 = data2.get('errors', [])
     assert any('Invalid cloze' in (e.get('error') or '') for e in errs2)
-    # Unicode preserved
-    assert '😀' in cols[1]
+
+
+def test_import_json_unicode_preserved(client_with_flashcards_db: TestClient):
+    import json as _json
+    payload = [
+        {"deck": "JUnicode", "front": "Hello 😀", "back": "World"}
+    ]
+    files = {'file': ('cards.json', _json.dumps(payload), 'application/json')}
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    items = r2.json().get('items', [])
+    assert any('😀' in (it.get('front') or '') for it in items)
 
 
 def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashcards_db: TestClient):
-    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "QuoteDeck"})
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "QuoteDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
     r = client_with_flashcards_db.post("/api/v1/flashcards", json={
         "deck_id": deck_id,
@@ -652,7 +677,7 @@ def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashca
     })
     assert r.status_code == 200
 
-    r = client_with_flashcards_db.get("/api/v1/flashcards/export")
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", headers=AUTH_HEADERS)
     assert r.status_code == 200
     text = r.content.decode('utf-8')
     lines = [ln for ln in text.splitlines() if ln.strip()]

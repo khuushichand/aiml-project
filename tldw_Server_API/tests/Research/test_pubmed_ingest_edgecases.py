@@ -1,0 +1,31 @@
+import pytest
+from httpx import AsyncClient, ASGITransport
+import sys, types
+
+# Stub heavy modules before importing the full app
+sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
+sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
+
+
+@pytest.mark.asyncio
+async def test_pubmed_ingest_requires_pmcid(monkeypatch):
+    from tldw_Server_API.app.main import app
+
+    from tldw_Server_API.app.core.Third_Party import PubMed as _Pub
+
+    def _fake_pubmed_by_id(pmid):
+        return {
+            "pmid": pmid,
+            "pmcid": None,  # No OA PMCID available
+            "title": "Test",
+        }, None
+
+    monkeypatch.setattr(_Pub, "get_pubmed_by_id", _fake_pubmed_by_id)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(
+            "/api/v1/paper-search/pubmed/ingest",
+            params={"pmid": "123456"},
+        )
+        assert r.status_code == 400
+        assert "No PMC Open Access PMCID" in r.text

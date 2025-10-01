@@ -38,7 +38,7 @@ def fetch_arxiv_pdf_url(paper_id: str) -> Optional[str]:
     http_session.mount("http://", adapter)
 
     try:
-        response = http_session.get(base_url)
+        response = http_session.get(base_url, timeout=10)
         response.raise_for_status()
         time.sleep(1)  # Keep a small delay, 2s might be too long for an API response time
         soup = BeautifulSoup(response.content, 'xml')  # Use response.content for bytes
@@ -99,7 +99,7 @@ def search_arxiv_custom_api(query: Optional[str], author: Optional[str], year: O
 def fetch_arxiv_xml(paper_id: str) -> Optional[str]:
     base_url = "http://export.arxiv.org/api/query?id_list="
     try:
-        response = requests.get(base_url + paper_id)
+        response = requests.get(base_url + paper_id, timeout=10)
         response.raise_for_status()
         time.sleep(1)  # Keep delay
         return response.text

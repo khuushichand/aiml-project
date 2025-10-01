@@ -43,8 +43,24 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
     sanitize_filename, logging
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text, \
-    convert_to_wav, ConversionError
+# Lazy wrappers to avoid importing heavy transcription deps at module import time
+# Use the ConversionError defined in the transcription library to ensure
+# exception handling is consistent across modules (enables pytest fallback).
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    ConversionError as TranscriptionConversionError,
+)
+
+def speech_to_text(*args, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        speech_to_text as _speech_to_text,
+    )
+    return _speech_to_text(*args, **kwargs)
+
+def convert_to_wav(*args, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        convert_to_wav as _convert_to_wav,
+    )
+    return _convert_to_wav(*args, **kwargs)
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 #
 #######################################################################################################################
@@ -556,11 +572,11 @@ def process_audio_files(
                     wav_file_path = convert_to_wav(current_audio_path, overwrite=True)
                     # ... (path checking logic - ensure wav_file_path is valid) ...
                     if not wav_file_path or not Path(wav_file_path).exists():
-                         raise ConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
+                         raise TranscriptionConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
                     item_temp_files.append(wav_file_path) # Mark WAV for potential cleanup
                     item_result["processing_source"] = wav_file_path # Update source
                     update_progress(f"Conversion to WAV successful: {Path(wav_file_path).name}")
-                except (ConversionError, FileNotFoundError, RuntimeError) as conv_err:
+                except (TranscriptionConversionError, FileNotFoundError, RuntimeError) as conv_err:
                     # If conversion fails, set error and status. In test environments, degrade gracefully.
                     err_msg = f"Audio conversion failed: {conv_err}"
                     update_progress(err_msg)

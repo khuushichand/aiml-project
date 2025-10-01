@@ -47,8 +47,10 @@ Observability
 - Tracing: Configure OpenTelemetry exporters if required.
 - Logs: Centralize logs; avoid logging sensitive data. Set appropriate log levels.
 - Dashboards: Import `Samples/Grafana/security-dashboard.json` into Grafana to visualize HTTP/security metrics.
- - Request IDs: The app sets/propagates `X-Request-ID` on each response. Configure your proxy to pass it through.
- - Tracing headers: Forward `traceparent` and `tracestate` headers at the proxy if using OpenTelemetry tracing.
+- Request IDs: The app sets/propagates `X-Request-ID` on each response. Configure your proxy to pass it through.
+- Tracing headers: Forward `traceparent` and `tracestate` headers at the proxy if using OpenTelemetry tracing.
+ - Alerting: Use Prometheus alert rules from `Samples/Prometheus/alerts.yml` to notify when users approach storage quotas.
+   - Warning at >90% for 15m, Critical at >98% for 5m (per sample). Mount rules into Prometheus and reference from prometheus.yml.
 
 App Server
 - Use uvicorn workers suitable for your CPU and workload (`UVICORN_WORKERS`, default 4 in Dockerfile.prod).

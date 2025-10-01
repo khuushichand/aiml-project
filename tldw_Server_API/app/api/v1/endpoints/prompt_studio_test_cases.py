@@ -54,6 +54,25 @@ router = APIRouter(
 ########################################################################################################################
 # Test Case CRUD Endpoints
 
+# Compatibility: simple POST on base path returns test case object directly
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_test_case_simple(
+    test_case_data: TestCaseCreate,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    security_config: SecurityConfig = Depends(get_security_config),
+    user_context: Dict = Depends(get_prompt_studio_user)
+) -> Dict[str, Any]:
+    resp = await create_test_case(test_case_data, db, security_config, user_context)  # type: ignore[arg-type]
+    # Unwrap StandardResponse regardless of Pydantic/dict
+    if hasattr(resp, "model_dump"):
+        obj = resp.model_dump()
+    else:
+        obj = resp if isinstance(resp, dict) else {}
+    data = obj.get("data", obj)
+    if hasattr(data, "model_dump"):
+        return data.model_dump()
+    return data
+
 @router.post(
     "/create",
     response_model=StandardResponse,
@@ -760,6 +779,21 @@ async def get_csv_import_template(
     except Exception as e:
         logger.error(f"Failed to generate CSV template: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate CSV template")
+
+# Compatibility: run test cases endpoint returning {"results": [...]}
+@router.post("/run")
+async def run_test_cases_simple(
+    payload: Dict[str, Any],
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+) -> Dict[str, Any]:
+    manager = TestCaseManager(db)
+    prompt_id = int(payload.get("prompt_id", 0))
+    test_case_ids = payload.get("test_case_ids") or []
+    # Convert to ints if they are strings
+    test_case_ids = [int(t) if isinstance(t, str) and t.isdigit() else t for t in test_case_ids]
+    model = payload.get("model", "gpt-3.5-turbo")
+    results = await manager.run_batch_tests(prompt_id=prompt_id, test_case_ids=test_case_ids, model=model)
+    return {"results": results}
 
 @router.post(
     "/export/{project_id}",

@@ -52,7 +52,42 @@ except Exception as e:
 TEST_MEDIA_DIR = Path(__file__).parent / "test_media"
 TEST_MEDIA_DIR.mkdir(exist_ok=True) # Ensure directory exists
 SAMPLE_VIDEO_PATH = TEST_MEDIA_DIR / "sample.mp4"
-SAMPLE_AUDIO_PATH = TEST_MEDIA_DIR / "sample.mp3"
+"""
+Prefer a valid audio file for upload tests. Use a helper location under
+Helper_Scripts/Testing-related/valid_sample.mp3. If it doesn't exist,
+create it by copying the bundled sample.wav (or generate a small WAV
+payload) but keep the .mp3 extension for test semantics.
+"""
+HELPER_MP3_DIR = Path("Helper_Scripts/Testing-related")
+HELPER_MP3_DIR.mkdir(parents=True, exist_ok=True)
+HELPER_MP3_PATH = HELPER_MP3_DIR / "valid_sample.mp3"
+
+if not HELPER_MP3_PATH.exists():
+    src_wav = TEST_MEDIA_DIR / "sample.wav"
+    try:
+        if src_wav.exists():
+            HELPER_MP3_PATH.write_bytes(src_wav.read_bytes())
+        else:
+            # Generate 1s of silence as WAV bytes and write to .mp3 path
+            import wave
+            import struct
+            framerate = 16000
+            duration_s = 1
+            nframes = framerate * duration_s
+            # Write to a temporary path, then rename to .mp3
+            tmp_wav_path = HELPER_MP3_DIR / "_tmp_valid_sample.wav"
+            with wave.open(str(tmp_wav_path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(framerate)
+                wf.writeframes(b"\x00\x00" * nframes)
+            HELPER_MP3_PATH.write_bytes(tmp_wav_path.read_bytes())
+            tmp_wav_path.unlink(missing_ok=True)
+    except Exception as _e:
+        # As a last resort, create a small non-empty file so conversion path engages
+        HELPER_MP3_PATH.write_bytes(b"VALIDAUDIOPLACEHOLDERDATA")
+
+SAMPLE_AUDIO_PATH = HELPER_MP3_PATH
 SAMPLE_PDF_PATH = TEST_MEDIA_DIR / "sample.pdf"
 SAMPLE_EPUB_PATH = TEST_MEDIA_DIR / "sample.epub"
 SAMPLE_TXT_PATH = TEST_MEDIA_DIR / "sample.txt"

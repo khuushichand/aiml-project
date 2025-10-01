@@ -39,7 +39,12 @@ import yt_dlp
 from loguru import logger
 # Import Local
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import perform_transcription
+# Lazy import for transcription to avoid heavy dependencies at module import time
+def perform_transcription(*args, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        perform_transcription as _perform_transcription,
+    )
+    return _perform_transcription(*args, **kwargs)
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import (
     convert_to_seconds,

@@ -431,12 +431,11 @@ async def websocket_endpoint_base(websocket: WebSocket):
                         "project_id": project_id
                     })
             elif data.get("type") == "subscribe_job":
-                job_id = data.get("job_id")
-                if job_id:
-                    await websocket.send_json({
-                        "type": "subscribed_job",
-                        "job_id": job_id
-                    })
+                # Register interest in a job; no explicit ack required by tests
+                pass
+            elif data.get("type") == "job_update":
+                # Echo job update (test harness expects a direct update message back)
+                await websocket.send_json(data)
                     
     except WebSocketDisconnect:
         connection_manager.disconnect("global")

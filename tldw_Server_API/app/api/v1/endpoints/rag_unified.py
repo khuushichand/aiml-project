@@ -167,6 +167,20 @@ async def get_capabilities(request: Request):
             "supported": True,
             "methods": ["acronym", "synonym", "domain", "entity"],
         },
+        "claims": {
+            "supported": True,
+            "extractors": ["aps", "claimify", "auto"],
+            "verifiers": ["nli", "llm", "hybrid"],
+            "defaults": {
+                "top_k": 5,
+                "confidence_threshold": 0.7,
+                "max": 25
+            },
+            "nli": {
+                "env": ["RAG_NLI_MODEL", "RAG_NLI_MODEL_PATH"],
+                "override_param": "nli_model"
+            }
+        },
         "semantic_cache": {
             "supported": True,
             "adaptive_thresholds": True,
@@ -182,7 +196,8 @@ async def get_capabilities(request: Request):
         },
         "citation_generation": {
             "supported": True,
-            "styles": ["APA", "MLA", "Chicago", "Harvard"]
+            "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
+            "include_page_numbers": True
         },
         "answer_generation": {
             "supported": True,
@@ -198,10 +213,20 @@ async def get_capabilities(request: Request):
         },
         "table_processing": {
             "supported": True,
+            "methods": ["markdown", "html", "hybrid"]
         },
         "enhanced_chunking": {
             "supported": True,
-            "parent_context": True
+            "parent_context": True,
+            "sibling_context": True,
+            "parameters": [
+                "parent_context_size",
+                "include_parent_document",
+                "parent_max_tokens",
+                "include_sibling_chunks",
+                "sibling_window",
+                "chunk_type_filter"
+            ]
         },
         "feedback": {
             "supported": True,
@@ -209,16 +234,36 @@ async def get_capabilities(request: Request):
         },
         "monitoring": {
             "supported": True,
-            "observability": True
+            "observability": True,
+            "trace_id": True
+        },
+        "analytics": {
+            "supported": True
         },
         "batch_processing": {
             "supported": True,
-            "concurrent": True
+            "concurrent": True,
+            "defaults": {"max_concurrent": 5},
+            "limits": {"max_concurrent_max": 20}
         },
         "resilience": {
             "supported": True,
             "retries": True,
             "circuit_breakers": True
+        },
+        "streaming": {
+            "supported": True,
+            "endpoint": "/api/v1/rag/search/stream",
+            "media_type": "application/x-ndjson",
+            "events": ["delta", "claims_overlay", "final_claims"]
+        },
+        "quick_wins": {
+            "supported": True,
+            "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode"]
+        },
+        "user_context": {
+            "supported": True,
+            "fields": ["user_id", "session_id"]
         }
     }
 
@@ -246,13 +291,17 @@ async def get_capabilities(request: Request):
         "processor": RAG_SERVICE_CONFIG.get("processor", {}),
         "cache": RAG_SERVICE_CONFIG.get("cache", {}),
         "batch_size": RAG_SERVICE_CONFIG.get("batch_size", 32),
-        "num_workers": RAG_SERVICE_CONFIG.get("num_workers", 4)
+        "num_workers": RAG_SERVICE_CONFIG.get("num_workers", 4),
+        "min_score": 0.0,
+        "use_connection_pool": True,
+        "use_embedding_cache": True
     }
 
     limits = {
         "top_k_max": 100,
         "documents_per_db_max": 1000,
-        "answer_tokens_max": 2048
+        "answer_tokens_max": 2048,
+        "timeout_seconds_max": 60.0
     }
 
     auth = {
