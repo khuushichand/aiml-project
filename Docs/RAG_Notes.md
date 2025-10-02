@@ -84,7 +84,7 @@ https://medium.com/@bravekjh/rag-mcp-supercharging-ai-agents-with-retrieval-augm
 https://github.com/Aquiles-ai/Aquiles-RAG
 https://www.reddit.com/r/Rag/comments/1n98ua7/building_a_productiongrade_rag_on_a_900page/
 https://integral-business-intelligence.github.io/archivist/
-
+https://huggingface.co/blog/thebajajra/rexbert-encoders
 https://cloud.google.com/generative-ai-app-builder/docs/check-grounding#claim-level-score-response-examples
 
 https://www.tutorialspoint.com/basic-understanding-of-cure-algorithm

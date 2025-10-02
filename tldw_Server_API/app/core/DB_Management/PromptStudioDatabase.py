@@ -244,7 +244,8 @@ class PromptStudioDatabase(PromptsDatabase):
                 raise DatabaseError(f"Failed to get project: {e}")
     
     def list_projects(self, user_id: Optional[str] = None, status: Optional[str] = None,
-                     include_deleted: bool = False, page: int = 1, per_page: int = 20) -> Dict[str, Any]:
+                     include_deleted: bool = False, page: int = 1, per_page: int = 20,
+                     search: Optional[str] = None) -> Dict[str, Any]:
         """
         List projects with optional filtering.
         
@@ -273,6 +274,11 @@ class PromptStudioDatabase(PromptsDatabase):
         if status:
             conditions.append("status = ?")
             params.append(status)
+
+        if search:
+            conditions.append("(name LIKE ? OR description LIKE ?)")
+            like = f"%{search}%"
+            params.extend([like, like])
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
         # Count total with retry

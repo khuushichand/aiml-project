@@ -213,7 +213,7 @@ class TestPromptEndpoints:
             return response.json()["data"]["id"]
         return None
     
-    def test_create_prompt(self, client, test_db, project_id):
+    def test_create_prompt(self, client, test_db, project_id, auth_headers):
         """Test creating a new prompt."""
         if not project_id:
             pytest.skip("Project creation failed")

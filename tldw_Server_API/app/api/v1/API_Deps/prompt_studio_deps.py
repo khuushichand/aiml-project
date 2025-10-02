@@ -125,6 +125,10 @@ async def get_prompt_studio_user(
     import os
 
     # 1) Explicit test-mode bypass via env only (do not bypass automatically under pytest)
+    try:
+        logger.debug(f"PS get_user path={request.url.path} method={request.method} authz={'yes' if request.headers.get('Authorization') else 'no'} api_key={'yes' if request.headers.get('X-API-KEY') else 'no'}")
+    except Exception:
+        pass
     if os.getenv("TEST_MODE", "").lower() == "true":
         user_context = {
             "user_id": "test-user",

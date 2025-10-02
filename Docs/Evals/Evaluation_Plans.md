@@ -17,6 +17,7 @@ https://arxiv.org/pdf/2502.17601
 https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG
+https://github.com/johnbean393/SVGBench
 https://arxiv.org/abs/2412.12300
 https://huggingface.co/tencent/SongGeneration
 https://github.com/aizip/Rag-Eval-flow
