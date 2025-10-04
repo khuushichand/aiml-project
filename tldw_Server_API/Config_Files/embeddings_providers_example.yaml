@@ -71,7 +71,7 @@ providers:
       - BAAI/bge-large-en-v1.5
       - intfloat/e5-large-v2
       - jinaai/jina-embeddings-v2-base-en
-    cache_dir: ./embedding_models_data/huggingface_cache
+    cache_dir: ./models/embedding_models_data/huggingface_cache
     features:
       dimensions_support: false
       local_execution: true
@@ -81,7 +81,7 @@ providers:
     models:
       - sentence-transformers/all-MiniLM-L6-v2
       - BAAI/bge-base-en-v1.5
-    storage_dir: ./embedding_models_data/onnx_models
+    storage_dir: ./models/embedding_models_data/onnx_models
     providers:
       - CPUExecutionProvider
       # - CUDAExecutionProvider  # Uncomment if CUDA is available

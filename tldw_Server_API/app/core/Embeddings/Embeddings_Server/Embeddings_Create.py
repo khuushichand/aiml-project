@@ -155,7 +155,7 @@ ModelCfg = HFModelCfg | ONNXModelCfg | OpenAIModelCfg | LocalAPICfg
 
 class EmbeddingConfigSchema(BaseModel):
     default_model_id: str
-    model_storage_base_dir: Optional[str] = Field(default="./embedding_models_data/")
+    model_storage_base_dir: Optional[str] = Field(default="./models/embedding_models_data/")
     # These are currently NOT used by the global decorators.
     # If dynamic configuration is needed, decorators must be applied differently.
     rate_limiter: RateLimiterCfg = RateLimiterCfg()

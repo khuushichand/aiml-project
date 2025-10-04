@@ -141,7 +141,7 @@ services:
       - CACHE_TTL_SECONDS=3600
     volumes:
       - ./user_databases:/app/user_databases
-      - ./embedding_models_data:/app/embedding_models_data
+      - ./models/embedding_models_data:/app/embedding_models_data
     restart: unless-stopped
     deploy:
       resources:

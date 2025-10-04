@@ -1212,31 +1212,65 @@ class ChatDictionaryService:
                         total_dicts = int(row[0]) if row else 0
                         active_dicts = int(row[1]) if row and len(row) > 1 else 0
 
-                    row2 = conn.execute("SELECT COUNT(*) as total_entries FROM dictionary_entries").fetchone()
-                    total_entries = int(row2.get('total_entries', 0)) if isinstance(row2, dict) else int(row2[0])
+                    row2 = conn.execute(
+                        """
+                        SELECT 
+                            COUNT(*) as total_entries,
+                            SUM(CASE WHEN is_regex = 1 THEN 1 ELSE 0 END) as regex_entries,
+                            SUM(CASE WHEN (is_regex IS NULL OR is_regex = 0) THEN 1 ELSE 0 END) as literal_entries,
+                            SUM(CASE WHEN probability IS NOT NULL AND probability < 1.0 THEN 1 ELSE 0 END) as probabilistic_entries
+                        FROM dictionary_entries
+                    """
+                    ).fetchone()
+                    if isinstance(row2, dict):
+                        total_entries = int(row2.get('total_entries', 0))
+                        regex_entries = int(row2.get('regex_entries', 0))
+                        literal_entries = int(row2.get('literal_entries', 0))
+                        probabilistic_entries = int(row2.get('probabilistic_entries', 0))
+                    else:
+                        total_entries = int(row2[0]) if row2 else 0
+                        regex_entries = int(row2[1]) if row2 and len(row2) > 1 else 0
+                        literal_entries = int(row2[2]) if row2 and len(row2) > 2 else 0
+                        probabilistic_entries = int(row2[3]) if row2 and len(row2) > 3 else 0
 
                     avg_entries = (total_entries / total_dicts) if total_dicts else 0
-                    # Optional detailed breakdowns (set to 0 unless needed by callers/tests)
                     return {
                         "total_dictionaries": total_dicts,
                         "active_dictionaries": active_dicts,
                         "total_entries": total_entries,
-                        "literal_entries": 0,
-                        "regex_entries": 0,
-                        "probabilistic_entries": 0,
+                        "literal_entries": literal_entries,
+                        "regex_entries": regex_entries,
+                        "probabilistic_entries": probabilistic_entries,
                         "average_entries_per_dictionary": avg_entries,
                     }
                 else:
                     row = conn.execute(
-                        "SELECT COUNT(*) as total_entries FROM dictionary_entries WHERE dictionary_id = ?",
+                        """
+                        SELECT 
+                            COUNT(*) AS total_entries,
+                            SUM(CASE WHEN is_regex = 1 THEN 1 ELSE 0 END) AS regex_entries,
+                            SUM(CASE WHEN (is_regex IS NULL OR is_regex = 0) THEN 1 ELSE 0 END) AS literal_entries,
+                            SUM(CASE WHEN probability IS NOT NULL AND probability < 1.0 THEN 1 ELSE 0 END) AS probabilistic_entries
+                        FROM dictionary_entries
+                        WHERE dictionary_id = ?
+                        """,
                         (dictionary_id,)
                     ).fetchone()
-                    total_entries = int(row.get('total_entries', 0)) if isinstance(row, dict) else int(row[0])
+                    if isinstance(row, dict):
+                        total_entries = int(row.get('total_entries', 0))
+                        regex_entries = int(row.get('regex_entries', 0))
+                        literal_entries = int(row.get('literal_entries', 0))
+                        probabilistic_entries = int(row.get('probabilistic_entries', 0))
+                    else:
+                        total_entries = int(row[0]) if row else 0
+                        regex_entries = int(row[1]) if row and len(row) > 1 else 0
+                        literal_entries = int(row[2]) if row and len(row) > 2 else 0
+                        probabilistic_entries = int(row[3]) if row and len(row) > 3 else 0
                     return {
                         "total_entries": total_entries,
-                        "literal_entries": 0,
-                        "regex_entries": 0,
-                        "probabilistic_entries": 0,
+                        "literal_entries": literal_entries,
+                        "regex_entries": regex_entries,
+                        "probabilistic_entries": probabilistic_entries,
                     }
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")

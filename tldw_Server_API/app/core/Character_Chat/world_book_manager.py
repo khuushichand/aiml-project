@@ -681,7 +681,7 @@ class WorldBookService:
     def get_entries(
         self,
         world_book_id: Optional[int] = None,
-        enabled_only: bool = True
+        enabled_only: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Get world book entries.

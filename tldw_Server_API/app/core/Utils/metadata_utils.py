@@ -38,7 +38,10 @@ def normalize_safe_metadata(sm: Dict[str, Any]) -> Dict[str, Any]:
         out[k] = val
 
     # DOI
-    doi = _norm_str(out.get("doi") or out.get("DOI"))
+    _raw_doi = out.get("doi") if "doi" in out else out.get("DOI")
+    doi = _norm_str(_raw_doi)
+    if _raw_doi is not None and doi is None:
+        raise ValueError(f"Invalid DOI format: {_raw_doi}")
     if doi is not None:
         if not _DOI_RE.match(doi):
             raise ValueError(f"Invalid DOI format: {doi}")
@@ -77,4 +80,3 @@ def normalize_safe_metadata(sm: Dict[str, Any]) -> Dict[str, Any]:
         out["s2_paper_id"] = s2
 
     return out
-

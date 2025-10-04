@@ -18,11 +18,13 @@ https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG
 https://github.com/johnbean393/SVGBench
+https://github.com/scaleapi/SWE-bench_Pro-os
 https://arxiv.org/abs/2412.12300
 https://huggingface.co/tencent/SongGeneration
 https://github.com/aizip/Rag-Eval-flow
 https://arxiv.org/pdf/2502.15840
 https://llmapitest.com/
+https://github.com/huggingface/evaluation-guidebook/tree/main
 https://www.kaggle.com/benchmarks/google/facts-grounding
 https://github.com/allenai/IFBench
 https://arxiv.org/abs/2507.02825

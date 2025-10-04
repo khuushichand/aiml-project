@@ -248,7 +248,6 @@ class ElevenLabsAdapter(TTSAdapter):
                 AudioFormat.MP3,
                 AudioFormat.OPUS,
                 AudioFormat.PCM,
-                AudioFormat.ULAW,
                 AudioFormat.WAV,
             },
             max_text_length=5000,  # ElevenLabs character limit
@@ -513,8 +512,8 @@ class ElevenLabsAdapter(TTSAdapter):
         """Get Accept header for requested format"""
         format_map = {
             AudioFormat.MP3: "audio/mpeg",
+            AudioFormat.WAV: "audio/wav",
             AudioFormat.PCM: "audio/pcm",
-            AudioFormat.ULAW: "audio/ulaw",
             AudioFormat.OPUS: "audio/opus",
         }
         # Default to mpeg for unknown or unsupported formats

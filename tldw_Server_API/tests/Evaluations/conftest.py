@@ -255,6 +255,8 @@ async def webhook_receiver_server():
 
     Returns a dict with 'url' and 'received' list of captured requests.
     """
+    # Ensure webhook delivery path awaits completions during tests
+    os.environ["TEST_MODE"] = "true"
     app = web.Application()
     received = []
 

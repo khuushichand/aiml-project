@@ -35,6 +35,13 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import (
     get_tts_service_v2,
     close_tts_service_v2
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_tts_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    return None
 #
 #######################################################################################################################
 #
@@ -290,7 +297,7 @@ class TestAdapterRegistry:
         """Test registry initialization"""
         registry = TTSAdapterRegistry({"test_config": "value"})
         assert registry.config["test_config"] == "value"
-        assert len(registry._adapter_classes) == 7  # Default adapters (now includes VibeVoice and ElevenLabs)
+        assert len(registry._adapter_specs) == 7  # Default adapters (now includes VibeVoice and ElevenLabs)
     
     async def test_register_custom_adapter(self):
         """Test registering a custom adapter"""
@@ -313,7 +320,7 @@ class TestAdapterRegistry:
         
         # Register custom adapter
         registry.register_adapter(TTSProvider.OPENAI, CustomAdapter)
-        assert registry._adapter_classes[TTSProvider.OPENAI] == CustomAdapter
+        assert registry._adapter_specs[TTSProvider.OPENAI] == CustomAdapter
     
     async def test_get_adapter_with_config(self):
         """Test getting adapter with configuration"""

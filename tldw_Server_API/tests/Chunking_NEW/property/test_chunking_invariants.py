@@ -19,12 +19,25 @@ settings.load_profile("ci")
 
 def _has_punkt():
     try:
-        import nltk
+        import nltk  # noqa: F401
         from nltk.data import find
-        find('tokenizers/punkt_tab/english/')
-        return True
     except Exception:
         return False
+
+    candidates = (
+        "tokenizers/punkt_tab/english/",
+        "tokenizers/punkt/english.pickle",
+        "tokenizers/punkt/PY3/english.pickle",
+    )
+
+    for resource in candidates:
+        try:
+            find(resource)
+            return True
+        except LookupError:
+            continue
+
+    return False
 import json as _json
 
 def _to_text_list(chunks):
@@ -118,7 +131,7 @@ class TestContentPreservation:
         assume(text.strip())  # Skip empty text
         
         if params['method'] == 'sentences' and not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         chunker = Chunker(options={
             'method': params['method'],
             'max_size': params['max_size'],
@@ -144,7 +157,7 @@ class TestContentPreservation:
     def test_chunk_ordering_preserved(self, text):
         """Property: Chunk order preserves text order."""
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         chunker = Chunker(options={'method': 'sentences', 'max_size': 2, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         chunk_texts = _to_text_list(chunks)
@@ -225,7 +238,7 @@ class TestChunkSizeProperties:
         text = ". ".join([f"Sentence {i}" for i in range(num_sentences)]) + "."
         
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         chunker = Chunker(options={'method': 'sentences', 'max_size': sentences_per_chunk, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         

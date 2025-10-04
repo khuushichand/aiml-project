@@ -10,6 +10,13 @@ import numpy as np
 from fastapi import HTTPException
 from httpx import AsyncClient
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def clear_tts_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    return None
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest

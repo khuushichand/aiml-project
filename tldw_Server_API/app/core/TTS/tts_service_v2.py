@@ -384,7 +384,7 @@ class TTSServiceV2:
         # Provider-specific extras passthrough
         extras = getattr(request, 'extra_params', None) or {}
 
-        return TTSRequest(
+        tts_request = TTSRequest(
             text=request.input,
             voice=request.voice,
             format=audio_format,
@@ -395,6 +395,11 @@ class TTSServiceV2:
             # Additional parameters can be added via extra_params
             extra_params=extras
         )
+
+        # Preserve originating model for metrics/diagnostics when available
+        setattr(tts_request, "model", getattr(request, "model", None))
+
+        return tts_request
     
     async def _get_adapter(
         self,

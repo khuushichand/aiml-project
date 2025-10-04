@@ -362,8 +362,8 @@ async def list_prompts(
             detail="Failed to list prompts"
         )
 
-# Compatibility: GET on base path returns {"prompts": [...]}
-@router.get("")
+# Simple alias that mirrors the canonical list response shape
+@router.get("", response_model=ListResponse)
 async def list_prompts_simple(
     project_id: int = Query(..., description="Project ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -371,13 +371,8 @@ async def list_prompts_simple(
     include_deleted: bool = Query(False, description="Include deleted prompts"),
     _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
-) -> Dict[str, Any]:
-    lr = await list_prompts(project_id, page, per_page, include_deleted, True, db)  # type: ignore[arg-type]
-    if isinstance(lr, dict) and lr.get("data") is not None:
-        items = lr["data"]
-        prompts = [i if isinstance(i, dict) else i.model_dump() for i in items]
-        return {"prompts": prompts}
-    return lr
+) -> ListResponse:
+    return await list_prompts(project_id, page, per_page, include_deleted, True, db)  # type: ignore[arg-type]
 
 # Simple execute endpoint used by tests
 @router.post("/execute")

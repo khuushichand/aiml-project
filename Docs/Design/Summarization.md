@@ -20,6 +20,11 @@ https://blog.metrostar.com/iteratively-summarize-long-documents-llm
 https://arxiv.org/html/2412.15487v1
 https://arxiv.org/pdf/2204.01849
 https://arxiv.org/pdf/2501.08167
+https://substack.com/home/post/p-161922553
+https://github.com/anthropics/claude-cookbooks/blob/main/skills/summarization/evaluation/custom_evals/llm_eval.py
+https://www.bliro.io/en/blog/best-prompts-to-summarize-meeting-transcripts-using-chatgpt
+https://alexdong.com/how-openai-writes-prompts-for-text-classification-tasks.html
+https://www.airops.com/prompts/transcript-summary-ai-seo-claude-prompts
 https://aizip.substack.com/p/evaluating-small-language-models
 https://github.com/aizip/RED-flow
 Unread/Unreviewed

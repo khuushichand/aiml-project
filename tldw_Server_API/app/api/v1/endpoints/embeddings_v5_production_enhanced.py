@@ -811,7 +811,7 @@ async def create_embeddings_with_circuit_breaker(
             app_config = {
                 "embedding_config": {
                     "default_model_id": model_id,
-                    "model_storage_base_dir": "./embedding_models_data/",
+                    "model_storage_base_dir": "./models/embedding_models_data/",
                     "models": {model_id: model_cfg},
                 }
             }

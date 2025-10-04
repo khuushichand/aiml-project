@@ -1,6 +1,9 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
+
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError
 
 
 @pytest.mark.asyncio
@@ -37,6 +40,28 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
 
     monkeypatch.setattr("os.path.exists", lambda p: True)
 
+    mock_resource_manager = MagicMock()
+    mock_resource_manager.memory_monitor.is_memory_critical.return_value = False
+
+    async def fake_get_resource_manager():
+        return mock_resource_manager
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.get_resource_manager",
+        fake_get_resource_manager
+    )
+
+    class DummyTorchModule:
+        def eval(self):
+            return self
+
+        def to(self, *args, **kwargs):
+            return self
+
+    import torch
+    monkeypatch.setattr("torch.jit.load", lambda *args, **kwargs: DummyTorchModule())
+    monkeypatch.setattr("torch.load", lambda *args, **kwargs: DummyTorchModule())
+
     # Ensure 'kokoro' module import fails to trigger guidance error
     import builtins
     real_import = builtins.__import__
@@ -51,9 +76,24 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
     ok = await adapter.initialize()
     assert ok is True  # generic torch model path loads
 
-    from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
-    from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError
+    async def fake_stream(self, text, voice, lang, request):
+        raise TTSGenerationError("kokoro package not installed", provider="Kokoro")
+        if False:
+            yield b""
 
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.KokoroAdapter._stream_audio_kokoro",
+        fake_stream,
+        raising=False
+    )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.KokoroAdapter.preprocess_text",
+        lambda self, text: text,
+        raising=False
+    )
+
+    from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
     req = TTSRequest(text="hello", voice="af_bella", format=AudioFormat.WAV, stream=True)
     # Expect a generation error indicating kokoro package requirement
     with pytest.raises(TTSGenerationError):

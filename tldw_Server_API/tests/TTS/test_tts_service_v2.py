@@ -16,13 +16,16 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.adapter_registry import TTSAdapterRegistry, TTSProvider, TTSAdapterFactory
 from tldw_Server_API.app.core.TTS.adapters.base import (
-    TTSAdapter, 
+    TTSAdapter,
     TTSCapabilities,
     TTSRequest,
-    TTSResponse
+    TTSResponse,
+    AudioFormat,
+    ProviderStatus
 )
 from tldw_Server_API.app.core.TTS.circuit_breaker import CircuitBreaker, CircuitState
 from tldw_Server_API.app.core.TTS.audio_utils import AudioProcessor, process_voice_reference
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError, TTSProviderError
 
 #######################################################################################################################
 #
@@ -38,23 +41,35 @@ class MockAdapter(TTSAdapter):
         super().__init__(provider_config)
         self.initialized = False
         self.generate_called = False
-        
+        self.provider_id = provider_config.get("name", "mock")
+
     async def initialize(self) -> bool:
         self.initialized = True
+        self._initialized = True
+        self._status = ProviderStatus.AVAILABLE
+        self._capabilities = await self.get_capabilities()
         return True
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         self.generate_called = True
+        target_format = request.format if isinstance(request.format, AudioFormat) else AudioFormat.MP3
+
+        if request.stream:
+            async def _stream():
+                for chunk in (b"mock ", b"stream ", b"data"):
+                    yield chunk
+
+            return TTSResponse(
+                audio_stream=_stream(),
+                format=target_format,
+                provider=self.provider_id
+            )
+
         return TTSResponse(
-            audio=b"mock audio data",
-            format=request.format or "mp3",
-            provider=self.provider_config.get("name", "mock")
+            audio_data=b"mock audio data",
+            format=target_format,
+            provider=self.provider_id
         )
-    
-    async def generate_stream(self, request: TTSRequest):
-        yield b"mock "
-        yield b"stream "
-        yield b"data"
     
     async def get_capabilities(self) -> TTSCapabilities:
         from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo, AudioFormat
@@ -102,8 +117,32 @@ class TestTTSServiceV2:
         factory.create_adapter = AsyncMock(return_value=MockAdapter(config.get("mock", {})))
         factory.get_adapter = AsyncMock(return_value=MockAdapter(config.get("mock", {})))
         factory.list_adapters = AsyncMock(return_value=[TTSProvider.MOCK])
-        
+        factory.get_adapter_by_model = AsyncMock(return_value=MockAdapter({"name": "mock"}))
+        factory.get_best_adapter = AsyncMock(return_value=MockAdapter({"name": "mock"}))
+        factory.registry = MagicMock(spec=TTSAdapterRegistry)
+        factory.registry.get_all_capabilities = AsyncMock(return_value={})
+        factory.registry.get_adapter = AsyncMock(return_value=MockAdapter({"name": "mock"}))
+
         service = TTSServiceV2(factory)
+
+        class MetricsStub:
+            def register_metric(self, *args, **kwargs):
+                return None
+
+            def set_gauge(self, *args, **kwargs):
+                return None
+
+            def increment(self, *args, **kwargs):
+                return None
+
+            def observe(self, *args, **kwargs):
+                return None
+
+            def gauge_add(self, *args, **kwargs):
+                return None
+
+        service.metrics = MetricsStub()
+
         return service
     
     @pytest.mark.asyncio
@@ -125,16 +164,16 @@ class TestTTSServiceV2:
             response_format="mp3"
         )
         
-        # Mock the factory's get_adapter_by_model to return our mock adapter
+        request.stream = False
+
         mock_adapter = MockAdapter({"name": "mock"})
         await mock_adapter.initialize()
         service.factory.get_adapter_by_model = AsyncMock(return_value=mock_adapter)
-        
-        response = await service.generate_speech(request)
-        
-        assert response is not None
-        assert response.audio == b"mock audio data"
-        assert response.format == "mp3"
+
+        chunks = [chunk async for chunk in service.generate_speech(request)]
+        payload = b"".join(chunks)
+
+        assert payload == b"mock audio data"
     
     @pytest.mark.asyncio
     async def test_generate_stream(self, service):
@@ -147,26 +186,23 @@ class TestTTSServiceV2:
             response_format="mp3"
         )
         
-        # Mock the factory
         mock_adapter = MockAdapter({"name": "mock"})
         await mock_adapter.initialize()
         service.factory.get_adapter_by_model = AsyncMock(return_value=mock_adapter)
-        
-        chunks = []
-        async for chunk in service.generate_audio_stream(request):
-            chunks.append(chunk)
-        
+
+        chunks = [chunk async for chunk in service.generate_speech(request)]
+
         assert len(chunks) == 3
         assert b"".join(chunks) == b"mock stream data"
     
     @pytest.mark.asyncio
     async def test_get_capabilities(self, service):
         """Test getting provider capabilities"""
-        # Mock the factory's registry
         mock_adapter = MockAdapter({"name": "mock"})
         await mock_adapter.initialize()
+        mock_caps = await mock_adapter.get_capabilities()
         service.factory.registry.get_all_capabilities = AsyncMock(return_value={
-            TTSProvider.MOCK: await mock_adapter.get_capabilities()
+            TTSProvider.MOCK: mock_caps
         })
         
         caps = await service.get_capabilities()
@@ -175,8 +211,8 @@ class TestTTSServiceV2:
         assert "mock" in caps
         provider_caps = caps["mock"]
         assert provider_caps["supports_streaming"] is True
-        assert "en" in provider_caps["supported_languages"]
-        assert "mp3" in provider_caps["supported_formats"]
+        assert "en" in provider_caps["languages"]
+        assert "mp3" in provider_caps["formats"]
     
     @pytest.mark.asyncio
     async def test_list_providers(self, service):
@@ -217,8 +253,7 @@ class TestTTSServiceV2:
         
         # Create failing adapter
         failing_adapter = MockAdapter({"name": "failing"})
-        failing_adapter.generate = AsyncMock(side_effect=Exception("Provider failed"))
-        
+
         # Create working adapter
         working_adapter = MockAdapter({"name": "working"})
         
@@ -230,23 +265,54 @@ class TestTTSServiceV2:
                                        failing_adapter if name == "failing" else working_adapter)
         factory.list_adapters = AsyncMock(return_value=["failing", "working"])
         
-        service = TTSServiceV2(factory)
-        
-        request = TTSRequest(
-            text="Test text",
-            voice="voice1"
+        request = OpenAISpeechRequest(
+            input="Test text",
+            model="failing",
+            voice="voice1",
+            response_format="mp3"
         )
-        
-        response = await service.generate(request)
-        
-        assert response is not None
-        assert response.provider == "working"
+        request.stream = False
+
+        failing_error = TTSProviderError("Provider failed", provider="failing")
+        failing_adapter.generate = AsyncMock(side_effect=failing_error)
+        await failing_adapter.initialize()
+        await working_adapter.initialize()
+
+        factory.get_adapter_by_model = AsyncMock(return_value=failing_adapter)
+        factory.get_best_adapter = AsyncMock(return_value=working_adapter)
+        factory.registry = MagicMock(spec=TTSAdapterRegistry)
+        factory.registry.get_adapter = AsyncMock(return_value=working_adapter)
+
+        service = TTSServiceV2(factory)
+
+        class MetricsStub:
+            def register_metric(self, *args, **kwargs):
+                return None
+
+            def set_gauge(self, *args, **kwargs):
+                return None
+
+            def increment(self, *args, **kwargs):
+                return None
+
+            def observe(self, *args, **kwargs):
+                return None
+
+            def gauge_add(self, *args, **kwargs):
+                return None
+
+        service.metrics = MetricsStub()
+
+        chunks = [chunk async for chunk in service.generate_speech(request)]
+        payload = b"".join(chunks)
+
+        assert payload == b"mock audio data"
     
     @pytest.mark.asyncio
     async def test_circuit_breaker(self, service):
         """Test circuit breaker functionality"""
         # Get circuit breaker for mock provider
-        cb = service.circuit_manager.get_circuit("mock") if hasattr(service, 'circuit_manager') else None
+        cb = service.circuit_manager.get_circuit("mock") if getattr(service, 'circuit_manager', None) else None
         
         if cb:
             assert cb.state == CircuitState.CLOSED
@@ -453,8 +519,8 @@ class TestAdapterRegistry:
         registry.register_adapter(TTSProvider.MOCK, MockAdapter)
         
         # Check it was registered in the adapter_classes dict
-        assert TTSProvider.MOCK in registry._adapter_classes
-        assert registry._adapter_classes[TTSProvider.MOCK] == MockAdapter
+        assert TTSProvider.MOCK in registry._adapter_specs
+        assert registry._adapter_specs[TTSProvider.MOCK] == MockAdapter
     
     @pytest.mark.asyncio
     async def test_get_adapter(self):

@@ -86,6 +86,17 @@ https://www.reddit.com/r/Rag/comments/1n98ua7/building_a_productiongrade_rag_on_
 https://integral-business-intelligence.github.io/archivist/
 https://huggingface.co/blog/thebajajra/rexbert-encoders
 https://cloud.google.com/generative-ai-app-builder/docs/check-grounding#claim-level-score-response-examples
+https://universalrag.github.io/
+https://engineeringblog.yelp.com/2025/02/search-query-understanding-with-LLMs.html
+https://github.com/facebookresearch/ReasonIR/tree/main
+https://huggingface.co/lightonai/Reason-ModernColBERT
+https://arxiv.org/pdf/2407.12883
+https://arxiv.org/pdf/2505.22095
+https://github.com/hzy312/knowledge-r1/blob/main/README_Search-R1.md
+https://arxiv.org/html/2503.21729v3
+https://github.com/yale-nlp/MCTS-RAG
+
+
 
 https://www.tutorialspoint.com/basic-understanding-of-cure-algorithm
 	https://cloud.google.com/generative-ai-app-builder/docs/check-grounding

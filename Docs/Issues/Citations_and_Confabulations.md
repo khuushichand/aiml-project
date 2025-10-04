@@ -11,6 +11,8 @@ Evals
   https://github.com/microsoft/lost_in_conversation
 https://huggingface.co/spaces/LISA-Kadi/LISA-demo/tree/main
 https://arxiv.org/abs/2412.07965
+https://arxiv.org/abs/2510.01591
+https://arxiv.org/abs/2510.02173
 https://arxiv.org/abs/2501.08292
 https://docs.exa.ai/examples/demo-hallucination-detector
 https://www.microsoft.com/en-us/research/blog/claimify-extracting-high-quality-claims-from-language-model-outputs/
