@@ -68,6 +68,23 @@ media_config = loaded_config_data.get('media_processing', {}) if loaded_config_d
 AUDIO_TRANSCRIPTION_BUFFER_SIZE_MB = media_config.get('audio_transcription_buffer_size_mb', 10)
 """int: Maximum buffer size for audio transcription in MB."""
 
+
+def _resolve_project_root() -> Path:
+    """Return the repository root to anchor shared model directories."""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        models_dir = parent / "models"
+        if models_dir.is_dir():
+            return parent
+
+    parents = current.parents
+    fallback_index = 5 if len(parents) > 5 else len(parents) - 1
+    return parents[fallback_index]
+
+
+PROJECT_ROOT_DIR = _resolve_project_root()
+WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
+
 #######################################################################################################################
 # Function Definitions
 #
@@ -1188,8 +1205,7 @@ def check_model_exists(model_name: str) -> bool:
     Returns:
         True if model exists locally, False otherwise
     """
-    tldw_dir = os.path.dirname(os.path.dirname(__file__))
-    default_download_root = os.path.join(tldw_dir, 'models', 'Whisper')
+    default_download_root = str(WHISPER_MODEL_BASE_DIR)
     
     # Check if it's a path that exists
     if os.path.exists(model_name):
@@ -1264,8 +1280,7 @@ class WhisperModel(OriginalWhisperModel):
         model_identifier (str): The resolved identifier (path or name) used to
             load the model.
     """
-    tldw_dir = os.path.dirname(os.path.dirname(__file__))
-    default_download_root = os.path.join(tldw_dir, 'models', 'Whisper')
+    default_download_root = str(WHISPER_MODEL_BASE_DIR)
 
     valid_model_sizes = [
         "tiny.en", "tiny", "base.en", "base", "small.en", "small", "medium.en", "medium",
