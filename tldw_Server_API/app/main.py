@@ -3,14 +3,16 @@
 #
 # Imports
 import logging
+import asyncio
 #
 # 3rd-party Libraries
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 #
@@ -114,6 +116,7 @@ from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards
 # LLM Providers Endpoint
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
 from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router
+from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 # Web Scraping Management Endpoints
 from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
 #
@@ -125,6 +128,9 @@ from tldw_Server_API.app.core.Metrics import (
     track_metrics,
     OTEL_AVAILABLE
 )
+#
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
+from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
 #
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 #
@@ -743,8 +749,8 @@ app = FastAPI(
         "url": "https://github.com/cpacker/tldw_server/issues",
     },
     license_info={
-        "name": "Apache 2.0",
-        "url": "https://www.apache.org/licenses/LICENSE-2.0",
+        "name": "GNU GPL v2.0",
+        "url": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html",
     },
     openapi_tags=OPENAPI_TAGS,
     swagger_ui_parameters={
@@ -925,6 +931,18 @@ async def display_startup_info():
         logger.info("Authentication required via JWT tokens")
         logger.info("="*70)
 
+    try:
+        await asyncio.to_thread(get_cached_evaluation_manager)
+    except Exception as exc:
+        logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
+        raise
+
+    try:
+        if needs_setup():
+            logger.info("First-time setup is enabled. Open http://localhost:8000/setup to configure the server.")
+    except FileNotFoundError:
+        logger.warning("Configuration file missing; unable to determine setup state. Ensure config.txt exists.")
+
 # --- FIX: Add CORS Middleware ---
 # Import from config
 from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX
@@ -1057,6 +1075,25 @@ if WEBUI_DIR.exists():
 else:
     logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
 
+SETUP_PAGE_PATH = WEBUI_DIR / "setup.html"
+
+
+@app.get("/setup", include_in_schema=False, openapi_extra={"security": []})
+async def serve_setup_page():
+    """Serve the first-time setup UI when required."""
+    try:
+        setup_required = needs_setup()
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Configuration file missing; cannot render setup UI.")
+
+    if not setup_required:
+        return RedirectResponse(url="/webui/", status_code=307)
+
+    if not SETUP_PAGE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the WebUI bundle.")
+
+    return FileResponse(SETUP_PAGE_PATH)
+
 # Mount project Docs (read-only) for WebUI links, if present
 DOCS_DIR = BASE_DIR.parent.parent / "Docs"
 if DOCS_DIR.exists():
@@ -1072,7 +1109,15 @@ async def favicon():
 
 @app.get("/", openapi_extra={"security": []})
 async def root():
-    return {"message": "Welcome to the tldw API; If you're seeing this, the server is running!" + "Check out /webui , /docs or /metrics to get started!"}
+    try:
+        if needs_setup():
+            return RedirectResponse(url="/setup", status_code=307)
+    except FileNotFoundError:
+        logger.warning("config.txt missing while handling root request; serving default message.")
+
+    return {
+        "message": "Welcome to the tldw API; If you're seeing this, the server is running!" "Check out /webui , /docs or /metrics to get started!"
+    }
 
 # Metrics endpoint for Prometheus scraping
 @app.get("/metrics", include_in_schema=False)
@@ -1192,8 +1237,11 @@ app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
 # Router for Benchmark endpoint (NEW)
 app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])
 
-# Router for Configuration Info endpoint (for documentation)
+# Router for Setup endpoints (first-time configuration)
 from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
+
+# Router for Configuration Info endpoint (for documentation)
 app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
 
 # Router for Sync endpoint

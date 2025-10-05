@@ -14,6 +14,7 @@ import json
 import uuid
 import sqlite3
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import asyncio
@@ -633,3 +634,21 @@ class EvaluationManager:
         except Exception as e:
             logger.error(f"list_evaluations failed: {e}")
             return []
+
+
+# --- Shared instance helpers ---
+
+@lru_cache(maxsize=1)
+def _get_cached_manager() -> "EvaluationManager":
+    """Return a cached EvaluationManager instance for lightweight checks."""
+    return EvaluationManager()
+
+
+def get_cached_evaluation_manager() -> "EvaluationManager":
+    """Public accessor for the cached EvaluationManager instance."""
+    return _get_cached_manager()
+
+
+def reset_cached_evaluation_manager() -> None:
+    """Clear the cached EvaluationManager instance (primarily for tests)."""
+    _get_cached_manager.cache_clear()

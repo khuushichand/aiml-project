@@ -814,4 +814,4 @@ When extending the RAG module:
 
 ## License
 
-Same as tldw_server (Apache 2.0)
+Same as tldw_server (GPLv2)

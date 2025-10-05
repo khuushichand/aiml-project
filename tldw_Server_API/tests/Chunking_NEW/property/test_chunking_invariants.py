@@ -161,15 +161,31 @@ class TestContentPreservation:
         chunker = Chunker(options={'method': 'sentences', 'max_size': 2, 'overlap': 0, 'adaptive': False})
         chunks = chunker.chunk_text(text)
         chunk_texts = _to_text_list(chunks)
-        
-        if len(chunks) > 1:
-            # First words of each chunk should appear in order
+
+        if len(chunk_texts) > 1:
             positions = []
-            for ct in chunk_texts:
-                first_word = ct.split()[0] if ct.split() else ""
-                if first_word in text:
-                    positions.append(text.index(first_word))
-            
+            search_start = 0
+
+            for chunk_text in chunk_texts:
+                if not chunk_text or not chunk_text.strip():
+                    continue
+
+                match_start = text.find(chunk_text, search_start)
+                match_length = len(chunk_text)
+
+                if match_start == -1:
+                    normalized = chunk_text.strip()
+                    if not normalized:
+                        continue
+                    match_start = text.find(normalized, search_start)
+                    match_length = len(normalized)
+
+                if match_start == -1:
+                    pytest.fail(f"Chunk text not found in original input: {chunk_text!r}")
+
+                positions.append(match_start)
+                search_start = match_start + match_length
+
             # Positions should be increasing
             assert positions == sorted(positions)
     

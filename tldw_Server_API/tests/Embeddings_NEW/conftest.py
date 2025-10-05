@@ -20,7 +20,6 @@ import pytest
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 import chromadb
-from chromadb.config import Settings
 
 # sentence-transformers is installed in this environment; no stub needed.
 
@@ -72,6 +71,7 @@ def test_env_vars():
     os.environ["CHROMA_BATCH_SIZE"] = "100"
     os.environ["EMBEDDING_BATCH_SIZE"] = "32"
     os.environ["MAX_WORKERS"] = "2"
+    os.environ["CHROMADB_FORCE_STUB"] = "true"
     
     # Isolate user DB base dir to a temporary location to avoid migrating/using repo DBs
     tmp_user_base = tempfile.mkdtemp(prefix="emb_user_db_base_")
@@ -145,40 +145,32 @@ def document_metadata() -> List[Dict[str, Any]]:
 
 @pytest.fixture
 def chroma_client():
-    """Create a robust ChromaDB client for testing and ensure cleanup.
+    """Return the same per-user Chroma client the API uses."""
+    from tldw_Server_API.app.core.config import settings as app_settings
 
-    Prefer a PersistentClient on a temp directory for stability across
-    ChromaDB versions (0.4.x vs 0.5.x). Falls back to in-memory client
-    if PersistentClient initialization fails.
-    """
-    import tempfile
-    temp_dir = tempfile.mkdtemp(prefix="chroma_prop_")
-    client = None
+    user_base = app_settings.get("USER_DB_BASE_DIR") or os.environ.get("USER_DB_BASE_DIR")
+    if not user_base:
+        user_base = tempfile.mkdtemp(prefix="api_chroma_base_")
+        os.environ["USER_DB_BASE_DIR"] = user_base
+
+    embedding_cfg = app_settings.get("EMBEDDING_CONFIG", {}).copy()
+    embedding_cfg["USER_DB_BASE_DIR"] = user_base
+
+    user_id = str(app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+    manager = ChromaDBManager(user_id=user_id, user_embedding_config=embedding_cfg)
+    client = manager.client
+
     try:
-        try:
-            settings = Settings(
-                anonymized_telemetry=False,
-                allow_reset=True,
-            )
-            client = chromadb.PersistentClient(path=temp_dir, settings=settings)
-        except Exception:
-            # Fallback to in-memory client
-            client = chromadb.Client(Settings(is_persistent=False, anonymized_telemetry=False))
         yield client
     finally:
-        # Best-effort shutdown to release threads/resources
         try:
-            if client is not None and hasattr(client, "close"):
+            if hasattr(client, "close"):
                 client.close()  # type: ignore[attr-defined]
             else:
-                system = getattr(client, "_system", None) if client is not None else None
-                stop_fn = getattr(system, "stop", None) if system is not None else None
+                system = getattr(client, "_system", None)
+                stop_fn = getattr(system, "stop", None) if system else None
                 if callable(stop_fn):
                     stop_fn()
-        except Exception:
-            pass
-        try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
 
@@ -349,13 +341,20 @@ def job_result() -> Dict[str, Any]:
 # =====================================================================
 
 @pytest.fixture
-def media_database() -> Generator[MediaDatabase, None, None]:
-    """Create a test media database."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        db_path = Path(temp_dir) / "test_media.db"
+def media_database(test_client) -> MediaDatabase:
+    """Return the shared MediaDatabase used by API routes."""
+    from tldw_Server_API.app.main import app
+
+    db = getattr(app.state, "test_media_db", None)
+    if db is None:
+        base_dir = Path(os.environ.get("USER_DB_BASE_DIR", tempfile.mkdtemp(prefix="fallback_media_db_")))
+        user_dir = base_dir / "1"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        db_path = user_dir / "Media_DB_v2.db"
         db = MediaDatabase(db_path=str(db_path), client_id="test_client")
         db.initialize_db()
-        yield db
+        app.state.test_media_db = db
+    return db
 
 @pytest.fixture
 def populated_media_database(media_database) -> MediaDatabase:
@@ -531,12 +530,14 @@ def test_client(test_env_vars):
         return db
 
     app.dependency_overrides[get_media_db_for_user] = _override_db
+    app.state.test_media_db = db
     try:
         client = TestClient(app, raise_server_exceptions=False)
         yield client
     finally:
         # Clean up override and close DB
         app.dependency_overrides.pop(get_media_db_for_user, None)
+        app.state.test_media_db = None
         try:
             db.close_connection()
         except Exception:

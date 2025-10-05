@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import audit_logger
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker, CircuitState
-from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
 from tldw_Server_API.app.core.Security.secret_manager import secret_manager
 from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_health, get_connection_stats
@@ -91,7 +91,7 @@ async def health_check(
     # Evaluation service check
     try:
         # Check evaluation database
-        eval_manager = EvaluationManager()
+        eval_manager = get_cached_evaluation_manager()
         eval_db_status = "ok"
         
         # Check if evaluation database is accessible
@@ -348,7 +348,7 @@ async def evaluation_service_health() -> Dict[str, Any]:
     
     # Check evaluation database
     try:
-        eval_manager = EvaluationManager()
+        eval_manager = get_cached_evaluation_manager()
         
         # Test database connectivity and get stats
         import sqlite3
@@ -614,7 +614,7 @@ async def security_health_check() -> Dict[str, Any]:
     
     try:
         # Check evaluation database for potential security issues
-        eval_manager = EvaluationManager()
+        eval_manager = get_cached_evaluation_manager()
         
         with __import__('sqlite3').connect(eval_manager.db_path) as conn:
             # Check for unusual evaluation patterns that might indicate abuse

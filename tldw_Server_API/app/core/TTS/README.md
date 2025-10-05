@@ -367,8 +367,8 @@ Supported formats vary by provider:
 
 ## License
 
-This module is part of the tldw_server project and follows the same dual licensing:
-- Apache 2.0 License
+This module is part of the tldw_server project and follows the same licensing:
+- GNU General Public License v2.0
 
 ## Contributing
 

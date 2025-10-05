@@ -1,3 +1,10 @@
+[Setup]
+# Controls the first-time setup experience. Set enable_first_time_setup to false to disable
+# the guided setup screen. Once setup is complete, the application will flip setup_completed
+# to true to suppress the setup flow on subsequent launches.
+enable_first_time_setup = true
+setup_completed = false
+
 [Processing]
 processing_choice = cuda
 

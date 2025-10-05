@@ -531,6 +531,29 @@ async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedE
 
 
 @pytest.fixture(scope="function")
+def override_unified_service(temp_db_path, monkeypatch):
+    """Force API endpoints to use an isolated evaluations database."""
+    from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as service_module
+    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as router_module
+
+    user_db_base = temp_db_path.parent / "user_eval_dbs"
+    user_db_base.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
+
+    service = UnifiedEvaluationService(db_path=str(temp_db_path))
+    service_module._service_instance = service
+    router_module._evaluation_service = service
+
+    yield service
+
+    router_module._evaluation_service = None
+    service_module._service_instance = None
+
+
+@pytest.fixture(scope="function")
 def connection_pool(temp_db_path) -> ConnectionPool:
     """Create a ConnectionPool instance for testing."""
     pool = ConnectionPool(
@@ -679,21 +702,21 @@ def sample_batch_evaluation_data() -> Dict[str, Any]:
 # ============================================================================
 
 @pytest.fixture
-def api_client():
+def api_client(override_unified_service):
     """Create a test client for API testing."""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
-    
+
     with TestClient(app) as client:
         yield client
 
 
 @pytest_asyncio.fixture
-async def async_api_client():
+async def async_api_client(override_unified_service):
     """Create an async test client for API testing."""
     from httpx import AsyncClient, ASGITransport
     from tldw_Server_API.app.main import app
-    
+
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test"

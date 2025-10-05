@@ -235,7 +235,8 @@ def docker_redis_service():
     """
 
     if not (_docker_present() and os.getenv("USE_DOCKER_REDIS", "0").lower() in {"1", "true", "yes"}):
-        return None
+        yield None
+        return
 
     container_name = f"tldw-redis-test-{uuid.uuid4().hex[:8]}"
     port = int(os.getenv("TEST_REDIS_PORT", "6380"))
@@ -357,7 +358,7 @@ class TestChunkingWorker:
         worker = ChunkingWorker(base_worker_config)
         worker.redis_client = redis_stub
 
-        with patch.object(worker, '_update_job_status', new_callable=AsyncMock) as mock_status,
+        with patch.object(worker, '_update_job_status', new_callable=AsyncMock) as mock_status, \
              patch.object(worker, '_update_job_progress', new_callable=AsyncMock) as mock_progress:
             result = await worker.process_message(chunking_message)
 
@@ -469,7 +470,7 @@ class TestStorageWorker:
     @pytest.mark.asyncio
     async def test_process_storage_message(self, base_worker_config, storage_message, redis_stub):
         """Test processing a storage message using patched dependencies"""
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.ChromaDBManager') as mock_manager_cls:
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
             mock_manager_cls.return_value = MagicMock()
             worker = StorageWorker(base_worker_config)
 
@@ -491,7 +492,7 @@ class TestStorageWorker:
 
     @pytest.mark.asyncio
     async def test_get_or_create_collection_uses_manager(self, base_worker_config):
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.ChromaDBManager') as mock_manager_cls:
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
             manager_instance = MagicMock()
             mock_manager_cls.return_value = manager_instance
             worker = StorageWorker(base_worker_config)
@@ -504,7 +505,7 @@ class TestStorageWorker:
 
     @pytest.mark.asyncio
     async def test_store_batch_invokes_collection_add(self, base_worker_config):
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.ChromaDBManager') as mock_manager_cls:
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
             mock_manager_cls.return_value = MagicMock()
             worker = StorageWorker(base_worker_config)
 

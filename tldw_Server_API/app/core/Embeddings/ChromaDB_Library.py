@@ -249,8 +249,7 @@ class ChromaDBManager:
         )
 
         try:
-            self.client = chromadb.PersistentClient(
-                path=str(self.user_chroma_path),
+            self.client = chromadb.Client(
                 settings=client_settings,
             )
         except Exception as e:  # Catch broader exceptions during client initialization
@@ -1423,22 +1422,31 @@ class _InMemoryCollection:
         self._docs: Dict[str, str] = {}
         self._embs: Dict[str, List[float]] = {}
         self._meta: Dict[str, Dict[str, Any]] = {}
+        self._deleted: bool = False
+
+    def _ensure_active(self) -> None:
+        if self._deleted:
+            raise RuntimeError(f"Collection '{self.name}' no longer exists")
 
     @property
     def metadata(self) -> Dict[str, Any]:
+        self._ensure_active()
         return self._metadata
 
     def modify(self, metadata: Optional[Dict[str, Any]] = None):
+        self._ensure_active()
         if metadata:
             self._metadata.update(metadata)
 
     def count(self) -> int:
+        self._ensure_active()
         return len(self._docs)
 
     def add(self, documents: List[str], embeddings: List[List[float]], ids: List[str], metadatas: Optional[List[Dict[str, Any]]] = None):
         return self.upsert(documents=documents, embeddings=embeddings, ids=ids, metadatas=metadatas)
 
     def upsert(self, documents: List[str], embeddings: List[List[float]], ids: List[str], metadatas: Optional[List[Dict[str, Any]]] = None):
+        self._ensure_active()
         mds = metadatas or [{} for _ in ids]
         for i, id_ in enumerate(ids):
             self._docs[id_] = documents[i] if documents else ""
@@ -1447,6 +1455,7 @@ class _InMemoryCollection:
         return None
 
     def delete(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None):
+        self._ensure_active()
         if ids:
             for id_ in list(ids):
                 self._docs.pop(id_, None)
@@ -1455,6 +1464,7 @@ class _InMemoryCollection:
         return None
 
     def get(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
+        self._ensure_active()
         # Mirror Chroma's default behavior: include documents and metadatas when include is not specified
         if include is None:
             include = ["documents", "metadatas"]
@@ -1489,6 +1499,7 @@ class _InMemoryCollection:
         return out
 
     def query(self, query_embeddings: List[List[float]], n_results: int = 10, where: Optional[Dict[str, Any]] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
+        self._ensure_active()
         # Mirror common defaults: when include is omitted, return documents, metadatas, and distances
         if include is None:
             include = ["documents", "metadatas", "distances"]
@@ -1572,7 +1583,9 @@ class _InMemoryChromaClient:
         return self._collections[name]
 
     def delete_collection(self, name: str) -> None:
-        self._collections.pop(name, None)
+        col = self._collections.pop(name, None)
+        if col is not None:
+            col._deleted = True
         return None
 
 def get_default_chroma_manager():

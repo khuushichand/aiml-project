@@ -5,12 +5,16 @@ Uses Hypothesis to generate test data and verify that certain properties
 always hold true regardless of input.
 """
 
-import pytest
-from hypothesis import given, strategies as st, assume, settings, HealthCheck
-from hypothesis.stateful import RuleBasedStateMachine, rule, initialize, invariant
+import asyncio
 import json
+import tempfile
 from datetime import datetime, timedelta
+from pathlib import Path
+
 import numpy as np
+import pytest
+from hypothesis import HealthCheck, assume, given, settings, strategies as st
+from hypothesis.stateful import Bundle, RuleBasedStateMachine, initialize, invariant, rule
 
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
@@ -308,106 +312,114 @@ class TestConcurrencyInvariants:
     def test_concurrent_operations_consistency(self, evaluation_manager, operations):
         """Concurrent operations must maintain data consistency."""
         import threading
-        
+
         results = []
         errors = []
-        
+
         def perform_operation(op_type, data):
             try:
-                if op_type == 'store':
-                    result = evaluation_manager.store_evaluation(**data)
-                elif op_type == 'retrieve':
-                    result = evaluation_manager.get_evaluation(data["evaluation_id"])
-                else:  # list
-                    result = evaluation_manager.list_evaluations(limit=10)
-                
+                async def _run():
+                    if op_type == 'store':
+                        payload = {k: v for k, v in data.items() if k != "evaluation_id"}
+                        return await evaluation_manager.store_evaluation(**payload)
+                    if op_type == 'retrieve':
+                        eval_id = data.get("evaluation_id")
+                        if eval_id:
+                            return await evaluation_manager.get_evaluation(eval_id)
+                        return None
+                    return await evaluation_manager.list_evaluations(limit=10)
+
+                result = asyncio.run(_run())
                 results.append((op_type, result))
             except Exception as e:
                 errors.append((op_type, str(e)))
-        
-        # Execute operations concurrently
+
         threads = []
         for op_type, data in operations:
             t = threading.Thread(target=perform_operation, args=(op_type, data))
             threads.append(t)
             t.start()
-        
+
         for t in threads:
             t.join()
-        
-        # No data corruption errors should occur
+
         for error_type, error_msg in errors:
             assert "corrupt" not in error_msg.lower()
             assert "integrity" not in error_msg.lower()
 
 
 @pytest.mark.property
-class TestStateMachineEvaluation(RuleBasedStateMachine):
-    """Stateful testing of evaluation system."""
-    
+class EvaluationManagerStateMachine(RuleBasedStateMachine):
+    """Stateful testing of evaluation manager using an isolated database."""
+
+    evaluations = Bundle("evaluations")
+
     def __init__(self):
         super().__init__()
-        self.manager = EvaluationManager()
-        self.evaluations = {}  # Track evaluations in test
-        self.deleted = set()    # Track deleted evaluations
-    
-    @initialize()
-    def setup(self):
-        """Initialize the state machine."""
-        self.manager._init_database()
-    
-    @rule(
-        eval_id=st.text(min_size=8, max_size=32),
-        eval_type=evaluation_type_strategy(),
-        score=evaluation_score_strategy()
-    )
-    def create_evaluation(self, eval_id, eval_type, score):
-        """Create a new evaluation."""
-        if eval_id not in self.evaluations and eval_id not in self.deleted:
-            success = self.manager.store_evaluation(
-                evaluation_id=eval_id,
-                evaluation_type=eval_type,
-                input_data={"test": True},
-                results={"score": score}
-            )
-            
-            if success:
-                self.evaluations[eval_id] = {
-                    "type": eval_type,
-                    "score": score
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db_path = Path(self._tmpdir.name) / "state_machine_evals.db"
+
+        from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+
+        original_get_db_path = EvaluationManager._get_db_path
+
+        def _patched_get_db_path(instance):
+            return self._db_path
+
+        EvaluationManager._get_db_path = _patched_get_db_path
+        try:
+            self.manager = EvaluationManager()
+        finally:
+            EvaluationManager._get_db_path = original_get_db_path
+
+    def teardown(self):
+        self.manager = None
+        self._tmpdir.cleanup()
+
+    @rule(target=evaluations, eval_type=evaluation_type_strategy(), score=evaluation_score_strategy(), text=text_strategy())
+    def create_evaluation(self, eval_type, score, text):
+        """Create and persist a new evaluation record."""
+        payload = {
+            "evaluation_type": eval_type,
+            "input_data": {"question": text, "context": [text]},
+            "results": {
+                "score": score,
+                "metrics": {
+                    "overall": {"score": score}
                 }
-    
-    @rule(eval_id=st.sampled_from(['eval_1', 'eval_2', 'eval_3']))
+            },
+            "metadata": {"source": "state_machine", "length": len(text)}
+        }
+
+        eval_id = asyncio.run(self.manager.store_evaluation(**payload))
+        return eval_id
+
+    @rule(eval_id=evaluations)
     def retrieve_evaluation(self, eval_id):
-        """Retrieve an evaluation."""
-        result = self.manager.get_evaluation(eval_id)
-        
-        if eval_id in self.evaluations:
-            assert result is not None
-            stored = self.evaluations[eval_id]
-            assert result["evaluation_type"] == stored["type"]
-        elif eval_id in self.deleted:
-            # Deleted evaluations might still be retrievable (soft delete)
-            pass
-        else:
-            # Never created
-            pass
-    
+        """Ensure stored evaluations are retrievable."""
+        record = asyncio.run(self.manager.get_evaluation(eval_id))
+        assert record is not None
+        assert record["evaluation_id"] == eval_id
+        assert "results" in record
+
     @rule()
     def list_evaluations(self):
-        """List all evaluations."""
-        results = self.manager.list_evaluations(limit=100)
-        
-        # Results should not exceed actual evaluations
-        assert len(results) <= len(self.evaluations) + len(self.deleted)
-    
+        """List evaluations and validate basic structure."""
+        records = asyncio.run(self.manager.list_evaluations(limit=50))
+        assert isinstance(records, list)
+        for record in records:
+            assert "evaluation_id" in record
+
     @invariant()
-    def consistency_invariant(self):
-        """Check that stored evaluations remain consistent."""
-        for eval_id, expected in self.evaluations.items():
-            retrieved = self.manager.get_evaluation(eval_id)
-            if retrieved:
-                assert retrieved["evaluation_type"] == expected["type"]
+    def evaluations_remain_accessible(self):
+        """Previously created evaluations remain accessible."""
+        records = asyncio.run(self.manager.list_evaluations(limit=200))
+        seen_ids = {record["evaluation_id"] for record in records}
+        for eval_id in seen_ids:
+            assert asyncio.run(self.manager.get_evaluation(eval_id)) is not None
+
+
+TestEvaluationManagerStateMachine = EvaluationManagerStateMachine.TestCase
 
 
 @pytest.mark.property

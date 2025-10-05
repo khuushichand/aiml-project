@@ -311,7 +311,7 @@ For issues or questions:
 
 ## License
 
-This module is part of the TLDW Server project and follows the same licensing terms (Apache 2.0).
+This module is part of the TLDW Server project and follows the same licensing terms (GPLv2).
 
 ---
 

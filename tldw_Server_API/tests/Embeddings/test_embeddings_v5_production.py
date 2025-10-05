@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from hypothesis import given, strategies as st, settings, assume
 
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -676,7 +676,10 @@ class TestEndToEnd:
             nonlocal call_count
             call_count += 1
             batch = texts if isinstance(texts, list) else [texts]
-            return [[float(sum(map(ord, text)) % 5), 0.0, 0.0] for text in batch]
+            return [
+                [float(sum(map(ord, text))), float(len(text)), 0.0]
+                for text in batch
+            ]
 
         with patch(
             'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
@@ -850,47 +853,55 @@ class TestIntegration:
         
         # First, ensure the model is loaded with a single request
         print("Loading HuggingFace model...")
-        warmup_response = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": "warmup",
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        )
-        
-        if warmup_response.status_code != 200:
-            pytest.skip(f"HuggingFace model not available: {warmup_response.status_code}")
-        
-        print("Model loaded, testing concurrent requests...")
-        
-        # Now test concurrent requests using TestClient (which is thread-safe)
-        from concurrent.futures import ThreadPoolExecutor
-        import threading
-        
-        def make_request(idx):
-            """Make a request in a thread"""
-            try:
-                # Each thread needs its own client; ensure proper cleanup
-                with TestClient(app) as client:
+        async def fake_embeddings(texts, provider, model_id, config):
+            batch = texts if isinstance(texts, list) else [texts]
+            return [[0.1, 0.2, 0.3] for _ in batch]
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+            new=AsyncMock(side_effect=fake_embeddings)
+        ):
+            warmup_response = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": "warmup",
+                    "model": "sentence-transformers/all-MiniLM-L6-v2"
+                }
+            )
+
+            if warmup_response.status_code != 200:
+                pytest.skip(f"Embeddings service unavailable: {warmup_response.status_code}")
+
+            print("Model loaded, testing concurrent requests...")
+
+            transport = ASGITransport(app=app)
+
+            async def run_requests() -> list[int | None]:
+                async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
                     client.cookies.set("csrf_token", "test-csrf-token-12345")
-                    response = client.post(
-                        "/api/v1/embeddings",
-                        headers={**setup.auth_headers, "x-provider": "huggingface"},
-                        json={
-                            "input": f"Concurrent test {idx}",
-                            "model": "sentence-transformers/all-MiniLM-L6-v2"
-                        }
-                    )
-                    return response.status_code
-            except Exception as e:
-                print(f"Request {idx} failed: {e}")
-                return None
-        
-        # Use ThreadPoolExecutor for concurrent requests
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(make_request, i) for i in range(20)]
-            results = [f.result() for f in futures]
+                    tasks = [
+                        client.post(
+                            "/api/v1/embeddings",
+                            headers={**setup.auth_headers, "x-provider": "huggingface"},
+                            json={
+                                "input": f"Concurrent test {idx}",
+                                "model": "sentence-transformers/all-MiniLM-L6-v2"
+                            }
+                        )
+                        for idx in range(20)
+                    ]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+                    statuses: list[int | None] = []
+                    for idx, resp in enumerate(responses):
+                        if isinstance(resp, Exception):
+                            print(f"Request {idx} failed: {resp}")
+                            statuses.append(None)
+                        else:
+                            statuses.append(resp.status_code)
+                    return statuses
+
+            results = await run_requests()
         
         # Analyze results
         successful = [r for r in results if r == 200]

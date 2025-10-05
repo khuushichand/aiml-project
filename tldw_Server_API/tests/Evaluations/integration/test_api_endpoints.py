@@ -9,6 +9,7 @@ import pytest
 pytestmark = pytest.mark.integration
 import json
 import asyncio
+import os
 from typing import Dict, Any
 from datetime import datetime
 
@@ -115,11 +116,10 @@ class TestGEvalEndpoint:
         # Verify data was persisted - check using the actual evaluations database
         from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
         from pathlib import Path
-        
-        # Get the actual database path used by the service
-        # The service uses "Databases/evaluations.db" relative to the project root
-        project_root = Path(__file__).parent.parent.parent.parent.parent
-        db_path = project_root / "Databases" / "evaluations.db"
+
+        db_env = os.environ.get("EVALUATIONS_TEST_DB_PATH")
+        assert db_env, "EVALUATIONS_TEST_DB_PATH must be set for integration tests"
+        db_path = Path(db_env)
         
         # Use the EvaluationsDatabase to check persistence
         eval_db = EvaluationsDatabase(str(db_path))
@@ -442,53 +442,17 @@ class TestWebhookEndpoints:
         import sqlite3
         from pathlib import Path
         
-        # Fix webhook table schema - drop and recreate with correct schema
-        # This is needed because the table may have an old incompatible schema
-        # Note: The db_adapter actually uses tldw_Server_API/Databases, not the root Databases
-        db_path_1 = Path(__file__).parent.parent.parent.parent / "Databases" / "evaluations.db"
-        db_path_2 = Path(__file__).parent.parent.parent.parent.parent / "Databases" / "evaluations.db"
-        
-        # Clean both possible database locations
-        for db_path in [db_path_1, db_path_2]:
-            if db_path.exists():
-                with sqlite3.connect(db_path) as conn:
-                    try:
-                        # Drop the existing tables to fix schema issues
-                        conn.execute("DROP TABLE IF EXISTS webhook_deliveries")
-                        conn.execute("DROP TABLE IF EXISTS webhook_registrations")
-                        print(f"DEBUG: Dropped webhook tables in {db_path}")
-                        
-                        # Recreate with the correct schema that webhook_manager expects
-                        conn.execute("""
-                            CREATE TABLE IF NOT EXISTS webhook_registrations (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                user_id TEXT NOT NULL,
-                                url TEXT NOT NULL,
-                                secret TEXT NOT NULL,
-                                events TEXT NOT NULL,
-                                active BOOLEAN DEFAULT 1,
-                                retry_count INTEGER DEFAULT 3,
-                                timeout_seconds INTEGER DEFAULT 30,
-                                total_deliveries INTEGER DEFAULT 0,
-                                successful_deliveries INTEGER DEFAULT 0,
-                                failed_deliveries INTEGER DEFAULT 0,
-                                last_delivery_at TIMESTAMP,
-                                last_error TEXT,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                UNIQUE(user_id, url)
-                            )
-                        """)
-                        print(f"DEBUG: Recreated webhook_registrations table in {db_path}")
-                        conn.commit()
-                        
-                        # Verify the table is empty
-                        cursor = conn.execute("SELECT COUNT(*) FROM webhook_registrations")
-                        count = cursor.fetchone()[0]
-                        print(f"DEBUG: {db_path} now has {count} webhooks (should be 0)")
-                        
-                    except sqlite3.OperationalError as e:
-                        print(f"DEBUG: Error fixing webhook table in {db_path}: {e}")
+        db_env = os.environ.get("EVALUATIONS_TEST_DB_PATH")
+        assert db_env, "EVALUATIONS_TEST_DB_PATH must be set for integration tests"
+        db_path = Path(db_env)
+
+        with sqlite3.connect(db_path) as conn:
+            try:
+                initial_count = conn.execute(
+                    "SELECT COUNT(*) FROM webhook_registrations"
+                ).fetchone()[0]
+            except sqlite3.OperationalError as exc:
+                pytest.fail(f"webhook_registrations table missing before test: {exc}")
         
         # Use unique URL to avoid conflicts
         unique_id = str(uuid.uuid4())[:8]
@@ -522,6 +486,17 @@ class TestWebhookEndpoints:
         # Should contain our webhook
         webhook_ids = [w["webhook_id"] for w in webhooks]
         assert webhook_id in webhook_ids
+
+        with sqlite3.connect(db_path) as conn:
+            stored = conn.execute(
+                "SELECT url FROM webhook_registrations WHERE url = ?",
+                (webhook_data["url"],)
+            ).fetchone()
+            assert stored is not None
+            final_count = conn.execute(
+                "SELECT COUNT(*) FROM webhook_registrations"
+            ).fetchone()[0]
+            assert final_count >= initial_count + 1
     
     @pytest.mark.asyncio
     @pytest.mark.integration

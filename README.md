@@ -2,7 +2,7 @@
 
 <h1>tldw Server - API-First Media Analysis & Research Platform</h1>
 
-[![License](https://img.shields.io/badge/license-Apache%202-blue)](https://img.shields.io/badge/license-Apache%202-blue)
+[![License](https://img.shields.io/badge/license-GPLv2-blue)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server) 
 
 <h3>FastAPI-powered backend for media ingestion, analysis, and AI-powered research</h3>
@@ -1590,7 +1590,7 @@ See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy an
 
 ## License
 
-This project is Licensed under an Apache 2.0 License.
+This project is licensed under the GNU General Public License v2.0.
 
 ---
 

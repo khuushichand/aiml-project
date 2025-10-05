@@ -450,7 +450,7 @@ tldw-evals run benchmark --log-level DEBUG
 
 ## 📝 License
 
-This module is part of tldw_server and is licensed under the Apache 2.0 License.
+This module is part of tldw_server and is licensed under the GNU General Public License v2.0.
 
 ## 🙏 Acknowledgments
 
