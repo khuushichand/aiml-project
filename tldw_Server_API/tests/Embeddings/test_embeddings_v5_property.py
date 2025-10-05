@@ -153,10 +153,11 @@ class TestInputValidationProperties:
         )
         
         if input_text.strip():
-            # Non-empty should be accepted or rate limited
-            assert response.status_code in [200, 429, 503]
+            assert response.status_code in (200, 400)
+            if response.status_code == 400:
+                detail = response.json().get("detail", "").lower()
+                assert "empty" in detail or "long" in detail
         else:
-            # Empty should be rejected
             assert response.status_code == 400
             assert "empty" in response.json()["detail"].lower()
     
@@ -182,7 +183,7 @@ class TestInputValidationProperties:
             assert response.status_code == 400
             assert "empty" in response.json()["detail"].lower()
         elif num_inputs <= 2048:
-            assert response.status_code in [200, 429, 503]
+            assert response.status_code == 200
         else:
             assert response.status_code == 400
             assert "2048" in response.json()["detail"]
@@ -211,16 +212,10 @@ class TestInputValidationProperties:
         
         if not provider or provider in valid_providers:
             # Valid provider or default
-            assert response.status_code in [200, 404, 429, 503]  # May fail if model not found
+            assert response.status_code in (200, 404)
         else:
-            # Invalid provider - could be 400 (bad request) or 503 (service unavailable)
-            assert response.status_code in [400, 503]
-            if response.status_code == 400:
-                assert "Unknown provider" in response.json()["detail"]
-            else:
-                # 503 means service unavailable (e.g., circuit breaker open)
-                detail = response.json().get("detail", "")
-                assert "unavailable" in detail.lower() or "service" in detail.lower()
+            assert response.status_code == 400
+            assert "unknown provider" in response.json()["detail"].lower()
 
 
 class TestEmbeddingOutputProperties:

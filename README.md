@@ -451,7 +451,7 @@ See the [Migration Guide](#migration-guide) if upgrading from a previous version
 
 ### Content Analysis
 - **16+ LLM Providers**: 
-  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter
+  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
   - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite
 - **Flexible Analysis**: Multiple chunking strategies and prompt customization
 - **Evaluation System**: G-Eval, RAG evaluation, response quality metrics

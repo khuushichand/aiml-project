@@ -30,6 +30,9 @@ def _client():
 def test_media_embedding_job_lifecycle():
     os.environ["TESTING"] = "true"
     try:
+        original_allowed_providers = settings.get("ALLOWED_EMBEDDING_PROVIDERS")
+        original_allowed_models = settings.get("ALLOWED_EMBEDDING_MODELS")
+        original_model_limits = settings.get("EMBEDDING_MODEL_MAX_TOKENS")
         # Keep token limits permissive
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai", "huggingface"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-small", "sentence-transformers/all-MiniLM-L6-v2"]
@@ -61,7 +64,19 @@ def test_media_embedding_job_lifecycle():
             assert r3.status_code == 200
             j = r3.json()
             assert isinstance(j.get("data"), list)
-            assert any(row.get("id") == job_id for row in j["data"]) 
+            assert any(row.get("id") == job_id for row in j["data"])
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_media_db_for_user, None)
+        if original_allowed_providers is None:
+            settings.pop("ALLOWED_EMBEDDING_PROVIDERS", None)
+        else:
+            settings["ALLOWED_EMBEDDING_PROVIDERS"] = original_allowed_providers
+        if original_allowed_models is None:
+            settings.pop("ALLOWED_EMBEDDING_MODELS", None)
+        else:
+            settings["ALLOWED_EMBEDDING_MODELS"] = original_allowed_models
+        if original_model_limits is None:
+            settings.pop("EMBEDDING_MODEL_MAX_TOKENS", None)
+        else:
+            settings["EMBEDDING_MODEL_MAX_TOKENS"] = original_model_limits

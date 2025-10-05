@@ -50,6 +50,7 @@ class ConfigMigrator:
             "mistral_api_key": "MISTRAL_API_KEY",
             "openai_api_key": "OPENAI_API_KEY",
             "openrouter_api_key": "OPENROUTER_API_KEY",
+            "qwen_api_key": "QWEN_API_KEY",
             "elevenlabs_api_key": "ELEVENLABS_API_KEY",
             "custom_openai_api_key": "CUSTOM_OPENAI_API_KEY",
             "custom_openai_api_ip": "CUSTOM_OPENAI_API_IP",

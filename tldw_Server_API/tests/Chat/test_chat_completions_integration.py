@@ -170,7 +170,7 @@ def get_commercial_providers_with_keys_integration():
     """
     potentially_commercial = [
         "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface"
+        "deepseek", "mistral", "google", "huggingface", "qwen"
         # Add others that are external and need keys from your config
     ]
     # Check against keys actually loaded by the app's config (via schemas)

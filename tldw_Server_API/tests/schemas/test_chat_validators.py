@@ -330,7 +330,7 @@ class TestValidateProviderName:
         """Test known provider names."""
         known_providers = [
             "openai", "anthropic", "cohere", "groq", 
-            "openrouter", "deepseek", "mistral", "google",
+            "openrouter", "deepseek", "mistral", "google", "qwen",
             "llama.cpp", "kobold.cpp", "oobabooga", "ollama"
         ]
         for provider in known_providers:

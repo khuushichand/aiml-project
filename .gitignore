@@ -310,3 +310,4 @@ uv.lock
 /logs/
 /Databases/
 /tldw_Server_API/Logs
+/tmp

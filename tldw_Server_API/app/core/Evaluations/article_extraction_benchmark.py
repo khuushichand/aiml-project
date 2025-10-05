@@ -84,19 +84,21 @@ class ArticleExtractionBenchmarkEvaluator:
         limit: Optional[int] = None,
         output_predictions_path: Optional[Path] = None,
     ) -> BenchmarkMetrics:
-        ground_truth = self._load_ground_truth()
+        full_ground_truth = self._load_ground_truth()
         predictions: Dict[str, Dict[str, str]] = {}
 
-        item_ids = list(ground_truth.keys())
+        item_ids = list(full_ground_truth.keys())
         if limit is not None:
             item_ids = item_ids[:limit]
             logger.info(
-                "Running benchmark on %d/%d documents (limit applied)",
-                len(item_ids),
-                len(ground_truth),
+                "Running benchmark on {subset}/{total} documents (limit applied)",
+                subset=len(item_ids),
+                total=len(full_ground_truth),
             )
         else:
-            logger.info("Running benchmark on %d documents", len(item_ids))
+            logger.info("Running benchmark on {count} documents", count=len(item_ids))
+
+        ground_truth = {key: full_ground_truth[key] for key in item_ids}
 
         for idx, item_id in enumerate(item_ids, start=1):
             truth = ground_truth[item_id]
@@ -108,26 +110,23 @@ class ArticleExtractionBenchmarkEvaluator:
             }
 
             if idx % 25 == 0 or idx == len(item_ids):
-                logger.info("Processed %d/%d documents", idx, len(item_ids))
+                logger.info("Processed {done}/{total} documents", done=idx, total=len(item_ids))
 
         if output_predictions_path:
             output_predictions_path.write_text(
                 json.dumps(predictions, indent=2, ensure_ascii=False)
             )
-            logger.info("Saved predictions to %s", output_predictions_path)
+            logger.info("Saved predictions to {path}", path=output_predictions_path)
 
         metrics = evaluate_metrics(ground_truth, predictions, self.n_bootstrap)
         logger.info(
-            "Benchmark complete — F1: %.3f (± %.3f), Precision: %.3f (± %.3f), "
-            "Recall: %.3f (± %.3f), Accuracy: %.3f (± %.3f)",
-            metrics["f1"],
-            metrics["f1_std"],
-            metrics["precision"],
-            metrics["precision_std"],
-            metrics["recall"],
-            metrics["recall_std"],
-            metrics["accuracy"],
-            metrics["accuracy_std"],
+            (
+                "Benchmark complete — F1: {f1:.3f} (± {f1_std:.3f}), "
+                "Precision: {precision:.3f} (± {precision_std:.3f}), "
+                "Recall: {recall:.3f} (± {recall_std:.3f}), "
+                "Accuracy: {accuracy:.3f} (± {accuracy_std:.3f})"
+            ),
+            **metrics,
         )
 
         return BenchmarkMetrics(

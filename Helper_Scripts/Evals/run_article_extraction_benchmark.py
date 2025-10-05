@@ -57,7 +57,7 @@ def main() -> None:
 
     logger.info("Final benchmark metrics:")
     for key, value in metrics.to_dict().items():
-        logger.info("%s: %.4f", key, value)
+        logger.info("{key}: {value:.4f}", key=key, value=value)
 
 
 if __name__ == "__main__":
