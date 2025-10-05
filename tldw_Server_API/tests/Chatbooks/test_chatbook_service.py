@@ -29,7 +29,8 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
     ExportStatus,
     ImportStatus,
     ChatbookVersion,
-    ContentType
+    ContentType,
+    ConflictResolution,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -63,24 +64,13 @@ def service(mock_db, tmp_path, monkeypatch):
     monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
     monkeypatch.setenv('TLDW_USER_DATA_PATH', str(tmp_path))
     
-    # Mock execute_query to return empty results for table creation
     mock_db.execute_query.return_value = []
-    mock_db.get_connection.return_value.execute = MagicMock()
-    mock_db.get_connection.return_value.close = MagicMock()
-    
-    with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.Path.mkdir') as mock_mkdir:
-        mock_mkdir.return_value = None
-        service = ChatbookService(user_id="test_user", db=mock_db)
-    
-    # Ensure directories exist in tmp_path
-    service.user_data_dir = tmp_path / 'users' / 'test_user' / 'chatbooks'
-    service.export_dir = service.user_data_dir / 'exports'
-    service.import_dir = service.user_data_dir / 'imports'
-    service.temp_dir = service.user_data_dir / 'temp'
-    
-    for dir_path in [service.user_data_dir, service.export_dir, service.import_dir, service.temp_dir]:
-        dir_path.mkdir(parents=True, exist_ok=True)
-    
+    connection = MagicMock()
+    connection.execute = MagicMock()
+    connection.close = MagicMock()
+    mock_db.get_connection.return_value = connection
+
+    service = ChatbookService(user_id="test_user", db=mock_db)
     return service
 
 
@@ -169,52 +159,78 @@ class TestChatbookService:
         assert "INSERT OR REPLACE INTO export_jobs" in call_args[0]
     
     @pytest.mark.asyncio
-    async def test_export_chatbook_sync(self, service, mock_db):
+    async def test_export_chatbook_sync(self, service, mock_db, tmp_path):
         """Test synchronous chatbook export."""
-        # Mock content retrieval
-        mock_db.execute_query.side_effect = [
-            [{"id": "conv1", "title": "Test Conv", "created_at": "2024-01-01"}],  # Conversations
-            [],  # Characters  
-            [],  # World books
-            [],  # Dictionaries
-            [],  # Notes
-            []   # Prompts
+        mock_db.execute_query.return_value = [
+            {"id": "conv1"},
+            {"id": "conv2"},
         ]
-        
-        with patch.object(service, '_create_chatbook_archive') as mock_archive:
-            mock_archive.return_value = "/tmp/test.chatbook"
-            
-            result = await service.export_chatbook(
-                name="Test Export",
-                content_types=["conversations"]
+
+        archive_path = tmp_path / "test_export.chatbook"
+        manifest_payload = {
+            "name": "Test Export",
+            "description": "Test Description",
+            "statistics": {"total_conversations": 2},
+        }
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest_payload))
+
+        with patch.object(service, "create_chatbook", new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = (
+                True,
+                "Chatbook created successfully",
+                str(archive_path),
             )
-        
-        # Check result structure - export_chatbook returns a dict from the async wrapper
-        assert "status" in result or "success" in result
-        if "success" in result:
-            assert result["success"] == True
-        if "file_path" in result:
-            assert result["file_path"] is not None
-    
-    @pytest.mark.asyncio
-    async def test_export_chatbook_async_job(self, service, mock_db):
-        """Test asynchronous chatbook export with job management."""
-        test_uuid = uuid4()
-        job_id = str(test_uuid)
-        
-        with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.uuid4', return_value=test_uuid):
-            mock_db.execute_query.return_value = None
-            
+
             result = await service.export_chatbook(
                 name="Test Export",
                 content_types=["conversations"],
-                async_job=True
             )
-        
-        assert result["job_id"] == job_id
-        assert result["status"] == "pending"
-        # Message format changed
-        assert "Export job" in result["message"]
+
+        mock_create.assert_awaited_once()
+        call_kwargs = mock_create.await_args.kwargs
+        assert call_kwargs["name"] == "Test Export"
+        assert "async_mode" not in call_kwargs
+        assert call_kwargs["content_selections"] == {
+            ContentType.CONVERSATION: ["conv1", "conv2"],
+        }
+
+        assert result["success"] is True
+        assert result["message"] == "Chatbook created successfully"
+        assert result["file_path"] == str(archive_path)
+        assert result["job_id"] is None
+        assert result["status"] == "completed"
+        assert result["content_summary"]["conversations"] == 2
+
+    @pytest.mark.asyncio
+    async def test_export_chatbook_async_job(self, service, mock_db):
+        """Test asynchronous chatbook export with job management."""
+        mock_db.execute_query.return_value = []
+
+        with patch.object(service, "create_chatbook", new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = (
+                True,
+                "Export job started: job-123",
+                "job-123",
+            )
+
+            result = await service.export_chatbook(
+                name="Test Export",
+                content_types=["conversations"],
+                async_job=True,
+            )
+
+        mock_create.assert_awaited_once()
+        call_kwargs = mock_create.await_args.kwargs
+        assert call_kwargs["async_mode"] is True
+        assert result == {
+            "success": True,
+            "message": "Export job started: job-123",
+            "file_path": None,
+            "job_id": "job-123",
+            "status": "pending",
+            "content_summary": {},
+        }
     
     def test_preview_export(self, service, mock_db):
         """Test previewing export content."""
@@ -288,132 +304,57 @@ class TestChatbookService:
         assert result == True
     
     @pytest.mark.asyncio
-    async def test_import_chatbook_with_conflicts(self, service, mock_db, sample_manifest):
-        """Test importing a chatbook with conflict resolution."""
-        # Create a test chatbook file
-        with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
-            # Add content_items to manifest so import knows what to import
-            manifest_dict = manifest_to_dict(sample_manifest)
-            manifest_dict['content_items'] = [
-                {
-                    "id": "conv1",
-                    "type": "conversation",
-                    "title": "Test Conversation",
-                    "created_at": "2024-01-01T00:00:00"
-                }
-            ]
-            with zipfile.ZipFile(tmp.name, 'w') as zf:
-                zf.writestr('manifest.json', json.dumps(manifest_dict))
-                # Use correct path structure expected by import
-                zf.writestr('content/conversations/conversation_conv1.json', json.dumps({
-                    "id": "conv1",
-                    "name": "Test Conversation",  # Service expects 'name', not 'title'
-                    "character_id": 1,  # Add required character_id field
-                    "created_at": "2024-01-01T00:00:00",
-                    "messages": []
-                }))
-            
-            # Mock checking for conflicts
-            mock_db.execute_query.side_effect = [
-                [{"id": "conv1"}],  # Existing conversation (conflict)
-                None  # Import operation
-            ]
-            
+    async def test_import_chatbook_passes_conflict_resolution_enum(self, service):
+        """Ensure string conflict_resolution values map to the enum."""
+        with patch(
+            "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = (True, "ok", None)
+
             result = await service.import_chatbook(
-                file_path=tmp.name,
-                conflict_resolution="skip"
+                file_path="sample.chatbook",
+                conflict_resolution="overwrite",
             )
-        
-        # Result is a tuple (success, message, path)
-        if isinstance(result, tuple):
-            success, message, _ = result
-            assert success or "conflict" in message.lower()
-        else:
-            assert result.get("success", False) == True
-    
+
+        mock_to_thread.assert_awaited_once()
+        call_args = mock_to_thread.await_args.args
+        assert call_args[3] is ConflictResolution.OVERWRITE
+        assert result == (True, "ok", None)
+
     @pytest.mark.asyncio
-    async def test_import_chatbook_replace_strategy(self, service, mock_db, sample_manifest):
-        """Test importing with replace conflict strategy."""
-        with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
-            # Add content_items to manifest
-            manifest_dict = manifest_to_dict(sample_manifest)
-            manifest_dict['content_items'] = [
-                {
-                    "id": "char1",
-                    "type": "character",
-                    "title": "New Character",
-                    "created_at": "2024-01-01T00:00:00"
-                }
-            ]
-            with zipfile.ZipFile(tmp.name, 'w') as zf:
-                zf.writestr('manifest.json', json.dumps(manifest_dict))
-                # Use correct path structure
-                zf.writestr('content/characters/character_char1.json', json.dumps({
-                    "id": "char1",
-                    "name": "New Character",
-                    "description": "A test character",
-                    "personality": "Friendly",
-                    "scenario": "Testing",
-                    "system_prompt": "You are a test character"
-                }))
-            
-            mock_db.execute_query.side_effect = [
-                [{"id": "char1"}],  # Existing character
-                None  # Replace operation
-            ]
-            
-            result = await service.import_chatbook(
-                file_path=tmp.name,
-                conflict_strategy="replace"
+    async def test_import_chatbook_conflict_strategy_alias(self, service):
+        """conflict_strategy alias should map to the same enum handling."""
+        with patch(
+            "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = (True, "alias ok", None)
+
+            await service.import_chatbook(
+                file_path="sample.chatbook",
+                conflict_strategy="rename",
             )
-        
-        # Result is a tuple (success, message, path)
-        if isinstance(result, tuple):
-            success, message, _ = result
-            assert success == True or "replaced" in message.lower()
-        else:
-            assert result["success"] == True
-            assert result["conflicts_resolved"]["replaced"] > 0
-    
+
+        call_args = mock_to_thread.await_args.args
+        assert call_args[3] is ConflictResolution.RENAME
+
     @pytest.mark.asyncio
-    async def test_import_chatbook_rename_strategy(self, service, mock_db, sample_manifest):
-        """Test importing with rename conflict strategy."""
-        with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
-            # Add content_items to manifest
-            manifest_dict = manifest_to_dict(sample_manifest)
-            manifest_dict['content_items'] = [
-                {
-                    "id": "note1",
-                    "type": "note",
-                    "title": "Test Note",
-                    "created_at": "2024-01-01T00:00:00"
-                }
-            ]
-            with zipfile.ZipFile(tmp.name, 'w') as zf:
-                zf.writestr('manifest.json', json.dumps(manifest_dict))
-                # Use correct path structure - notes expect raw markdown content, not JSON
-                zf.writestr('content/notes/note_note1.md', """---
-title: Test Note
----
-Test content""")
-            
-            mock_db.execute_query.side_effect = [
-                [{"id": "note1"}],  # Existing note
-                None  # Import with new name
-            ]
-            
-            result = await service.import_chatbook(
-                file_path=tmp.name,
-                conflict_strategy="rename"
+    async def test_import_chatbook_invalid_conflict_resolution_defaults_to_skip(self, service):
+        """Invalid conflict resolution values should fall back to SKIP."""
+        with patch(
+            "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = (True, "defaulted", None)
+
+            await service.import_chatbook(
+                file_path="sample.chatbook",
+                conflict_resolution="replace",
             )
-        
-        # Result is a tuple (success, message, path)
-        if isinstance(result, tuple):
-            success, message, _ = result
-            assert success == True or "renamed" in message.lower()
-        else:
-            assert result["success"] == True
-            assert result["conflicts_resolved"]["renamed"] > 0
+
+        call_args = mock_to_thread.await_args.args
+        assert call_args[3] is ConflictResolution.SKIP
     
     def test_create_import_job(self, service, mock_db):
         """Test creating an import job."""
@@ -538,41 +479,30 @@ Test content""")
         assert stats["imports"].get("completed", 0) == 28
     
     @pytest.mark.asyncio
-    async def test_error_handling_during_export(self, service, mock_db):
+    async def test_error_handling_during_export(self, service):
         """Test error handling during export."""
-        mock_db.execute_query.side_effect = Exception("Database error")
-        
-        # The export_chatbook method IS async in our implementation
-        result = await service.export_chatbook(
-            user_id="test_user",
-            chatbook_name="Test Export",
-            options={"content_types": ["conversations"]}
-        )
-        
-        # Check that error was handled - result is a dict with status
-        # The actual implementation doesn't throw errors, it creates the export successfully
-        # even when queries fail, so we check if it completed successfully or had an error
-        assert result.get("status") in ["failed", "error", "completed"] or "error" in result or result.get("success") == True
-    
+        with patch.object(service, "create_chatbook", new_callable=AsyncMock) as mock_create:
+            mock_create.side_effect = RuntimeError("Database error")
+
+            with pytest.raises(RuntimeError):
+                await service.export_chatbook(
+                    name="Test Export",
+                    content_types=["conversations"],
+                )
+
     @pytest.mark.asyncio
-    async def test_error_handling_during_import(self, service, mock_db):
+    async def test_error_handling_during_import(self, service):
         """Test error handling during import."""
-        # The import_chatbook method IS async in our implementation
         result = await service.import_chatbook(
             file_path="/nonexistent/file.chatbook",
-            conflict_resolution="skip"  # Use correct parameter name
+            conflict_resolution="skip"
         )
-        
-        # Result is a tuple (success, message, path)
-        if isinstance(result, tuple):
-            success, message, _ = result
-            assert success == False
-            assert ("error" in message.lower() or 
-                    "not found" in message.lower() or
-                    "invalid" in message.lower())
-        else:
-            assert result.get("status") == "failed"
-            assert "error" in result
+
+        assert result == (
+            False,
+            "Error: Invalid or potentially malicious archive file",
+            None,
+        )
     
     def test_user_isolation(self, service, mock_db):
         """Test that operations are isolated to the current user."""
