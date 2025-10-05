@@ -48,12 +48,11 @@ class TestMediaEmbeddingsEndpoint:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_202_ACCEPTED:
-            data = response.json()
-            assert "job_id" in data
-            assert "status" in data
-            assert data["status"] == "processing"
+
+        assert response.status_code == status.HTTP_202_ACCEPTED, response.text
+        data = response.json()
+        assert data["status"] == "accepted"
+        assert data["job_id"]
     
     @pytest.mark.integration
     async def test_get_embedding_status(self, test_client, auth_headers):
@@ -64,10 +63,8 @@ class TestMediaEmbeddingsEndpoint:
             f"/api/v1/media/embeddings/jobs/{job_id}",
             headers=auth_headers
         )
-        
-        # If jobs DB not initialized yet, some environments return 500 (table missing).
-        # Otherwise 404 for unknown job id.
-        assert response.status_code in [status.HTTP_404_NOT_FOUND, status.HTTP_500_INTERNAL_SERVER_ERROR]
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
     
     @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
@@ -89,11 +86,10 @@ class TestMediaEmbeddingsEndpoint:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_202_ACCEPTED:
-            data = response.json()
-            assert "job_ids" in data
-            assert len(data["job_ids"]) == len(media_ids)
+
+        assert response.status_code == status.HTTP_202_ACCEPTED, response.text
+        data = response.json()
+        assert len(data.get("job_ids", [])) == len(media_ids)
     
     @pytest.mark.integration
     async def test_search_by_embeddings(self, test_client, auth_headers, populated_chroma_collection):
@@ -107,11 +103,11 @@ class TestMediaEmbeddingsEndpoint:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert "results" in data
-            assert len(data["results"]) <= 5
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        assert "results" in data
+        assert len(data["results"]) <= 5
 
 # ========================================================================
 # Embedding Models Management Tests
@@ -127,17 +123,16 @@ class TestEmbeddingModelsManagement:
             "/api/v1/embeddings/models",
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            # Endpoint returns a dict with a 'data' list
-            models = data.get("data") if isinstance(data, dict) else data
-            assert isinstance(models, list)
-            # Should have at least the default model
-            assert any(
-                (isinstance(m, dict) and "all-MiniLM-L6-v2" in m.get("model", "")) or (isinstance(m, str) and "all-MiniLM-L6-v2" in m)
-                for m in models
-            )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        models = data.get("data") if isinstance(data, dict) else data
+        assert isinstance(models, list)
+        assert any(
+            (isinstance(m, dict) and "all-MiniLM-L6-v2" in m.get("model", "")) or
+            (isinstance(m, str) and "all-MiniLM-L6-v2" in m)
+            for m in models
+        )
     
     @pytest.mark.integration
     async def test_get_model_info(self, test_client, auth_headers):
@@ -146,12 +141,11 @@ class TestEmbeddingModelsManagement:
             "/api/v1/embeddings/models/sentence-transformers/all-MiniLM-L6-v2",
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert "dimension" in data
-            assert data["dimension"] == 384
-            assert "max_tokens" in data
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        assert data["dimension"] == 384
+        assert "max_tokens" in data
     
     @pytest.mark.unit
     @patch('sentence_transformers.SentenceTransformer')
@@ -167,10 +161,10 @@ class TestEmbeddingModelsManagement:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert data["status"] in ["warmed_up", "ok"]
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        assert data["status"] in {"warmed_up", "ok"}
 
 # ========================================================================
 # ChromaDB Collection Management Tests
@@ -191,14 +185,13 @@ class TestChromaDBCollectionManagement:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_201_CREATED:
-            data = response.json()
-            assert data["name"] == "test_collection"
-            
-            # Verify collection exists in ChromaDB
-            collections = chroma_client.list_collections()
-            assert any(c.name == "test_collection" for c in collections)
+
+        assert response.status_code == status.HTTP_201_CREATED, response.text
+        data = response.json()
+        assert data["name"] == "test_collection"
+
+        collections = chroma_client.list_collections()
+        assert any(c.name == "test_collection" for c in collections)
     
     @pytest.mark.integration
     async def test_list_collections(self, test_client, auth_headers, populated_chroma_collection):
@@ -207,11 +200,11 @@ class TestChromaDBCollectionManagement:
             "/api/v1/embeddings/collections",
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert isinstance(data, list)
-            assert len(data) > 0
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) > 0
     
     @pytest.mark.integration
     async def test_delete_collection(self, test_client, auth_headers, chroma_collection):
@@ -222,11 +215,10 @@ class TestChromaDBCollectionManagement:
             f"/api/v1/embeddings/collections/{collection_name}",
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_204_NO_CONTENT:
-            # Verify collection is deleted
-            with pytest.raises(Exception):
-                chroma_collection.get()
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT, response.text
+        with pytest.raises(Exception):
+            chroma_collection.get()
     
     @pytest.mark.integration
     async def test_get_collection_stats(self, test_client, auth_headers, populated_chroma_collection):
@@ -235,12 +227,11 @@ class TestChromaDBCollectionManagement:
             f"/api/v1/embeddings/collections/{populated_chroma_collection.name}/stats",
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert "count" in data
-            assert data["count"] == 10  # From populated fixture
-            assert "embedding_dimension" in data
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        data = response.json()
+        assert data["count"] == 10
+        assert "embedding_dimension" in data
 
 # ========================================================================
 # Embedding Generation Pipeline Tests
@@ -279,22 +270,23 @@ class TestEmbeddingGenerationPipeline:
             },
             headers=auth_headers
         )
-        
-        if response.status_code == status.HTTP_202_ACCEPTED:
-            job_id = response.json()["job_id"]
-            
-            # Poll for completion (in real scenario)
-            await asyncio.sleep(0.5)
-            
-            # Check status
+
+        assert response.status_code == status.HTTP_202_ACCEPTED, response.text
+        job_id = response.json()["job_id"]
+
+        # Poll job status until completion or timeout
+        for _ in range(10):
             status_response = test_client.get(
                 f"/api/v1/media/embeddings/jobs/{job_id}",
                 headers=auth_headers
             )
-            
             if status_response.status_code == status.HTTP_200_OK:
                 status_data = status_response.json()
-                assert status_data["job_id"] == job_id
+                assert status_data["id"] == job_id
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("Embedding job did not reach completed status in time")
     
     @pytest.mark.unit
     async def test_pipeline_with_custom_chunking(self, test_client, auth_headers, media_database):
@@ -320,10 +312,7 @@ class TestEmbeddingGenerationPipeline:
             headers=auth_headers
         )
         
-        assert response.status_code in [
-            status.HTTP_202_ACCEPTED,
-            status.HTTP_200_OK
-        ]
+        assert response.status_code in {status.HTTP_202_ACCEPTED, status.HTTP_200_OK}, response.text
 
 # ========================================================================
 # Worker Orchestration Tests
@@ -470,12 +459,10 @@ class TestErrorHandlingIntegration:
             headers=auth_headers
         )
         
-        assert response.status_code in [
+        assert response.status_code in {
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            status.HTTP_200_OK,
-            status.HTTP_202_ACCEPTED
-        ]
+            status.HTTP_503_SERVICE_UNAVAILABLE
+        }
 
 # ========================================================================
 # Performance and Scaling Tests
@@ -506,11 +493,10 @@ class TestPerformanceAndScaling:
                 },
                 headers=auth_headers
             )
-            
-            if response.status_code == status.HTTP_200_OK:
-                data = response.json()
-                assert "embeddings" in data
-                assert len(data["embeddings"]) == 100
+
+            assert response.status_code == status.HTTP_200_OK, response.text
+            data = response.json()
+            assert len(data.get("embeddings", [])) == 100
     
     @pytest.mark.integration
     async def test_rate_limiting(self, test_client, auth_headers):

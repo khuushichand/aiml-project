@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import tempfile
 from typing import Any, Dict, List, Union, Optional, Tuple
 #
@@ -59,6 +60,51 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 # FIXME - Add a config file option/check for the user agent
 web_scraping_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+
+DEFAULT_BOILERPLATE_PATTERNS = [
+    r"\bsubscribe\s+now\b",
+    r"\bsubscribe\s+today\b",
+    r"\bsign\s+up\b",
+    r"\bshare\s+this\b",
+    r"\bshare\s+on\s+(facebook|twitter|linkedin|reddit)\b",
+    r"\bfollow\s+us\b",
+    r"\bnewsletter\b",
+    r"\bread\s+more\b",
+    r"\bthanks\s+for\s+reading\b",
+]
+
+_BOILERPLATE_REGEXES = [re.compile(pattern, re.IGNORECASE) for pattern in DEFAULT_BOILERPLATE_PATTERNS]
+
+
+def _strip_boilerplate_sections(text: str) -> str:
+    """Remove common boilerplate phrases from extracted article text."""
+    if not text:
+        return text
+
+    lines = text.splitlines()
+
+    def _is_boilerplate(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        return any(regex.search(stripped) for regex in _BOILERPLATE_REGEXES)
+
+    filtered_lines: List[str] = [line for line in lines if not _is_boilerplate(line)]
+
+    # Collapse consecutive blank lines introduced by removals.
+    collapsed: List[str] = []
+    previous_blank = False
+    for line in filtered_lines:
+        if line.strip():
+            collapsed.append(line)
+            previous_blank = False
+        else:
+            if not previous_blank:
+                collapsed.append(line)
+            previous_blank = True
+
+    return "\n".join(collapsed)
+
 #################################################################
 #
 # Scraping-related functions:
@@ -90,6 +136,7 @@ def extract_article_data_from_html(html: str, url: str) -> Dict[str, Any]:
         include_tables=False,
         include_images=False,
     )
+    downloaded = _strip_boilerplate_sections(downloaded)
     metadata = trafilatura.extract_metadata(html)
 
     result: Dict[str, Any] = {

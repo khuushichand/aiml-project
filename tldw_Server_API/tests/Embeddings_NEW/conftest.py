@@ -10,7 +10,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Generator, Optional
-from unittest.mock import MagicMock, AsyncMock, Mock
+from unittest.mock import MagicMock, AsyncMock, Mock, patch
 import json
 import numpy as np
 from datetime import datetime
@@ -551,6 +551,35 @@ def auth_headers():
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
+
+
+@pytest.fixture(autouse=True)
+def mock_embedding_backends():
+    """Patch embedding generation calls to avoid external provider dependencies."""
+
+    fake_vector = [0.05] * 384
+
+    async def fake_async_embeddings(*args, **kwargs):
+        texts = kwargs.get("texts") if "texts" in kwargs else (args[0] if args else [])
+        if isinstance(texts, str):
+            texts = [texts]
+        return [fake_vector.copy() for _ in texts]
+
+    def fake_sync_embeddings(texts, *args, **kwargs):
+        payloads = texts if isinstance(texts, list) else [texts]
+        return [fake_vector.copy() for _ in payloads]
+
+    with patch(
+        'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch_async',
+        new=AsyncMock(side_effect=fake_async_embeddings)
+    ), patch(
+        'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch',
+        new=fake_sync_embeddings
+    ), patch(
+        'tldw_Server_API.app.api.v1.endpoints.vector_stores_openai._get_embeddings_fn',
+        return_value=fake_sync_embeddings
+    ):
+        yield
 
 # =====================================================================
 # Cleanup Fixtures
