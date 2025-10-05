@@ -215,14 +215,18 @@ def chat_dictionary_service(test_db_path) -> Generator[ChatDictionaryService, No
     
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
     service = ChatDictionaryService(db)
-    
-    yield service
-    
-    # Cleanup
+
     try:
-        service.close()
-    except:
-        pass
+        yield service
+    finally:
+        try:
+            service.close()
+        except Exception:
+            pass
+        try:
+            db.close_all_connections()
+        except Exception:
+            pass
 
 @pytest.fixture
 def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
@@ -231,14 +235,18 @@ def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
     
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
     service = WorldBookService(db)
-    
-    yield service
-    
-    # Cleanup
+
     try:
-        service.close()
-    except:
-        pass
+        yield service
+    finally:
+        try:
+            service.close()
+        except Exception:
+            pass
+        try:
+            db.close_all_connections()
+        except Exception:
+            pass
 
 @pytest.fixture
 def mock_character_db():

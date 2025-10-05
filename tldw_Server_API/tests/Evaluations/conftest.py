@@ -543,6 +543,27 @@ def override_unified_service(temp_db_path, monkeypatch):
     monkeypatch.setenv("TESTING", "true")
     monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
 
+    from tldw_Server_API.app.core.Evaluations import webhook_manager as webhook_module
+    from tldw_Server_API.app.core.Evaluations.db_adapter import (
+        DatabaseAdapterFactory,
+        DatabaseConfig,
+        DatabaseType,
+    )
+
+    # Preserve current adapter details so we can restore after the test
+    original_config = None
+    existing_adapter = getattr(webhook_module.webhook_manager, "db_adapter", None)
+    if existing_adapter is not None:
+        original_config = getattr(existing_adapter, "config", None)
+
+    test_adapter = DatabaseAdapterFactory.create(
+        DatabaseConfig(
+            db_type=DatabaseType.SQLITE,
+            connection_string=str(temp_db_path)
+        )
+    )
+    webhook_module.webhook_manager.set_adapter(test_adapter)
+
     service = UnifiedEvaluationService(db_path=str(temp_db_path))
     service_module._service_instance = service
     router_module._evaluation_service = service
@@ -551,6 +572,19 @@ def override_unified_service(temp_db_path, monkeypatch):
 
     router_module._evaluation_service = None
     service_module._service_instance = None
+
+    # Restore the original webhook adapter to avoid leaking test state
+    if original_config is not None:
+        restore_config = DatabaseConfig(
+            db_type=original_config.db_type,
+            connection_string=original_config.connection_string,
+            pool_size=original_config.pool_size,
+            max_overflow=original_config.max_overflow,
+            echo=original_config.echo,
+            options=dict(original_config.options) if original_config.options else {}
+        )
+        restore_adapter = DatabaseAdapterFactory.create(restore_config)
+        webhook_module.webhook_manager.set_adapter(restore_adapter)
 
 
 @pytest.fixture(scope="function")

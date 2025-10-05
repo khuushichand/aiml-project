@@ -103,11 +103,10 @@ class TestChatUnit:
                 "/api/v1/chat/completions",
                 json_data=request_data
             )
-            
-            # Should return an error for missing API key or provider
-            # Since the endpoint is mocked, it might still return 200 - adjust the test
-            # to just verify the request is handled
-            assert response.status_code in [200, 400, 422, 500]
+
+        assert response.status_code >= status.HTTP_400_BAD_REQUEST
+        payload = response.json()
+        assert isinstance(payload, dict)
     
     @pytest.mark.skip(reason="Streaming tests hang with TestClient")
     def test_streaming_request(self, unit_test_client):

@@ -12,6 +12,7 @@ Handles:
 import asyncio
 import time
 import statistics
+from contextlib import suppress
 import httpx
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
@@ -1781,14 +1782,24 @@ class EvaluationRunner:
             del self.running_tasks[run_id]
             return True
         return False
-    
+
     def get_run_status(self, run_id: str) -> Optional[str]:
         """Get the status of a run"""
         run = self.db.get_run(run_id)
         if run:
             return run["status"]
         return None
-    
+
+    async def shutdown(self) -> None:
+        """Cancel any running tasks and clear internal bookkeeping."""
+        for task in list(self.running_tasks.values()):
+            if task.done():
+                continue
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self.running_tasks.clear()
+
     # Alias for compatibility with tests
     async def run_evaluation_async(self, run_id: str, eval_config: Dict[str, Any]):
         """Alias for run_evaluation to match test expectations"""

@@ -1,29 +1,25 @@
-"""
-Simplified test configuration that works with the existing system.
-"""
+"""Simplified test configuration that works with the existing system."""
 
 import pytest
 import tempfile
 import os
+import json
+import threading
+import time
+import atexit
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from unittest.mock import MagicMock, AsyncMock
+from fastapi.testclient import TestClient
+import datetime
+
 # Set environment variables BEFORE any tldw imports
-import os
 os.environ["OPENAI_API_KEY"] = "sk-mock-key-12345"
 os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
 
 # IMPORTANT: Ensure API_BEARER is not set - it causes wrong authentication path in single-user mode
 if "API_BEARER" in os.environ:
     del os.environ["API_BEARER"]
-
-import subprocess
-import time
-import requests
-import atexit
-import signal
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
-from fastapi.testclient import TestClient
-import datetime
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -34,8 +30,8 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
 
-# Global variable to track mock server process
-_mock_server_process = None
+# Global state to track mock server
+_mock_server_state = {"server": None, "thread": None, "base_url": None}
 
 # Global variable to store original dependency overrides
 _original_dependency_overrides = None
@@ -43,17 +39,25 @@ _original_dependency_overrides = None
 
 def cleanup_mock_server():
     """Cleanup function to ensure mock server is stopped."""
-    global _mock_server_process
-    if _mock_server_process:
+    server = _mock_server_state.get("server")
+    thread = _mock_server_state.get("thread")
+
+    if server:
         try:
-            _mock_server_process.terminate()
-            _mock_server_process.wait(timeout=5)
-        except:
-            try:
-                _mock_server_process.kill()
-            except:
-                pass
-        _mock_server_process = None
+            server.shutdown()
+        except Exception:
+            pass
+        try:
+            server.server_close()
+        except Exception:
+            pass
+
+    if thread and thread.is_alive():
+        thread.join(timeout=5)
+
+    _mock_server_state["server"] = None
+    _mock_server_state["thread"] = None
+    _mock_server_state["base_url"] = None
 
 
 # Register cleanup function
@@ -97,81 +101,69 @@ def reset_app_overrides():
 @pytest.fixture(scope="session")
 def mock_openai_server():
     """Start the mock OpenAI server for testing."""
-    global _mock_server_process
-    
-    # Check if server is already running
-    try:
-        response = requests.get("http://localhost:8080/v1/models", timeout=1)
-        if response.status_code == 200:
-            print("Mock OpenAI server already running")
-            yield "http://localhost:8080"
+    if _mock_server_state["server"]:
+        yield _mock_server_state["base_url"]
+        return
+
+    class _MockOpenAIHandler(BaseHTTPRequestHandler):
+        mock_completion = {
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "mock-gpt",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "This is a test response"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+
+        def _send_json(self, payload, status_code=200):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802 - http.server naming
+            if self.path == "/v1/models":
+                self._send_json({"data": [{"id": "mock-gpt"}]})
+            else:
+                self._send_json({"error": "Not found"}, status_code=404)
+
+        def do_POST(self):  # noqa: N802 - http.server naming
+            if self.path == "/v1/chat/completions":
+                content_length = int(self.headers.get("Content-Length") or 0)
+                if content_length:
+                    # Consume request body to keep the socket healthy
+                    self.rfile.read(content_length)
+                response = dict(self.mock_completion)
+                response["created"] = int(time.time())
+                self._send_json(response)
+            else:
+                self._send_json({"error": "Not found"}, status_code=404)
+
+        def log_message(self, format, *args):  # noqa: D401 - silence default logging
             return
-    except:
-        pass
-    
-    # FIXME: Once mock_openai_server is published as a PyPI package,
-    # replace this relative path approach with:
-    # from mock_openai_server import start_server
-    # or use: python -m mock_openai_server
-    
-    # Get the path to mock_openai_server relative to this test file
-    test_dir = Path(__file__).parent
-    project_root = test_dir.parent.parent.parent  # Go up to tldw_server root
-    mock_server_dir = project_root / "mock_openai_server"
-    
-    if not mock_server_dir.exists():
-        pytest.skip("mock_openai_server not found - skipping integration tests")
-    
-    # Start the mock server
-    print(f"Starting mock OpenAI server from {mock_server_dir}...")
-    _mock_server_process = subprocess.Popen(
-        [sys.executable, "-m", "mock_openai.server"],
-        cwd=str(mock_server_dir),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # Combine stderr with stdout
-        text=True  # Text mode for easier debugging
-    )
-    
-    # Wait for server to start
-    max_retries = 60  # Increase retries
-    for i in range(max_retries):
-        # Check if process is still running
-        if _mock_server_process.poll() is not None:
-            # Process has died, get output for debugging
-            output = _mock_server_process.stdout.read()
-            cleanup_mock_server()
-            pytest.fail(f"Mock server process died. Output:\n{output}")
-        
-        try:
-            # Test with the auth header that the mock server expects
-            response = requests.get(
-                "http://localhost:8080/v1/models", 
-                headers={"Authorization": "Bearer sk-mock-key-12345"},
-                timeout=1
-            )
-            if response.status_code == 200:
-                print("Mock OpenAI server started successfully")
-                break
-        except requests.exceptions.ConnectionError:
-            # Server not ready yet
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error checking server: {e}")
-            time.sleep(0.5)
-    else:
-        # Get any output for debugging
-        output = ""
-        if _mock_server_process and _mock_server_process.stdout:
-            try:
-                output = _mock_server_process.stdout.read()
-            except:
-                pass
-        cleanup_mock_server()
-        pytest.fail(f"Failed to start mock OpenAI server after {max_retries} retries. Output:\n{output}")
-    
-    yield "http://localhost:8080"
-    
-    # Cleanup
+
+    server = HTTPServer(("127.0.0.1", 0), _MockOpenAIHandler)
+    thread = threading.Thread(target=server.serve_forever, name="mock-openai-server", daemon=True)
+    thread.start()
+
+    # Store state for reuse
+    _mock_server_state["server"] = server
+    _mock_server_state["thread"] = thread
+    _mock_server_state["base_url"] = f"http://127.0.0.1:{server.server_port}"
+
+    # Give server moment to start
+    time.sleep(0.1)
+
+    yield _mock_server_state["base_url"]
+
     cleanup_mock_server()
 
 

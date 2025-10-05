@@ -107,7 +107,7 @@ class WebhookManager:
         
         # Background task for retries
         self._retry_task = None
-    
+
     def _init_database(self):
         """Initialize webhook tables."""
         # These tables are created in the migration
@@ -153,6 +153,27 @@ class WebhookManager:
         """
         
         self.db_adapter.init_schema(schema_sql)
+
+    def set_adapter(self, adapter: DatabaseAdapter) -> None:
+        """Replace the underlying database adapter (useful for tests)."""
+        if adapter is None:
+            raise ValueError("adapter must not be None")
+
+        current_adapter = getattr(self, "db_adapter", None)
+        if current_adapter is adapter:
+            return
+
+        if current_adapter is not None:
+            try:
+                current_adapter.close()
+            except Exception as exc:
+                logger.warning(f"Failed to close existing webhook adapter: {exc}")
+
+        self.db_adapter = adapter
+        self._init_database()
+
+        # Rebuild helper components that depend on the adapter instance
+        self.permission_manager = WebhookPermissionManager(self.db_adapter)
     
     async def register_webhook(
         self,

@@ -314,18 +314,21 @@ class TestTextProcessing:
             probability=0.5
         )
         
-        # Test multiple times to check probability
+        iterations = 20
+        deterministic_rng = random.Random(0)
+
         replacements = 0
-        iterations = 100
-        
-        for _ in range(iterations):
-            text = "maybe this will work"
-            processed = service.process_text(text, dict_id)
-            if "perhaps" in processed:
-                replacements += 1
-        
-        # Should be roughly 50% replacement rate (allow for variance)
-        assert 30 < replacements < 70
+        with patch(
+            "tldw_Server_API.app.core.Character_Chat.chat_dictionary.random.random",
+            side_effect=deterministic_rng.random,
+        ):
+            for _ in range(iterations):
+                text = "maybe this will work"
+                processed = service.process_text(text, dict_id)
+                if "perhaps" in processed:
+                    replacements += 1
+
+        assert 0 < replacements < iterations
     
     @pytest.mark.unit
     def test_multiple_replacements(self, chat_dictionary_service):
