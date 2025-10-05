@@ -104,24 +104,30 @@ video_summarize_prompt = "Above is the transcript of a video. Please read throug
 # AuthNZ/User DB is configured via the `DATABASE_URL` environment variable and supports PostgreSQL
 # (recommended for multi-user) and SQLite (dev/local). This section below controls the media/notes/characters/chat DBs.
 #
-# Content DB backend type: currently 'sqlite' only in v0.1 (FTS5-based search). PostgreSQL for content DBs is on the roadmap.
+# Content DB backend type: supported values are 'sqlite', 'postgresql', 'elasticsearch'.
+# Set to 'postgresql' to store all content (media + notes/characters) in a PostgreSQL instance.
 type = sqlite
-sqlite_path = Databases/server_media_summary.db
-backup_path = ./tldw_DB_Backups/
-#Path to the backup location for the database. If the path does not exist, the backup will not be created.
 
-# PostgreSQL Configuration for CONTENT DBs (Roadmap)
-# PostgreSQL for content/media DBs is not yet integrated in v0.1. Keep using SQLite here.
-# The AuthNZ/User DB already supports PostgreSQL via `DATABASE_URL`.
-# type = postgresql
-# pg_host = localhost
-# pg_port = 5432
-# pg_database = tldw_server
-# pg_user = tldw_user
-# pg_password = your_secure_password
-# pg_sslmode = prefer
-# pg_pool_size = 20
-# pg_max_overflow = 40
+# SQLite configuration
+sqlite_path = Databases/server_media_summary.db
+sqlite_wal_mode = true
+sqlite_foreign_keys = true
+
+# Backups
+backup_path = ./tldw_DB_Backups/
+# Path to the backup location for the database. If the path does not exist, the backup will not be created.
+
+# PostgreSQL configuration (used when type = postgresql)
+pg_connection_string =
+pg_host = localhost
+pg_port = 5432
+pg_database = tldw_content
+pg_user = tldw_user
+pg_password = your_secure_password
+pg_sslmode = prefer
+pg_pool_size = 20
+pg_max_overflow = 40
+pg_pool_timeout = 30.0
 
 # Elasticsearch Configuration (Alternative search backend)
 elasticsearch_host = localhost
