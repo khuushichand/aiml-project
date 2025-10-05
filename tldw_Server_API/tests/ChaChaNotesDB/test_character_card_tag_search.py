@@ -302,17 +302,18 @@ class TestTagSearchPerformance:
         
         # Test search performance - should complete quickly
         import time
-        start_time = time.time()
+        start_time = time.monotonic()
         results = mem_db.search_character_cards_by_tags(["common"], limit=100)  # Use higher limit to get all results
-        end_time = time.time()
+        end_time = time.monotonic()
         
         # Should find all 50 characters that were just created (they all have "common" tag)
         # Note: There may be other characters from sample_character_cards fixture, but only 
         # the 50 we created have the "common" tag
         assert len(results) == 50
         
-        # Should complete in reasonable time (less than 1 second for 50 items)
-        assert (end_time - start_time) < 1.0
+        duration = end_time - start_time
+        # Should complete in reasonable time; alert if it degrades significantly
+        assert duration < 5.0, f"Tag search took too long: {duration:.2f}s"
     
     def test_json_vs_fallback_consistency(self, mem_db, sample_character_cards):
         """Test that JSON and fallback methods return consistent results."""

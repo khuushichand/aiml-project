@@ -54,21 +54,13 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture
-def test_env_vars():
-    """Set up test environment variables."""
-    original_env = os.environ.copy()
-    
-    # Set test mode
-    os.environ["TEST_MODE"] = "true"
-    os.environ["TTS_DEFAULT_PROVIDER"] = "openai"
-    os.environ["TTS_DEFAULT_MODEL"] = "tts-1"
-    os.environ["TTS_DEFAULT_VOICE"] = "alloy"
-    
+def test_env_vars(monkeypatch):
+    """Set up test environment variables without polluting global state."""
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "openai")
+    monkeypatch.setenv("TTS_DEFAULT_MODEL", "tts-1")
+    monkeypatch.setenv("TTS_DEFAULT_VOICE", "alloy")
     yield
-    
-    # Restore original environment
-    os.environ.clear()
-    os.environ.update(original_env)
 
 # =====================================================================
 # Audio Generation Fixtures
@@ -107,18 +99,27 @@ def sample_mp3_bytes() -> bytes:
 
 @pytest.fixture
 def streaming_audio_generator():
-    """Generate streaming audio chunks."""
-    async def generator():
-        # Generate audio in chunks
-        chunk_size = 1024
-        total_size = 4096
-        
-        for i in range(0, total_size, chunk_size):
-            # Generate chunk of audio data
-            chunk = os.urandom(chunk_size)
-            yield chunk
-    
-    return generator()
+    """Factory for streaming audio chunks."""
+
+    class _StreamingFactory:
+        def __init__(self, default_total: int = 4096, default_chunk: int = 1024) -> None:
+            self._default_total = default_total
+            self._default_chunk = default_chunk
+
+        def __call__(self, *, total_size: Optional[int] = None, chunk_size: Optional[int] = None):
+            total = total_size if total_size is not None else self._default_total
+            chunk = chunk_size if chunk_size is not None else self._default_chunk
+
+            async def _generator():
+                for _ in range(0, total, chunk):
+                    yield os.urandom(chunk)
+
+            return _generator()
+
+        def __aiter__(self):
+            return self().__call__()
+
+    return _StreamingFactory()
 
 # =====================================================================
 # TTS Request/Response Fixtures

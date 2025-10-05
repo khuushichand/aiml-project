@@ -3,10 +3,18 @@
 #
 # Imports
 import pytest
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.legacy_tts, pytest.mark.requires_api_key]
 import os
 import asyncio
 import platform
+RUN_TTS_LEGACY_INTEGRATION = os.getenv("RUN_TTS_LEGACY_INTEGRATION") == "1"
+
+if not RUN_TTS_LEGACY_INTEGRATION:
+    pytest.skip(
+        "Legacy TTS integration tests are disabled by default. Set RUN_TTS_LEGACY_INTEGRATION=1 to enable.",
+        allow_module_level=True,
+    )
+
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter

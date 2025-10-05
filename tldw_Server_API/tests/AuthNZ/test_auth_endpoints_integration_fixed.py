@@ -2,6 +2,8 @@
 Integration tests for authentication endpoints using real database.
 """
 
+import os
+
 import pytest
 pytestmark = pytest.mark.integration
 import asyncio
@@ -73,11 +75,16 @@ class TestAuthEndpointsIntegration:
         from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
         
         # Connect to test database
+        test_host = os.getenv("TEST_DB_HOST", "localhost")
+        test_port = int(os.getenv("TEST_DB_PORT", "5432"))
+        test_user = os.getenv("TEST_DB_USER", "tldw_user")
+        test_password = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+
         conn = await asyncpg.connect(
-            host="localhost",
-            port=5432,
-            user="tldw_user",
-            password="TestPassword123!",
+            host=test_host,
+            port=test_port,
+            user=test_user,
+            password=test_password,
             database=db_name
         )
         

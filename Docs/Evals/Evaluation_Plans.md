@@ -216,7 +216,7 @@ https://arxiv.org/abs/2412.17758
 https://huggingface.co/spaces/bigcode/bigcodebench-leaderboard
 https://www.atla-ai.com/post/evaluating-the-evaluator
 https://hamel.dev/blog/posts/llm-judge/
-https://github.com/scrapinghub/article-extraction-benchmark
+https://github.com/scrapinghub/article-extraction-benchmark — see `Docs/Evals/WebScraping_Article_Benchmark.md` for integration details
 https://github.com/Zhe-Young/SelfCorrectDecompose
 https://eugeneyan.com/writing/evals/
 
@@ -1034,5 +1034,4 @@ https://github.com/illuin-tech/vidore-benchmark
 https://arxiv.org/abs/2411.15296
 https://arxiv.org/abs/2411.06284
 ----------------------------------------------------------------------------------------------------------------
-
 

@@ -421,6 +421,17 @@ deepseek_api_timeout = 90
 deepseek_api_retry = 3
 deepseek_api_retry_delay = 1
 #
+# DashScope-compatible commercial Qwen models
+qwen_model = qwen-plus
+qwen_streaming = True
+qwen_temperature = 0.7
+qwen_top_p = 0.8
+qwen_max_tokens = 4096
+qwen_api_timeout = 90
+qwen_api_retry = 3
+qwen_api_retry_delay = 1
+qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+#
 # Available Model Options:
 google_model = gemini-2.5-flash-preview-05-20
 # Model Options: gemini-2.5-pro-preview-05-06, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro

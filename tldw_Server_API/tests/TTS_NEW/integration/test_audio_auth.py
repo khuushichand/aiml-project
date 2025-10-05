@@ -10,46 +10,11 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
-
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.integration]
 
 
 def test_speech_requires_auth_401():
     with TestClient(app) as client:
-    payload = {
-        "model": "kokoro",
-        "input": "Hello",
-        "voice": "af_bella",
-        "response_format": "mp3",
-        "stream": False,
-    }
-    resp = client.post("/api/v1/audio/speech", json=payload)
-    assert resp.status_code == 401
-
-
-def test_speech_ok_with_override(monkeypatch):
-    with TestClient(app) as client:
-
-    # Override user dependency to simulate authenticated user
-    async def _override_user():
-        return User(id=1, username="tester", email="t@example.com", is_active=True)
-
-    app.dependency_overrides[get_request_user] = _override_user
-
-    # Stub TTS service dependency to avoid external calls
-    class _StubTTS:
-        # Return an async generator directly (no extra coroutine layer)
-        def generate_speech(self, *args, **kwargs):
-            async def _gen():
-                yield b"abc"
-            return _gen()
-
-    async def _override_tts_service():
-        return _StubTTS()
-
-    app.dependency_overrides[audio_endpoints.get_tts_service] = _override_tts_service
-
-    try:
         payload = {
             "model": "kokoro",
             "input": "Hello",
@@ -58,10 +23,39 @@ def test_speech_ok_with_override(monkeypatch):
             "stream": False,
         }
         resp = client.post("/api/v1/audio/speech", json=payload)
-        assert resp.status_code == 200
-        assert resp.headers.get("content-type", "").startswith("audio/mpeg")
-        assert resp.content == b"abc"
-    finally:
-        # Clean overrides
-        app.dependency_overrides.pop(get_request_user, None)
-        app.dependency_overrides.pop(audio_endpoints.get_tts_service, None)
+        assert resp.status_code == 401
+
+
+def test_speech_ok_with_override(monkeypatch):
+    with TestClient(app) as client:
+        async def _override_user():
+            return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        class _StubTTS:
+            def generate_speech(self, *args, **kwargs):
+                async def _gen():
+                    yield b"abc"
+                return _gen()
+
+        async def _override_tts_service():
+            return _StubTTS()
+
+        app.dependency_overrides[audio_endpoints.get_tts_service] = _override_tts_service
+
+        try:
+            payload = {
+                "model": "kokoro",
+                "input": "Hello",
+                "voice": "af_bella",
+                "response_format": "mp3",
+                "stream": False,
+            }
+            resp = client.post("/api/v1/audio/speech", json=payload)
+            assert resp.status_code == 200
+            assert resp.headers.get("content-type", "").startswith("audio/mpeg")
+            assert resp.content == b"abc"
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
+            app.dependency_overrides.pop(audio_endpoints.get_tts_service, None)

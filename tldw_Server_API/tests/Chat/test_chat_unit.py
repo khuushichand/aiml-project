@@ -75,9 +75,10 @@ class TestChatUnit:
         
         assert response.status_code == status.HTTP_200_OK
         
-        # Get conversations for the default character (ID=2 based on logs)
-        # The endpoint uses "Default Character" which has ID 2
-        conversations = isolated_db.get_conversations_for_character(2)
+        default_character = isolated_db.get_character_card_by_name("Default Character")
+        assert default_character is not None, "Default character not found in test database"
+
+        conversations = isolated_db.get_conversations_for_character(default_character["id"])
         assert len(conversations) > 0, "No conversations found after chat completion"
         
         # Get the latest conversation

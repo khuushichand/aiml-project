@@ -13,6 +13,11 @@ https://huggingface.co/spaces/LISA-Kadi/LISA-demo/tree/main
 https://arxiv.org/abs/2412.07965
 https://arxiv.org/abs/2510.01591
 https://arxiv.org/abs/2510.02173
+https://arxiv.org/abs/2303.08896
+https://arxiv.org/abs/2308.16175
+https://arxiv.org/abs/2405.01535
+https://arxiv.org/abs/2410.12784
+https://pub.towardsai.net/reliable-agentic-rag-with-llm-trustworthiness-estimates-c488fb1bd116
 https://arxiv.org/abs/2501.08292
 https://docs.exa.ai/examples/demo-hallucination-detector
 https://www.microsoft.com/en-us/research/blog/claimify-extracting-high-quality-claims-from-language-model-outputs/

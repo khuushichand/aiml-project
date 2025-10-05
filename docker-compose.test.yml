@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  postgres-test:
+    image: postgres:15
+    restart: unless-stopped
+    ports:
+      - "${TEST_DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${TEST_DB_NAME:-tldw_test}
+      POSTGRES_USER: ${TEST_DB_USER:-tldw_user}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-TestPassword123!}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-test-data:

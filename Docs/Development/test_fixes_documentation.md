@@ -286,3 +286,14 @@ Overall improvement from 68.3% to approximately 92% pass rate for fixed test sui
    - Some tests still have hardcoded expectations
    - FTS search functionality needs investigation
    - Async test patterns need standardization
+### 7. AuthNZ Test Harness Improvements - FIXED ✅
+
+**Issue**:
+- AuthNZ tests left background audit tasks running and required manual Postgres setup.
+
+**Fixes Applied**:
+1. Added fixture cleanup to stop the unified audit service after each test.
+2. Converted the legacy `test_db_setup.py` script into an assertion-based integration test that validates the schema provided by the isolated database fixture.
+3. Added `docker-compose.test.yml` and updated documentation so CI/CD runs can spin up a Postgres container with the expected credentials.
+
+**Test Status**: AuthNZ tests now shut down cleanly and can be run in isolation with `docker compose -f docker-compose.test.yml up -d postgres-test`.

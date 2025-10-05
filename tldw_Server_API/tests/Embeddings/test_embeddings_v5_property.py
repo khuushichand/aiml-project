@@ -10,7 +10,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # Disable rate limiting for all tests
 @pytest.fixture(autouse=True)
@@ -36,7 +36,15 @@ def setup(test_client, regular_user, auth_headers):
     
     app.dependency_overrides[get_request_user] = override_user
     
-    yield SetupData()
+    async def fake_embeddings(texts, provider, model_id, config):
+        batch = texts if isinstance(texts, list) else [texts]
+        return [[float(len(text)), 0.0, 0.0] for text in batch]
+
+    with patch(
+        'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+        new=AsyncMock(side_effect=fake_embeddings)
+    ):
+        yield SetupData()
     app.dependency_overrides.clear()
 
 

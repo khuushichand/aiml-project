@@ -799,6 +799,10 @@ def load_and_log_configs():
         # logging.debug(
         #     f"Loaded DeepSeek API Key: {deepseek_api_key[:5]}...{deepseek_api_key[-5:] if deepseek_api_key else None}")
 
+        qwen_api_key = os.getenv('QWEN_API_KEY') or config_parser_object.get('API', 'qwen_api_key', fallback=None)
+        # logging.debug(
+        #     f"Loaded Qwen API Key: {qwen_api_key[:5]}...{qwen_api_key[-5:] if qwen_api_key else None}")
+
         mistral_api_key = os.getenv('MISTRAL_API_KEY') or config_parser_object.get('API', 'mistral_api_key', fallback=None)
         # logging.debug(
         #     f"Loaded Mistral API Key: {mistral_api_key[:5]}...{mistral_api_key[-5:] if mistral_api_key else None}")
@@ -844,6 +848,19 @@ def load_and_log_configs():
         deepseek_api_timeout = config_parser_object.get('API', 'deepseek_api_timeout', fallback='90')
         deepseek_api_retries = config_parser_object.get('API', 'deepseek_api_retry', fallback='3')
         deepseek_api_retry_delay = config_parser_object.get('API', 'deepseek_api_retry_delay', fallback='5')
+
+        # Qwen (DashScope-compatible)
+        qwen_model = config_parser_object.get('API', 'qwen_model', fallback='qwen-plus')
+        qwen_streaming = config_parser_object.get('API', 'qwen_streaming', fallback='True')
+        qwen_temperature = config_parser_object.get('API', 'qwen_temperature', fallback='0.7')
+        qwen_top_p = config_parser_object.get('API', 'qwen_top_p', fallback='0.8')
+        qwen_max_tokens = config_parser_object.get('API', 'qwen_max_tokens', fallback='4096')
+        qwen_api_timeout = config_parser_object.get('API', 'qwen_api_timeout', fallback='90')
+        qwen_api_retries = config_parser_object.get('API', 'qwen_api_retry', fallback='3')
+        qwen_api_retry_delay = config_parser_object.get('API', 'qwen_api_retry_delay', fallback='1')
+        qwen_api_base_url = config_parser_object.get(
+            'API', 'qwen_api_base_url', fallback='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+        )
 
         # Groq
         groq_model = config_parser_object.get('API', 'groq_model', fallback='llama3-70b-8192')
@@ -1422,6 +1439,18 @@ def load_and_log_configs():
                 'api_timeout': deepseek_api_timeout,
                 'api_retries': deepseek_api_retries,
                 'api_retry_delay': deepseek_api_retry_delay
+            },
+            'qwen_api': {
+                'api_key': qwen_api_key,
+                'model': qwen_model,
+                'streaming': qwen_streaming,
+                'temperature': qwen_temperature,
+                'top_p': qwen_top_p,
+                'max_tokens': qwen_max_tokens,
+                'api_timeout': qwen_api_timeout,
+                'api_retries': qwen_api_retries,
+                'api_retry_delay': qwen_api_retry_delay,
+                'api_base_url': qwen_api_base_url
             },
             'google_api': {
                 'api_key': google_api_key,
