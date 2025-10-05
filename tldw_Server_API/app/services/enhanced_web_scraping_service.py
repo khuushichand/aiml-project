@@ -81,7 +81,9 @@ class WebScrapingService:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         mode: str = "persist",
         priority: str = "normal",
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Process web scraping task with enhanced features.
@@ -116,31 +118,33 @@ class WebScrapingService:
                     url_input, custom_titles, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
-                    job_priority
+                    job_priority, user_agent, custom_headers
                 )
-                
+
             elif scrape_method == "Sitemap":
                 result = await self._scrape_sitemap(
                     url_input, max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
-                    system_prompt, temperature, job_priority
+                    system_prompt, temperature, job_priority,
+                    custom_cookies, user_agent, custom_headers
                 )
-                
+
             elif scrape_method == "URL Level":
                 if url_level is None:
                     raise ValueError("url_level must be provided for URL Level scraping")
                 result = await self._scrape_by_url_level(
                     url_input, url_level, max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
-                    system_prompt, temperature, job_priority
+                    system_prompt, temperature, job_priority,
+                    custom_cookies, user_agent, custom_headers
                 )
-                
+
             elif scrape_method == "Recursive Scraping":
                 result = await self._scrape_recursive(
                     url_input, max_pages, max_depth, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
-                    job_priority
+                    job_priority, user_agent, custom_headers
                 )
                 
             else:
@@ -162,7 +166,9 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
-        priority: JobPriority
+        priority: JobPriority,
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]]
     ) -> Dict[str, Any]:
         """Scrape individual URLs with enhanced features"""
         # Parse URLs and titles
@@ -189,7 +195,9 @@ class WebScrapingService:
             api_key=api_key,
             system_prompt=system_prompt,
             temperature=temperature,
-            custom_cookies=custom_cookies
+            custom_cookies=custom_cookies,
+            user_agent=user_agent,
+            custom_headers=custom_headers
         )
         
         logger.info(f"Scraping completed, got {len(results)} results")
@@ -215,7 +223,10 @@ class WebScrapingService:
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, priority: JobPriority
+        temperature: float, priority: JobPriority,
+        custom_cookies: Optional[List[Dict[str, Any]]],
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]]
     ) -> Dict[str, Any]:
         """Scrape from sitemap with filtering"""
         # Check if scraper is available
@@ -227,7 +238,10 @@ class WebScrapingService:
         results = await self.scraper.scrape_sitemap(
             sitemap_url,
             filter_func=is_content_page,
-            max_urls=max_pages
+            max_urls=max_pages,
+            custom_cookies=custom_cookies,
+            user_agent=user_agent,
+            custom_headers=custom_headers
         )
         
         # Add summarization if requested
@@ -254,7 +268,10 @@ class WebScrapingService:
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, priority: JobPriority
+        temperature: float, priority: JobPriority,
+        custom_cookies: Optional[List[Dict[str, Any]]],
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]]
     ) -> Dict[str, Any]:
         """Scrape by URL level"""
         # Define URL level filter
@@ -268,7 +285,10 @@ class WebScrapingService:
             base_url,
             max_pages=max_pages,
             max_depth=url_level,
-            url_filter=url_level_filter
+            url_filter=url_level_filter,
+            custom_cookies=custom_cookies,
+            user_agent=user_agent,
+            custom_headers=custom_headers
         )
         
         # Add summarization if requested
@@ -296,7 +316,9 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
-        priority: JobPriority
+        priority: JobPriority,
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]]
     ) -> Dict[str, Any]:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
@@ -308,7 +330,10 @@ class WebScrapingService:
                 base_url,
                 max_pages=max_pages,
                 max_depth=max_depth,
-                url_filter=is_content_page
+                url_filter=is_content_page,
+                custom_cookies=custom_cookies,
+                user_agent=user_agent,
+                custom_headers=custom_headers
             )
             
             # Add summarization if requested

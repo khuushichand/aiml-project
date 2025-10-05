@@ -37,6 +37,11 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_key
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.config import load_and_log_configs
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
 
 class JobStatus(Enum):
     """Job status enumeration"""
@@ -173,29 +178,62 @@ class CookieManager:
         """Get cookies for a URL"""
         domain = urlparse(url).netloc
         return self._cookies.get(domain)
-    
-    async def get_session(self, url: str) -> aiohttp.ClientSession:
-        """Get or create session for URL"""
+
+    def _build_session_key(
+        self,
+        domain: str,
+        user_agent: str,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Create a stable key for session reuse based on headers."""
+        if not headers and user_agent == DEFAULT_USER_AGENT:
+            return domain
+
+        payload = {
+            "user_agent": user_agent,
+            "headers": headers or {},
+        }
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return f"{domain}|{payload_hash}"
+
+    async def get_session(
+        self,
+        url: str,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> aiohttp.ClientSession:
+        """Get or create session for URL with optional header overrides."""
         domain = urlparse(url).netloc
-        
-        if domain not in self._sessions:
+        header_copy = dict(custom_headers) if custom_headers else {}
+
+        effective_user_agent = user_agent or header_copy.get("User-Agent") or DEFAULT_USER_AGENT
+        # Ensure User-Agent only set via context
+        header_copy.pop("User-Agent", None)
+
+        session_key = self._build_session_key(domain, effective_user_agent, header_copy)
+
+        if session_key not in self._sessions:
             connector = aiohttp.TCPConnector(limit=10, limit_per_host=2)
             timeout = aiohttp.ClientTimeout(total=30)
-            self._sessions[domain] = aiohttp.ClientSession(
+            base_headers = {"User-Agent": effective_user_agent}
+            if header_copy:
+                base_headers.update(header_copy)
+
+            self._sessions[session_key] = aiohttp.ClientSession(
                 connector=connector,
                 timeout=timeout,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
+                headers=base_headers,
             )
-            
+
             # Apply cookies if available
             cookies = self.get_cookies(url)
             if cookies:
                 for cookie in cookies:
-                    self._sessions[domain].cookie_jar.update_cookies(cookie)
-        
-        return self._sessions[domain]
+                    self._sessions[session_key].cookie_jar.update_cookies(cookie)
+
+        return self._sessions[session_key]
     
     async def close_all(self):
         """Close all sessions"""
@@ -404,7 +442,9 @@ class ScrapingJobQueue:
             return await self.parent_scraper.scrape_article(
                 job.url, 
                 job.method,
-                custom_cookies=job.metadata.get('custom_cookies')
+                custom_cookies=job.metadata.get('custom_cookies'),
+                user_agent=job.metadata.get('user_agent'),
+                custom_headers=job.metadata.get('custom_headers')
             )
         else:
             # Fallback to importing the standalone scraping function
@@ -488,19 +528,40 @@ class EnhancedWebScraper:
         
         logger.info("Enhanced web scraper stopped")
     
-    async def scrape_article(self, url: str, method: str = "trafilatura",
-                           custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def scrape_article(
+        self,
+        url: str,
+        method: str = "trafilatura",
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         """Scrape a single article with specified method"""
         # Apply rate limiting
         await self.rate_limiter.acquire()
         
         try:
             if method == "trafilatura":
-                return await self._scrape_with_trafilatura(url, custom_cookies)
+                return await self._scrape_with_trafilatura(
+                    url,
+                    custom_cookies,
+                    user_agent=user_agent,
+                    custom_headers=custom_headers,
+                )
             elif method == "playwright":
-                return await self._scrape_with_playwright(url, custom_cookies)
+                return await self._scrape_with_playwright(
+                    url,
+                    custom_cookies,
+                    user_agent=user_agent,
+                    custom_headers=custom_headers,
+                )
             elif method == "beautifulsoup":
-                return await self._scrape_with_beautifulsoup(url, custom_cookies)
+                return await self._scrape_with_beautifulsoup(
+                    url,
+                    custom_cookies,
+                    user_agent=user_agent,
+                    custom_headers=custom_headers,
+                )
             else:
                 raise ValueError(f"Unknown scraping method: {method}")
         
@@ -512,10 +573,19 @@ class EnhancedWebScraper:
                 "extraction_successful": False
             }
     
-    async def _scrape_with_trafilatura(self, url: str, 
-                                     custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def _scrape_with_trafilatura(
+        self,
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         """Scrape using trafilatura"""
-        session = await self.cookie_manager.get_session(url)
+        session = await self.cookie_manager.get_session(
+            url,
+            user_agent=user_agent,
+            custom_headers=custom_headers,
+        )
         
         if custom_cookies:
             for cookie in custom_cookies:
@@ -568,12 +638,21 @@ class EnhancedWebScraper:
                 "extraction_successful": False
             }
     
-    async def _scrape_with_playwright(self, url: str,
-                                    custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def _scrape_with_playwright(
+        self,
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         """Scrape using Playwright for JavaScript-heavy sites"""
-        context = await self._browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+        headers_copy = dict(custom_headers) if custom_headers else {}
+        effective_user_agent = user_agent or headers_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
+
+        context = await self._browser.new_context(user_agent=effective_user_agent)
+
+        if headers_copy:
+            await context.set_extra_http_headers(headers_copy)
         
         if custom_cookies:
             await context.add_cookies(custom_cookies)
@@ -641,10 +720,19 @@ class EnhancedWebScraper:
             await page.close()
             await context.close()
     
-    async def _scrape_with_beautifulsoup(self, url: str,
-                                       custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def _scrape_with_beautifulsoup(
+        self,
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         """Scrape using BeautifulSoup for simple HTML parsing"""
-        session = await self.cookie_manager.get_session(url)
+        session = await self.cookie_manager.get_session(
+            url,
+            user_agent=user_agent,
+            custom_headers=custom_headers,
+        )
         
         if custom_cookies:
             for cookie in custom_cookies:
@@ -768,12 +856,26 @@ class EnhancedWebScraper:
             logger.error(f"Summarization failed: {e}")
             return "Summary generation failed"
     
-    async def scrape_sitemap(self, sitemap_url: str, 
-                           filter_func: Optional[Callable[[str], bool]] = None,
-                           max_urls: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def scrape_sitemap(
+        self,
+        sitemap_url: str,
+        filter_func: Optional[Callable[[str], bool]] = None,
+        max_urls: Optional[int] = None,
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
-        session = await self.cookie_manager.get_session(sitemap_url)
-        
+        session = await self.cookie_manager.get_session(
+            sitemap_url,
+            user_agent=user_agent,
+            custom_headers=custom_headers,
+        )
+
+        if custom_cookies:
+            for cookie in custom_cookies:
+                session.cookie_jar.update_cookies(cookie)
+
         async with session.get(sitemap_url) as response:
             content = await response.text()
             
@@ -792,11 +894,23 @@ class EnhancedWebScraper:
         logger.info(f"Found {len(urls)} URLs in sitemap")
         
         # Scrape all URLs
-        return await self.scrape_multiple(urls)
+        return await self.scrape_multiple(
+            urls,
+            custom_cookies=custom_cookies,
+            user_agent=user_agent,
+            custom_headers=custom_headers,
+        )
     
-    async def recursive_scrape(self, base_url: str, max_pages: int = 100,
-                             max_depth: int = 3, 
-                             url_filter: Optional[Callable[[str], bool]] = None) -> List[Dict[str, Any]]:
+    async def recursive_scrape(
+        self,
+        base_url: str,
+        max_pages: int = 100,
+        max_depth: int = 3,
+        url_filter: Optional[Callable[[str], bool]] = None,
+        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        user_agent: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Recursively scrape a website"""
         visited = set()
         to_visit = [(base_url, 0)]
@@ -820,7 +934,12 @@ class EnhancedWebScraper:
             }
             
             # Scrape page
-            result = await self.scrape_article(url)
+            result = await self.scrape_article(
+                url,
+                custom_cookies=custom_cookies,
+                user_agent=user_agent,
+                custom_headers=custom_headers,
+            )
             
             if result.get('extraction_successful'):
                 results.append(result)

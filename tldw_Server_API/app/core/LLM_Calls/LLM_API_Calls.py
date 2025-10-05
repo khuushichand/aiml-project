@@ -1437,28 +1437,20 @@ def chat_with_qwen(
                     try:
                         for line in response.iter_lines(decode_unicode=True):
                             if line and line.strip():
-                                yield line + "
-
-"
-                        yield "data: [DONE]
-
-"
+                                yield line + ""
+                        yield "data: [DONE]"
                     except requests.exceptions.ChunkedEncodingError as err:
                         logging.error(f"Qwen: ChunkedEncodingError during stream: {err}", exc_info=True)
                         error_chunk = json.dumps({
                             "error": {"message": f"Stream connection error: {err}", "type": "qwen_stream_error"}
                         })
-                        yield f"data: {error_chunk}
-
-"
+                        yield f"data: {error_chunk}"
                     except Exception as stream_err:
                         logging.error(f"Qwen: Error during stream iteration: {stream_err}", exc_info=True)
                         error_chunk = json.dumps({
                             "error": {"message": f"Stream iteration error: {stream_err}", "type": "qwen_stream_error"}
                         })
-                        yield f"data: {error_chunk}
-
-"
+                        yield f"data: {error_chunk}"
                     finally:
                         if response:
                             response.close()

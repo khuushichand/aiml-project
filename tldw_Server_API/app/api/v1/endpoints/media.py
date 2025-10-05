@@ -6368,6 +6368,8 @@ class WebScrapingRequest(BaseModel):
     temperature: float = 0.7
     custom_cookies: Optional[List[Dict[str, Any]]] = None  # e.g. [{"name":"mycookie","value":"abc"}]
     mode: str = "persist"  # or "ephemeral"
+    user_agent: Optional[str] = None
+    custom_headers: Optional[Dict[str, str]] = None
 
 @router.post("/process-web-scraping")
 async def process_web_scraping_endpoint(
@@ -6398,7 +6400,9 @@ async def process_web_scraping_endpoint(
             system_prompt=payload.system_prompt,
             temperature=payload.temperature,
             custom_cookies=payload.custom_cookies,
-            mode=payload.mode
+            mode=payload.mode,
+            user_agent=payload.user_agent,
+            custom_headers=payload.custom_headers
         )
         return result
     except Exception as e:
