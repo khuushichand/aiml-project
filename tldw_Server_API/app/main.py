@@ -476,7 +476,10 @@ async def lifespan(app: FastAPI):
         from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager as _get_pm
         from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-        from tldw_Server_API.app.core.config import ALLOWED_ORIGINS as _ALLOWED_ORIGINS
+        from tldw_Server_API.app.core.config import (
+            ALLOWED_ORIGINS as _ALLOWED_ORIGINS,
+            should_disable_cors as _should_disable_cors,
+        )
 
         _s = _get_settings()
         _prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -503,7 +506,10 @@ async def lifespan(app: FastAPI):
             logger.info("• Database check: OK")
         logger.info(f"• Redis: enabled={_redis_enabled}")
         logger.info(f"• CSRF: enabled={_csrf_enabled}")
-        logger.info(f"• CORS: allowed_origins={_cors_count}")
+        if _should_disable_cors():
+            logger.info("• CORS: disabled")
+        else:
+            logger.info(f"• CORS: allowed_origins={_cors_count}")
         logger.info(f"• Global rate limiter: {_has_limiter}")
         logger.info(f"• Providers configured: {_providers}")
         logger.info(f"• OpenTelemetry available: {bool(_OTEL)}")
@@ -945,20 +951,21 @@ async def display_startup_info():
 
 # --- FIX: Add CORS Middleware ---
 # Import from config
-from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX
-
-# Use configured origins
-origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"]
+from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, should_disable_cors
 
 # FIXME - CORS
-# # -- If you have any global middleware, add it here --
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"], # Must include OPTIONS, GET, POST, DELETE etc.
-    allow_headers=["*"],
-)
+if should_disable_cors():
+    logger.warning("CORS middleware disabled via configuration/ENV flag.")
+else:
+    origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"]
+    # # -- If you have any global middleware, add it here --
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"], # Must include OPTIONS, GET, POST, DELETE etc.
+        allow_headers=["*"],
+    )
 
 # Add CSRF Protection Middleware (NEW) with friendly error logging for misconfiguration
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import add_csrf_protection

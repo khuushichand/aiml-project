@@ -5,6 +5,10 @@
 enable_first_time_setup = true
 setup_completed = false
 
+[Server]
+# Server-level toggles. Disable CORS only when you fully control all clients.
+disable_cors = false
+
 [Processing]
 processing_choice = cuda
 

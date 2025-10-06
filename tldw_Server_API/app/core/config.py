@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import yaml
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
@@ -706,6 +707,22 @@ def load_comprehensive_config():
 
     logger.info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
     return config_parser
+
+
+@lru_cache(maxsize=1)
+def should_disable_cors() -> bool:
+    """Return True if CORS middleware should be skipped."""
+    env_value = os.getenv("DISABLE_CORS")
+    if env_value is not None:
+        return env_value.strip().lower() in {"true", "1", "yes", "on"}
+
+    try:
+        config_parser = load_comprehensive_config()
+        if config_parser.has_section('Server'):
+            return config_parser.getboolean('Server', 'disable_cors', fallback=False)
+    except Exception as exc:
+        logger.debug(f"Unable to read disable_cors flag from config: {exc}")
+    return False
 
 def load_comprehensive_config_with_tts():
     """

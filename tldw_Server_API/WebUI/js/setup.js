@@ -9,10 +9,12 @@
     'ChangeMeStrong123!',
     'change-me-in-production',
   ]);
+  const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
   const state = {
     dirty: {},
     sections: [],
     status: null,
+    saving: false,
   };
 
   const elements = {};
@@ -60,13 +62,16 @@
     elements.actionMessage = document.getElementById('actionMessage');
   }
 
+  function hasPendingChanges() {
+    return Object.keys(state.dirty).length > 0;
+  }
+
   async function loadConfig() {
     try {
       const data = await fetchJson(`${API_BASE}/config`);
       state.sections = data.sections || [];
       renderSections(state.sections);
-      elements.saveButton.disabled = false;
-      elements.completeButton.disabled = false;
+      updateSaveState();
     } catch (error) {
       console.error('Failed to fetch config snapshot', error);
       setMessage('error', `Unable to load configuration: ${error.message || error}`);
@@ -90,6 +95,16 @@
       elements.placeholderNotice.hidden = false;
     } else {
       elements.placeholderNotice.hidden = true;
+    }
+  }
+
+  async function refreshStatus() {
+    try {
+      const status = await fetchJson(`${API_BASE}/status`);
+      state.status = status;
+      renderStatus(status);
+    } catch (error) {
+      console.error('Failed to refresh setup status', error);
     }
   }
 
@@ -142,6 +157,10 @@
       wrapper.classList.add('placeholder');
     }
 
+    if (shouldUseWideLayout(field)) {
+      wrapper.classList.add('wide');
+    }
+
     const label = document.createElement('label');
     label.className = 'field-label';
     label.textContent = field.key;
@@ -153,7 +172,7 @@
     input.dataset.section = sectionName;
     input.dataset.key = field.key;
     input.dataset.type = field.type;
-    input.dataset.originalValue = field.value;
+    input.dataset.originalValue = initialDatasetValue(field);
     input.addEventListener('input', handleFieldInput);
     input.addEventListener('change', handleFieldInput);
 
@@ -188,28 +207,93 @@
   }
 
   function createInputForField(field) {
-    const value = field.value ?? '';
-    if (field.type === 'boolean') {
+    const rawValue = field.value === undefined || field.value === null ? '' : field.value;
+    const value = typeof rawValue === 'string' ? rawValue : String(rawValue);
+    const isBoolean = field.type === 'boolean';
+    const isNumeric = field.type === 'number' || field.type === 'integer';
+    const isSecret = !!field.is_secret;
+
+    if (isBoolean) {
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = toBoolean(value);
       return input;
     }
 
-    if (value.includes('\n') || value.length > 160) {
+    if (shouldRenderTextarea(field, value)) {
       const textarea = document.createElement('textarea');
-      textarea.rows = Math.min(10, Math.max(4, Math.ceil(value.length / 80)));
+      const visibleLength = value.length;
+      const computedRows = Math.ceil(visibleLength / 60);
+      textarea.rows = Math.min(10, Math.max(4, computedRows || 4));
       textarea.value = value;
+      textarea.spellcheck = false;
       return textarea;
     }
 
     const input = document.createElement('input');
-    input.type = field.is_secret ? 'password' : (field.type === 'number' || field.type === 'integer' ? 'number' : 'text');
+    input.type = isSecret ? 'password' : (isNumeric ? 'number' : 'text');
     input.value = value;
-    if (field.type === 'number' || field.type === 'integer') {
+    if (isNumeric) {
       input.step = field.type === 'integer' ? '1' : 'any';
     }
     return input;
+  }
+
+  function shouldUseWideLayout(field) {
+    if (!field) {
+      return false;
+    }
+
+    const type = field.type;
+    if (type === 'boolean' || type === 'integer' || type === 'number') {
+      return false;
+    }
+
+    if (field.is_secret) {
+      return false;
+    }
+
+    const key = String(field.key || '');
+    const heuristicMatch = TEXTAREA_KEY_PATTERN.test(key);
+    const valueLength = String(field.value ?? '').length;
+    return heuristicMatch || valueLength > 60;
+  }
+
+  function shouldRenderTextarea(field, value) {
+    if (!field) {
+      return false;
+    }
+
+    if (field.is_secret) {
+      return false;
+    }
+
+    const type = field.type;
+    if (type === 'boolean' || type === 'integer' || type === 'number') {
+      return false;
+    }
+
+    if (typeof value === 'string') {
+      if (value.includes('\n') || value.length > 80) {
+        return true;
+      }
+    }
+
+    const key = String(field.key || '');
+    return TEXTAREA_KEY_PATTERN.test(key);
+  }
+
+  function initialDatasetValue(field) {
+    if (field.type === 'boolean') {
+      return toBoolean(field.value) ? 'true' : 'false';
+    }
+
+    if (field.type === 'number' || field.type === 'integer') {
+      const numeric = field.value === undefined || field.value === null ? '' : field.value;
+      return String(numeric).trim();
+    }
+
+    return field.value === undefined || field.value === null ? '' : String(field.value);
   }
 
   function handleFieldInput(event) {
@@ -217,7 +301,7 @@
     const section = input.dataset.section;
     const key = input.dataset.key;
     const type = input.dataset.type;
-    const original = input.dataset.originalValue ?? '';
+    const original = input.dataset.originalValue !== undefined ? input.dataset.originalValue : '';
     const value = normaliseValue(input, type);
 
     if (!state.dirty[section]) {
@@ -231,13 +315,17 @@
       if (Object.keys(state.dirty[section]).length === 0) {
         delete state.dirty[section];
       }
-      parentCard?.classList.remove('dirty');
+      if (parentCard) {
+        parentCard.classList.remove('dirty');
+      }
       if (parentCard) {
         parentCard.classList.toggle('placeholder', isPlaceholderValue(value));
       }
     } else {
       state.dirty[section][key] = value;
-      parentCard?.classList.add('dirty');
+      if (parentCard) {
+        parentCard.classList.add('dirty');
+      }
       if (parentCard && !isPlaceholderValue(value)) {
         parentCard.classList.remove('placeholder');
       }
@@ -247,8 +335,15 @@
   }
 
   function updateSaveState() {
-    const hasChanges = Object.keys(state.dirty).length > 0;
-    elements.saveButton.disabled = !hasChanges;
+    const hasChanges = hasPendingChanges();
+
+    if (elements.saveButton) {
+      elements.saveButton.disabled = !hasChanges || state.saving;
+    }
+
+    if (elements.completeButton) {
+      elements.completeButton.disabled = hasChanges || state.saving;
+    }
   }
 
   function shouldExpandSection(section) {
@@ -256,16 +351,18 @@
     return placeholders;
   }
 
-  async function handleSave() {
-    if (!Object.keys(state.dirty).length) {
-      setMessage('info', 'No changes to save.');
-      return;
+  async function persistDirtyChanges(options = {}) {
+    const { silentSuccess = false } = options;
+
+    if (!hasPendingChanges()) {
+      if (!silentSuccess) {
+        setMessage('info', 'No changes to save.');
+      }
+      return false;
     }
 
-    setSaving(true);
     try {
       const payload = { updates: state.dirty };
-      // Convert boolean strings before sending to avoid nested objects being reused
       const serialised = serialisePayload(payload);
       const response = await fetchJson(`${API_BASE}/config`, {
         method: 'POST',
@@ -273,32 +370,52 @@
         body: JSON.stringify(serialised),
       });
 
-      setMessage('success', `Configuration saved. ${response.requires_restart ? 'Restart the server to apply changes.' : ''}`);
-      if (response.backup_path) {
-        appendMessage(`Backup created at ${response.backup_path}`);
+      state.dirty = {};
+      updateSaveState();
+      await refreshStatus();
+      await loadConfig();
+
+      if (!silentSuccess) {
+        setMessage('success', `Configuration saved. ${response.requires_restart ? 'Restart the server to apply changes.' : ''}`);
+        if (response.backup_path) {
+          appendMessage(`Backup created at ${response.backup_path}`);
+        }
       }
 
-      // Reset dirty state
-      state.dirty = {};
-      const dirtyCards = document.querySelectorAll('.field-card.dirty');
-      dirtyCards.forEach((node) => node.classList.remove('dirty'));
-      updateSaveState();
-
-      // Reload status to refresh placeholder list
-      const status = await fetchJson(`${API_BASE}/status`);
-      state.status = status;
-      renderStatus(status);
+      return true;
     } catch (error) {
       console.error('Failed to save configuration', error);
       setMessage('error', `Save failed: ${error.message || error}`);
+      throw error;
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await persistDirtyChanges();
+    } catch {
+      // Message handled in persistDirtyChanges
     } finally {
       setSaving(false);
     }
   }
 
   async function handleComplete() {
+    if (hasPendingChanges()) {
+      setMessage('info', 'Saving pending changes before completing setup…');
+    }
+
     setSaving(true);
     try {
+      if (hasPendingChanges()) {
+        try {
+          await persistDirtyChanges({ silentSuccess: true });
+        } catch {
+          return;
+        }
+      }
+
       const payload = { disable_first_time_setup: elements.disableToggle.checked };
       const response = await fetchJson(`${API_BASE}/complete`, {
         method: 'POST',
@@ -349,8 +466,8 @@
   }
 
   function setSaving(isSaving) {
-    elements.saveButton.disabled = isSaving || !Object.keys(state.dirty).length;
-    elements.completeButton.disabled = isSaving;
+    state.saving = isSaving;
+    updateSaveState();
   }
 
   function setMessage(level, message) {

@@ -34,6 +34,7 @@ SECTION_LABELS: Dict[str, str] = {
     "API": "API Providers",
     "Processing": "Processing",
     "Media-Processing": "Media Processing",
+    "Server": "Server Settings",
     "Chat-Module": "Chat Module",
     "Character-Chat": "Character Chat",
     "Settings": "General Settings",
@@ -52,6 +53,7 @@ SECTION_DESCRIPTIONS: Dict[str, str] = {
     "Setup": "Controls the guided setup flow shown on first launch.",
     "AuthNZ": "Configure authentication mode and credentials.",
     "API": "Add API keys for the providers you plan to use.",
+    "Server": "Server-level behaviour toggles.",
     "Database": "Manage database storage locations and options.",
     "Embeddings": "Configure embedding providers and defaults.",
     "RAG": "Tune retrieval and augmentation behaviour.",
@@ -66,6 +68,7 @@ FIELD_HINTS: Dict[Tuple[str, str], str] = {
     ("API", "google_api_key"): "Google Generative AI key.",
     ("API", "groq_api_key"): "Groq LPU inference key.",
     ("Database", "sqlite_path"): "Path to the main content SQLite database.",
+    ("Server", "disable_cors"): "If true, skips CORS middleware entirely (same-origin clients only).",
 }
 
 
