@@ -10,19 +10,112 @@
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
+  const FEATURE_SECTION_MAP = {
+    chat: ['API', 'Chat-Module', 'Embeddings', 'RAG'],
+    media: ['Processing', 'Media-Processing'],
+    audio: ['STT-Settings', 'TTS-Settings'],
+  };
+  const WIZARD_STEPS = [
+    {
+      id: 'auth',
+      type: 'single',
+      title: 'Who will use this server?',
+      description: 'Pick the option that best matches your deployment so we can configure authentication.',
+      options: [
+        {
+          value: 'single_user',
+          label: 'Just me on this machine',
+          hint: 'Simple API key authentication (recommended for local or personal installs).',
+          sections: ['AuthNZ', 'Setup'],
+        },
+        {
+          value: 'multi_user',
+          label: 'Multiple teammates or remote access',
+          hint: 'Enables JWT auth, user management, and database configuration.',
+          sections: ['AuthNZ', 'Setup', 'Database'],
+        },
+      ],
+    },
+    {
+      id: 'features',
+      type: 'multi',
+      title: 'Which capabilities do you plan to use first?',
+      description: 'We will surface the settings that unlock these features right away.',
+      options: [
+        {
+          value: 'chat',
+          label: 'AI chat & retrieval (RAG)',
+          hint: 'Configure API providers, chat behaviour, embeddings, and retrieval settings.',
+          sections: FEATURE_SECTION_MAP.chat,
+        },
+        {
+          value: 'media',
+          label: 'Media ingestion & document analysis',
+          hint: 'Focus on processing pipelines for video, audio, and documents.',
+          sections: FEATURE_SECTION_MAP.media,
+        },
+        {
+          value: 'audio',
+          label: 'Speech-to-text & text-to-speech',
+          hint: 'Highlight audio transcription and TTS configuration.',
+          sections: FEATURE_SECTION_MAP.audio,
+        },
+      ],
+    },
+    {
+      id: 'depth',
+      type: 'single',
+      title: 'How much configuration do you want to see now?',
+      description: 'You can always reveal every section later.',
+      options: [
+        {
+          value: 'guided',
+          label: 'Show the recommended sections only',
+          hint: 'Keeps advanced settings tucked away until you need them.',
+        },
+        {
+          value: 'all',
+          label: 'Show everything from config.txt',
+          hint: 'Ideal if you already know which values you want to change.',
+        },
+      ],
+    },
+    {
+      id: 'summary',
+      type: 'summary',
+      title: 'All set! Let’s review.',
+      description: '',
+    },
+  ];
   const state = {
     dirty: {},
     sections: [],
     status: null,
     saving: false,
+    configLoaded: false,
+    visibleSections: null,
+    showHiddenSections: false,
+    hiddenSections: [],
+    recommendedSections: new Set(),
+    wizard: {
+      active: false,
+      currentStep: 0,
+      answers: {},
+      completed: false,
+      skipped: false,
+    },
   };
 
   const elements = {};
+  let actionsBound = false;
+  let wizardActionsBound = false;
+  let visibilityActionsBound = false;
 
   document.addEventListener('DOMContentLoaded', init);
 
   async function init() {
     cacheElements();
+    hideConfigSection();
     setLoading(true);
 
     try {
@@ -40,8 +133,7 @@
       }
 
       renderStatus(status);
-      await loadConfig();
-      bindActions();
+      initialiseWizard();
     } catch (error) {
       console.error('Setup initialisation failed', error);
       setMessage('error', `Failed to load setup data: ${error.message || error}`);
@@ -51,6 +143,7 @@
   }
 
   function cacheElements() {
+    elements.configSection = document.getElementById('configSection');
     elements.configSections = document.getElementById('configSections');
     elements.configLoading = document.getElementById('configLoading');
     elements.setupRequired = document.getElementById('setupRequired');
@@ -60,6 +153,13 @@
     elements.completeButton = document.getElementById('completeSetup');
     elements.disableToggle = document.getElementById('disableWizardToggle');
     elements.actionMessage = document.getElementById('actionMessage');
+    elements.wizardSection = document.getElementById('guidedWizard');
+    elements.wizardContent = document.getElementById('wizardContent');
+    elements.wizardBack = document.getElementById('wizardBack');
+    elements.wizardNext = document.getElementById('wizardNext');
+    elements.wizardSkip = document.getElementById('wizardSkip');
+    elements.wizardSummary = document.getElementById('wizardSummary');
+    elements.showAllSections = document.getElementById('showAllSections');
   }
 
   function hasPendingChanges() {
@@ -70,8 +170,9 @@
     try {
       const data = await fetchJson(`${API_BASE}/config`);
       state.sections = data.sections || [];
-      renderSections(state.sections);
-      updateSaveState();
+      state.configLoaded = true;
+      refreshConfigView();
+      ensureActionsBound();
     } catch (error) {
       console.error('Failed to fetch config snapshot', error);
       setMessage('error', `Unable to load configuration: ${error.message || error}`);
@@ -109,6 +210,8 @@
   }
 
   function renderDisabledState() {
+    hideWizard();
+    showConfigSection();
     if (elements.configSections) {
       elements.configSections.innerHTML = `
         <div class="empty-state">
@@ -116,18 +219,34 @@
         </div>
       `;
     }
-    elements.saveButton.disabled = true;
-    elements.completeButton.disabled = true;
+    if (elements.saveButton) {
+      elements.saveButton.disabled = true;
+    }
+    if (elements.completeButton) {
+      elements.completeButton.disabled = true;
+    }
     setMessage('info', 'Setup wizard disabled via config.txt.');
   }
 
   function renderSections(sections) {
     const container = elements.configSections;
+    if (!container) return;
     container.innerHTML = '';
 
+    const hiddenNames = [];
+
     sections.forEach((section) => {
+      const isHidden = shouldHideSection(section.name);
+      if (isHidden && !state.showHiddenSections) {
+        hiddenNames.push(section.name);
+        return;
+      }
+
       const details = document.createElement('details');
       details.className = 'section-card';
+      if (isHidden) {
+        details.classList.add('wizard-additional');
+      }
       details.open = shouldExpandSection(section);
 
       const summary = document.createElement('summary');
@@ -147,7 +266,421 @@
 
       details.appendChild(fieldsWrapper);
       container.appendChild(details);
+
+      if (isHidden && state.showHiddenSections) {
+        hiddenNames.push(section.name);
+      }
     });
+
+    state.hiddenSections = hiddenNames;
+    updateVisibilityControls();
+  }
+
+  function initialiseWizard() {
+    if (!elements.wizardSection) {
+      skipWizard(true);
+      return;
+    }
+
+    state.wizard.active = true;
+    state.wizard.currentStep = 0;
+    state.wizard.answers = {};
+    state.wizard.completed = false;
+    state.wizard.skipped = false;
+    state.visibleSections = null;
+    state.showHiddenSections = false;
+    state.recommendedSections = new Set();
+
+    elements.wizardSection.hidden = false;
+    elements.wizardSkip.hidden = false;
+    if (elements.wizardSummary) {
+      elements.wizardSummary.hidden = true;
+    }
+    bindWizardActions();
+    bindVisibilityActions();
+    renderWizardStep();
+  }
+
+  function renderWizardStep() {
+    const step = WIZARD_STEPS[state.wizard.currentStep];
+    if (!step || !elements.wizardContent) {
+      return;
+    }
+
+    clearMessage();
+    elements.wizardContent.innerHTML = '';
+    elements.wizardBack.disabled = state.wizard.currentStep === 0;
+    elements.wizardNext.textContent = step.type === 'summary' ? 'Open configuration' : 'Next';
+    elements.wizardSkip.hidden = step.type === 'summary';
+
+    if (step.type === 'summary') {
+      renderWizardSummary();
+      return;
+    }
+
+    const title = document.createElement('h3');
+    title.className = 'wizard-step-title';
+    title.textContent = step.title;
+    elements.wizardContent.appendChild(title);
+
+    if (step.description) {
+      const description = document.createElement('p');
+      description.className = 'wizard-step-description';
+      description.textContent = step.description;
+      elements.wizardContent.appendChild(description);
+    }
+
+    const optionsWrapper = document.createElement('div');
+    optionsWrapper.className = 'wizard-options';
+
+    step.options.forEach((option) => {
+      optionsWrapper.appendChild(createWizardOption(step, option));
+    });
+
+    elements.wizardContent.appendChild(optionsWrapper);
+    updateWizardOptionStyles(step.id);
+  }
+
+  function renderWizardSummary() {
+    const summaryContainer = document.createElement('div');
+    summaryContainer.className = 'wizard-content-summary';
+
+    const heading = document.createElement('h3');
+    heading.className = 'wizard-step-title';
+    heading.textContent = 'All set! Here’s what we’ll focus on.';
+    summaryContainer.appendChild(heading);
+
+    const summaryList = document.createElement('ul');
+    const recommended = Array.from(computeRecommendedSections()).map((name) => escapeHtml(name));
+    const featureSelections = Array.from(state.wizard.answers.features || []).map((value) => escapeHtml(getWizardOptionLabel('features', value)));
+
+    const lines = [];
+    if (recommended.length) {
+      lines.push(`We will highlight: <strong>${recommended.join(', ')}</strong>`);
+    }
+    if (featureSelections.length) {
+      lines.push(`Selected capabilities: ${featureSelections.join(', ')}`);
+    }
+    if (!lines.length) {
+      lines.push('We will show the full configuration so you can adjust anything.');
+    }
+
+    lines.forEach((line) => {
+      const item = document.createElement('li');
+      item.innerHTML = line;
+      summaryList.appendChild(item);
+    });
+
+    const body = document.createElement('p');
+    body.className = 'wizard-step-description';
+    body.textContent = 'Click “Open configuration” to review and save your settings. You can still reveal every section later.';
+
+    summaryContainer.appendChild(body);
+    summaryContainer.appendChild(summaryList);
+    elements.wizardContent.appendChild(summaryContainer);
+  }
+
+  function createWizardOption(step, option) {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'wizard-option';
+
+    const input = document.createElement('input');
+    input.type = step.type === 'multi' ? 'checkbox' : 'radio';
+    input.name = `wizard-${step.id}`;
+    input.value = option.value;
+    input.checked = isOptionSelected(step.id, option.value);
+
+    input.addEventListener('change', (event) => {
+      toggleWizardSelection(step, option.value, event.target.checked, step.type === 'multi');
+      updateWizardOptionStyles(step.id);
+    });
+
+    const content = document.createElement('div');
+    content.className = 'wizard-option-content';
+
+    const title = document.createElement('div');
+    title.className = 'wizard-option-title';
+    title.textContent = option.label;
+    content.appendChild(title);
+
+    if (option.hint) {
+      const hint = document.createElement('p');
+      hint.className = 'wizard-option-hint';
+      hint.textContent = option.hint;
+      content.appendChild(hint);
+    }
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(content);
+
+    if (input.checked) {
+      wrapper.classList.add('selected');
+    }
+
+    return wrapper;
+  }
+
+  function isOptionSelected(stepId, value) {
+    const answer = state.wizard.answers[stepId];
+    if (Array.isArray(answer)) {
+      return answer.includes(value);
+    }
+    return answer === value;
+  }
+
+  function getWizardStep(stepId) {
+    return WIZARD_STEPS.find((step) => step.id === stepId);
+  }
+
+  function getWizardOptionLabel(stepId, value) {
+    const step = getWizardStep(stepId);
+    const option = step?.options?.find((item) => item.value === value);
+    return option?.label || value;
+  }
+
+  function toggleWizardSelection(step, value, checked, isMulti) {
+    if (isMulti) {
+      const current = new Set(state.wizard.answers[step.id] || []);
+      if (checked) {
+        current.add(value);
+      } else {
+        current.delete(value);
+      }
+      state.wizard.answers[step.id] = Array.from(current);
+      return;
+    }
+
+    if (checked) {
+      state.wizard.answers[step.id] = value;
+    }
+  }
+
+  function updateWizardOptionStyles(stepId) {
+    const inputs = elements.wizardContent?.querySelectorAll(`[name="wizard-${stepId}"]`) || [];
+    inputs.forEach((input) => {
+      const parent = input.closest('.wizard-option');
+      if (!parent) return;
+      if (input.checked) {
+        parent.classList.add('selected');
+      } else {
+        parent.classList.remove('selected');
+      }
+    });
+  }
+
+  function handleWizardNext() {
+    const step = WIZARD_STEPS[state.wizard.currentStep];
+    if (!step) {
+      return;
+    }
+
+    if (step.type === 'single') {
+      const choice = state.wizard.answers[step.id];
+      if (!choice) {
+        setMessage('info', 'Please choose an option to continue.');
+        return;
+      }
+    }
+
+    if (step.type === 'multi') {
+      const selections = state.wizard.answers[step.id] || [];
+      if (!selections.length) {
+        setMessage('info', 'Select at least one capability or skip the wizard to continue.');
+        return;
+      }
+    }
+
+    if (step.type === 'summary') {
+      completeWizard();
+      return;
+    }
+
+    state.wizard.currentStep = Math.min(state.wizard.currentStep + 1, WIZARD_STEPS.length - 1);
+    renderWizardStep();
+  }
+
+  function handleWizardBack() {
+    if (state.wizard.currentStep === 0) {
+      return;
+    }
+    state.wizard.currentStep -= 1;
+    renderWizardStep();
+  }
+
+  function skipWizard(silent = false) {
+    state.wizard.active = false;
+    state.wizard.skipped = true;
+    state.visibleSections = null;
+    state.showHiddenSections = true;
+    state.recommendedSections = new Set();
+    hideWizard();
+    ensureConfigLoaded();
+    if (!silent) {
+      setMessage('info', 'Showing full configuration.');
+    }
+  }
+
+  function completeWizard() {
+    state.wizard.active = false;
+    state.wizard.completed = true;
+
+    const depthPreference = state.wizard.answers.depth;
+    const recommended = computeRecommendedSections();
+    state.recommendedSections = recommended;
+
+    if (depthPreference === 'guided' && recommended.size > 0) {
+      state.visibleSections = recommended;
+      state.showHiddenSections = false;
+    } else {
+      state.visibleSections = null;
+      state.showHiddenSections = true;
+    }
+
+    hideWizard();
+    ensureConfigLoaded().then(() => {
+      updateSectionSummaryBanner();
+    });
+  }
+
+  function hideWizard() {
+    if (elements.wizardSection) {
+      elements.wizardSection.hidden = true;
+    }
+  }
+
+  function hideConfigSection() {
+    if (elements.configSection) {
+      elements.configSection.hidden = true;
+    }
+  }
+
+  function showConfigSection() {
+    if (elements.configSection) {
+      elements.configSection.hidden = false;
+    }
+  }
+
+  async function ensureConfigLoaded() {
+    showConfigSection();
+    if (state.configLoaded) {
+      refreshConfigView();
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await loadConfig();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function refreshConfigView() {
+    if (!state.configLoaded) {
+      return;
+    }
+    renderSections(state.sections);
+    updateSectionSummaryBanner();
+    updateSaveState();
+  }
+
+  function shouldHideSection(sectionName) {
+    if (!state.visibleSections || state.showHiddenSections) {
+      return false;
+    }
+    return !state.visibleSections.has(sectionName);
+  }
+
+  function computeRecommendedSections() {
+    const sections = new Set(['Setup']);
+    const authChoice = state.wizard.answers.auth;
+
+    if (authChoice === 'single_user') {
+      sections.add('AuthNZ');
+    }
+
+    if (authChoice === 'multi_user') {
+      sections.add('AuthNZ');
+      sections.add('Database');
+    }
+
+    const features = state.wizard.answers.features || [];
+    features.forEach((feature) => {
+      (FEATURE_SECTION_MAP[feature] || []).forEach((section) => sections.add(section));
+    });
+
+    return sections;
+  }
+
+  function updateSectionSummaryBanner() {
+    if (!elements.wizardSummary) {
+      return;
+    }
+
+    const hiddenCount = state.hiddenSections.length;
+    if (!state.visibleSections || state.showHiddenSections || hiddenCount === 0) {
+      elements.wizardSummary.hidden = true;
+      return;
+    }
+
+    const recommendedList = Array.from(state.recommendedSections || []).filter((section) => state.visibleSections.has(section));
+    const sectionItems = recommendedList.map((section) => `<span>${escapeHtml(section)}</span>`).join(', ');
+    const headline = sectionItems ? `showing key sections ${sectionItems}.` : 'showing the most relevant sections first.';
+
+    elements.wizardSummary.hidden = false;
+    elements.wizardSummary.innerHTML = `
+      <strong>Guided view:</strong> ${headline}
+      <br />${hiddenCount} additional section${hiddenCount === 1 ? '' : 's'} hidden. Use the button below to reveal them.`;
+  }
+
+  function updateVisibilityControls() {
+    if (!elements.showAllSections) {
+      return;
+    }
+
+    const hiddenCount = state.hiddenSections.length;
+
+    if (!state.visibleSections || hiddenCount === 0) {
+      elements.showAllSections.hidden = true;
+      return;
+    }
+
+    elements.showAllSections.hidden = false;
+    if (state.showHiddenSections) {
+      elements.showAllSections.textContent = 'Hide additional sections';
+    } else {
+      elements.showAllSections.textContent = `Show ${hiddenCount} additional section${hiddenCount === 1 ? '' : 's'}`;
+    }
+  }
+
+  function bindWizardActions() {
+    if (wizardActionsBound) {
+      return;
+    }
+
+    elements.wizardNext?.addEventListener('click', handleWizardNext);
+    elements.wizardBack?.addEventListener('click', handleWizardBack);
+    elements.wizardSkip?.addEventListener('click', () => skipWizard(false));
+    wizardActionsBound = true;
+  }
+
+  function bindVisibilityActions() {
+    if (visibilityActionsBound) {
+      return;
+    }
+
+    elements.showAllSections?.addEventListener('click', handleToggleSections);
+    visibilityActionsBound = true;
+  }
+
+  function handleToggleSections() {
+    state.showHiddenSections = !state.showHiddenSections;
+    refreshConfigView();
+    if (state.showHiddenSections) {
+      setMessage('info', 'Showing all configuration sections.');
+    } else {
+      clearMessage();
+    }
   }
 
   function renderField(sectionName, field) {
@@ -456,8 +989,16 @@
   }
 
   function bindActions() {
-    elements.saveButton.addEventListener('click', handleSave);
-    elements.completeButton.addEventListener('click', handleComplete);
+    if (actionsBound) {
+      return;
+    }
+    elements.saveButton?.addEventListener('click', handleSave);
+    elements.completeButton?.addEventListener('click', handleComplete);
+    actionsBound = true;
+  }
+
+  function ensureActionsBound() {
+    bindActions();
   }
 
   function setLoading(isLoading) {
@@ -474,6 +1015,12 @@
     if (!elements.actionMessage) return;
     elements.actionMessage.textContent = message;
     elements.actionMessage.className = `action-message ${level}`;
+  }
+
+  function clearMessage() {
+    if (!elements.actionMessage) return;
+    elements.actionMessage.textContent = '';
+    elements.actionMessage.className = 'action-message';
   }
 
   function appendMessage(additional) {

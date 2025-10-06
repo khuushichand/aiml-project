@@ -33,11 +33,28 @@
             </div>
         </section>
 
-        <section class="setup-section">
+        <section id="guidedWizard" class="setup-section wizard-section" hidden>
+            <div class="section-heading">
+                <h2>Guided Setup</h2>
+                <p>Answer a few quick questions so we can highlight the settings that matter most. You can always skip and edit everything manually.</p>
+            </div>
+            <div id="wizardContent" class="wizard-content"></div>
+            <div class="wizard-footer">
+                <button id="wizardBack" class="btn subtle" type="button" disabled>Back</button>
+                <div class="wizard-actions">
+                    <button id="wizardSkip" class="btn subtle" type="button">Skip &amp; Show All Settings</button>
+                    <button id="wizardNext" class="btn primary" type="button">Next</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="configSection" class="setup-section" hidden>
             <div class="section-heading">
                 <h2>Configuration Explorer</h2>
                 <p>Review each section below. Update any values that still use placeholders or defaults.</p>
             </div>
+            <div id="wizardSummary" class="wizard-summary" hidden></div>
+            <button id="showAllSections" class="btn subtle show-all" type="button" hidden></button>
             <div id="configSections" class="config-sections">
                 <div class="empty-state" id="configLoading">Loading configuration…</div>
             </div>
