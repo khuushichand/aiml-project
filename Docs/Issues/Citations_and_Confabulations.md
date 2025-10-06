@@ -15,6 +15,8 @@ https://arxiv.org/abs/2501.08292
 https://docs.exa.ai/examples/demo-hallucination-detector
 https://www.microsoft.com/en-us/research/blog/claimify-extracting-high-quality-claims-from-language-model-outputs/
 https://stark.stanford.edu/
+https://arxiv.org/abs/2509.22582
+
 https://github.com/aizip/Rag-Eval-flow
 https://huggingface.co/QuantFactory/gemma-7b-aps-it-GGUF
 https://huggingface.co/google/gemma-7b-aps-it
