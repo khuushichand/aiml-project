@@ -15,6 +15,23 @@
     media: ['Processing', 'Media-Processing'],
     audio: ['STT-Settings', 'TTS-Settings'],
   };
+  const SECTION_INFO_DESCRIPTIONS = {
+    Setup: 'Controls the guided setup flow that appears on first launch and handles completion flags.',
+    AuthNZ: 'Configure authentication mode, API keys, and multi-user security policies.',
+    API: 'Provide credentials for external LLMs and services used by chat, RAG, and tooling.',
+    Processing: 'Set global ingestion defaults like concurrency, temporary storage, and file validation.',
+    'Media-Processing': 'Fine-tune how videos, audio, and documents are chunked, converted, and analyzed.',
+    'Chat-Module': 'Adjust chat behaviour, default providers, streaming responses, and moderation settings.',
+    'Character-Chat': 'Manage persona chat options, character cards, and session persistence.',
+    Settings: 'General server preferences covering UI, rate limiting, and miscellaneous toggles.',
+    'Auto-Save': 'Control how frequently notes, chats, and prompts are saved and versioned.',
+    Database: 'Set database engines and file paths for auth, media content, and per-user data.',
+    Embeddings: 'Choose embedding providers, models, and batching options for retrieval.',
+    RAG: 'Tune retrieval parameters, hybrid search weights, and reranking behaviour.',
+    'STT-Settings': 'Pick speech-to-text models, diarization, and streaming transcription preferences.',
+    'TTS-Settings': 'Configure text-to-speech voices, codecs, and streaming output.',
+    Logging: 'Direct logs to files or services, adjust verbosity, and enable observability hooks.',
+  };
   const WIZARD_STEPS = [
     {
       id: 'auth',
@@ -237,6 +254,7 @@
 
     sections.forEach((section) => {
       const isHidden = shouldHideSection(section.name);
+      const isRecommended = !state.visibleSections || state.visibleSections.has(section.name);
       if (isHidden && !state.showHiddenSections) {
         hiddenNames.push(section.name);
         return;
@@ -247,15 +265,65 @@
       if (isHidden) {
         details.classList.add('wizard-additional');
       }
-      details.open = shouldExpandSection(section);
+      details.open = shouldExpandSection(section, isRecommended);
 
       const summary = document.createElement('summary');
       summary.className = 'section-summary';
-      summary.innerHTML = `
-        <span class="section-title">${escapeHtml(section.label || section.name)}</span>
-        <span class="section-subtitle">${escapeHtml(section.description || '')}</span>
-      `;
+      const summaryTitle = document.createElement('span');
+      summaryTitle.className = 'section-title';
+      summaryTitle.textContent = section.label || section.name;
+      summary.appendChild(summaryTitle);
+
+      if (isRecommended && !state.showHiddenSections) {
+        const badge = document.createElement('span');
+        badge.className = 'section-pill recommended';
+        badge.textContent = 'Recommended';
+        summary.appendChild(badge);
+      } else if (!isRecommended) {
+        const badge = document.createElement('span');
+        badge.className = 'section-pill optional';
+        badge.textContent = 'Additional';
+        summary.appendChild(badge);
+      }
       details.appendChild(summary);
+
+      const content = document.createElement('div');
+      content.className = 'section-content';
+
+      const infoPanel = document.createElement('div');
+      infoPanel.className = 'section-info';
+
+      const infoTitle = document.createElement('h4');
+      infoTitle.className = 'section-info-title';
+      infoTitle.textContent = `About ${section.label || section.name}`;
+      infoPanel.appendChild(infoTitle);
+
+      const infoBody = document.createElement('p');
+      infoBody.className = 'section-info-body';
+      infoBody.textContent = getSectionDescription(section);
+      infoPanel.appendChild(infoBody);
+
+      const highlights = getSectionHighlights(section.name, section.fields);
+      if (highlights.length) {
+        const highlightList = document.createElement('ul');
+        highlightList.className = 'section-info-list';
+        highlights.forEach((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          highlightList.appendChild(li);
+        });
+        infoPanel.appendChild(highlightList);
+      }
+
+      const placeholdersCount = (section.fields || []).filter((field) => field.placeholder).length;
+      if (placeholdersCount > 0) {
+        const placeholderNote = document.createElement('p');
+        placeholderNote.className = 'section-info-note';
+        placeholderNote.textContent = `${placeholdersCount} value${placeholdersCount === 1 ? '' : 's'} still use placeholder defaults.`;
+        infoPanel.appendChild(placeholderNote);
+      }
+
+      content.appendChild(infoPanel);
 
       const fieldsWrapper = document.createElement('div');
       fieldsWrapper.className = 'fields-wrapper';
@@ -264,7 +332,8 @@
         fieldsWrapper.appendChild(renderField(section.name, field));
       });
 
-      details.appendChild(fieldsWrapper);
+      content.appendChild(fieldsWrapper);
+      details.appendChild(content);
       container.appendChild(details);
 
       if (isHidden && state.showHiddenSections) {
@@ -274,6 +343,41 @@
 
     state.hiddenSections = hiddenNames;
     updateVisibilityControls();
+  }
+
+  function getSectionDescription(section) {
+    const fallback = SECTION_INFO_DESCRIPTIONS[section.name];
+    const computed = section.description || fallback || `Configuration options for ${section.label || section.name}.`;
+    return computed;
+  }
+
+  function getSectionLabelByName(sectionName) {
+    const match = state.sections.find((entry) => entry.name === sectionName);
+    return match?.label || sectionName;
+  }
+
+  function getSectionHighlights(sectionName, fields) {
+    const highlights = [];
+    const authChoice = state.wizard.answers?.auth;
+    if (sectionName === 'AuthNZ' && authChoice === 'single_user') {
+      highlights.push('Using single-user API key mode (great for local installs).');
+    }
+    if (sectionName === 'AuthNZ' && authChoice === 'multi_user') {
+      highlights.push('Multi-user authentication enabled for team access.');
+    }
+    if (sectionName === 'Database' && authChoice === 'multi_user') {
+      highlights.push('Needed for multi-user deployments to manage shared data.');
+    }
+
+    const features = state.wizard.answers?.features || [];
+    features.forEach((feature) => {
+      const mappedSections = FEATURE_SECTION_MAP[feature] || [];
+      if (mappedSections.includes(sectionName)) {
+        highlights.push(`Supports: ${getWizardOptionLabel('features', feature)}`);
+      }
+    });
+
+    return highlights;
   }
 
   function initialiseWizard() {
@@ -351,7 +455,7 @@
     summaryContainer.appendChild(heading);
 
     const summaryList = document.createElement('ul');
-    const recommended = Array.from(computeRecommendedSections()).map((name) => escapeHtml(name));
+    const recommended = Array.from(computeRecommendedSections()).map((name) => escapeHtml(getSectionLabelByName(name)));
     const featureSelections = Array.from(state.wizard.answers.features || []).map((value) => escapeHtml(getWizardOptionLabel('features', value)));
 
     const lines = [];
@@ -523,6 +627,7 @@
   function completeWizard() {
     state.wizard.active = false;
     state.wizard.completed = true;
+    clearMessage();
 
     const depthPreference = state.wizard.answers.depth;
     const recommended = computeRecommendedSections();
@@ -624,7 +729,9 @@
     }
 
     const recommendedList = Array.from(state.recommendedSections || []).filter((section) => state.visibleSections.has(section));
-    const sectionItems = recommendedList.map((section) => `<span>${escapeHtml(section)}</span>`).join(', ');
+    const sectionItems = recommendedList
+      .map((section) => `<span>${escapeHtml(getSectionLabelByName(section))}</span>`)
+      .join(', ');
     const headline = sectionItems ? `showing key sections ${sectionItems}.` : 'showing the most relevant sections first.';
 
     elements.wizardSummary.hidden = false;
@@ -879,9 +986,21 @@
     }
   }
 
-  function shouldExpandSection(section) {
+  function shouldExpandSection(section, isRecommended = true) {
     const placeholders = (section.fields || []).some((field) => field.placeholder);
-    return placeholders;
+    if (placeholders) {
+      return true;
+    }
+
+    if (!state.visibleSections) {
+      return true;
+    }
+
+    if (isRecommended) {
+      return true;
+    }
+
+    return false;
   }
 
   async function persistDirtyChanges(options = {}) {
