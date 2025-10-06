@@ -9,6 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch, Mock
 from typing import Dict, Any, AsyncGenerator
 import httpx
 import base64
+
+
+@pytest.fixture(autouse=True)
+def clear_tts_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    return None
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.base import (
@@ -307,7 +314,13 @@ class TestElevenLabsAdapterComprehensive:
         mock_stream.__aenter__ = AsyncMock(side_effect=mock_stream_context)
         mock_stream.__aexit__ = AsyncMock(return_value=None)
         
-        with patch.object(adapter.client, 'stream', return_value=mock_stream):
+        fake_post_response = AsyncMock()
+        fake_post_response.status_code = 200
+        fake_post_response.content = mock_audio_response
+        fake_post_response.raise_for_status = AsyncMock()
+
+        with patch.object(adapter.client, 'stream', return_value=mock_stream), \
+             patch.object(adapter.client, 'post', return_value=fake_post_response):
             request = TTSRequest(
                 text="Test with emotion",
                 voice="rachel",

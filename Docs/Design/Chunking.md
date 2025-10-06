@@ -34,7 +34,7 @@ https://docs.llamaindex.ai/en/stable/examples/node_parsers/semantic_double_mergi
 https://www.reddit.com/r/Rag/comments/1mu8snn/introducing_hierarchyaware_document_chunker_no/
 https://github.com/speedyk-005/chunklet
 https://github.com/anthropics/anthropic-cookbook/blob/main/skills/contextual-embeddings/guide.ipynb
-
+https://arxiv.org/abs/2203.09638    
 
 
 https://github.com/ofriw/chunkhound?tab=readme-ov-file

@@ -41,6 +41,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     UnifiedEvaluationService, get_unified_evaluation_service
 )
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 
 # Use configuration from test_config
 DEFAULT_API_KEY = test_config.TEST_API_KEY
@@ -60,6 +61,35 @@ async def async_client():
     from httpx import ASGITransport
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
+    """Route all evaluation storage to the per-test temporary database."""
+
+    def _get_db_path(_self):
+        return temp_db_path
+
+    monkeypatch.setattr(EvaluationManager, "_get_db_path", _get_db_path, raising=False)
+
+    service = UnifiedEvaluationService(
+        db_path=str(temp_db_path),
+        enable_webhooks=False,
+        enable_caching=True
+    )
+
+    event_loop.run_until_complete(service.initialize())
+
+    async def _dependency_override():
+        return service
+
+    app.dependency_overrides[get_unified_evaluation_service] = _dependency_override
+
+    try:
+        yield
+    finally:
+        event_loop.run_until_complete(service.shutdown())
+        app.dependency_overrides.pop(get_unified_evaluation_service, None)
 
 
 @pytest.fixture

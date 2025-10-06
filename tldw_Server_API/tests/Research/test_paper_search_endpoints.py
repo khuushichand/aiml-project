@@ -3,50 +3,44 @@ from httpx import AsyncClient, ASGITransport
 
 
 @pytest.mark.asyncio
-async def test_paper_search_arxiv_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_paper_search_arxiv_success(monkeypatch, paper_search_app):
+    def _fake_arxiv(query, author, year, start_index, page_size):
+        items = [
+            {
+                "id": "1234.5678v1",
+                "title": "Attention Is All You Need",
+                "authors": "Vaswani, A.; Shazeer, N.; et al.",
+                "published_date": "2017-06-01",
+                "abstract": "We propose the Transformer...",
+                "pdf_url": "http://arxiv.org/pdf/1234.5678.pdf",
+            },
+            {
+                "id": "2345.6789v1",
+                "title": "Transformers in Vision",
+                "authors": "Dosovitskiy, A.; et al.",
+                "published_date": "2020-10-01",
+                "abstract": "We explore ViT...",
+                "pdf_url": "http://arxiv.org/pdf/2345.6789.pdf",
+            },
+        ]
+        return items, 2, None
 
-    async def _run():
-        def _fake_arxiv(query, author, year, start_index, page_size):
-            items = [
-                {
-                    "id": "1234.5678v1",
-                    "title": "Attention Is All You Need",
-                    "authors": "Vaswani, A.; Shazeer, N.; et al.",
-                    "published_date": "2017-06-01",
-                    "abstract": "We propose the Transformer...",
-                    "pdf_url": "http://arxiv.org/pdf/1234.5678.pdf",
-                },
-                {
-                    "id": "2345.6789v1",
-                    "title": "Transformers in Vision",
-                    "authors": "Dosovitskiy, A.; et al.",
-                    "published_date": "2020-10-01",
-                    "abstract": "We explore ViT...",
-                    "pdf_url": "http://arxiv.org/pdf/2345.6789.pdf",
-                },
-            ]
-            return items, 2, None
+    from tldw_Server_API.app.core.Third_Party import Arxiv as _Arxiv
+    monkeypatch.setattr(_Arxiv, "search_arxiv_custom_api", _fake_arxiv)
 
-        from tldw_Server_API.app.core.Third_Party import Arxiv as _Arxiv
-        monkeypatch.setattr(_Arxiv, "search_arxiv_custom_api", _fake_arxiv)
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            r = await client.get(
-                "/api/v1/paper-search/arxiv",
-                params={"query": "transformer", "page": 1, "results_per_page": 2},
-            )
-            assert r.status_code == 200
-            data = r.json()
-            assert data["total_results"] == 2
-            assert len(data["items"]) == 2
-
-    await _run()
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
+        r = await client.get(
+            "/api/v1/paper-search/arxiv",
+            params={"query": "transformer", "page": 1, "results_per_page": 2},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_results"] == 2
+        assert len(data["items"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_paper_search_biorxiv_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_paper_search_biorxiv_success(monkeypatch, paper_search_app):
 
     def _fake_bio(q, server, f, t, category, offset, limit, recent_days=None, recent_count=None):
         items = [
@@ -68,7 +62,7 @@ async def test_paper_search_biorxiv_success(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
     monkeypatch.setattr(_Bio, "search_biorxiv", _fake_bio)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/biorxiv",
             params={"q": "genomics", "server": "biorxiv", "page": 1, "results_per_page": 1},
@@ -80,8 +74,7 @@ async def test_paper_search_biorxiv_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_paper_search_semantic_scholar_error_mapping(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_paper_search_semantic_scholar_error_mapping(monkeypatch, paper_search_app):
 
     def _fake_s2(query, offset, limit, fos, pub_types, year_range, venue, min_citations, open_access_only, fields_to_return=None):
         return None, "Semantic Scholar API HTTP Error: 429 - Too Many Requests."
@@ -89,7 +82,7 @@ async def test_paper_search_semantic_scholar_error_mapping(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
     monkeypatch.setattr(_S2, "search_papers_semantic_scholar", _fake_s2)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/semantic-scholar",
             params={"query": "graph neural networks", "page": 1, "results_per_page": 2},
@@ -99,8 +92,7 @@ async def test_paper_search_semantic_scholar_error_mapping(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_paper_search_pubmed_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_paper_search_pubmed_success(monkeypatch, paper_search_app):
 
     def _fake_pubmed(q, offset, limit, from_year, to_year, free_full_text):
         items = [
@@ -122,7 +114,7 @@ async def test_paper_search_pubmed_success(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import PubMed as _Pub
     monkeypatch.setattr(_Pub, "search_pubmed", _fake_pubmed)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/pubmed",
             params={"q": "cancer immunotherapy", "page": 1, "results_per_page": 1, "free_full_text": True},
@@ -134,8 +126,7 @@ async def test_paper_search_pubmed_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_paper_search_pubmed_error_mapping(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_paper_search_pubmed_error_mapping(monkeypatch, paper_search_app):
 
     def _fake_pubmed_err(q, offset, limit, from_year, to_year, free_full_text):
         return None, 0, "PubMed API HTTP Error: 429"
@@ -143,7 +134,7 @@ async def test_paper_search_pubmed_error_mapping(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import PubMed as _Pub
     monkeypatch.setattr(_Pub, "search_pubmed", _fake_pubmed_err)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/pubmed",
             params={"q": "cancer", "page": 1, "results_per_page": 1},
@@ -152,8 +143,7 @@ async def test_paper_search_pubmed_error_mapping(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_biorxiv_by_doi_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_biorxiv_by_doi_success(monkeypatch, paper_search_app):
 
     def _fake_by_doi(doi, server):
         return {
@@ -172,7 +162,7 @@ async def test_biorxiv_by_doi_success(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
     monkeypatch.setattr(_Bio, "get_biorxiv_by_doi", _fake_by_doi)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/biorxiv/by-doi",
             params={"doi": "10.1101/2021.11.09.467936", "server": "biorxiv"},
@@ -183,8 +173,7 @@ async def test_biorxiv_by_doi_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_biorxiv_by_doi_not_found(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_biorxiv_by_doi_not_found(monkeypatch, paper_search_app):
 
     def _fake_by_doi_notfound(doi, server):
         return None, None
@@ -192,7 +181,7 @@ async def test_biorxiv_by_doi_not_found(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
     monkeypatch.setattr(_Bio, "get_biorxiv_by_doi", _fake_by_doi_notfound)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/biorxiv/by-doi",
             params={"doi": "10.1101/does.not.exist", "server": "biorxiv"},

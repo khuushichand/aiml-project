@@ -12,7 +12,7 @@ import shutil
 import sys
 from typing import Optional
 import pytest
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.legacy_tts, pytest.mark.requires_api_key]
 import tempfile
 from pathlib import Path
 
@@ -22,6 +22,14 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
+RUN_TTS_LEGACY_INTEGRATION = os.getenv("RUN_TTS_LEGACY_INTEGRATION") == "1"
+
+if not RUN_TTS_LEGACY_INTEGRATION:
+    pytest.skip(
+        "Legacy TTS integration tests are disabled by default. Set RUN_TTS_LEGACY_INTEGRATION=1 to enable.",
+        allow_module_level=True,
+    )
 
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
@@ -326,7 +334,7 @@ class TestLocalTTSIntegration:
         
         assert response is not None
         assert response.audio is not None
-        print(f"GPU inference took {duration:.2f} seconds")
+        assert duration > 0
         
         await adapter.close()
     
@@ -506,11 +514,8 @@ class TestTTSPerformance:
             results["ElevenLabs"] = time.time() - start
             await adapter.close()
         
-        # Print results
-        for provider, latency in results.items():
-            print(f"{provider}: {latency:.2f}s")
-        
-        assert len(results) > 0
+        assert results
+        assert all(latency > 0 for latency in results.values())
 
 
 #######################################################################################################################

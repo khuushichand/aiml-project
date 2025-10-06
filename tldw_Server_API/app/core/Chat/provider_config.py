@@ -12,7 +12,8 @@ from typing import Dict, Any, Callable
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_openai, chat_with_anthropic, chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
-    chat_with_mistral, chat_with_huggingface, chat_with_google
+    chat_with_mistral, chat_with_huggingface, chat_with_google,
+    chat_with_qwen
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -32,6 +33,7 @@ API_CALL_HANDLERS: Dict[str, Callable] = {
     'anthropic': chat_with_anthropic,
     'cohere': chat_with_cohere,
     'groq': chat_with_groq,
+    'qwen': chat_with_qwen,
     'openrouter': chat_with_openrouter,
     'deepseek': chat_with_deepseek,
     'mistral': chat_with_mistral,
@@ -135,6 +137,29 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'top_logprobs': 'top_logprobs',
+    },
+    'qwen': {
+        'api_key': 'api_key',
+        'messages_payload': 'input_data',
+        'prompt': 'custom_prompt_arg',
+        'temp': 'temp',
+        'system_message': 'system_message',
+        'streaming': 'streaming',
+        'maxp': 'maxp',
+        'model': 'model',
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
+        'logprobs': 'logprobs',
+        'top_logprobs': 'top_logprobs',
+        'logit_bias': 'logit_bias',
+        'presence_penalty': 'presence_penalty',
+        'frequency_penalty': 'frequency_penalty',
+        'max_tokens': 'max_tokens',
+        'seed': 'seed',
+        'stop': 'stop',
+        'response_format': 'response_format',
+        'n': 'n',
+        'user_identifier': 'user',
     },
     'openrouter': {
         'api_key': 'api_key',

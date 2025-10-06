@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
 from tldw_Server_API.app.core.Chunking.template_initialization import (
     load_builtin_templates,
@@ -83,8 +84,9 @@ def test_client(temp_db):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
+    api_key = get_settings().SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY", "test-api-key-that-is-long-enough")
     return {
-        "X-API-KEY": "test-api-key-that-is-long-enough",
+        "X-API-KEY": api_key,
         "Content-Type": "application/json"
     }
 

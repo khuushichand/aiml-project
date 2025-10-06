@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from hypothesis import given, strategies as st, settings, assume
 
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -543,21 +543,30 @@ class TestPerformance:
             return setup.regular_user
         
         app.dependency_overrides[get_request_user] = override_user
-        
-        # Test with real HuggingFace embeddings (no mocking)
-        # Note: This may download the model on first run
-        response = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": ["test1", "test2", "test3"],
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        )
-        
-        # Check if it works at all
-        if response.status_code == 200:
-            # Test concurrent requests with smaller batch
+        call_sizes = []
+
+        async def fake_embeddings(texts, provider, model_id, config):
+            nonlocal call_sizes
+            batch = texts if isinstance(texts, list) else [texts]
+            call_sizes.append(len(batch))
+            return [[0.1, 0.2, 0.3] for _ in batch]
+
+        mock_creator = AsyncMock(side_effect=fake_embeddings)
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+            mock_creator
+        ):
+            response = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": ["test1", "test2", "test3"],
+                    "model": "sentence-transformers/all-MiniLM-L6-v2"
+                }
+            )
+            assert response.status_code == 200
+
             responses = []
             for i in range(5):
                 resp = setup.client.post(
@@ -569,12 +578,10 @@ class TestPerformance:
                     }
                 )
                 responses.append(resp)
-            
-            success_count = sum(1 for r in responses if r.status_code == 200)
-            assert success_count >= 4  # Most should succeed
-        else:
-            # Skip test if HuggingFace not available
-            pytest.skip(f"HuggingFace embeddings not available: {response.status_code}")
+
+        assert all(r.status_code == 200 for r in responses)
+        assert call_sizes[0] == 3  # initial batch request handled together
+        assert len(call_sizes) == 6
     
     @pytest.mark.asyncio
     async def test_cache_performance(self):
@@ -582,28 +589,24 @@ class TestPerformance:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import TTLCache, get_cache_key
         
         cache = TTLCache(max_size=1000, ttl_seconds=3600)
-        
-        # Measure time for cache miss
-        start = time.time()
-        for i in range(100):
-            key = get_cache_key(f"text_{i}", "openai", "model", None)
-            await cache.get(key)
-        miss_time = time.time() - start
-        
-        # Populate cache
-        for i in range(100):
-            key = get_cache_key(f"text_{i}", "openai", "model", None)
+        miss_keys = [get_cache_key(f"text_{i}", "openai", "model", None) for i in range(10)]
+
+        for key in miss_keys:
+            assert await cache.get(key) is None
+
+        stats_after_misses = cache.stats()
+        assert stats_after_misses['misses'] == 10
+
+        for key in miss_keys:
             await cache.set(key, [1.0, 2.0, 3.0])
-        
-        # Measure time for cache hits
-        start = time.time()
-        for i in range(100):
-            key = get_cache_key(f"text_{i}", "openai", "model", None)
-            await cache.get(key)
-        hit_time = time.time() - start
-        
-        # Cache hits should be significantly faster
-        assert hit_time < miss_time * 2  # Very conservative check
+
+        for key in miss_keys:
+            value = await cache.get(key)
+            assert value == [1.0, 2.0, 3.0]
+
+        stats_after_hits = cache.stats()
+        assert stats_after_hits['hits'] == 10
+        assert stats_after_hits['hit_rate'] > 0
     
     @pytest.mark.asyncio
     async def test_memory_usage_bounded(self):
@@ -631,33 +634,31 @@ class TestEndToEnd:
             return setup.regular_user
         
         app.dependency_overrides[get_request_user] = override_user
-        
-        # Use HuggingFace for testing (works without API key)
-        response = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": ["text1", "text2", "text3"],
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        )
-        
-        # May fail if model not available
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Check response structure
-            assert "data" in data
-            assert "model" in data
-            assert "usage" in data
-            
-            # Check embeddings
-            assert len(data["data"]) == 3
-            for i, embedding_data in enumerate(data["data"]):
-                assert embedding_data["index"] == i
-                assert "embedding" in embedding_data
-                # Real embeddings have 384 dimensions for this model
-                assert len(embedding_data["embedding"]) == 384
+        async def fake_embeddings(texts, provider, model_id, config):
+            batch = texts if isinstance(texts, list) else [texts]
+            return [[float(idx), float(idx + 1), float(idx + 2)] for idx, _ in enumerate(batch)]
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+            new=AsyncMock(side_effect=fake_embeddings)
+        ):
+            response = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": ["text1", "text2", "text3"],
+                    "model": "sentence-transformers/all-MiniLM-L6-v2"
+                }
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "data" in data
+        assert len(data["data"]) == 3
+        for i, embedding_data in enumerate(data["data"]):
+            assert embedding_data["index"] == i
+            assert len(embedding_data["embedding"]) == 3
     
     @pytest.mark.asyncio
     async def test_caching_behavior(self, setup):
@@ -669,21 +670,32 @@ class TestEndToEnd:
         
         # Use unique text to ensure cache testing
         unique_text = f"cache test {datetime.now().isoformat()}"
-        
-        # First request - should create embedding
-        response1 = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": unique_text,
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        )
-        
-        if response1.status_code == 200:
+        call_count = 0
+
+        async def fake_embeddings(texts, provider, model_id, config):
+            nonlocal call_count
+            call_count += 1
+            batch = texts if isinstance(texts, list) else [texts]
+            return [
+                [float(sum(map(ord, text))), float(len(text)), 0.0]
+                for text in batch
+            ]
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+            new=AsyncMock(side_effect=fake_embeddings)
+        ):
+            response1 = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": unique_text,
+                    "model": "sentence-transformers/all-MiniLM-L6-v2"
+                }
+            )
+            assert response1.status_code == 200
             embedding1 = response1.json()["data"][0]["embedding"]
-            
-            # Second identical request - should use cache
+
             response2 = setup.client.post(
                 "/api/v1/embeddings",
                 headers={**setup.auth_headers, "x-provider": "huggingface"},
@@ -692,14 +704,9 @@ class TestEndToEnd:
                     "model": "sentence-transformers/all-MiniLM-L6-v2"
                 }
             )
-            
             assert response2.status_code == 200
             embedding2 = response2.json()["data"][0]["embedding"]
-            
-            # Should return identical embeddings (from cache)
-            assert embedding1 == embedding2
-            
-            # Different text - should create new embedding
+
             response3 = setup.client.post(
                 "/api/v1/embeddings",
                 headers={**setup.auth_headers, "x-provider": "huggingface"},
@@ -708,11 +715,12 @@ class TestEndToEnd:
                     "model": "sentence-transformers/all-MiniLM-L6-v2"
                 }
             )
-            
-            if response3.status_code == 200:
-                embedding3 = response3.json()["data"][0]["embedding"]
-                # Should be different from cached
-                assert embedding3 != embedding1
+            assert response3.status_code == 200
+            embedding3 = response3.json()["data"][0]["embedding"]
+
+        assert embedding1 == embedding2
+        assert embedding3 != embedding1
+        assert call_count == 2  # First request + different text, cache hit avoided second call
 
 
 @pytest.mark.integration
@@ -845,47 +853,55 @@ class TestIntegration:
         
         # First, ensure the model is loaded with a single request
         print("Loading HuggingFace model...")
-        warmup_response = setup.client.post(
-            "/api/v1/embeddings",
-            headers={**setup.auth_headers, "x-provider": "huggingface"},
-            json={
-                "input": "warmup",
-                "model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-        )
-        
-        if warmup_response.status_code != 200:
-            pytest.skip(f"HuggingFace model not available: {warmup_response.status_code}")
-        
-        print("Model loaded, testing concurrent requests...")
-        
-        # Now test concurrent requests using TestClient (which is thread-safe)
-        from concurrent.futures import ThreadPoolExecutor
-        import threading
-        
-        def make_request(idx):
-            """Make a request in a thread"""
-            try:
-                # Each thread needs its own client; ensure proper cleanup
-                with TestClient(app) as client:
+        async def fake_embeddings(texts, provider, model_id, config):
+            batch = texts if isinstance(texts, list) else [texts]
+            return [[0.1, 0.2, 0.3] for _ in batch]
+
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker',
+            new=AsyncMock(side_effect=fake_embeddings)
+        ):
+            warmup_response = setup.client.post(
+                "/api/v1/embeddings",
+                headers={**setup.auth_headers, "x-provider": "huggingface"},
+                json={
+                    "input": "warmup",
+                    "model": "sentence-transformers/all-MiniLM-L6-v2"
+                }
+            )
+
+            if warmup_response.status_code != 200:
+                pytest.skip(f"Embeddings service unavailable: {warmup_response.status_code}")
+
+            print("Model loaded, testing concurrent requests...")
+
+            transport = ASGITransport(app=app)
+
+            async def run_requests() -> list[int | None]:
+                async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
                     client.cookies.set("csrf_token", "test-csrf-token-12345")
-                    response = client.post(
-                        "/api/v1/embeddings",
-                        headers={**setup.auth_headers, "x-provider": "huggingface"},
-                        json={
-                            "input": f"Concurrent test {idx}",
-                            "model": "sentence-transformers/all-MiniLM-L6-v2"
-                        }
-                    )
-                    return response.status_code
-            except Exception as e:
-                print(f"Request {idx} failed: {e}")
-                return None
-        
-        # Use ThreadPoolExecutor for concurrent requests
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(make_request, i) for i in range(20)]
-            results = [f.result() for f in futures]
+                    tasks = [
+                        client.post(
+                            "/api/v1/embeddings",
+                            headers={**setup.auth_headers, "x-provider": "huggingface"},
+                            json={
+                                "input": f"Concurrent test {idx}",
+                                "model": "sentence-transformers/all-MiniLM-L6-v2"
+                            }
+                        )
+                        for idx in range(20)
+                    ]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+                    statuses: list[int | None] = []
+                    for idx, resp in enumerate(responses):
+                        if isinstance(resp, Exception):
+                            print(f"Request {idx} failed: {resp}")
+                            statuses.append(None)
+                        else:
+                            statuses.append(resp.status_code)
+                    return statuses
+
+            results = await run_requests()
         
         # Analyze results
         successful = [r for r in results if r == 200]

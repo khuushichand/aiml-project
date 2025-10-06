@@ -19,19 +19,28 @@ os.environ["CSRF_ENABLED"] = "false"
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
 
 ########################################################################################################################
 # Test Client Setup
 
 @pytest.fixture
-def client(mock_user):
+def client(mock_user, test_db):
     """Create a test client for the FastAPI app with mocked authentication."""
+    os.environ["TEST_MODE"] = "true"
     # Override the auth dependency
     app.dependency_overrides[get_current_active_user] = lambda: mock_user
+
+    async def _override_prompt_studio_db():
+        return test_db
+
+    app.dependency_overrides[get_prompt_studio_db] = _override_prompt_studio_db
+
     with TestClient(app) as client:
         yield client
     # Clear overrides after test
     app.dependency_overrides.clear()
+    os.environ.pop("TEST_MODE", None)
 
 @pytest.fixture
 def test_db():
@@ -251,8 +260,9 @@ class TestPromptEndpoints:
             
             assert response.status_code == 200
             data = response.json()
-            assert "prompts" in data
-            assert isinstance(data["prompts"], list)
+            assert data["success"] is True
+            assert isinstance(data["data"], list)
+            assert "metadata" in data
     
     def test_execute_prompt(self, client, auth_headers, mock_user):
         """Test executing a prompt."""

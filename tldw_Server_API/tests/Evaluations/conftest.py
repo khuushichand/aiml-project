@@ -255,6 +255,8 @@ async def webhook_receiver_server():
 
     Returns a dict with 'url' and 'received' list of captured requests.
     """
+    # Ensure webhook delivery path awaits completions during tests
+    os.environ["TEST_MODE"] = "true"
     app = web.Application()
     received = []
 
@@ -529,6 +531,63 @@ async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedE
 
 
 @pytest.fixture(scope="function")
+def override_unified_service(temp_db_path, monkeypatch):
+    """Force API endpoints to use an isolated evaluations database."""
+    from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as service_module
+    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as router_module
+
+    user_db_base = temp_db_path.parent / "user_eval_dbs"
+    user_db_base.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
+
+    from tldw_Server_API.app.core.Evaluations import webhook_manager as webhook_module
+    from tldw_Server_API.app.core.Evaluations.db_adapter import (
+        DatabaseAdapterFactory,
+        DatabaseConfig,
+        DatabaseType,
+    )
+
+    # Preserve current adapter details so we can restore after the test
+    original_config = None
+    existing_adapter = getattr(webhook_module.webhook_manager, "db_adapter", None)
+    if existing_adapter is not None:
+        original_config = getattr(existing_adapter, "config", None)
+
+    test_adapter = DatabaseAdapterFactory.create(
+        DatabaseConfig(
+            db_type=DatabaseType.SQLITE,
+            connection_string=str(temp_db_path)
+        )
+    )
+    webhook_module.webhook_manager.set_adapter(test_adapter)
+
+    service = UnifiedEvaluationService(db_path=str(temp_db_path))
+    service_module._service_instance = service
+    router_module._evaluation_service = service
+
+    yield service
+
+    router_module._evaluation_service = None
+    service_module._service_instance = None
+
+    # Restore the original webhook adapter to avoid leaking test state
+    if original_config is not None:
+        restore_config = DatabaseConfig(
+            db_type=original_config.db_type,
+            connection_string=original_config.connection_string,
+            pool_size=original_config.pool_size,
+            max_overflow=original_config.max_overflow,
+            echo=original_config.echo,
+            options=dict(original_config.options) if original_config.options else {}
+        )
+        restore_adapter = DatabaseAdapterFactory.create(restore_config)
+        webhook_module.webhook_manager.set_adapter(restore_adapter)
+
+
+@pytest.fixture(scope="function")
 def connection_pool(temp_db_path) -> ConnectionPool:
     """Create a ConnectionPool instance for testing."""
     pool = ConnectionPool(
@@ -677,21 +736,21 @@ def sample_batch_evaluation_data() -> Dict[str, Any]:
 # ============================================================================
 
 @pytest.fixture
-def api_client():
+def api_client(override_unified_service):
     """Create a test client for API testing."""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
-    
+
     with TestClient(app) as client:
         yield client
 
 
 @pytest_asyncio.fixture
-async def async_api_client():
+async def async_api_client(override_unified_service):
     """Create an async test client for API testing."""
     from httpx import AsyncClient, ASGITransport
     from tldw_Server_API.app.main import app
-    
+
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test"

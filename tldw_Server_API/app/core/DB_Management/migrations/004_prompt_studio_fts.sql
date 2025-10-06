@@ -32,7 +32,8 @@ CREATE TRIGGER prompt_studio_projects_fts_update
 AFTER UPDATE ON prompt_studio_projects
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_projects_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_projects_fts(prompt_studio_projects_fts, rowid)
+    VALUES('delete', OLD.id);
     INSERT INTO prompt_studio_projects_fts(rowid, name, description)
     SELECT id, name, description FROM prompt_studio_projects 
     WHERE id = NEW.id AND deleted = 0;
@@ -43,7 +44,8 @@ CREATE TRIGGER prompt_studio_projects_fts_delete
 AFTER DELETE ON prompt_studio_projects
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_projects_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_projects_fts(prompt_studio_projects_fts, rowid)
+    VALUES('delete', OLD.id);
 END;
 
 -- FTS for prompts (search by name, system_prompt, user_prompt)
@@ -76,7 +78,8 @@ CREATE TRIGGER prompt_studio_prompts_fts_update
 AFTER UPDATE ON prompt_studio_prompts
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_prompts_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_prompts_fts(prompt_studio_prompts_fts, rowid)
+    VALUES('delete', OLD.id);
     INSERT INTO prompt_studio_prompts_fts(rowid, name, system_prompt, user_prompt)
     SELECT id, name, system_prompt, user_prompt FROM prompt_studio_prompts
     WHERE id = NEW.id AND deleted = 0;
@@ -87,7 +90,8 @@ CREATE TRIGGER prompt_studio_prompts_fts_delete
 AFTER DELETE ON prompt_studio_prompts
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_prompts_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_prompts_fts(prompt_studio_prompts_fts, rowid)
+    VALUES('delete', OLD.id);
 END;
 
 -- FTS for test cases (search by name, description, tags)
@@ -120,7 +124,8 @@ CREATE TRIGGER prompt_studio_test_cases_fts_update
 AFTER UPDATE ON prompt_studio_test_cases
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_test_cases_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_test_cases_fts(prompt_studio_test_cases_fts, rowid)
+    VALUES('delete', OLD.id);
     INSERT INTO prompt_studio_test_cases_fts(rowid, name, description, tags)
     SELECT id, name, description, tags FROM prompt_studio_test_cases
     WHERE id = NEW.id AND deleted = 0;
@@ -131,5 +136,6 @@ CREATE TRIGGER prompt_studio_test_cases_fts_delete
 AFTER DELETE ON prompt_studio_test_cases
 FOR EACH ROW
 BEGIN
-    DELETE FROM prompt_studio_test_cases_fts WHERE rowid = OLD.id;
+    INSERT INTO prompt_studio_test_cases_fts(prompt_studio_test_cases_fts, rowid)
+    VALUES('delete', OLD.id);
 END;

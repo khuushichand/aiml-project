@@ -48,7 +48,9 @@ async def process_web_scraping_task(
     temperature: float,
     custom_cookies: Optional[List[Dict[str, Any]]],
     mode: str = "persist",
-    user_id: Optional[int] = None
+    user_id: Optional[int] = None,
+    user_agent: Optional[str] = None,
+    custom_headers: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
     Enhanced web scraping with production features:
@@ -93,7 +95,9 @@ async def process_web_scraping_task(
             custom_cookies=custom_cookies,
             mode=mode,
             priority=priority,
-            user_id=user_id
+            user_id=user_id,
+            user_agent=user_agent,
+            custom_headers=custom_headers
         )
         
         return result

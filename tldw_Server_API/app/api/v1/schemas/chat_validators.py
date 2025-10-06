@@ -336,7 +336,7 @@ def validate_provider_name(provider: Optional[str]) -> Optional[str]:
     # List of known providers (can be extended)
     known_providers = [
         "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface",
+        "deepseek", "mistral", "google", "huggingface", "qwen",
         "llama.cpp", "kobold", "ollama", "ooba", "tabbyapi",
         "vllm", "local-llm", "aphrodite",
         "custom-openai-api", "custom-openai-api-2"

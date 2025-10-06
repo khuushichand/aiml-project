@@ -618,7 +618,10 @@ async def audit_service(test_db_pool):
     """Create an audit service instance for testing."""
     service = UnifiedAuditService()
     await service.initialize()
-    return service
+    try:
+        yield service
+    finally:
+        await service.stop()
 
 
 @pytest.fixture

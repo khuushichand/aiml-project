@@ -102,8 +102,8 @@ class ChunkingWorker(BaseWorker):
                 user_tier=message.user_tier,
                 created_at=message.created_at,
                 chunks=chunk_data_list,
-                model_config={},  # Will be populated by embedding worker
-                model_provider=""  # Will be populated by embedding worker
+                embedding_model_config={},  # Populated later by embedding worker
+                model_provider=""  # Populated later by embedding worker
             )
             
             logger.info(f"Created {len(chunks)} chunks for job {message.job_id}")

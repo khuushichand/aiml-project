@@ -64,7 +64,8 @@ class TestElevenLabsAdapterMock:
         assert caps.max_text_length == 5000
         assert AudioFormat.MP3 in caps.supported_formats
         assert AudioFormat.PCM in caps.supported_formats
-        assert AudioFormat.ULAW in caps.supported_formats
+        assert AudioFormat.WAV in caps.supported_formats
+        assert AudioFormat.ULAW not in caps.supported_formats
     
     async def test_voice_mapping(self):
         """Test voice mapping functionality"""
@@ -195,10 +196,11 @@ class TestElevenLabsAdapterMock:
         
         assert adapter._get_accept_header(AudioFormat.MP3) == "audio/mpeg"
         assert adapter._get_accept_header(AudioFormat.PCM) == "audio/pcm"
-        assert adapter._get_accept_header(AudioFormat.ULAW) == "audio/ulaw"
+        assert adapter._get_accept_header(AudioFormat.WAV) == "audio/wav"
+        assert adapter._get_accept_header(AudioFormat.ULAW) == "audio/mpeg"
         
         # Unknown format defaults to MP3
-        assert adapter._get_accept_header(AudioFormat.WAV) == "audio/mpeg"
+        assert adapter._get_accept_header(AudioFormat.OGG) == "audio/mpeg"
     
     async def test_text_preprocessing(self):
         """Test text preprocessing"""

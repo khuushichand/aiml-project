@@ -5,7 +5,7 @@ Tests each of the 13 chunking strategies with minimal mocking.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 import json
 import xml.etree.ElementTree as ET
 
@@ -27,12 +27,25 @@ def _to_text_list(chunks):
     return texts
 def _has_punkt():
     try:
-        import nltk
+        import nltk  # noqa: F401
         from nltk.data import find
-        find('tokenizers/punkt_tab/english/')
-        return True
     except Exception:
         return False
+
+    candidates = (
+        "tokenizers/punkt_tab/english/",
+        "tokenizers/punkt/english.pickle",
+        "tokenizers/punkt/PY3/english.pickle",
+    )
+
+    for resource in candidates:
+        try:
+            find(resource)
+            return True
+        except LookupError:
+            continue
+
+    return False
 from tldw_Server_API.app.core.Chunking.strategies import (
     words,
     sentences,
@@ -116,7 +129,7 @@ class TestSentencesStrategy:
     def test_sentences_basic_chunking(self, sample_text_medium):
         """Test basic sentence-based chunking."""
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         chunker = Chunker(options={'method':'sentences','max_size':3,'overlap':1,'adaptive':False})
         chunks = chunker.chunk_text(sample_text_medium)
         
@@ -131,7 +144,7 @@ class TestSentencesStrategy:
     def test_sentences_preserve_boundaries(self):
         """Test that sentence boundaries are preserved."""
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         text = "First sentence. Second sentence! Third sentence? Fourth sentence."
         
         chunker = Chunker(options={'method':'sentences','max_size':2,'overlap':0,'adaptive':False})
@@ -213,37 +226,34 @@ class TestSemanticStrategy:
     
     @pytest.mark.unit
     @pytest.mark.strategy
-    def test_semantic_basic_chunking(self, sample_text_medium, mock_sentence_transformer):
+    def test_semantic_basic_chunking(self, sample_text_medium):
         """Test basic semantic chunking."""
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
-        with patch('sentence_transformers.SentenceTransformer', return_value=mock_sentence_transformer):
-            chunker = Chunker(options={'method':'semantic','max_size':100,'overlap':20,'semantic_similarity_threshold':0.7,'adaptive':False})
-            chunks = chunker.chunk_text(sample_text_medium)
-            
-            assert len(chunks) > 0
-            mock_sentence_transformer.encode.assert_called()
+            pytest.skip("NLTK punkt tokenizer data not available")
+        chunker = Chunker(options={'method':'semantic','max_size':100,'overlap':20,'semantic_similarity_threshold':0.7,'adaptive':False})
+        chunks = chunker.chunk_text(sample_text_medium)
+
+        assert len(chunks) > 0
     
     @pytest.mark.unit
     @pytest.mark.strategy
-    def test_semantic_similarity_threshold(self, mock_sentence_transformer):
+    def test_semantic_similarity_threshold(self):
         """Test semantic similarity threshold affects chunking."""
         if not _has_punkt():
-            pytest.skip("NLTK punkt_tab not available")
+            pytest.skip("NLTK punkt tokenizer data not available")
         text = "Dogs are animals. Cats are animals. Cars are vehicles. Trucks are vehicles."
         
-        with patch('sentence_transformers.SentenceTransformer', return_value=mock_sentence_transformer):
-            # High threshold - more chunks
-            chunker_high = Chunker(options={'method':'semantic','max_size':100,'semantic_similarity_threshold':0.9,'adaptive':False})
-            
-            # Low threshold - fewer chunks
-            chunker_low = Chunker(options={'method':'semantic','max_size':100,'semantic_similarity_threshold':0.3,'adaptive':False})
-            
-            chunks_high = chunker_high.chunk_text(text)
-            chunks_low = chunker_low.chunk_text(text)
-            
-            # Different thresholds should affect chunking
-            assert len(chunks_high) >= len(chunks_low)
+        # High threshold - more chunks
+        chunker_high = Chunker(options={'method':'semantic','max_size':100,'semantic_similarity_threshold':0.9,'adaptive':False})
+
+        # Low threshold - fewer chunks
+        chunker_low = Chunker(options={'method':'semantic','max_size':100,'semantic_similarity_threshold':0.3,'adaptive':False})
+
+        chunks_high = chunker_high.chunk_text(text)
+        chunks_low = chunker_low.chunk_text(text)
+
+        # Different thresholds should affect chunking
+        assert len(chunks_high) >= len(chunks_low)
 
 # ========================================================================
 # Structure-Aware Strategy Tests

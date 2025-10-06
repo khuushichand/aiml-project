@@ -9,6 +9,7 @@ https://levelup.gitconnected.com/uml-diagrams-a-guide-for-software-engineers-712
 https://github.com/hmrishavbandy/FlipSketch
 https://news.ycombinator.com/item?id=42647668
 https://kroki.io/
+https://www.yworks.com/products/yed
 
 https://ratfactor.com/minslides/
 https://nbd.neocities.org/slidepresentation/Slide%20presentation%20about%20slides

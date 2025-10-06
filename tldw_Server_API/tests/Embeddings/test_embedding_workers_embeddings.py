@@ -8,9 +8,18 @@ without requiring actual Redis or database connections.
 
 import asyncio
 import json
+import os
+import shutil
+import socket
+import subprocess
+import time
+import uuid
+from collections import defaultdict
 from datetime import datetime
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
 import pytest
+import redis.asyncio as aioredis
 
 from tldw_Server_API.app.core.Embeddings.workers.base_worker import BaseWorker, WorkerConfig
 from tldw_Server_API.app.core.Embeddings.workers.chunking_worker import ChunkingWorker
@@ -147,6 +156,122 @@ def storage_message():
     )
 
 
+class InMemoryRedis:
+    """Minimal in-memory Redis stand-in covering commands used by workers."""
+
+    def __init__(self):
+        self.streams = defaultdict(list)
+        self.hashes = defaultdict(dict)
+        self.expirations = {}
+        self.setex_values = {}
+
+    async def xadd(self, name, fields):
+        self.streams[name].append(fields)
+        return f"{len(self.streams[name])}-0"
+
+    async def xreadgroup(self, group, consumer, streams, count=None, block=None):
+        return []
+
+    async def xack(self, name, group, *ids):
+        return len(ids)
+
+    async def hset(self, name, mapping=None, **kwargs):
+        updates = mapping.copy() if mapping else {}
+        updates.update(kwargs)
+        self.hashes[name].update(updates)
+        return len(updates)
+
+    async def expire(self, name, ttl):
+        self.expirations[name] = ttl
+        return True
+
+    async def setex(self, name, ttl, value):
+        self.setex_values[name] = value
+        return True
+
+    async def xlen(self, name):
+        return len(self.streams.get(name, []))
+
+    async def delete(self, name):
+        self.streams.pop(name, None)
+        self.hashes.pop(name, None)
+
+    async def flushdb(self):
+        self.streams.clear()
+        self.hashes.clear()
+        self.expirations.clear()
+        self.setex_values.clear()
+
+    async def close(self):
+        return None
+
+
+@pytest.fixture
+def redis_stub():
+    """Provide in-memory Redis replacement for unit tests."""
+    return InMemoryRedis()
+
+
+def _docker_present() -> bool:
+    return shutil.which("docker") is not None
+
+
+def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
+@pytest.fixture(scope="session")
+def docker_redis_service():
+    """Launch a disposable Redis container when Docker is available and requested.
+
+    Activate by setting USE_DOCKER_REDIS=1. Returns connection URL or None.
+    """
+
+    if not (_docker_present() and os.getenv("USE_DOCKER_REDIS", "0").lower() in {"1", "true", "yes"}):
+        yield None
+        return
+
+    container_name = f"tldw-redis-test-{uuid.uuid4().hex[:8]}"
+    port = int(os.getenv("TEST_REDIS_PORT", "6380"))
+
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--rm",
+                "-p",
+                f"{port}:6379",
+                "--name",
+                container_name,
+                "redis:7-alpine",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        pytest.skip(f"Unable to start Redis container: {exc.stderr.decode().strip()}")
+
+    if not _wait_for_port("127.0.0.1", port):
+        subprocess.run(["docker", "rm", "-f", container_name], check=False)
+        pytest.skip("Redis container did not become ready in time")
+
+    url = f"redis://127.0.0.1:{port}"
+
+    yield url
+
+    subprocess.run(["docker", "rm", "-f", container_name], check=False)
+
+
 class TestBaseWorker:
     """Test suite for BaseWorker class"""
     
@@ -226,40 +351,39 @@ class TestBaseWorker:
 
 class TestChunkingWorker:
     """Test suite for ChunkingWorker class"""
-    
-    @pytest.mark.skip(reason="Complex async worker test - requires real Redis integration")
+
     @pytest.mark.asyncio
-    async def test_process_chunking_message(self, base_worker_config, chunking_message):
-        """Test processing a chunking message"""
+    async def test_process_chunking_message(self, base_worker_config, chunking_message, redis_stub):
+        """Test processing a chunking message and sending to next stage"""
         worker = ChunkingWorker(base_worker_config)
-        
-        with patch.object(worker, 'redis_client') as mock_redis:
-            with patch.object(worker, '_update_job_status', new_callable=AsyncMock):
-                with patch.object(worker, '_update_job_progress', new_callable=AsyncMock):
-                    mock_redis.xadd = AsyncMock()
-                    
-                    # Pass the message object directly
-                    result = await worker.process_message(chunking_message)
-                    
-                    assert result is not None
-                    assert isinstance(result, EmbeddingMessage)
-                    # Verify chunks were created
-                    assert len(result.chunks) > 0
-    
-    @pytest.mark.skip(reason="Method signature mismatch - needs refactoring")
+        worker.redis_client = redis_stub
+
+        with patch.object(worker, '_update_job_status', new_callable=AsyncMock) as mock_status, \
+             patch.object(worker, '_update_job_progress', new_callable=AsyncMock) as mock_progress:
+            result = await worker.process_message(chunking_message)
+
+        assert isinstance(result, EmbeddingMessage)
+        assert len(result.chunks) > 0
+        mock_status.assert_awaited()
+        mock_progress.assert_awaited()
+
+        await worker._send_to_next_stage(result)
+        assert await redis_stub.xlen(worker.embedding_queue) == 1
+
     def test_chunk_text(self, base_worker_config):
-        """Test text chunking logic"""
+        """Test text chunking logic returns tuples with offsets"""
         worker = ChunkingWorker(base_worker_config)
-        
+
         text = "This is a test. It has multiple sentences. Each one should be properly chunked."
         config = ChunkingConfig(chunk_size=100, overlap=10, separator=" ")
-        
-        chunks = worker._chunk_text(text, config.chunk_size, config.overlap, config.separator)
-        
-        assert len(chunks) > 1
-        assert all(isinstance(chunk, ChunkData) for chunk in chunks)
-        assert chunks[0].sequence_number == 0
-        assert chunks[0].start_index == 0
+
+        chunks = worker._chunk_text(text, config)
+
+        assert len(chunks) >= 1
+        first_chunk, start_idx, end_idx = chunks[0]
+        assert isinstance(first_chunk, str)
+        assert start_idx == 0
+        assert end_idx <= len(text)
     
     def test_chunk_overlap(self, base_worker_config):
         """Test that chunk overlap works correctly"""
@@ -268,156 +392,184 @@ class TestChunkingWorker:
         text = "word1 word2 word3 word4 word5 word6 word7 word8"
         config = ChunkingConfig(chunk_size=100, overlap=20, separator=" ")
         
-        chunks = worker._chunk_text(text, config.chunk_size, config.overlap, config.separator)
-        
-        # Check that chunks have overlap
+        chunks = worker._chunk_text(text, config)
+
         if len(chunks) > 1:
-            # End of first chunk should overlap with beginning of second
-            assert chunks[0].content[-5:] in chunks[1].content
+            first_chunk = chunks[0][0]
+            second_chunk = chunks[1][0]
+            assert first_chunk[-5:] in second_chunk
 
 
 class TestEmbeddingWorker:
     """Test suite for EmbeddingWorker class"""
     
-    @pytest.mark.skip(reason="Complex async worker test - requires real Redis integration")
     @pytest.mark.asyncio
-    async def test_process_embedding_message(self, embedding_worker_config, embedding_message):
+    async def test_process_embedding_message(self, embedding_worker_config, embedding_message, redis_stub):
         """Test processing an embedding message"""
         worker = EmbeddingWorker(embedding_worker_config)
-        
-        with patch.object(worker, 'redis_client') as mock_redis:
-            with patch.object(worker, '_update_job_status', new_callable=AsyncMock):
-                with patch.object(worker, '_update_job_progress', new_callable=AsyncMock):
-                    with patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch') as mock_embed:
-                        mock_redis.xadd = AsyncMock()
-                        mock_embed.return_value = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-                        
-                        # Pass the message object directly
-                        result = await worker.process_message(embedding_message)
-                        
-                        assert result is not None
-                        # Verify embeddings were created
-                        mock_embed.assert_called_once()
-                        # Result should be a StorageMessage
-                        assert hasattr(result, 'embeddings')
-    
-    @pytest.mark.skip(reason="Complex async worker test - requires real Redis integration")
+        worker.redis_client = redis_stub
+        worker.cache = None  # disable caching side-effects for determinism
+
+        worker._update_job_status = AsyncMock()
+        worker._update_job_progress = AsyncMock()
+
+        worker._generate_embeddings = AsyncMock(
+            side_effect=lambda texts, config, provider: [[0.1, 0.2, 0.3] for _ in texts]
+        )
+
+        storage_message = await worker.process_message(embedding_message)
+
+        assert isinstance(storage_message, StorageMessage)
+        assert len(storage_message.embeddings) == len(embedding_message.chunks)
+        worker._update_job_status.assert_awaited()
+        worker._update_job_progress.assert_awaited()
+
+        await worker._send_to_next_stage(storage_message)
+        assert await redis_stub.xlen(worker.storage_queue) == 1
+
     @pytest.mark.asyncio
-    async def test_batch_processing(self, embedding_worker_config, embedding_message):
-        """Test that batch processing respects max_batch_size"""
+    async def test_batch_processing_respects_max_size(self, embedding_worker_config, embedding_message, redis_stub):
+        """Test that batch processing respects configured batch size"""
         worker = EmbeddingWorker(embedding_worker_config)
-        worker.embedding_config.max_batch_size = 1  # Force single item batches
-        
-        # Create message with multiple chunks
+        worker.redis_client = redis_stub
+        worker.cache = None
+        worker.embedding_config.max_batch_size = 1
+
         message = embedding_message.model_copy()
         message.chunks = [
             ChunkData(
                 chunk_id=f"chunk-{i}",
                 content=f"Content {i}",
                 metadata={},
-                start_index=i*10,
-                end_index=(i+1)*10,
+                start_index=i * 10,
+                end_index=(i + 1) * 10,
                 sequence_number=i
             )
             for i in range(5)
         ]
-        
-        with patch.object(worker, 'redis_client') as mock_redis:
-            with patch.object(worker, '_update_job_status', new_callable=AsyncMock):
-                with patch.object(worker, '_update_job_progress', new_callable=AsyncMock):
-                    with patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch') as mock_embed:
-                        mock_redis.xadd = AsyncMock()
-                        mock_embed.return_value = [[0.1, 0.2, 0.3]]
-                        
-                        # Pass the message object directly
-                        result = await worker.process_message(message)
-                        
-                        # Should be called 5 times (once per chunk due to batch_size=1)
-                        assert mock_embed.call_count == 5
+
+        call_counts = []
+
+        async def fake_generate(texts, config, provider):
+            call_counts.append(len(texts))
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+        worker._generate_embeddings = fake_generate
+        worker._update_job_status = AsyncMock()
+        worker._update_job_progress = AsyncMock()
+
+        await worker.process_message(message)
+
+        assert call_counts
+        assert all(batch_len == 1 for batch_len in call_counts)
 
 
 class TestStorageWorker:
     """Test suite for StorageWorker class"""
     
-    @pytest.mark.skip(reason="Complex async worker test - requires real Redis integration")
     @pytest.mark.asyncio
-    async def test_process_storage_message(self, base_worker_config, storage_message):
-        """Test processing a storage message"""
-        worker = StorageWorker(base_worker_config)
-        
-        with patch.object(worker, '_store_in_chromadb', new_callable=AsyncMock) as mock_chroma:
-            with patch.object(worker, '_update_job_status', new_callable=AsyncMock) as mock_update:
-                mock_chroma.return_value = True
-                mock_update.return_value = None
-                
-                # Pass the message object directly
-                result = await worker.process_message(storage_message)
-                
-                assert result == True
-                mock_chroma.assert_called_once()
-                mock_update.assert_called()
-    
-    @pytest.mark.skip(reason="Requires ChromaDB mock refactoring")
+    async def test_process_storage_message(self, base_worker_config, storage_message, redis_stub):
+        """Test processing a storage message using patched dependencies"""
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
+            mock_manager_cls.return_value = MagicMock()
+            worker = StorageWorker(base_worker_config)
+
+        worker.redis_client = redis_stub
+        worker._update_job_status = AsyncMock()
+        worker._update_job_progress = AsyncMock()
+        worker._update_database = AsyncMock()
+
+        mock_collection = MagicMock()
+        worker._get_or_create_collection = AsyncMock(return_value=mock_collection)
+        worker._store_batch = AsyncMock()
+
+        await worker.process_message(storage_message)
+
+        worker._get_or_create_collection.assert_awaited_once()
+        worker._store_batch.assert_awaited()
+        assert worker._update_job_status.await_count >= 2
+        worker._update_database.assert_awaited_once()
+
     @pytest.mark.asyncio
-    async def test_chromadb_storage(self, base_worker_config, storage_message):
-        """Test ChromaDB storage logic"""
-        worker = StorageWorker(base_worker_config)
-        
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.ChromaDBManager') as mock_manager_class:
-            mock_manager = MagicMock()
-            mock_manager_class.return_value = mock_manager
-            # Provide required constructor arguments
-            # Mock ChromaDBManager to accept any arguments
-            mock_manager_class.return_value = mock_manager
-            mock_manager.add_embeddings = MagicMock(return_value=True)
-            
-            result = await worker._store_in_chromadb(storage_message)
-            
-            assert result == True
-            # Verify embeddings were stored
-            mock_manager.add_embeddings.assert_called()
+    async def test_get_or_create_collection_uses_manager(self, base_worker_config):
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
+            manager_instance = MagicMock()
+            mock_manager_cls.return_value = manager_instance
+            worker = StorageWorker(base_worker_config)
+
+        manager_instance.get_or_create_collection.return_value = "collection"
+        result = await worker._get_or_create_collection("user", "collection")
+
+        assert result == "collection"
+        manager_instance.get_or_create_collection.assert_called_once_with("user", "collection")
+
+    @pytest.mark.asyncio
+    async def test_store_batch_invokes_collection_add(self, base_worker_config):
+        with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_cls:
+            mock_manager_cls.return_value = MagicMock()
+            worker = StorageWorker(base_worker_config)
+
+        collection = MagicMock()
+        await worker._store_batch(
+            collection,
+            ids=["chunk-1"],
+            embeddings=[[0.1, 0.2, 0.3]],
+            documents=[""],
+            metadatas=[{"foo": "bar"}]
+        )
+
+        collection.add.assert_called_once()
 
 
 class TestWorkerRetryLogic:
-    """Test retry logic across all workers"""
-    
+    """Test retry handling on BaseWorker"""
+
     @pytest.mark.asyncio
-    async def test_retry_on_failure(self, base_worker_config):
-        """Test that workers retry on failure"""
+    async def test_retry_requeues_message(self, base_worker_config, chunking_message, redis_stub):
         class TestWorker(BaseWorker):
-            attempt_count = 0
-            
-            async def process_message(self, message: dict) -> bool:
-                self.attempt_count += 1
-                if self.attempt_count < 3:
-                    raise Exception("Simulated failure")
+            async def process_message(self, message):
                 return True
-            
-            def _parse_message(self, data: dict):
-                return data
-            
+
+            def _parse_message(self, data):
+                return ChunkingMessage(**data)
+
             async def _send_to_next_stage(self, result):
-                pass
-        
+                return None
+
         worker = TestWorker(base_worker_config)
-        worker.config.max_retries = 3
-        
-        with patch.object(worker, 'redis_client'):
-            # Simulate message with retry_count
-            message = {"retry_count": 0, "max_retries": 3}
-            
-            # Test retry logic through simulated failures
-            # Note: The base class doesn't have _process_with_retry exposed
-            # so we'll test through the attempt counter
-            for i in range(3):
-                try:
-                    result = await worker.process_message(message)
-                    if result:
-                        break
-                except:
-                    message['retry_count'] = i + 1
-            
-            assert worker.attempt_count == 3
+        worker.redis_client = redis_stub
+
+        message_data = chunking_message.model_dump()
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await worker._handle_failed_message("1-0", message_data, Exception("boom"))
+
+        assert await redis_stub.xlen(base_worker_config.queue_name) == 1
+        sleep_mock.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retry_marks_failed_after_max(self, base_worker_config, chunking_message, redis_stub):
+        class TestWorker(BaseWorker):
+            async def process_message(self, message):
+                return True
+
+            def _parse_message(self, data):
+                return ChunkingMessage(**data)
+
+            async def _send_to_next_stage(self, result):
+                return None
+
+        worker = TestWorker(base_worker_config)
+        worker.redis_client = redis_stub
+        worker._update_job_status = AsyncMock()
+
+        message_data = chunking_message.model_dump()
+        message_data["retry_count"] = message_data["max_retries"]
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await worker._handle_failed_message("1-0", message_data, Exception("boom"))
+
+        worker._update_job_status.assert_awaited_once()
 
 
 class TestWorkerMetrics:
@@ -459,10 +611,8 @@ class TestWorkerMetrics:
         assert metrics['average_processing_time_ms'] == 150  # Average of processing times
 
 
-@pytest.mark.skip(reason="Complex orchestration test - requires full integration setup")
-@pytest.mark.asyncio
-async def test_worker_orchestration():
-    """Test that workers can be orchestrated together"""
+def test_worker_orchestration_initial_state():
+    """Ensure worker orchestrator initializes without side effects"""
     from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerPool
     from tldw_Server_API.app.core.Embeddings.worker_config import ChunkingWorkerPoolConfig
     
@@ -486,8 +636,53 @@ class TestWorkerIntegration:
     """Integration tests that require Redis and databases"""
     
     @pytest.mark.asyncio
-    async def test_end_to_end_pipeline(self):
-        """Test the complete pipeline from chunking to storage"""
-        # This test would require actual Redis and database connections
-        # It's marked as integration test and would be skipped in unit test runs
-        pass
+    async def test_end_to_end_pipeline(self, docker_redis_service, base_worker_config, chunking_message, embedding_worker_config):
+        """Test chunking → embedding pipeline against a real Redis instance when available."""
+        if not docker_redis_service:
+            pytest.skip("Docker Redis not available; set USE_DOCKER_REDIS=1 to enable")
+
+        redis_client = await aioredis.from_url(docker_redis_service, decode_responses=True)
+        await redis_client.flushdb()
+
+        try:
+            chunk_config = base_worker_config.model_copy(update={
+                "worker_id": "chunk-it",
+                "redis_url": docker_redis_service,
+                "queue_name": "it:chunking",
+                "consumer_group": "it:chunk-group"
+            })
+            chunk_worker = ChunkingWorker(chunk_config)
+            chunk_worker.redis_client = redis_client
+            chunk_worker._update_job_status = AsyncMock()
+            chunk_worker._update_job_progress = AsyncMock()
+
+            embedding_config = embedding_worker_config.model_copy(update={
+                "worker_id": "embed-it",
+                "redis_url": docker_redis_service,
+                "queue_name": "it:embedding",
+                "consumer_group": "it:embed-group"
+            })
+            embedding_worker = EmbeddingWorker(embedding_config)
+            embedding_worker.redis_client = redis_client
+            embedding_worker.cache = None
+            embedding_worker._update_job_status = AsyncMock()
+            embedding_worker._update_job_progress = AsyncMock()
+
+            storage_queue = embedding_worker.storage_queue
+
+            chunk_result = await chunk_worker.process_message(chunking_message)
+            await chunk_worker._send_to_next_stage(chunk_result)
+            assert await redis_client.xlen(chunk_worker.embedding_queue) == 1
+
+            async def fake_generate(texts, config, provider):
+                return [[0.1, 0.2, 0.3] for _ in texts]
+
+            embedding_worker._generate_embeddings = fake_generate
+            storage_message = await embedding_worker.process_message(chunk_result)
+            await embedding_worker._send_to_next_stage(storage_message)
+
+            assert await redis_client.xlen(storage_queue) == 1
+
+        finally:
+            await redis_client.flushdb()
+            await redis_client.close()

@@ -25,6 +25,11 @@ class TestCaseGenerator:
         """
         self.manager = test_case_manager
         self.db = test_case_manager.db
+
+    @staticmethod
+    def _unique_name(base: str) -> str:
+        """Attach a short unique suffix so concurrent jobs avoid name collisions."""
+        return f"{base} ({uuid.uuid4().hex[:8]})"
     
     ####################################################################################################################
     # Generation Strategies
@@ -153,7 +158,7 @@ class TestCaseGenerator:
             # Create the test case
             created = self.manager.create_test_case(
                 project_id=project_id,
-                name=f"{sig_name} - {strategy.replace('_', ' ').title()} Case {i + 1}",
+                name=self._unique_name(f"{sig_name} - {strategy.replace('_', ' ').title()} Case {i + 1}"),
                 description=f"Automatically generated {strategy} test case",
                 inputs=test_case_data["inputs"],
                 expected_outputs=test_case_data.get("expected_outputs"),
@@ -274,7 +279,7 @@ class TestCaseGenerator:
         text = texts[index % len(texts)]
         
         return {
-            "name": f"Summarization Test {index}",
+            "name": self._unique_name(f"Summarization Test {index}"),
             "description": "Test case for text summarization",
             "inputs": {"text": text, "max_length": 50},
             "expected_outputs": {"summary": f"Summary of text about {text.split('.')[0][:20]}..."},
@@ -295,7 +300,7 @@ class TestCaseGenerator:
         text, label = samples[index % len(samples)]
         
         return {
-            "name": f"Classification Test {index}",
+            "name": self._unique_name(f"Classification Test {index}"),
             "description": "Test case for sentiment classification",
             "inputs": {"text": text},
             "expected_outputs": {"sentiment": label, "confidence": 0.85},
@@ -316,7 +321,7 @@ class TestCaseGenerator:
         text = samples[index % len(samples)]
         
         return {
-            "name": f"Extraction Test {index}",
+            "name": self._unique_name(f"Extraction Test {index}"),
             "description": "Test case for information extraction",
             "inputs": {"text": text},
             "expected_outputs": {"entities": ["person", "date", "location"]},
@@ -337,7 +342,7 @@ class TestCaseGenerator:
         source, target = samples[index % len(samples)]
         
         return {
-            "name": f"Translation Test {index}",
+            "name": self._unique_name(f"Translation Test {index}"),
             "description": "Test case for language translation",
             "inputs": {"text": source, "target_language": "French"},
             "expected_outputs": {"translation": target},
@@ -358,7 +363,7 @@ class TestCaseGenerator:
         question, answer = samples[index % len(samples)]
         
         return {
-            "name": f"Q&A Test {index}",
+            "name": self._unique_name(f"Q&A Test {index}"),
             "description": "Test case for question answering",
             "inputs": {"question": question},
             "expected_outputs": {"answer": answer},
@@ -401,7 +406,7 @@ class TestCaseGenerator:
             }
         
         return {
-            "name": f"Generic Test {index}",
+            "name": self._unique_name(f"Generic Test {index}"),
             "description": "Automatically generated generic test case",
             "inputs": inputs,
             "expected_outputs": expected_outputs,

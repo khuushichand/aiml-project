@@ -96,7 +96,7 @@ class TestContextRelevance:
         assert mock_analyze.call_count == len(rag_data["retrieved_contexts"])
     
     @pytest.mark.asyncio
-    @patch('asyncio.to_thread')
+    @patch('asyncio.to_thread', new_callable=AsyncMock)
     async def test_context_relevance_edge_cases(self, mock_to_thread):
         """Test context relevance with edge cases."""
         evaluator = RAGEvaluator()
@@ -132,6 +132,7 @@ class TestContextRelevance:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestAnswerFaithfulness:
     """Test answer faithfulness evaluation."""
     
@@ -168,6 +169,7 @@ class TestAnswerFaithfulness:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestAnswerRelevance:
     """Test answer relevance evaluation."""
     
@@ -200,6 +202,7 @@ class TestAnswerRelevance:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestAnswerSimilarity:
     """Test answer similarity evaluation."""
     
@@ -258,6 +261,7 @@ class TestAnswerSimilarity:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestFullRAGEvaluation:
     """Test complete RAG evaluation workflow."""
     
@@ -285,7 +289,7 @@ class TestFullRAGEvaluation:
         assert 0 <= results["overall_score"] <= 1
     
     @pytest.mark.asyncio
-    @patch('asyncio.to_thread')
+    @patch('asyncio.to_thread', new_callable=AsyncMock)
     async def test_evaluate_rag_without_ground_truth(self, mock_to_thread):
         """Test RAG evaluation without ground truth."""
         # Order matches evaluate() execution: relevance, faithfulness, context_relevance
@@ -393,7 +397,7 @@ class TestErrorHandling:
     """Test error handling in RAGEvaluator."""
     
     @pytest.mark.asyncio
-    @patch('asyncio.to_thread')
+    @patch('asyncio.to_thread', new_callable=AsyncMock)
     async def test_handle_llm_failure(self, mock_to_thread):
         """Test handling of LLM API failures."""
         mock_to_thread.side_effect = Exception("LLM API error")
@@ -407,7 +411,7 @@ class TestErrorHandling:
         assert result["score"] == 0.0  # Caught exception should result in 0.0
     
     @pytest.mark.asyncio
-    @patch('asyncio.to_thread')
+    @patch('asyncio.to_thread', new_callable=AsyncMock)
     async def test_handle_invalid_llm_response(self, mock_to_thread):
         """Test handling of invalid LLM responses."""
         mock_to_thread.return_value = "not_a_number"
@@ -431,7 +435,7 @@ class TestErrorHandling:
         evaluator.embedding_available = True
         
         # Should fall back to LLM
-        with patch('asyncio.to_thread') as mock_to_thread:
+        with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             # The actual code expects plain numeric string, not JSON
             mock_to_thread.return_value = "4.0"
             

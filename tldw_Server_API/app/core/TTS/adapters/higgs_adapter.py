@@ -93,7 +93,24 @@ class HiggsAdapter(TTSAdapter):
             "higgs_tokenizer_path",
             "bosonai/higgs-audio-v2-tokenizer"
         )
-        self.device = self.config.get("higgs_device", "cuda" if torch.cuda.is_available() else "cpu")
+        preferred_device = str(self.config.get("higgs_device", "cuda")).lower()
+        cuda_available = False
+        try:
+            cuda_available = torch.cuda.is_available()
+        except Exception:
+            cuda_available = False
+
+        if preferred_device == "cuda":
+            self.device = "cuda" if cuda_available else "cpu"
+            if not cuda_available:
+                logger.warning(
+                    f"{self.provider_name}: CUDA requested but unavailable; falling back to CPU"
+                )
+        elif preferred_device == "cpu":
+            self.device = "cpu"
+        else:
+            # Preserve any custom device strings (e.g., 'mps'); default to CPU when unsupported
+            self.device = preferred_device if preferred_device else ("cuda" if cuda_available else "cpu")
         
         # Auto-download toggle: config override > env overrides > default True
         def _parse_bool(val, default=True):

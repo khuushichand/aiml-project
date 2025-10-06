@@ -22,7 +22,7 @@ from functools import lru_cache, wraps
 import atexit
 import os
 
-from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header
+from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
 from fastapi.responses import JSONResponse
 import tiktoken
 from loguru import logger
@@ -37,7 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -53,6 +53,7 @@ import configparser
 from tldw_Server_API.app.core.Embeddings.audit_logger import (
     get_audit_logger, AuditEventType
 )
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
@@ -249,6 +250,21 @@ def _get_allowed_providers() -> Optional[List[str]]:
         pass
     return None
 
+
+def _chroma_manager_for_user(user: User) -> ChromaDBManager:
+    cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
+    cfg["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
+    user_id = getattr(user, "id", None) or settings.get("SINGLE_USER_FIXED_ID", "1")
+    return ChromaDBManager(user_id=str(user_id), user_embedding_config=cfg)
+
+
+def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -> Tuple[str, str]:
+    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+    default_model = model or cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
+    resolved_provider = guess_provider_for_model(default_model, provider)
+    return default_model, resolved_provider
+
+
 def _get_allowed_models() -> Optional[List[str]]:
     try:
         vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
@@ -288,6 +304,8 @@ class TTLCache:
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.lock = Lock()
         self.cleanup_task = None
+        self.hits = 0
+        self.misses = 0
         
     async def start_cleanup_task(self):
         """Start background cleanup task"""
@@ -334,14 +352,20 @@ class TTLCache:
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache if not expired"""
         async with self.lock:
-            if key in self.cache:
-                entry = self.cache[key]
-                if time.time() - entry['timestamp'] <= self.ttl_seconds:
-                    entry['last_access'] = time.time()
-                    return entry['value']
-                else:
-                    del self.cache[key]
-                    embedding_cache_size.set(len(self.cache))
+            entry = self.cache.get(key)
+            if entry is None:
+                self.misses += 1
+                return None
+
+            if time.time() - entry['timestamp'] <= self.ttl_seconds:
+                entry['last_access'] = time.time()
+                self.hits += 1
+                return entry['value']
+
+            # Entry expired; remove and count as miss
+            del self.cache[key]
+            embedding_cache_size.set(len(self.cache))
+            self.misses += 1
             return None
             
     async def set(self, key: str, value: Any):
@@ -366,13 +390,19 @@ class TTLCache:
         async with self.lock:
             self.cache.clear()
             embedding_cache_size.set(0)
+            self.hits = 0
+            self.misses = 0
             
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
+        total_requests = self.hits + self.misses
         return {
             'size': len(self.cache),
             'max_size': self.max_size,
-            'ttl_seconds': self.ttl_seconds
+            'ttl_seconds': self.ttl_seconds,
+            'hits': self.hits,
+            'misses': self.misses,
+            'hit_rate': (self.hits / total_requests) if total_requests else 0.0
         }
 
 # ============================================================================
@@ -811,7 +841,7 @@ async def create_embeddings_with_circuit_breaker(
             app_config = {
                 "embedding_config": {
                     "default_model_id": model_id,
-                    "model_storage_base_dir": "./embedding_models_data/",
+                    "model_storage_base_dir": "./models/embedding_models_data/",
                     "models": {model_id: model_cfg},
                 }
             }
@@ -1204,6 +1234,81 @@ async def create_embedding_endpoint(
     finally:
         active_embedding_requests.dec()
 
+class EmbeddingsBatchRequest(BaseModel):
+    texts: List[str] = Field(..., min_items=1, description="Texts to embed")
+    model: Optional[str] = Field(None, description="Embedding model identifier")
+    provider: Optional[str] = Field(None, description="Embedding provider override")
+    dimensions: Optional[int] = Field(None, description="Requested output dimensions if supported")
+    batch_size: Optional[int] = Field(None, description="Hint for provider batch sizing")
+
+
+class EmbeddingsBatchResponse(BaseModel):
+    embeddings: List[List[float]]
+    model: str
+    provider: str
+    count: int
+
+
+@router.post(
+    "/embeddings/batch",
+    response_model=EmbeddingsBatchResponse,
+    summary="Create embeddings for a batch of texts"
+)
+async def create_embeddings_batch_endpoint(
+    payload: EmbeddingsBatchRequest,
+    current_user: User = Depends(get_request_user)
+) -> EmbeddingsBatchResponse:
+    texts = payload.texts or []
+    if not texts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="texts must not be empty")
+
+    for text in texts:
+        if not isinstance(text, str):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="All texts must be strings")
+        if not text.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="texts cannot contain empty strings")
+
+    model, provider = _resolve_model_and_provider(payload.model, payload.provider)
+
+    allowed_providers = _get_allowed_providers()
+    if allowed_providers is not None and provider.lower() not in allowed_providers:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Provider '{provider}' is not allowed")
+
+    if not is_model_allowed(provider, model):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
+
+    max_tokens = _get_model_max_tokens(provider, model)
+    too_long = []
+    for idx, text in enumerate(texts):
+        tok = count_tokens(text, model)
+        if tok > max_tokens:
+            too_long.append({"index": idx, "tokens": tok})
+
+    if too_long:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "error": "input_too_long",
+                "message": f"One or more inputs exceed max tokens {max_tokens} for model {model}",
+                "details": too_long
+            }
+        )
+
+    embeddings = await create_embeddings_batch_async(
+        texts=texts,
+        provider=provider,
+        model_id=model,
+        dimensions=payload.dimensions
+    )
+
+    return EmbeddingsBatchResponse(
+        embeddings=embeddings,
+        model=model,
+        provider=provider,
+        count=len(embeddings)
+    )
+
+
 # ============================================================================
 # Model Management Endpoints
 # ============================================================================
@@ -1245,9 +1350,69 @@ async def list_embedding_models():
     return {"data": known, "allowed_providers": _get_allowed_providers(), "allowed_models": _get_allowed_models()}
 
 
+@router.get("/embeddings/models/{model_id:path}", summary="Get embedding model metadata")
+async def get_embedding_model_info(
+    model_id: str,
+    provider: Optional[str] = Query(None, description="Provider override"),
+    current_user: User = Depends(get_request_user)
+):
+    model = model_id
+    resolved_provider = guess_provider_for_model(model, provider)
+
+    if not is_model_allowed(resolved_provider, model):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not available")
+
+    try:
+        vectors = await create_embeddings_batch_async(
+            texts=["model probe"],
+            provider=resolved_provider,
+            model_id=model
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Model info probe failed for {resolved_provider}:{model}: {exc}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+
+    dimension = None
+    if vectors and vectors[0]:
+        first = vectors[0]
+        if isinstance(first, (list, tuple, np.ndarray)):
+            dimension = len(first)
+
+    max_tokens = _get_model_max_tokens(resolved_provider, model)
+
+    return {
+        "model": model,
+        "provider": resolved_provider,
+        "dimension": dimension,
+        "max_tokens": max_tokens,
+        "allowed": True
+    }
+
+
 class ModelActionRequest(BaseModel):
     model: str
     provider: Optional[str] = None
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="Collection name")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Collection metadata")
+    embedding_model: Optional[str] = Field(default=None, description="Embedding model to associate")
+    provider: Optional[str] = Field(default=None, description="Provider override for dimension detection")
+
+
+class CollectionResponse(BaseModel):
+    name: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CollectionStatsResponse(BaseModel):
+    name: str
+    count: int
+    embedding_dimension: Optional[int] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/embeddings/models/warmup", summary="Warmup (preload) an embedding model (admin)")
@@ -1322,6 +1487,146 @@ async def clear_cache(
         "message": "Cache cleared successfully",
         "entries_removed": cache_stats['size']
     }
+
+
+# ============================================================================
+# Chroma Collection Management
+# ============================================================================
+
+@router.post(
+    "/embeddings/collections",
+    response_model=CollectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a ChromaDB collection"
+)
+async def create_collection(
+    payload: CollectionCreateRequest,
+    current_user: User = Depends(get_request_user)
+) -> CollectionResponse:
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Collection name is required")
+
+    manager = _chroma_manager_for_user(current_user)
+
+    try:
+        manager.client.get_collection(name=name)
+    except Exception:
+        pass
+    else:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Collection '{name}' already exists")
+
+    metadata = payload.metadata.copy() if isinstance(payload.metadata, dict) else {}
+    model, provider = _resolve_model_and_provider(payload.embedding_model, payload.provider)
+
+    if payload.embedding_model:
+        metadata.setdefault("embedding_model", model)
+    metadata.setdefault("provider", provider)
+
+    dimension = None
+    try:
+        vectors = await create_embeddings_batch_async(
+            texts=["collection probe"],
+            provider=provider,
+            model_id=model
+        )
+        if vectors and vectors[0]:
+            first = vectors[0]
+            if isinstance(first, (list, tuple, np.ndarray)):
+                dimension = len(first)
+    except Exception as exc:
+        logger.warning(f"Collection dimension probe failed for {name}: {exc}")
+
+    if dimension:
+        metadata.setdefault("embedding_dimension", dimension)
+
+    collection = manager.client.create_collection(name=name, metadata=metadata)
+    coll_metadata = getattr(collection, "metadata", None) or metadata
+    return CollectionResponse(name=collection.name, metadata=coll_metadata)
+
+
+@router.get(
+    "/embeddings/collections",
+    response_model=List[CollectionResponse],
+    summary="List ChromaDB collections"
+)
+async def list_collections(current_user: User = Depends(get_request_user)) -> List[CollectionResponse]:
+    manager = _chroma_manager_for_user(current_user)
+    collections = manager.client.list_collections()
+    response: List[CollectionResponse] = []
+    for collection in collections:
+        metadata = getattr(collection, "metadata", {}) or {}
+        response.append(CollectionResponse(name=collection.name, metadata=metadata))
+    return response
+
+
+@router.delete(
+    "/embeddings/collections/{collection_name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a ChromaDB collection"
+)
+async def delete_collection(
+    collection_name: str,
+    current_user: User = Depends(get_request_user)
+) -> Response:
+    manager = _chroma_manager_for_user(current_user)
+    try:
+        manager.client.delete_collection(name=collection_name)
+    except Exception as exc:
+        logger.warning(f"Failed to delete collection {collection_name}: {exc}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/embeddings/collections/{collection_name}/stats",
+    response_model=CollectionStatsResponse,
+    summary="Retrieve collection statistics"
+)
+async def get_collection_stats(
+    collection_name: str,
+    current_user: User = Depends(get_request_user)
+) -> CollectionStatsResponse:
+    manager = _chroma_manager_for_user(current_user)
+    try:
+        collection = manager.client.get_collection(name=collection_name)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+
+    try:
+        count = int(collection.count())
+    except Exception:
+        try:
+            data = collection.get(limit=0, include=[])
+            count = len(data.get("ids") or [])
+        except Exception:
+            count = 0
+
+    metadata = getattr(collection, "metadata", {}) or {}
+    dimension = metadata.get("embedding_dimension")
+
+    if dimension is None:
+        try:
+            sample = collection.get(limit=1, include=["embeddings"])
+            embeddings = sample.get("embeddings") or []
+            candidate = None
+            if embeddings:
+                bucket = embeddings[0]
+                if isinstance(bucket, list) and bucket:
+                    candidate = bucket[0]
+                elif isinstance(bucket, (np.ndarray, tuple)):
+                    candidate = bucket
+            if candidate is not None and hasattr(candidate, "__len__"):
+                dimension = len(candidate)
+        except Exception:
+            pass
+
+    return CollectionStatsResponse(
+        name=collection.name,
+        count=count,
+        embedding_dimension=dimension,
+        metadata=metadata
+    )
 
 @router.get(
     "/embeddings/health",

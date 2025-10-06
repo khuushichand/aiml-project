@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, List, Generator, Optional
 from unittest.mock import MagicMock, AsyncMock, Mock
-import numpy as np
 from datetime import datetime
 import uuid
 
@@ -365,19 +364,6 @@ def mock_tokenizer():
     tokenizer.convert_tokens_to_string = Mock(side_effect=lambda tokens: ' '.join(tokens))
     return tokenizer
 
-@pytest.fixture
-def mock_sentence_transformer():
-    """Mock sentence transformer for semantic chunking."""
-    model = MagicMock()
-    
-    def mock_encode(texts, **kwargs):
-        # Return random embeddings of appropriate dimension
-        if isinstance(texts, str):
-            return np.random.randn(384)
-        return np.random.randn(len(texts), 384)
-    
-    model.encode = Mock(side_effect=mock_encode)
-    return model
 
 # =====================================================================
 # Expected Output Fixtures

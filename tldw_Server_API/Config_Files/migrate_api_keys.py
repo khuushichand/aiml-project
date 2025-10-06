@@ -56,6 +56,7 @@ def main():
         ('API', 'cohere_api_key'): 'COHERE_API_KEY',
         ('API', 'groq_api_key'): 'GROQ_API_KEY',
         ('API', 'deepseek_api_key'): 'DEEPSEEK_API_KEY',
+        ('API', 'qwen_api_key'): 'QWEN_API_KEY',
         ('API', 'google_api_key'): 'GOOGLE_API_KEY',
         ('API', 'huggingface_api_key'): 'HUGGINGFACE_API_KEY',
         ('API', 'mistral_api_key'): 'MISTRAL_API_KEY',

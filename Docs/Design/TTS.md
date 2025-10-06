@@ -13,11 +13,13 @@ https://github.com/Enemyx-net/VibeVoice-ComfyUI
 https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_chunk_size_in/
  To reduce it, you’ll need to look at the inference/streaming loop (usually where the decoder pushes tokens into the vocoder). Try adjusting the buffer size or flushing frequency so that the model yields audio frames every few hundred tokens instead of waiting for a long sequence. Look for parameters like chunk_size, frame_stride, or flush_interval in the streaming code. Setting those lower should let you get ~1 second of audio out first, then continue smoothly. 
 ```
+
 https://github.com/rsxdalv/chatterbox/tree/streaming
 https://github.com/randombk/chatterbox-vllm
 https://generativeai.pub/glm-4-voice-9b-real-time-multilingual-voice-conversation-ai-install-locally-in-minutes-ce2fcd6c8fd8
 https://github.com/KartDriver/mira_converse?tab=readme-ov-file
 https://huggingface.co/kyutai
+https://huggingface.co/Echo9Zulu/Kokoro-82M-FP16-OpenVINO
 github.com/wwang1110/kokoro_batch
 https://github.com/bytedance/MegaTTS3
     https://modelscope.cn/models/ACoderPassBy/MegaTTS-SFT/files

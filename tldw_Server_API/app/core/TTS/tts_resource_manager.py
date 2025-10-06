@@ -336,34 +336,55 @@ class MemoryMonitor:
         process = psutil.Process()
         mb = 1024 * 1024
 
-        total = getattr(memory, "total", 0)
-        available = getattr(memory, "available", 0)
-        used = getattr(memory, "used", None)
-        if used is None and total and available is not None:
-            used = total - available
-        free = getattr(memory, "free", None)
-        if free is None:
-            free = available
-        percent = getattr(memory, "percent", None)
-        if percent is None and total:
+        def _as_int(value, default=0):
             try:
-                percent = (used / total) * 100
+                return int(value)
+            except (TypeError, ValueError):
+                try:
+                    return int(float(value))
+                except (TypeError, ValueError):
+                    return default
+
+        def _as_float(value, default=0.0):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        total_raw = getattr(memory, "total", 0)
+        available_raw = getattr(memory, "available", 0)
+        used_raw = getattr(memory, "used", None)
+        if used_raw is None and total_raw and available_raw is not None:
+            used_raw = total_raw - available_raw
+        free_raw = getattr(memory, "free", None)
+        if free_raw is None:
+            free_raw = available_raw
+        percent_raw = getattr(memory, "percent", None)
+        if percent_raw is None and total_raw:
+            try:
+                percent_raw = (used_raw / total_raw) * 100
             except Exception:
-                percent = 0
+                percent_raw = 0
+
+        total = _as_int(total_raw)
+        available = _as_int(available_raw)
+        used = _as_int(used_raw, default=max(total - available, 0))
+        free = _as_int(free_raw, default=available)
+        percent = _as_float(percent_raw)
 
         # Compute warning/critical from the same percent value to avoid extra psutil calls
-        usage_ratio = (float(percent) if percent is not None else 0.0) / 100.0
+        usage_ratio = (percent / 100.0) if percent is not None else 0.0
         stats = {
-            "total": int(total),
-            "available": int(available),
-            "used": int(used) if used is not None else 0,
-            "percent": float(percent) if percent is not None else 0.0,
-            "free": int(free) if free is not None else 0,
-            "total_mb": int(total) // mb if total else 0,
-            "available_mb": int(available) // mb if available else 0,
-            "used_mb": (int(used) // mb) if used is not None else 0,
-            "free_mb": (int(free) // mb) if free is not None else 0,
-            "process_mb": int(process.memory_info().rss) // mb,
+            "total": total,
+            "available": available,
+            "used": used,
+            "percent": percent,
+            "free": free,
+            "total_mb": total // mb if total else 0,
+            "available_mb": available // mb if available else 0,
+            "used_mb": used // mb if used else 0,
+            "free_mb": free // mb if free else 0,
+            "process_mb": _as_int(process.memory_info().rss) // mb,
             "threshold": self.memory_threshold * 100,
             "cleanup_threshold": self.cleanup_threshold * 100,
             "is_warning": usage_ratio > self.memory_threshold,
@@ -376,12 +397,20 @@ class MemoryMonitor:
     
     def is_memory_critical(self) -> bool:
         """Check if memory usage is critical"""
-        usage = psutil.virtual_memory().percent / 100.0
+        try:
+            percent = float(psutil.virtual_memory().percent)
+        except (TypeError, ValueError):
+            percent = 0.0
+        usage = percent / 100.0
         return usage > self.cleanup_threshold
-    
+
     def is_memory_high(self) -> bool:
         """Check if memory usage is high"""
-        usage = psutil.virtual_memory().percent / 100.0
+        try:
+            percent = float(psutil.virtual_memory().percent)
+        except (TypeError, ValueError):
+            percent = 0.0
+        usage = percent / 100.0
         return usage > self.memory_threshold
     
     def is_memory_warning(self) -> bool:

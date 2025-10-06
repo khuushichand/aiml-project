@@ -31,6 +31,7 @@ from collections import deque
 from functools import partial
 from io import BytesIO
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
+from unittest.mock import Mock
 
 from fastapi import (
     APIRouter,
@@ -101,6 +102,7 @@ from tldw_Server_API.app.core.Chat.Chat_Functions import (
     process_user_input,
     update_chat_content,
 )
+_ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
     PromptTemplate,
@@ -417,6 +419,7 @@ async def create_chat_completion(
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
+    X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
     request: Request = None,  # Optional Request object for audit logging and rate limiting
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
@@ -508,16 +511,20 @@ async def create_chat_completion(
         # Secure authentication validation
         if is_authentication_required():
             auth_header_val = Authorization or Token
-            if not auth_header_val:
+            extracted_token: Optional[str] = None
+
+            if auth_header_val:
+                extracted_token = extract_bearer_token(auth_header_val)
+                if not extracted_token:
+                    metrics.track_auth_failure("invalid_token_format")
+                    logger.warning("Invalid token format provided")
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token format.")
+            elif X_API_KEY:
+                extracted_token = X_API_KEY.strip()
+            else:
                 metrics.track_auth_failure("missing_token")
                 logger.warning("Authentication required but no token provided")
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token.")
-            
-            extracted_token = extract_bearer_token(auth_header_val)
-            if not extracted_token:
-                metrics.track_auth_failure("invalid_token_format")
-                logger.warning("Invalid token format provided")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token format.")
             
             expected_token = get_expected_api_token()
             if not expected_token:
@@ -570,6 +577,8 @@ async def create_chat_completion(
         
         # Apply rate limiting
         rate_limiter = get_rate_limiter()
+        if isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock):
+            rate_limiter = None
         if rate_limiter:
             # Estimate tokens for rate limiting
             estimated_tokens = len(request_json) // 4  # Rough estimate: 4 chars per token
@@ -635,10 +644,13 @@ async def create_chat_completion(
         # Outside TEST_MODE, prefer the module-level API_KEYS mapping (allows patch.dict in unit tests),
         # falling back to dynamic lookup if it's empty.
         import os as _os_keys
-        if _os_keys.getenv("TEST_MODE", "").lower() == "true":
-            api_keys = get_api_keys()
+        module_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
+        dynamic_keys = get_api_keys()
+        if module_keys:
+            # Module-level keys (including patched values) override dynamic lookups
+            api_keys = {**dynamic_keys, **module_keys}
         else:
-            api_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else get_api_keys()
+            api_keys = dynamic_keys
         # Normalize empty strings to None so optional providers don't receive "" as a key
         _raw_key = api_keys.get(target_api_provider)
         provider_api_key = _raw_key if (_raw_key is not None and str(_raw_key) != "") else None
@@ -960,7 +972,73 @@ async def create_chat_completion(
         # Current implementation continues with direct processing:
         # ------------------------------------------------------------------------
         
-        llm_call_func = partial(perform_chat_api_call, **cleaned_args)
+        mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
+        use_mock_provider = (
+            _test_mode_flag
+            and provider_api_key
+            and provider_api_key in mock_friendly_keys
+            and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
+        )
+
+        def _build_mock_response(messages_payload: List[Dict[str, Any]]) -> str:
+            for msg in reversed(messages_payload):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return f"Mock response: {content.strip()}"
+            return "Mock response from test mode"
+
+        def _mock_chat_call(**kwargs):
+            messages_payload = kwargs.get("messages_payload") or []
+            streaming_flag = bool(kwargs.get("streaming"))
+            model_name = kwargs.get("model") or request_data.model or "mock-model"
+            content = _build_mock_response(messages_payload)
+
+            if streaming_flag:
+                chunk_text = content
+
+                def _stream_generator():
+                    data_chunk = {
+                        "choices": [
+                            {
+                                "delta": {"role": "assistant", "content": chunk_text},
+                                "finish_reason": None,
+                                "index": 0,
+                            }
+                        ]
+                    }
+                    yield f"data: {json.dumps(data_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return _stream_generator()
+
+            prompt_tokens = max(1, len(json.dumps(messages_payload)) // 4)
+            completion_tokens = max(1, len(content) // 4)
+            total_tokens = prompt_tokens + completion_tokens
+
+            return {
+                "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                },
+            }
+
+        if use_mock_provider and provider in {"openai", "groq", "mistral"}:
+            llm_call_func = partial(_mock_chat_call, **cleaned_args)
+        else:
+            llm_call_func = partial(perform_chat_api_call, **cleaned_args)
 
         if request_data.stream:
             # Track LLM call

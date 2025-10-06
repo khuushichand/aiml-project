@@ -34,7 +34,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io import TestCaseIO
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_generator import TestCaseGenerator
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, InputError, ConflictError
 from fastapi.responses import Response
 
 ########################################################################################################################
@@ -174,6 +174,11 @@ async def create_test_case(
             data=TestCaseResponse(**test_case)
         )
         
+    except ConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
     except DatabaseError as e:
         logger.error(f"Database error creating test case: {e}")
         raise HTTPException(

@@ -2,7 +2,7 @@
 
 <h1>tldw Server - API-First Media Analysis & Research Platform</h1>
 
-[![License](https://img.shields.io/badge/license-Apache%202-blue)](https://img.shields.io/badge/license-Apache%202-blue)
+[![License](https://img.shields.io/badge/license-GPLv2-blue)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server) 
 
 <h3>FastAPI-powered backend for media ingestion, analysis, and AI-powered research</h3>
@@ -88,7 +88,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Web Scraping: Stable — Scrapers/utilities (`app/core/Web_Scraping/`).
 - Paper Search: Stable — arXiv and related endpoints (`/api/v1/paper-search/*`).
 - Web Search Aggregator: WIP — Multi‑provider search + aggregation (`app/core/Search_and_Research/`, `/api/v1/research/websearch`).
-- Browser Extension: Planned — Direct web capture into pipeline.
+- Browser Extension: WIP - https://github.com/rmusser01/tldw_browser_assistant
 
 ### Tooling & Integration
 - MCP Unified: Stable — Production‑grade MCP server + endpoints/WS (`app/core/MCP_unified/`).
@@ -108,7 +108,9 @@ Note: If a module has both stable and experimental parts, the most frequently us
 
 ### RAG Quickstart
 
-- Unified RAG search (all options shown):
+<summary>- Unified RAG search (all options shown):</summary>
+
+<details>
 
 ```bash
 # Required: query; choose sources and search_mode
@@ -223,9 +225,13 @@ Remove optional blocks you don’t need; unspecified fields use sensible default
 
 More: see `tldw_Server_API/app/core/RAG/README.md` and `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`.
 
+</details>
+
 ### RAG Capabilities
 
-Discover available features, defaults, and limits at runtime:
+<summary> Discover available features, defaults, and limits at runtime:</summary>
+
+<details>
 
 ```bash
 curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
@@ -321,6 +327,8 @@ Sample response (abridged but complete in structure):
 Notes:
 - Capability labels “fulltext” and “semantic” correspond to request values `"fts"` and `"vector"` for `search_mode`.
 - Source values `"characters"` and `"chats"` both map to the `character_db` datastore internally.
+
+</details>
 
 ## Auth Quickstart
 
@@ -451,7 +459,7 @@ See the [Migration Guide](#migration-guide) if upgrading from a previous version
 
 ### Content Analysis
 - **16+ LLM Providers**: 
-  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter
+  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
   - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite
 - **Flexible Analysis**: Multiple chunking strategies and prompt customization
 - **Evaluation System**: G-Eval, RAG evaluation, response quality metrics
@@ -1590,7 +1598,7 @@ See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy an
 
 ## License
 
-This project is Licensed under an Apache 2.0 License.
+This project is licensed under the GNU General Public License v2.0.
 
 ---
 

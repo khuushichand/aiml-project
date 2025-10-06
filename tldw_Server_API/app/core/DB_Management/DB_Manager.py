@@ -22,6 +22,10 @@ from tldw_Server_API.app.core.Utils.Utils import get_database_path, get_project_
     # insert_prompt_to_db as sqlite_insert_prompt_to_db,
     #delete_prompt as sqlite_delete_prompt
 #)
+from tldw_Server_API.app.core.DB_Management.content_backend import (
+    ContentDatabaseSettings,
+    load_content_db_settings,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
     import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
@@ -54,8 +58,10 @@ single_user_config_path = get_project_relative_path('Config_Files/config.txt')
 single_user_config = configparser.ConfigParser()
 single_user_config.read(single_user_config_path)
 
-single_user_db_path: str = single_user_config.get('Database', 'sqlite_path', fallback='./Databases/server_media_summary.db')
-single_user_backup_path: str = single_user_config.get('Database', 'backup_path', fallback='database_backups')
+content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
+
+single_user_db_path: str = content_db_settings.sqlite_path or './Databases/server_media_summary.db'
+single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
 single_user_backup_dir: Union[str, bytes] = os.environ.get('DB_BACKUP_DIR', single_user_backup_path)
 
 
@@ -95,12 +101,14 @@ def ensure_directory_exists(file_path):
         print(f"Created directory: {directory}")
 
 BIGSEARCH = single_user_config.getboolean('Database', 'bigsearch', fallback=False)
-if not BIGSEARCH == True:
-    db_type = 'sqlite'
-elif BIGSEARCH == True and single_user_config.get('Database', 'type') == 'elasticsearch':
-    db_type = 'elasticsearch'
-elif BIGSEARCH == True and single_user_config.get('Database', 'type') == 'postgres':
+
+raw_backend = content_db_settings.raw_backend_type
+if raw_backend in {'postgres', 'postgresql'}:
     db_type = 'postgres'
+elif BIGSEARCH and raw_backend in {'elasticsearch', 'opensearch'}:
+    db_type = 'elasticsearch'
+else:
+    db_type = 'sqlite'
 
 
 #

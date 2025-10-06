@@ -4,12 +4,23 @@
 # Imports
 import asyncio
 import os
+import importlib.util
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import numpy as np
 from fastapi import HTTPException
 from httpx import AsyncClient
 from fastapi.testclient import TestClient
+
+
+AV_AVAILABLE = importlib.util.find_spec("av") is not None
+
+
+@pytest.fixture(autouse=True)
+def clear_tts_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    return None
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
@@ -58,7 +69,7 @@ class TestStreamingAudioWriter:
         final = writer.write_chunk(finalize=True)
         assert final == b""
     
-    @pytest.mark.skipif(not os.system("python -c 'import av'") == 0, reason="av not installed")
+    @pytest.mark.skipif(not AV_AVAILABLE, reason="av not installed")
     def test_wav_output(self):
         """Test WAV format output"""
         writer = StreamingAudioWriter(format="wav", sample_rate=24000)

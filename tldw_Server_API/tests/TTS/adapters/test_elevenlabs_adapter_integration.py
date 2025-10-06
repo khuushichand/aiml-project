@@ -3,9 +3,17 @@
 #
 # Imports
 import pytest
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.legacy_tts, pytest.mark.requires_api_key]
 import os
 import asyncio
+RUN_TTS_LEGACY_INTEGRATION = os.getenv("RUN_TTS_LEGACY_INTEGRATION") == "1"
+
+if not RUN_TTS_LEGACY_INTEGRATION:
+    pytest.skip(
+        "Legacy TTS integration tests are disabled by default. Set RUN_TTS_LEGACY_INTEGRATION=1 to enable.",
+        allow_module_level=True,
+    )
+
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter import ElevenLabsAdapter
@@ -162,6 +170,8 @@ class TestElevenLabsAdapterIntegration:
         
         models = ["eleven_monolingual_v1", "eleven_turbo_v2"]
         
+        successes = 0
+        failures = []
         for model in models:
             request = TTSRequest(
                 text=f"Testing model: {model}",
@@ -170,13 +180,17 @@ class TestElevenLabsAdapterIntegration:
                 stream=False,
                 extra_params={"model": model}
             )
-            
+
             try:
                 response = await adapter.generate(request)
                 assert response.audio_data is not None
-            except Exception as e:
-                # Some models may not be available on all accounts
-                print(f"Model {model} not available: {e}")
+                successes += 1
+            except Exception as exc:
+                failures.append(f"{model}: {exc}")
+
+        if successes == 0:
+            reason = "; ".join(failures) if failures else "models unavailable"
+            pytest.skip(f"No ElevenLabs models available for this account: {reason}")
         
         # Cleanup
         await adapter.close()
@@ -202,21 +216,27 @@ class TestElevenLabsAdapterIntegration:
             ("de", "Hallo, wie geht es dir?")
         ]
         
-        for lang, text in languages:
+        successes = 0
+        failures = []
+        for lang, sample_text in languages:
             request = TTSRequest(
-                text=text,
+                text=sample_text,
                 voice="rachel",
                 language=lang,
                 format=AudioFormat.MP3,
                 stream=False
             )
-            
+
             try:
                 response = await adapter.generate(request)
                 assert response.audio_data is not None
-            except Exception as e:
-                # Multilingual model may not be available on all accounts
-                print(f"Language {lang} generation failed: {e}")
+                successes += 1
+            except Exception as exc:
+                failures.append(f"{lang}: {exc}")
+
+        if successes == 0:
+            reason = "; ".join(failures) if failures else "languages unavailable"
+            pytest.skip(f"ElevenLabs multilingual model unavailable for this account: {reason}")
         
         # Cleanup
         await adapter.close()

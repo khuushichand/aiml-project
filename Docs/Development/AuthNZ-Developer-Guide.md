@@ -393,6 +393,17 @@ python -m tldw_Server_API.app.core.AuthNZ.run_migrations
 
 ### Running Tests
 ```bash
+# Start ephemeral Postgres for tests
+docker compose -f docker-compose.test.yml up -d postgres-test
+
+export TEST_DB_HOST=localhost
+export TEST_DB_PORT=5432
+export TEST_DB_USER=tldw_user
+export TEST_DB_PASSWORD=TestPassword123!
+export TEST_DB_NAME=tldw_test
+```
+
+```bash
 # All AuthNZ tests
 pytest tests/AuthNZ/ -v
 

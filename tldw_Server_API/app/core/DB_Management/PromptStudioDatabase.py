@@ -91,10 +91,10 @@ class PromptStudioDatabase(PromptsDatabase):
             "003_prompt_studio_triggers.sql",
             "004_prompt_studio_fts.sql"
         ]
-        # In test mode, skip FTS migrations to reduce flakiness and avoid platform FTS quirks
+        # Allow explicitly skipping FTS migrations when requested, but default to running them
         try:
             import os as _os
-            if _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() == "true":
+            if _os.getenv("SKIP_PROMPT_STUDIO_FTS", "").lower() == "true":
                 migration_files = [mf for mf in migration_files if not mf.startswith("004_")]
         except Exception:
             pass

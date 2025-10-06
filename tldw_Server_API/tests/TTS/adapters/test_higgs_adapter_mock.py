@@ -32,17 +32,18 @@ class TestHiggsAdapterMock:
     
     async def test_initialization_configuration(self):
         """Test initialization with configuration"""
-        adapter = HiggsAdapter({
-            "higgs_model_path": "bosonai/higgs-audio-v2",
-            "higgs_tokenizer_path": "bosonai/higgs-tokenizer",
-            "higgs_device": "cuda",
-            "higgs_use_fp16": True,
-            "higgs_batch_size": 2
-        })
-        
+        with patch('torch.cuda.is_available', return_value=True):
+            adapter = HiggsAdapter({
+                "higgs_model_path": "bosonai/higgs-audio-v2",
+                "higgs_tokenizer_path": "bosonai/higgs-tokenizer",
+                "higgs_device": "cuda",
+                "higgs_use_fp16": True,
+                "higgs_batch_size": 2
+            })
+
         assert adapter.model_path == "bosonai/higgs-audio-v2"
         assert adapter.tokenizer_path == "bosonai/higgs-tokenizer"
-        assert adapter.device == "cuda" if torch.cuda.is_available() else "cpu"
+        assert adapter.device == "cuda"
         assert adapter.use_fp16 is True
         assert adapter.batch_size == 2
     
@@ -194,28 +195,43 @@ class TestHiggsAdapterMock:
         assert adapter.use_fp16 is False  # Should be disabled on CPU
     
     async def test_model_not_found_error(self):
-        """Test error when model library not installed"""
+        """Test error when required boson_multimodal dependency is missing"""
         adapter = HiggsAdapter({})
-        
-        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter.HiggsAdapter.initialize') as mock_init:
-            mock_init.side_effect = ImportError("boson_multimodal not found")
-            
-            success = await adapter.initialize()
-            assert not success
+
+        mock_resource_manager = MagicMock()
+        mock_resource_manager.memory_monitor.is_memory_critical.return_value = False
+
+        async def fake_get_resource_manager():
+            return mock_resource_manager
+
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter.get_resource_manager', side_effect=fake_get_resource_manager):
+            real_import = __import__
+
+            def fake_import(name, *args, **kwargs):
+                if name.startswith('boson_multimodal'):
+                    raise ImportError("boson_multimodal not found")
+                return real_import(name, *args, **kwargs)
+
+            with patch('builtins.__import__', side_effect=fake_import):
+                success = await adapter.initialize()
+
+        assert not success
+        assert adapter.status == ProviderStatus.NOT_CONFIGURED
     
     async def test_cleanup_on_close(self):
         """Test resource cleanup on close"""
-        adapter = HiggsAdapter({"higgs_device": "cuda"})
-        
+        with patch('torch.cuda.is_available', return_value=True):
+            adapter = HiggsAdapter({"higgs_device": "cuda"})
+
         # Mock resources
         adapter.serve_engine = MagicMock()
         adapter._initialized = True
         adapter._status = ProviderStatus.AVAILABLE
-        
+
         with patch('torch.cuda.is_available', return_value=True):
             with patch('torch.cuda.empty_cache') as mock_empty_cache:
                 await adapter.close()
-                
+
                 assert adapter.serve_engine is None
                 assert adapter._initialized is False
                 assert adapter._status == ProviderStatus.DISABLED

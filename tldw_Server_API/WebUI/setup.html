@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TLDW Server – First-Time Setup</title>
+    <link rel="stylesheet" href="/webui/css/styles.css">
+    <link rel="stylesheet" href="/webui/css/setup.css">
+    <script defer src="/webui/js/setup-guard.js"></script>
+    <script defer src="/webui/js/setup.js"></script>
+</head>
+<body class="setup-body">
+    <div class="setup-layout">
+        <header class="setup-header">
+            <h1>Welcome to tldw_server</h1>
+            <p>Your instance is running with default configuration. Use this guided setup to add API keys, adjust authentication, and review important settings before continuing.</p>
+        </header>
+
+        <section id="setupStatus" class="setup-section status-section">
+            <div class="status-content">
+                <h2>Setup Checklist</h2>
+                <div class="status-grid">
+                    <div>
+                        <span class="status-label">Configuration file</span>
+                        <span id="configPath" class="status-value">Loading…</span>
+                    </div>
+                    <div>
+                        <span class="status-label">Setup required</span>
+                        <span id="setupRequired" class="status-badge">—</span>
+                    </div>
+                </div>
+                <div id="placeholderNotice" class="status-notice" hidden></div>
+            </div>
+        </section>
+
+        <section id="guidedWizard" class="setup-section wizard-section" hidden>
+            <div class="section-heading">
+                <h2>Guided Setup</h2>
+                <p>Answer a few quick questions so we can highlight the settings that matter most. You can always skip and edit everything manually.</p>
+            </div>
+            <div id="wizardContent" class="wizard-content"></div>
+            <div class="wizard-footer">
+                <button id="wizardBack" class="btn subtle" type="button" disabled>Back</button>
+                <div class="wizard-actions">
+                    <button id="wizardSkip" class="btn subtle" type="button">Skip &amp; Show All Settings</button>
+                    <button id="wizardNext" class="btn primary" type="button">Next</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="configSection" class="setup-section" hidden>
+            <div class="section-heading">
+                <h2>Configuration Explorer</h2>
+                <p>Review each section below. Update any values that still use placeholders or defaults.</p>
+            </div>
+            <div id="wizardSummary" class="wizard-summary" hidden></div>
+            <button id="showAllSections" class="btn subtle show-all" type="button" hidden></button>
+            <div id="configSections" class="config-sections">
+                <div class="empty-state" id="configLoading">Loading configuration…</div>
+            </div>
+        </section>
+
+        <section class="setup-section">
+            <div class="section-heading">
+                <h2>Actions</h2>
+                <p>Save your changes before marking setup as complete. Restart the server after finishing to apply new settings.</p>
+            </div>
+            <div class="action-row">
+                <button id="saveChanges" class="btn primary" disabled>Save Changes</button>
+                <label class="toggle-option">
+                    <input type="checkbox" id="disableWizardToggle">
+                    Disable guided setup after completion
+                </label>
+                <button id="completeSetup" class="btn success" disabled>Mark Setup Complete</button>
+            </div>
+            <div id="actionMessage" class="action-message" role="status"></div>
+        </section>
+    </div>
+</body>
+</html>

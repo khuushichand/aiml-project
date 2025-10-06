@@ -115,7 +115,8 @@ class TestCaseManager:
                     """,
                     (project_id, name)
                 )
-                existing_count = cursor.fetchone()[0]
+                row = cursor.fetchone()
+                existing_count = row[0] if row else 0
                 if existing_count and existing_count > 0:
                     raise ConflictError(f"Test case with name '{name}' already exists")
             except sqlite3.Error as e:

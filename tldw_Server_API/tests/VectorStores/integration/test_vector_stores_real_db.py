@@ -1,5 +1,6 @@
 import os
 import pathlib
+import asyncio
 import pytest
 pytestmark = pytest.mark.integration
 from fastapi.testclient import TestClient
@@ -24,10 +25,16 @@ def testing_env(monkeypatch, tmp_path):
 def client():
     async def override_user():
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
+
     app.dependency_overrides[get_request_user] = override_user
     settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-    return TestClient(app, headers=headers)
+
+    with TestClient(app, headers=headers) as test_client:
+        try:
+            yield test_client
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
 
 
 def test_vector_store_end_to_end_no_mocks(client):
@@ -86,8 +93,7 @@ def test_create_from_media_with_existing_embeddings_no_mocks(client):
     uid = str(sv.get('SINGLE_USER_FIXED_ID','1'))
     adapter = ChromaDBAdapter(VectorStoreConfig(store_type=VectorStoreType.CHROMADB, connection_params={'use_default': True}, embedding_dim=8, user_id=uid))
     import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(adapter.initialize())
+    asyncio.run(adapter.initialize())
     source_collection = adapter.manager.get_or_create_collection(f'user_{uid}_media_embeddings')
 
     # Insert one embedding for media_id=123
@@ -151,19 +157,19 @@ def test_vector_store_pagination_and_delete_no_mocks(client):
     d3 = r3.json(); assert d3['pagination']['total'] == 4
 
 
-@pytest.mark.xfail(reason="Embeddings may not be configured in CI; text query falls back to 500.", strict=False)
 def test_query_by_text_with_embeddings_optional(client):
     # Create store and upsert content-only records to trigger embeddings
     s = client.post('/api/v1/vector_stores', json={'name': 'EmbQ', 'dimensions': 8}).json()
     sid = s['id']
     body = {'records': [{'content': 'alpha bravo charlie'}, {'content': 'bravo delta echo'}]}
     r = client.post(f"/api/v1/vector_stores/{sid}/vectors", json=body)
-    # If embeddings are not available, this may 500; mark xfail at query stage below
+    # If embeddings are not available, this may 500; handle skip in query stage below
     if r.status_code not in (200, 500):
         assert r.status_code == 200
 
-    # Text query
     q = client.post(f"/api/v1/vector_stores/{sid}/query", json={'query': 'bravo', 'top_k': 2})
+    if q.status_code == 500:
+        pytest.skip("Embeddings backend not configured; skipping text query flow")
     assert q.status_code == 200
     data = q.json()
     assert isinstance(data.get('data'), list)

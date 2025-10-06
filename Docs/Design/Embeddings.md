@@ -23,7 +23,20 @@ https://huggingface.co/SituatedEmbedding/SitEmb-v1.5-Qwen3
 https://huggingface.co/spaces/hesamation/primer-llm-embedding?section=what_are_embeddings?
 https://sgnt.ai/p/embeddings-explainer/
 https://arxiv.org/abs/2508.21038
+https://huggingface.co/spaces/vidore/vidore-leaderboard
+https://patann.dev/
+https://gist.github.com/NohTow/d563244596548bf387f19fcd790664d3
+https://blog.voyageai.com/2025/01/07/voyage-3-large/
+https://docs.voyageai.com/docs/embeddings
+https://huggingface.co/blog/rteb
 
+https://huggingface.co/nvidia/llama-nemoretriever-colembed-3b-v1
+https://www.arxiv.org/abs/2507.05513
+
+https://github.com/illuin-tech/vidore-benchmark/tree/main
+https://github.com/jina-ai/jina-embeddings-v4-gguf
+
+https://huggingface.co/blog/manu/colpali
 
 https://huggingface.co/ibm-granite/granite-embedding-english-r2
 

@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import tempfile
 from typing import Any, Dict, List, Union, Optional, Tuple
 #
@@ -59,6 +60,51 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 # FIXME - Add a config file option/check for the user agent
 web_scraping_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+
+DEFAULT_BOILERPLATE_PATTERNS = [
+    r"\bsubscribe\s+now\b",
+    r"\bsubscribe\s+today\b",
+    r"\bsign\s+up\b",
+    r"\bshare\s+this\b",
+    r"\bshare\s+on\s+(facebook|twitter|linkedin|reddit)\b",
+    r"\bfollow\s+us\b",
+    r"\bnewsletter\b",
+    r"\bread\s+more\b",
+    r"\bthanks\s+for\s+reading\b",
+]
+
+_BOILERPLATE_REGEXES = [re.compile(pattern, re.IGNORECASE) for pattern in DEFAULT_BOILERPLATE_PATTERNS]
+
+
+def _strip_boilerplate_sections(text: str) -> str:
+    """Remove common boilerplate phrases from extracted article text."""
+    if not text:
+        return text
+
+    lines = text.splitlines()
+
+    def _is_boilerplate(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        return any(regex.search(stripped) for regex in _BOILERPLATE_REGEXES)
+
+    filtered_lines: List[str] = [line for line in lines if not _is_boilerplate(line)]
+
+    # Collapse consecutive blank lines introduced by removals.
+    collapsed: List[str] = []
+    previous_blank = False
+    for line in filtered_lines:
+        if line.strip():
+            collapsed.append(line)
+            previous_blank = False
+        else:
+            if not previous_blank:
+                collapsed.append(line)
+            previous_blank = True
+
+    return "\n".join(collapsed)
+
 #################################################################
 #
 # Scraping-related functions:
@@ -79,6 +125,67 @@ def get_page_title(url: str) -> str:
         logging.error(f"Error fetching page title: {e}")
         log_counter("page_title_extracted", labels={"success": "false"})
         return "Untitled"
+
+
+def extract_article_data_from_html(html: str, url: str) -> Dict[str, Any]:
+    """Extract article metadata and body from raw HTML."""
+    logging.info(f"Extracting article data from HTML for {url}")
+    downloaded = trafilatura.extract(
+        html,
+        include_comments=False,
+        include_tables=False,
+        include_images=False,
+    )
+    downloaded = _strip_boilerplate_sections(downloaded)
+    metadata = trafilatura.extract_metadata(html)
+
+    result: Dict[str, Any] = {
+        "title": "N/A",
+        "author": "N/A",
+        "content": "",
+        "date": "N/A",
+        "url": url,
+        "extraction_successful": False,
+    }
+
+    if downloaded:
+        logging.info(f"Content extracted successfully from {url}")
+        log_counter("article_extracted", labels={"success": "true", "url": url})
+        result["content"] = ContentMetadataHandler.format_content_with_metadata(
+            url=url,
+            content=downloaded,
+            pipeline="Trafilatura",
+            additional_metadata={
+                "extracted_date": metadata.date if metadata and metadata.date else "N/A",
+                "author": metadata.author if metadata and metadata.author else "N/A",
+            },
+        )
+        result["extraction_successful"] = True
+    else:
+        log_counter("article_extracted", labels={"success": "false", "url": url})
+        logging.warning("Content extraction failed.")
+
+    if metadata:
+        result.update(
+            {
+                "title": metadata.title if metadata.title else "N/A",
+                "author": metadata.author if metadata.author else "N/A",
+                "date": metadata.date if metadata.date else "N/A",
+            }
+        )
+    else:
+        logging.warning("Metadata extraction failed.")
+
+    return result
+
+
+def convert_html_to_markdown(html: str) -> str:
+    """Convert raw HTML to Markdown-friendly plain text."""
+    logging.info("Converting HTML to Markdown")
+    soup = BeautifulSoup(html, "html.parser")
+    for para in soup.find_all("p"):
+        para.append("\n")
+    return soup.get_text(separator="\n\n")
 
 
 async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -169,62 +276,8 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         # If for some reason you exit the loop without returning (unlikely), return empty string
         return ""
 
-    def extract_article_data(html: str, url: str) -> dict:
-        logging.info(f"Extracting article data from HTML for {url}")
-        # FIXME - Add option for extracting comments/tables/images
-        downloaded = trafilatura.extract(html, include_comments=False, include_tables=False, include_images=False)
-        metadata = trafilatura.extract_metadata(html)
-
-        result = {
-            'title': 'N/A',
-            'author': 'N/A',
-            'content': '',
-            'date': 'N/A',
-            'url': url,
-            'extraction_successful': False
-        }
-
-        if downloaded:
-            logging.info(f"Content extracted successfully from {url}")
-            log_counter("article_extracted", labels={"success": "true", "url": url})
-            # Add metadata to content
-            result['content'] = ContentMetadataHandler.format_content_with_metadata(
-                url=url,
-                content=downloaded,
-                pipeline="Trafilatura",
-                additional_metadata={
-                    "extracted_date": metadata.date if metadata and metadata.date else 'N/A',
-                    "author": metadata.author if metadata and metadata.author else 'N/A'
-                }
-            )
-            result['extraction_successful'] = True
-
-        if metadata:
-            result.update({
-                'title': metadata.title if metadata.title else 'N/A',
-                'author': metadata.author if metadata.author else 'N/A',
-                'date': metadata.date if metadata.date else 'N/A'
-            })
-        else:
-            log_counter("article_extracted", labels={"success": "false", "url": url})
-            logging.warning("Metadata extraction failed.")
-
-        if not downloaded:
-            logging.warning("Content extraction failed.")
-
-        return result
-
-    def convert_html_to_markdown(html: str) -> str:
-        logging.info("Converting HTML to Markdown")
-        soup = BeautifulSoup(html, 'html.parser')
-        for para in soup.find_all('p'):
-            # Add a newline at the end of each paragraph for markdown separation
-            para.append('\n')
-        # Use .get_text() with separator to keep paragraph separation
-        return soup.get_text(separator='\n\n')
-
     html = await fetch_html(url)
-    article_data = extract_article_data(html, url)
+    article_data = extract_article_data_from_html(html, url)
     if article_data['extraction_successful']:
         article_data['content'] = convert_html_to_markdown(article_data['content'])
         logging.info(f"Article content length: {len(article_data['content'])}")

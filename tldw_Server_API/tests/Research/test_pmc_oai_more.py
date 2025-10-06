@@ -1,15 +1,9 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-import sys, types
-
-# Stub heavy modules before importing the full app
-sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
-sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 @pytest.mark.asyncio
-async def test_pmc_oai_list_sets_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_pmc_oai_list_sets_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.core.Third_Party import PMC_OAI as _OAI
 
     def _fake_list_sets(token=None):
@@ -20,7 +14,7 @@ async def test_pmc_oai_list_sets_success(monkeypatch):
 
     monkeypatch.setattr(_OAI, "pmc_oai_list_sets", _fake_list_sets)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get("/api/v1/paper-search/pmc-oai/list-sets")
         assert r.status_code == 200
         data = r.json()
@@ -29,8 +23,7 @@ async def test_pmc_oai_list_sets_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pmc_oai_list_identifiers_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_pmc_oai_list_identifiers_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.core.Third_Party import PMC_OAI as _OAI
 
     def _fake_list_identifiers(prefix, f, u, s, token):
@@ -41,7 +34,7 @@ async def test_pmc_oai_list_identifiers_success(monkeypatch):
 
     monkeypatch.setattr(_OAI, "pmc_oai_list_identifiers", _fake_list_identifiers)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/pmc-oai/list-identifiers",
             params={"metadataPrefix": "oai_dc", "from": "2024-01-01"},
@@ -53,8 +46,7 @@ async def test_pmc_oai_list_identifiers_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pmc_oai_get_record_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_pmc_oai_get_record_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.core.Third_Party import PMC_OAI as _OAI
 
     def _fake_get_record(identifier, metadataPrefix):
@@ -65,7 +57,7 @@ async def test_pmc_oai_get_record_success(monkeypatch):
 
     monkeypatch.setattr(_OAI, "pmc_oai_get_record", _fake_get_record)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.get(
             "/api/v1/paper-search/pmc-oai/get-record",
             params={"identifier": "oai:pubmedcentral.nih.gov:456", "metadataPrefix": "oai_dc"},

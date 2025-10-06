@@ -56,6 +56,11 @@ for _p in (TEST_TEMP, TEST_CACHE, TEST_LOGS):
     except Exception:
         pass
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "legacy_tts: Legacy TTS integration tests hitting real models or providers")
+    config.addinivalue_line("markers", "requires_api_key: Tests that require third-party API credentials")
+
 # ------------------------------------------------------------------
 # Fallback 'mocker' fixture when pytest-mock is not installed
 # ------------------------------------------------------------------

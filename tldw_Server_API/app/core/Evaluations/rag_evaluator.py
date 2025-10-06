@@ -20,8 +20,9 @@ import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
 # Safe import of embeddings helpers to avoid heavy deps during app import
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-        create_embedding, 
+        create_embedding,
         get_embedding_config,
+        OpenAIModelCfg,
     )
     _RAG_EMBEDDINGS_AVAILABLE = True
 except Exception:
@@ -30,6 +31,15 @@ except Exception:
         raise RuntimeError("Embeddings backend unavailable; install required dependencies")
     def get_embedding_config():  # type: ignore[misc]
         return {"embedding_config": {"default_model_id": ""}}
+    class _FallbackOpenAIModelCfg(dict):
+        """Lightweight stand-in when full embeddings stack is unavailable."""
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    OpenAIModelCfg = _FallbackOpenAIModelCfg  # type: ignore[assignment]
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     llm_circuit_breaker,
     CircuitOpenError

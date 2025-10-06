@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 
 
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestErrorScenarios:
     """Test error handling in various failure scenarios."""
     
@@ -115,7 +116,10 @@ class TestErrorScenarios:
             evaluator.embedding_available = True
             
             # Should fall back to LLM
-            with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
+            with patch(
+                'tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread',
+                new_callable=AsyncMock
+            ) as mock_thread:
                 mock_thread.return_value = "3"
                 
                 _, result = await evaluator._evaluate_answer_similarity("response", "ground_truth")
@@ -204,10 +208,8 @@ class TestErrorScenarios:
                 db_path.unlink()
     
     @pytest.mark.asyncio
-    async def test_circular_reference_handling(self):
+    async def test_circular_reference_handling(self, evaluation_manager):
         """Test handling of circular references in data."""
-        manager = EvaluationManager()
-        
         # Create circular reference
         data = {"key": "value"}
         data["self"] = data  # Circular reference
@@ -215,7 +217,7 @@ class TestErrorScenarios:
         # Should handle during JSON serialization
         # JSON serialization will raise ValueError for circular references
         with pytest.raises((ValueError, TypeError)) as exc_info:
-            await manager.store_evaluation(
+            await evaluation_manager.store_evaluation(
                 evaluation_type="test",
                 input_data=data,
                 results={}
@@ -239,7 +241,10 @@ class TestErrorScenarios:
         ]
         
         for test_str in test_strings:
-            with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
+            with patch(
+                'tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread',
+                new_callable=AsyncMock
+            ) as mock_thread:
                 mock_thread.return_value = "3"
                 
                 # Should handle unicode properly
@@ -261,7 +266,10 @@ class TestErrorScenarios:
         # Create very long input (100k characters)
         long_text = "a" * 100000
         
-        with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
+        with patch(
+            'tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread',
+            new_callable=AsyncMock
+        ) as mock_thread:
             mock_thread.return_value = "3"
             
             # Should handle or truncate gracefully
@@ -275,6 +283,7 @@ class TestErrorScenarios:
             assert "metrics" in result
 
 
+@pytest.mark.usefixtures("mock_llm_analyze")
 class TestEdgeCases:
     """Test edge cases in the evaluation system."""
     
@@ -382,7 +391,10 @@ class TestEdgeCases:
             mock_embed.return_value = np.random.rand(1536).tolist()
             evaluator.embedding_available = True
             
-            with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
+            with patch(
+                'tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread',
+                new_callable=AsyncMock
+            ) as mock_thread:
                 mock_thread.side_effect = Exception("LLM unavailable")
                 
                 result = await evaluator.evaluate(

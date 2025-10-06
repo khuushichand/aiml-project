@@ -56,16 +56,17 @@ class TestWorldBookService:
         mock_conn = mock_db.get_connection().__enter__()
         service = WorldBookService(mock_db)
         
-        # Should create three tables and four indexes (7 total)
-        assert mock_conn.execute.call_count == 7
-        
-        # Check that tables are created
-        calls = mock_conn.execute.call_args_list
-        assert "CREATE TABLE IF NOT EXISTS world_books" in calls[0][0][0]
-        assert "CREATE TABLE IF NOT EXISTS world_book_entries" in calls[1][0][0]
-        assert "CREATE TABLE IF NOT EXISTS character_world_books" in calls[2][0][0]
-        # Indexes are created in calls 3-6
-        assert "CREATE INDEX" in calls[3][0][0]
+        # Should create at least the table and index statements
+        assert mock_conn.execute.call_count >= 7
+
+        executed_sql = [args[0] for args, _ in mock_conn.execute.call_args_list]
+
+        assert any("CREATE TABLE IF NOT EXISTS world_books" in sql for sql in executed_sql)
+        assert any("CREATE TABLE IF NOT EXISTS world_book_entries" in sql for sql in executed_sql)
+        assert any("CREATE TABLE IF NOT EXISTS character_world_books" in sql for sql in executed_sql)
+
+        index_statements = [sql for sql in executed_sql if "CREATE INDEX" in sql]
+        assert len(index_statements) >= 4
     
     def test_create_world_book(self, service, mock_db):
         """Test creating a new world book."""

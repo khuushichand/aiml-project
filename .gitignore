@@ -294,7 +294,13 @@ errors.log
 /redis_data/
 /Databases/ChromaDB/
 uv.lock
-/models
+/models/*
+!/models/embedding_models_data/
+!/models/embedding_models_data/.gitkeep
+!/models/embedding_models_data/.gitignore
+!/models/Whisper/
+!/models/Whisper/.gitkeep
+!/models/Whisper/.gitignore
 /cache
 /.tmp
 /tldw_Server_API/Test_Cache
@@ -304,3 +310,4 @@ uv.lock
 /logs/
 /Databases/
 /tldw_Server_API/Logs
+/tmp

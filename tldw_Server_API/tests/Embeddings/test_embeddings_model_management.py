@@ -1,11 +1,28 @@
+import copy
 import os
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+
+
+@pytest.fixture
+def restore_embedding_settings():
+    snapshot = {
+        "EMBEDDING_CONFIG": copy.deepcopy(settings.get("EMBEDDING_CONFIG")),
+        "ALLOWED_EMBEDDING_PROVIDERS": copy.deepcopy(settings.get("ALLOWED_EMBEDDING_PROVIDERS")),
+        "ALLOWED_EMBEDDING_MODELS": copy.deepcopy(settings.get("ALLOWED_EMBEDDING_MODELS")),
+    }
+    yield
+    for key, value in snapshot.items():
+        if value is None:
+            settings.pop(key, None)
+        else:
+            settings[key] = value
 
 
 def _client():
@@ -33,11 +50,11 @@ async def _override_regular_user():
     return _DummyUser(1, False)
 
 
-def test_list_models_exposes_defaults_and_policy():
+def test_list_models_exposes_defaults_and_policy(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Configure defaults and allowlists
-        cfg = settings.get("EMBEDDING_CONFIG", {})
+        cfg = copy.deepcopy(settings.get("EMBEDDING_CONFIG", {}) or {})
         cfg["default_model_id"] = "text-embedding-3-small"
         cfg["embedding_model"] = "text-embedding-3-small"
         cfg["embedding_provider"] = "openai"
@@ -60,7 +77,7 @@ def test_list_models_exposes_defaults_and_policy():
         os.environ.pop("TESTING", None)
 
 
-def test_warmup_requires_admin_and_invokes_backend():
+def test_warmup_requires_admin_and_invokes_backend(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Allow model
@@ -97,7 +114,7 @@ def test_warmup_requires_admin_and_invokes_backend():
         app.dependency_overrides.pop(get_request_user, None)
 
 
-def test_download_requires_admin_and_invokes_backend():
+def test_download_requires_admin_and_invokes_backend(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Allow model
@@ -118,7 +135,7 @@ def test_download_requires_admin_and_invokes_backend():
         app.dependency_overrides.pop(get_request_user, None)
 
 
-def test_warmup_rejects_disallowed_provider_and_model():
+def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Only allow huggingface, and only specific HF model
@@ -142,7 +159,7 @@ def test_warmup_rejects_disallowed_provider_and_model():
         app.dependency_overrides.pop(get_request_user, None)
 
 
-def test_download_rejects_disallowed_provider_and_model():
+def test_download_rejects_disallowed_provider_and_model(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Only allow openai and a specific openai model
@@ -166,13 +183,13 @@ def test_download_rejects_disallowed_provider_and_model():
         app.dependency_overrides.pop(get_request_user, None)
 
 
-def test_list_models_reflects_disallowed_models():
+def test_list_models_reflects_disallowed_models(restore_embedding_settings):
     os.environ["TESTING"] = "true"
     try:
         # Disallow text-embedding-3-small specifically
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-large"]
-        cfg = settings.get("EMBEDDING_CONFIG", {})
+        cfg = copy.deepcopy(settings.get("EMBEDDING_CONFIG", {}) or {})
         cfg["default_model_id"] = "text-embedding-3-small"
         cfg["embedding_model"] = "text-embedding-3-small"
         cfg["embedding_provider"] = "openai"

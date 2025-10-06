@@ -18,11 +18,13 @@ https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG
 https://github.com/johnbean393/SVGBench
+https://github.com/scaleapi/SWE-bench_Pro-os
 https://arxiv.org/abs/2412.12300
 https://huggingface.co/tencent/SongGeneration
 https://github.com/aizip/Rag-Eval-flow
 https://arxiv.org/pdf/2502.15840
 https://llmapitest.com/
+https://github.com/huggingface/evaluation-guidebook/tree/main
 https://www.kaggle.com/benchmarks/google/facts-grounding
 https://github.com/allenai/IFBench
 https://arxiv.org/abs/2507.02825
@@ -214,7 +216,7 @@ https://arxiv.org/abs/2412.17758
 https://huggingface.co/spaces/bigcode/bigcodebench-leaderboard
 https://www.atla-ai.com/post/evaluating-the-evaluator
 https://hamel.dev/blog/posts/llm-judge/
-https://github.com/scrapinghub/article-extraction-benchmark
+https://github.com/scrapinghub/article-extraction-benchmark — see `Docs/Evals/WebScraping_Article_Benchmark.md` for integration details
 https://github.com/Zhe-Young/SelfCorrectDecompose
 https://eugeneyan.com/writing/evals/
 
@@ -1032,5 +1034,4 @@ https://github.com/illuin-tech/vidore-benchmark
 https://arxiv.org/abs/2411.15296
 https://arxiv.org/abs/2411.06284
 ----------------------------------------------------------------------------------------------------------------
-
 

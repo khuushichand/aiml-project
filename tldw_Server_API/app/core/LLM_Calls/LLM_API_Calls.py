@@ -11,10 +11,11 @@
 # 2. chat_with_openai(api_key, file_path, custom_prompt_arg, streaming=None)
 # 3. chat_with_anthropic(api_key, file_path, model, custom_prompt_arg, max_retries=3, retry_delay=5, streaming=None)
 # 4. chat_with_cohere(api_key, file_path, model, custom_prompt_arg, streaming=None)
-# 5. chat_with_groq(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None):
-# 6. chat_with_openrouter(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 7. chat_with_huggingface(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 8. chat_with_deepseek(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
+# 5. chat_with_qwen(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
+# 6. chat_with_groq(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
+# 7. chat_with_openrouter(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
+# 8. chat_with_huggingface(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
+# 9. chat_with_deepseek(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
 #
 #
 ####################
@@ -1333,6 +1334,175 @@ def chat_with_google(
 
 
 # https://console.groq.com/docs/quickstart
+
+
+def chat_with_qwen(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None
+):
+    """OpenAI-compatible chat completions against the commercial Qwen API (DashScope)."""
+    loaded_config_data = load_and_log_configs()
+    qwen_config = loaded_config_data.get('qwen_api', {}) if loaded_config_data else {}
+    final_api_key = api_key or qwen_config.get('api_key')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="qwen", message="Qwen API Key required.")
+    base_url = (qwen_config.get('api_base_url') or 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1').rstrip('/')
+    current_model = model or qwen_config.get('model', 'qwen-plus')
+    current_temp = temp if temp is not None else _safe_cast(qwen_config.get('temperature'), float, 0.7)
+    current_top_p = maxp if maxp is not None else _safe_cast(qwen_config.get('top_p'), float, 0.8)
+    streaming_cfg = qwen_config.get('streaming', False)
+    current_streaming = streaming if streaming is not None else (
+        str(streaming_cfg).lower() == 'true' if isinstance(streaming_cfg, str) else bool(streaming_cfg)
+    )
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(qwen_config.get('max_tokens'), int)
+    api_timeout = _safe_cast(qwen_config.get('api_timeout'), float, 90.0)
+    api_retries = _safe_cast(qwen_config.get('api_retries'), int, 3)
+    retry_delay = _safe_cast(qwen_config.get('api_retry_delay'), float, 1.0)
+
+    api_messages: List[Dict[str, Any]] = []
+    if system_message and not any(msg.get("role") == "system" for msg in input_data):
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    headers = {
+        'Authorization': f'Bearer {final_api_key}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
+    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
+    if current_temp is not None:
+        payload["temperature"] = current_temp
+    if current_top_p is not None:
+        payload["top_p"] = current_top_p
+    if current_max_tokens is not None:
+        payload["max_tokens"] = current_max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    if stop is not None:
+        payload["stop"] = stop
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if n is not None:
+        payload["n"] = n
+    if user is not None:
+        payload["user"] = user
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        payload["frequency_penalty"] = frequency_penalty
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
+    if top_logprobs is not None and payload.get("logprobs"):
+        payload["top_logprobs"] = top_logprobs
+    if custom_prompt_arg:
+        logging.warning("Qwen: 'custom_prompt_arg' was provided but is unused when message payload is supplied.")
+
+    api_url = f"{base_url}/chat/completions"
+    payload_metadata = {k: v for k, v in payload.items() if k != "messages"}
+    logging.debug(f"Qwen API request target: {api_url}")
+    logging.debug(f"Qwen request payload metadata: {payload_metadata}")
+
+    try:
+        if current_streaming:
+            with requests.Session() as session:
+                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=api_timeout or 120)
+                response.raise_for_status()
+
+                def stream_generator():
+                    try:
+                        for line in response.iter_lines(decode_unicode=True):
+                            if line and line.strip():
+                                yield line + ""
+                        yield "data: [DONE]"
+                    except requests.exceptions.ChunkedEncodingError as err:
+                        logging.error(f"Qwen: ChunkedEncodingError during stream: {err}", exc_info=True)
+                        error_chunk = json.dumps({
+                            "error": {"message": f"Stream connection error: {err}", "type": "qwen_stream_error"}
+                        })
+                        yield f"data: {error_chunk}"
+                    except Exception as stream_err:
+                        logging.error(f"Qwen: Error during stream iteration: {stream_err}", exc_info=True)
+                        error_chunk = json.dumps({
+                            "error": {"message": f"Stream iteration error: {stream_err}", "type": "qwen_stream_error"}
+                        })
+                        yield f"data: {error_chunk}"
+                    finally:
+                        if response:
+                            response.close()
+
+                return stream_generator()
+        else:
+            adapter = HTTPAdapter(
+                max_retries=Retry(
+                    total=api_retries if api_retries is not None else 3,
+                    backoff_factor=retry_delay if retry_delay is not None else 1.0,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["POST"],
+                )
+            )
+            with requests.Session() as session:
+                session.mount("https://", adapter)
+                session.mount("http://", adapter)
+                response = session.post(api_url, headers=headers, json=payload, timeout=api_timeout or 90)
+            response.raise_for_status()
+            return response.json()
+    except requests.exceptions.HTTPError as e:
+        status_code = None
+        message = ""
+        if e.response is not None:
+            status_code = e.response.status_code
+            logging.error(f"Qwen error response (status {status_code}): {repr(e.response.text)}")
+            try:
+                err_json = e.response.json()
+                message = err_json.get("error", {}).get("message") or err_json.get("message") or ""
+            except Exception:
+                message = e.response.text or str(e)
+        else:
+            logging.error(f"Qwen HTTPError without response: {e}")
+            message = str(e)
+        if not message:
+            message = "Qwen API error"
+        if status_code in (400, 404, 422):
+            raise ChatBadRequestError(provider="qwen", message=message)
+        if status_code in (401, 403):
+            raise ChatAuthenticationError(provider="qwen", message=message)
+        if status_code == 429:
+            raise ChatRateLimitError(provider="qwen", message=message)
+        if status_code in (500, 502, 503, 504):
+            raise ChatProviderError(provider="qwen", message=message, status_code=status_code)
+        raise ChatAPIError(provider="qwen", message=message, status_code=status_code or 500)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Qwen request exception: {e}", exc_info=True)
+        raise ChatProviderError(provider="qwen", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        logging.error(f"Qwen unexpected error: {e}", exc_info=True)
+        raise ChatProviderError(provider="qwen", message=f"Unexpected error: {e}")
+
 def chat_with_groq(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,

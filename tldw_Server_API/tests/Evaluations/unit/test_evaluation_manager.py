@@ -214,7 +214,7 @@ class TestCustomMetrics:
     @pytest.mark.asyncio
     async def test_evaluate_custom_metric(self, evaluation_manager):
         """Test evaluating with a custom metric."""
-        with patch('asyncio.to_thread') as mock_to_thread:
+        with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             # Mock the asyncio.to_thread call to return the expected response
             mock_to_thread.return_value = '{"score": 8.8, "explanation": "Custom metric evaluation"}'
             
@@ -235,7 +235,7 @@ class TestCustomMetrics:
     @pytest.mark.asyncio
     async def test_evaluate_multiple_custom_metrics(self, evaluation_manager):
         """Test evaluating with multiple custom metrics."""
-        with patch('asyncio.to_thread') as mock_to_thread:
+        with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.side_effect = [
                 '{"score": 8.5}',
                 '{"score": 9.0}',

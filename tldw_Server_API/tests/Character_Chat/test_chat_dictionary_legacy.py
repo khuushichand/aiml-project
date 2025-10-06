@@ -12,11 +12,13 @@ CRUD operations, pattern matching, text processing, and import/export.
 import pytest
 import json
 import tempfile
+import re
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.exceptions import InputError
 
 
 @pytest.fixture
@@ -465,11 +467,25 @@ Description: Test import
         
         assert new_id == 2
     
-    def test_entry_validation(self, service, mock_db):
-        """Test that invalid entries are handled."""
-        # The actual implementation may handle this differently
-        # Testing basic validation
-        pass
+    def test_entry_validation(self, service):
+        """Test that invalid entries raise meaningful errors."""
+        # Probability outside accepted range (0-100 for ints) should raise InputError
+        with pytest.raises(InputError):
+            service.add_entry(
+                dictionary_id=1,
+                key="invalid_prob",
+                content="value",
+                probability=200,  # out of range
+            )
+
+        # Invalid regex patterns propagate re.error when explicitly marked as regex
+        with pytest.raises(re.error):
+            service.add_entry(
+                dictionary_id=1,
+                pattern=r"(",
+                replacement="bad",
+                type="regex",
+            )
     
     def test_clear_cache(self, service, mock_db):
         """Test that cache is cleared when dictionaries are modified."""

@@ -8,6 +8,7 @@
 
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -24,6 +25,7 @@ from tldw_Server_API.app.core.config import settings, load_comprehensive_config
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 import asyncio
+import uuid
 
 from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
     init_db as jobs_init_db,
@@ -39,6 +41,13 @@ router = APIRouter(prefix="/media", tags=["media-embeddings"])
 DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-4B-GGUF"
 DEFAULT_EMBEDDING_PROVIDER = "huggingface"
 FALLBACK_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def _user_embedding_config() -> Dict[str, Any]:
+    cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
+    cfg["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
+    return cfg
+
 
 class GenerateEmbeddingsRequest(BaseModel):
     """Request model for generating embeddings"""
@@ -80,6 +89,48 @@ class GenerateEmbeddingsResponse(BaseModel):
     embedding_model: str
     chunks_processed: Optional[int] = None
     job_id: Optional[str] = None
+
+
+class BatchMediaEmbeddingsRequest(BaseModel):
+    media_ids: List[int] = Field(..., min_items=1, description="List of media IDs to embed")
+    embedding_model: Optional[str] = Field(None, alias="model")
+    embedding_provider: Optional[str] = Field(None, alias="provider")
+    chunk_size: int = Field(1000, description="Chunk size to use for each media item")
+    chunk_overlap: int = Field(200, description="Chunk overlap to use for each media item")
+    force_regenerate: bool = Field(False, description="Force regeneration even if embeddings exist")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class BatchMediaEmbeddingsResponse(BaseModel):
+    status: str
+    job_ids: List[str]
+    submitted: int
+
+
+class EmbeddingsSearchRequest(BaseModel):
+    query: str = Field(..., description="Query text to embed and search with")
+    top_k: int = Field(5, gt=0, le=100, description="Number of nearest results to return")
+    collection: Optional[str] = Field(None, description="Target collection to search")
+    embedding_model: Optional[str] = Field(None, alias="model")
+    embedding_provider: Optional[str] = Field(None, alias="provider")
+    filters: Optional[Dict[str, Any]] = Field(None, description="Optional metadata filters")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class EmbeddingsSearchResult(BaseModel):
+    id: Optional[str]
+    document: Optional[str]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    distance: Optional[float] = None
+
+
+class EmbeddingsSearchResponse(BaseModel):
+    results: List[EmbeddingsSearchResult]
+    count: int
 
 
 async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
@@ -329,10 +380,7 @@ async def get_embeddings_status(
         
         # Check if embeddings exist by querying the per-user collection in ChromaDB
         user_id = str(getattr(current_user, 'id', '1'))
-        from tldw_Server_API.app.core.config import settings as app_settings
-        embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
-        embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
-        manager = ChromaDBManager(user_id=user_id, user_embedding_config=embedding_config)
+        manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
 
         has_embeddings = False
@@ -398,7 +446,6 @@ async def generate_embeddings(
         
         # Persist a job record and run generation in the background
         jobs_init_db(user_id)
-        import uuid
         job_id = f"mej_{uuid.uuid4().hex[:20]}"
         try:
             jobs_create(job_id=job_id, media_id=media_id, user_id=user_id, embedding_model=embedding_model)
@@ -453,6 +500,156 @@ async def generate_embeddings(
         )
 
 
+@router.post(
+    "/embeddings/batch",
+    response_model=BatchMediaEmbeddingsResponse,
+    status_code=status.HTTP_202_ACCEPTED
+)
+async def generate_embeddings_batch(
+    request: BatchMediaEmbeddingsRequest,
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user)
+) -> BatchMediaEmbeddingsResponse:
+    """Launch embedding jobs for multiple media items."""
+
+    media_ids = list(dict.fromkeys(request.media_ids))
+    if not media_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="media_ids must not be empty")
+
+    embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+
+    # Ensure media exists before launching jobs
+    media_payloads: Dict[int, Dict[str, Any]] = {}
+    for media_id in media_ids:
+        media_payloads[media_id] = await get_media_content(media_id, db)
+
+    user_id = str(current_user.id)
+    jobs_init_db(user_id)
+
+    job_ids: List[str] = []
+
+    for media_id in media_ids:
+        job_id = f"meb_{uuid.uuid4().hex[:20]}"
+        job_ids.append(job_id)
+        try:
+            jobs_create(job_id=job_id, media_id=media_id, user_id=user_id, embedding_model=embedding_model)
+        except Exception as exc:
+            logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
+
+        media_content = media_payloads[media_id]
+
+        async def _run_batch_job(mid: int = media_id, job_ref: str = job_id, payload: Dict[str, Any] = media_content) -> None:
+            try:
+                result = await generate_embeddings_for_media(
+                    media_id=mid,
+                    media_content=payload,
+                    embedding_model=embedding_model,
+                    embedding_provider=embedding_provider,
+                    chunk_size=request.chunk_size,
+                    chunk_overlap=request.chunk_overlap,
+                    user_id=user_id
+                )
+                try:
+                    jobs_update(
+                        job_id=job_ref,
+                        user_id=user_id,
+                        status='completed',
+                        embedding_count=result.get('embedding_count'),
+                        chunks_processed=result.get('chunks_processed')
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.error(f"Batch embeddings job failed for media {mid}: {exc}")
+                try:
+                    jobs_update(job_id=job_ref, user_id=user_id, status='failed', error=str(exc))
+                except Exception:
+                    pass
+
+        asyncio.create_task(_run_batch_job())
+
+    return BatchMediaEmbeddingsResponse(status="accepted", job_ids=job_ids, submitted=len(job_ids))
+
+
+@router.post(
+    "/embeddings/search",
+    response_model=EmbeddingsSearchResponse,
+    status_code=status.HTTP_200_OK
+)
+async def search_embeddings(
+    request: EmbeddingsSearchRequest,
+    current_user: User = Depends(get_request_user)
+) -> EmbeddingsSearchResponse:
+    """Search stored embeddings using the provided query text."""
+
+    if not request.query or not request.query.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="query must not be empty")
+
+    user_id = str(current_user.id)
+    embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
+            create_embeddings_batch_async
+        )
+        query_embeddings = await create_embeddings_batch_async(
+            texts=[request.query],
+            provider=embedding_provider,
+            model_id=embedding_model
+        )
+    except Exception as exc:
+        logger.error(f"Failed to embed search query: {exc}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+
+    if not query_embeddings or not query_embeddings[0]:
+        return EmbeddingsSearchResponse(results=[], count=0)
+
+    manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
+    collection_name = request.collection or f"user_{user_id}_media_embeddings"
+
+    try:
+        collection = manager.client.get_collection(name=collection_name)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Collection '{collection_name}' not found")
+
+    include = ["metadatas", "documents", "distances"]
+    try:
+        query_result = collection.query(
+            query_embeddings=[query_embeddings[0]],
+            n_results=request.top_k,
+            include=include,
+            where=request.filters if request.filters else None
+        )
+    except Exception as exc:
+        logger.error(f"Chroma query failed for collection {collection_name}: {exc}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search failed")
+
+    ids = (query_result.get("ids") or [[]])[0]
+    documents = (query_result.get("documents") or [[]])[0]
+    metadatas = (query_result.get("metadatas") or [[]])[0]
+    distances = (query_result.get("distances") or [[]])[0]
+
+    results: List[EmbeddingsSearchResult] = []
+    for idx, item_id in enumerate(ids):
+        metadata_obj: Dict[str, Any] = {}
+        if idx < len(metadatas) and isinstance(metadatas[idx], dict):
+            metadata_obj = metadatas[idx]
+        document_text = documents[idx] if idx < len(documents) else None
+        distance_val = distances[idx] if idx < len(distances) else None
+        results.append(
+            EmbeddingsSearchResult(
+                id=item_id,
+                document=document_text,
+                metadata=metadata_obj,
+                distance=distance_val
+            )
+        )
+
+    return EmbeddingsSearchResponse(results=results, count=len(results))
+
+
 @router.delete("/{media_id}/embeddings")
 async def delete_embeddings(
     media_id: int,
@@ -471,10 +668,7 @@ async def delete_embeddings(
         
         # Delete embeddings from per-user collection using a where filter
         user_id = str(getattr(current_user, 'id', '1'))
-        from tldw_Server_API.app.core.config import settings as app_settings
-        embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
-        embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
-        manager = ChromaDBManager(user_id=user_id, user_embedding_config=embedding_config)
+        manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
         collection = manager.get_or_create_collection(collection_name)
         try:

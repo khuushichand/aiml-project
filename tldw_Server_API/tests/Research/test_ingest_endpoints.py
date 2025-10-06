@@ -1,10 +1,5 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-import sys, types
-
-# Stub heavy modules before importing the full app
-sys.modules.setdefault('torch', types.SimpleNamespace(__spec__=None))
-sys.modules.setdefault('dill', types.SimpleNamespace(__spec__=None))
 
 
 class _FakeResp:
@@ -27,8 +22,7 @@ class _FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_arxiv_ingest_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_arxiv_ingest_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     import tldw_Server_API.app.api.v1.endpoints.paper_search as paper_search
 
@@ -40,7 +34,7 @@ async def test_arxiv_ingest_success(monkeypatch):
             return 5, "uuid-arxiv", "ok"
 
     fake_db = _FakeDB()
-    app.dependency_overrides[get_media_db_for_user] = lambda: fake_db
+    paper_search_app.dependency_overrides[get_media_db_for_user] = lambda: fake_db
 
     # Fake arXiv meta
     from tldw_Server_API.app.core.Third_Party import Arxiv as _Arxiv
@@ -69,7 +63,7 @@ async def test_arxiv_ingest_success(monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as _PDF
     monkeypatch.setattr(_PDF, "process_pdf_task", _fake_process_pdf_task)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.post(
             "/api/v1/paper-search/arxiv/ingest",
             params={"arxiv_id": "1706.03762", "perform_analysis": True},
@@ -80,12 +74,11 @@ async def test_arxiv_ingest_success(monkeypatch):
         assert saved["url"].startswith("arxiv:")
         assert '"arxiv_id": "1706.03762"' in saved.get("safe_metadata", "")
 
-    app.dependency_overrides.pop(get_media_db_for_user, None)
+    paper_search_app.dependency_overrides.pop(get_media_db_for_user, None)
 
 
 @pytest.mark.asyncio
-async def test_s2_ingest_success(monkeypatch):
-    from tldw_Server_API.app.main import app
+async def test_s2_ingest_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     import tldw_Server_API.app.api.v1.endpoints.paper_search as paper_search
 
@@ -97,7 +90,7 @@ async def test_s2_ingest_success(monkeypatch):
             return 7, "uuid-s2", "ok"
 
     fake_db = _FakeDB()
-    app.dependency_overrides[get_media_db_for_user] = lambda: fake_db
+    paper_search_app.dependency_overrides[get_media_db_for_user] = lambda: fake_db
 
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
 
@@ -121,7 +114,7 @@ async def test_s2_ingest_success(monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as _PDF
     monkeypatch.setattr(_PDF, "process_pdf_task", _fake_process_pdf_task)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
         r = await client.post(
             "/api/v1/paper-search/semantic-scholar/ingest",
             params={"paper_id": "abcdef"},
@@ -132,4 +125,4 @@ async def test_s2_ingest_success(monkeypatch):
         assert saved["url"].startswith("s2:")
         assert '"s2_paper_id": "abcdef"' in saved.get("safe_metadata", "")
 
-    app.dependency_overrides.pop(get_media_db_for_user, None)
+    paper_search_app.dependency_overrides.pop(get_media_db_for_user, None)
