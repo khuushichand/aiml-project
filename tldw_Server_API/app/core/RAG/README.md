@@ -195,6 +195,107 @@ The verifier prefers a local MNLI model and falls back to an LLM judge if unavai
 - Or pass `nli_model` to `unified_rag_pipeline` for per-request override.
 ```
 
+## Comprehensive Unified RAG cURL Example
+
+Use the unified RAG endpoint with all major options visible. Remove options you don’t need; unspecified fields use sensible defaults.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "query": "Comprehensive unified RAG example",
+    "sources": ["media_db", "notes", "characters", "chats"],
+    "search_mode": "hybrid",
+    "hybrid_alpha": 0.7,
+    "top_k": 10,
+    "min_score": 0.0,
+
+    "expand_query": true,
+    "expansion_strategies": ["acronym", "synonym", "domain", "entity", "semantic"],
+    "spell_check": true,
+
+    "enable_cache": true,
+    "cache_threshold": 0.85,
+    "adaptive_cache": true,
+
+    "keyword_filter": ["neural", "training"],
+
+    "enable_security_filter": true,
+    "detect_pii": true,
+    "redact_pii": true,
+    "sensitivity_level": "internal",
+    "content_filter": true,
+
+    "enable_table_processing": true,
+    "table_method": "markdown",
+
+    "chunk_type_filter": ["text", "code", "table", "list"],
+    "enable_parent_expansion": true,
+    "parent_context_size": 800,
+    "include_sibling_chunks": true,
+    "sibling_window": 2,
+    "include_parent_document": false,
+    "parent_max_tokens": 1200,
+
+    "enable_claims": true,
+    "claim_extractor": "aps",
+    "claim_verifier": "hybrid",
+    "claims_top_k": 5,
+    "claims_conf_threshold": 0.7,
+    "claims_max": 25,
+    "nli_model": "roberta-large-mnli",
+
+    "enable_reranking": true,
+    "reranking_strategy": "hybrid",
+    "rerank_top_k": 20,
+
+    "enable_citations": true,
+    "citation_style": "apa",
+    "include_page_numbers": true,
+    "enable_chunk_citations": true,
+
+    "enable_generation": true,
+    "generation_model": "gpt-4o",
+    "generation_prompt": "You are a helpful assistant. Provide a concise, grounded answer.",
+    "max_generation_tokens": 500,
+
+    "collect_feedback": true,
+    "feedback_user_id": "user123",
+    "apply_feedback_boost": true,
+
+    "enable_monitoring": true,
+    "enable_analytics": true,
+    "use_connection_pool": true,
+    "use_embedding_cache": true,
+    "enable_observability": false,
+    "trace_id": "trace-abc-123",
+
+    "enable_performance_analysis": false,
+    "timeout_seconds": 10.0,
+
+    "highlight_results": true,
+    "highlight_query_terms": true,
+    "track_cost": false,
+    "debug_mode": false,
+
+    "enable_batch": false,
+    "batch_queries": ["extra question 1", "extra question 2"],
+    "batch_concurrent": 3,
+
+    "enable_resilience": true,
+    "retry_attempts": 3,
+    "circuit_breaker": true,
+
+    "user_id": "user123",
+    "session_id": "session-456"
+  }'
+```
+
+See also:
+- RAG API docs: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`
+- Examples: `tldw_Server_API/app/core/RAG/UNIFIED_PIPELINE_EXAMPLES.md`
+
 ## Anthropic Contextual RAG (example config)
 
 To enable Contextual RAG using Anthropic for generating per‑chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:

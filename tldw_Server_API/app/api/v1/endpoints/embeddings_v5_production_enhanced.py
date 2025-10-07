@@ -195,6 +195,37 @@ active_embedding_requests = get_or_create_gauge(
     'Number of active embedding requests'
 )
 
+# Additional observability counters
+embedding_provider_failures = get_or_create_counter(
+    'embedding_provider_failures_total',
+    'Provider failures by reason',
+    ['provider', 'model', 'reason']
+)
+
+embedding_fallbacks_total = get_or_create_counter(
+    'embedding_fallbacks_total',
+    'Count of provider fallbacks taken',
+    ['from_provider', 'to_provider']
+)
+
+embedding_policy_denied_total = get_or_create_counter(
+    'embedding_policy_denied_total',
+    'Requests denied by policy',
+    ['provider', 'model', 'policy_type']
+)
+
+embedding_dimension_adjustments_total = get_or_create_counter(
+    'embedding_dimension_adjustments_total',
+    'Count of dimension adjustments performed',
+    ['provider', 'model', 'method']
+)
+
+embedding_token_inputs_total = get_or_create_counter(
+    'embedding_token_inputs_total',
+    'Number of requests using token array inputs',
+    ['mode']  # single or batch
+)
+
 # ============================================================================
 # Configuration and Constants
 # ============================================================================
@@ -649,6 +680,134 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
     key_string = "|".join(key_parts)
     return hashlib.sha256(key_string.encode()).hexdigest()
 
+# ============================================================================
+# Token-array handling and dimension adjustment helpers
+# ============================================================================
+
+def tokens_to_texts(
+    tokens_input: Union[List[int], List[List[int]]],
+    model_name: str
+) -> Tuple[List[str], int]:
+    """Convert token arrays to text using model tokenizer when possible.
+
+    Returns (texts, total_token_count). Uses tiktoken encoding_for_model or cl100k_base fallback.
+    """
+    try:
+        enc = get_tokenizer(model_name)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+
+    texts: List[str] = []
+    total_tokens = 0
+    # Single token array
+    if tokens_input and isinstance(tokens_input, list) and tokens_input and isinstance(tokens_input[0], int):
+        arr = tokens_input  # type: ignore[assignment]
+        total_tokens += len(arr)
+        try:
+            texts.append(enc.decode(arr))
+        except Exception:
+            texts.append("")
+        return texts, total_tokens
+
+    # Batch of token arrays
+    if tokens_input and isinstance(tokens_input, list):
+        for arr in tokens_input:  # type: ignore[assignment]
+            if not isinstance(arr, list) or not all(isinstance(x, int) for x in arr):
+                raise ValueError("Invalid token array format")
+            total_tokens += len(arr)
+            try:
+                texts.append(enc.decode(arr))
+            except Exception:
+                texts.append("")
+        return texts, total_tokens
+
+    raise ValueError("Invalid token array input")
+
+def _dimension_policy() -> str:
+    # reduce (slice), pad, or ignore
+    try:
+        val = os.getenv("EMBEDDINGS_DIMENSION_POLICY", "reduce").lower()
+        if val in ("reduce", "pad", "ignore"):
+            return val
+    except Exception:
+        pass
+    return "reduce"
+
+def adjust_dimensions(
+    vectors: List[List[float]],
+    target_dim: Optional[int],
+    provider: str,
+    model: str
+) -> List[List[float]]:
+    if not target_dim or target_dim <= 0:
+        return vectors
+    policy = _dimension_policy()
+    adjusted: List[List[float]] = []
+    for v in vectors:
+        if not isinstance(v, (list, tuple)):
+            adjusted.append(v)
+            continue
+        arr = np.asarray(v, dtype=np.float32)
+        cur = arr.shape[0]
+        if cur == target_dim or policy == "ignore":
+            adjusted.append(arr.tolist())
+            continue
+        if cur > target_dim:
+            # reduce by slicing first-N
+            out = arr[:target_dim]
+            adjusted.append(out.tolist())
+            embedding_dimension_adjustments_total.labels(provider=provider, model=model, method="reduce").inc()
+        else:
+            if policy == "pad":
+                # zero-pad
+                pad = np.zeros((target_dim - cur,), dtype=np.float32)
+                out = np.concatenate([arr, pad], axis=0)
+                adjusted.append(out.tolist())
+                embedding_dimension_adjustments_total.labels(provider=provider, model=model, method="pad").inc()
+            else:
+                # reduce policy cannot expand; return as-is
+                adjusted.append(arr.tolist())
+    return adjusted
+
+def _should_enforce_policy(user: Optional[User] = None) -> bool:
+    # Admin bypass unless strict enforcement requested
+    try:
+        if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
+            return False
+    except Exception:
+        pass
+    try:
+        cfg_val = settings.get("EMBEDDINGS_ENFORCE_POLICY", None)
+        if isinstance(cfg_val, bool):
+            return cfg_val
+    except Exception:
+        pass
+    # If env explicitly set, honor it; otherwise, default to enforcing in TESTING for backward-compatibility
+    env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
+    if env_val is not None:
+        return env_val.lower() in ("true", "1", "yes")
+    if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
+        return True
+    return False
+
+def resolve_fallback_chain(primary_provider: str) -> List[str]:
+    # Configurable chain; else default
+    try:
+        mapping = settings.get("EMBEDDINGS_FALLBACK_CHAIN", {}) or {}
+        if isinstance(mapping, dict):
+            chain = mapping.get(primary_provider, None)
+            if isinstance(chain, list) and chain:
+                return [primary_provider] + [p for p in chain if isinstance(p, str)]
+    except Exception:
+        pass
+    defaults = {
+        "openai": ["openai", "huggingface", "onnx", "local_api"],
+        "huggingface": ["huggingface", "onnx", "local_api"],
+        "onnx": ["onnx", "huggingface", "local_api"],
+        "local_api": ["local_api", "huggingface"],
+    }
+    return defaults.get(primary_provider, [primary_provider])
+
 # Models that require trust_remote_code=True for HuggingFace loading
 def _hf_trusts_remote_code(model_name: str) -> bool:
     try:
@@ -1058,37 +1217,42 @@ async def create_embedding_endpoint(
 
         # Parse and validate input FIRST (before policy checks)
         texts_to_embed: List[str] = []
-        
+        provided_token_arrays = False
+        provided_token_count = 0
+
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Input cannot be empty"
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input cannot be empty")
             texts_to_embed = [embedding_request.input]
         elif isinstance(embedding_request.input, list):
             if not embedding_request.input:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Input list cannot be empty"
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input list cannot be empty")
             if len(embedding_request.input) > 2048:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Maximum 2048 inputs allowed"
-                )
-            
-            if not all(isinstance(item, str) for item in embedding_request.input):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="All inputs must be strings"
-                )
-            texts_to_embed = embedding_request.input
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 2048 inputs allowed")
+
+            # Support list[str], list[int], or list[list[int]]
+            if all(isinstance(item, str) for item in embedding_request.input):
+                texts_to_embed = embedding_request.input  # type: ignore[assignment]
+            elif all(isinstance(item, int) for item in embedding_request.input):
+                # Single token array
+                try:
+                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    provided_token_arrays = True
+                    embedding_token_inputs_total.labels(mode="single").inc()
+                except Exception:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+            elif all(isinstance(item, list) for item in embedding_request.input):
+                # Batch of token arrays
+                try:
+                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    provided_token_arrays = True
+                    embedding_token_inputs_total.labels(mode="batch").inc()
+                except Exception:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid input type"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
         
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
@@ -1110,13 +1274,11 @@ async def create_embedding_endpoint(
 
         # Provider/model allowlist enforcement (after input validation)
         import os as _os
-        # Enforce allowlists only for API key-authenticated requests in tests
-        enforce_policy = (
-            _os.getenv("TESTING", "").lower() == "true"
-            and (request.headers.get("X-API-KEY") is not None)
-        )
+        # Enforce allowlists based on config/env; admin may bypass unless STRICT is set
+        enforce_policy = _should_enforce_policy(current_user)
         allowed_providers = _get_allowed_providers()
         if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
+            embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Provider '{provider}' is not allowed")
 
         allowed_models = _get_allowed_models()
@@ -1129,6 +1291,7 @@ async def create_embedding_endpoint(
                         return True
                 return False
             if not _model_allowed(model):
+                embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="model").inc()
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
 
         # Create embeddings
@@ -1138,6 +1301,8 @@ async def create_embedding_endpoint(
             and os.getenv("TESTING", "").lower() == "true"
             and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true"
         )
+
+        embeddings: List[List[float]] = []
 
         if use_synthetic_openai:
             dim = 1536
@@ -1155,26 +1320,42 @@ async def create_embedding_endpoint(
                     vec = vec / nrm
                 embeddings.append(vec.tolist())
         else:
-            try:
-                embeddings = await create_embeddings_batch_async(
-                    texts=texts_to_embed,
-                    provider=provider,
-                    model_id=model,
-                    dimensions=embedding_request.dimensions
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                embedding_requests_total.labels(
-                    provider=provider,
-                    model=model,
-                    status="error"
-                ).inc()
-                logger.error(f"Embedding creation failed: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create embeddings"
-                )
+            # Try provider with fallback chain on failure
+            last_error: Optional[Exception] = None
+            chain = resolve_fallback_chain(provider)
+            if enforce_policy and allowed_providers is not None:
+                chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
+            for p in chain:
+                try:
+                    if p != provider:
+                        embedding_fallbacks_total.labels(from_provider=provider, to_provider=p).inc()
+                    embeddings = await create_embeddings_batch_async(
+                        texts=texts_to_embed,
+                        provider=p,
+                        model_id=model,
+                        dimensions=embedding_request.dimensions
+                    )
+                    provider = p
+                    break
+                except HTTPException as he:
+                    if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
+                        embedding_provider_failures.labels(provider=p, model=model, reason=f"http_{he.status_code}").inc()
+                        last_error = he
+                        break
+                    embedding_provider_failures.labels(provider=p, model=model, reason=f"http_{he.status_code or 'unknown'}").inc()
+                    last_error = he
+                    continue
+                except Exception as e:
+                    embedding_provider_failures.labels(provider=p, model=model, reason="exception").inc()
+                    last_error = e
+                    continue
+            if not embeddings:
+                logger.error(f"Embedding creation failed across providers {chain}: {last_error}")
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding providers unavailable")
+
+        # Optional dimension adjustment (post-process)
+        if embedding_request.dimensions:
+            embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
         
         # Format response
         output_data = []
@@ -1197,7 +1378,10 @@ async def create_embedding_endpoint(
             )
         
         # Calculate token usage
-        num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
+        if provided_token_arrays:
+            num_tokens = provided_token_count
+        else:
+            num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
         
         # Track metrics
         duration = time.time() - start_time
@@ -1270,11 +1454,14 @@ async def create_embeddings_batch_endpoint(
 
     model, provider = _resolve_model_and_provider(payload.model, payload.provider)
 
+    enforce_policy = _should_enforce_policy(current_user)
     allowed_providers = _get_allowed_providers()
-    if allowed_providers is not None and provider.lower() not in allowed_providers:
+    if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
+        embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Provider '{provider}' is not allowed")
 
-    if not is_model_allowed(provider, model):
+    if enforce_policy and not is_model_allowed(provider, model):
+        embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="model").inc()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
 
     max_tokens = _get_model_max_tokens(provider, model)

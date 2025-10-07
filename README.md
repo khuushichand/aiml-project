@@ -1,18 +1,154 @@
 <div align="center">
 
-<h1>tldw Server - API-First Media Analysis & Research Platform</h1>
+<h1>tldw Server </br> API-First Media Analysis & Research Platform</h1>
 
-[![License](https://img.shields.io/badge/license-GPLv2-blue)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+
+
+[![Version](https://img.shields.io/badge/version-v0.1.0-blue)](https://github.com/rmusser01/tldw_server/releases)
+
 [![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server) 
 
-<h3>FastAPI-powered backend for media ingestion, analysis, and AI-powered research</h3>
-<h3>Process videos, audio, documents, and web content with 16+ LLM providers</h3>
-<h3>OpenAI-compatible API with RAG search, note-taking, and knowledge management</h3>
+[![License](https://img.shields.io/badge/license-GPLv2-blue)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
-## Your own local, open-source platform for media analysis and knowledge management
+
+<h3>Process videos, audio, documents, web content and more with 16+ LLM providers + OpenAI-compatible APIs for Chat, Embeddings and Evals</h3>
+
+<h3>Hosted SaaS + Browser Extension coming soon.</h3>
+
+## Your own local, Open-Source Platform for Media Analysis, Knowledge Work and LLM-Backed (Creative) Efforts
 </div>
 
 ---
+
+## Core Features
+
+<summary>Core Features</summary>
+
+<details>
+
+Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
+
+- Docs Hub: `Docs/Documentation.md`
+
+### Media Processing
+- **Multi-format Support** [Stable]: Video, audio, PDF, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps
+- **Advanced Transcription** [Stable]: 
+  - **Multiple Engines**: faster_whisper, NVIDIA Nemo (Canary, Parakeet), Qwen2Audio
+  - **Live Transcription**: Real-time audio streaming with VAD and silence detection
+  - **OpenAI Compatible API**: Drop-in replacement for OpenAI's audio transcription endpoints
+  - **Model Variants**: Support for ONNX and MLX optimized models
+- **Web Scraping** [Stable]: Advanced pipeline with job queue, rate limiting, and progress tracking
+- **Batch Processing** [Stable]: Handle multiple files/URLs simultaneously
+- **1000+ Sites** [Stable]: Compatible with any site supported by yt-dlp
+- **OCR Backends** [Stable]: List/health for OCR backends and preload support (`GET /api/v1/ocr/backends`, `POST /api/v1/ocr/points/preload`). Docs: `Docs/API-related/OCR_API_Documentation.md`
+
+### Content Analysis
+- **17+ LLM Providers** [Stable]: 
+  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
+  - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI API endpoints supported
+- **Flexible Analysis** [Stable]: Multiple chunking strategies and prompt customization
+- **Evaluation System** [Stable]: G-Eval, RAG evaluation, response quality metrics
+
+### Chunking
+- **Strategy Registry** [Stable]: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `structure_aware`, `propositions`, `json`, `xml`, `ebook_chapters`, `rolling_summarize` (`tldw_Server_API/app/core/Chunking/`)
+- **Hierarchical Chunking** [Stable]: Structure-aware segmentation with ancestry metadata; outputs leaf chunks with offsets (ancestry metadata is used by RAG for parent/sibling expansions and citations)
+- **Templates System** [Stable]: Stage-based and simple JSON templates with preprocessing/chunking/postprocessing; built-ins auto-seeded into DB at startup
+- **Seed‑Driven Templates** [Stable]: Learn boundary rules from example documents; validate and match templates
+- **APIs** [Stable]: Manage/apply templates and learn from examples (`/api/v1/chunking/templates/*`)
+- **Scale‑Out Optional** [Stable]: Chunking workers in the embeddings pipeline (queues + workers) for high-throughput ingestion
+
+### Chat & LLM
+- **Chat API** [Stable]: OpenAI-compatible chat with history (`/api/v1/chat/completions`, `app/core/Chat/`)
+- **Chat Dictionaries** [Stable]: CRUD + processing endpoints (`/api/v1/chat/*dictionaries*`)
+- **Providers** [Stable]: 16+ providers + local backends; listing/health and model metadata (`/api/v1/llm/providers`, `/api/v1/llm/providers/{name}`, `/api/v1/llm/models`, `/api/v1/llm/models/metadata`, `/api/v1/llm/health`; code: `app/api/v1/endpoints/llm_providers.py`)
+
+### Audio
+- **Speech-to-Text** [Stable]: faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`)
+- **File Transcription** [Stable]: OpenAI-compatible file API (`/api/v1/audio/transcriptions`)
+- **Text-to-Speech** [Stable]: OpenAI-compatible TTS + local Kokoro ONNX (`/api/v1/audio/speech`)
+
+### Search & Retrieval (Unified RAG)
+- **Unified Pipeline** [Stable]: Async architecture with a single, parameter-driven pipeline
+- **Hybrid Search** [Stable]: BM25 (SQLite FTS5) + vector embeddings (ChromaDB) with Reciprocal Rank Fusion
+- **Advanced Strategies** [Stable]: Query Fusion, HyDE (Hypothetical Document Embeddings), vanilla search
+- **Multi-Source Retrieval** [Stable]: Search across media, notes, characters, and chat history simultaneously
+- **Smart Caching** [Stable]: LRU cache with semantic matching and TTL management
+- **Flexible Configuration** [Stable]: Tune FTS/vector weights, thresholds, and reranking
+- **RAG Docs**: `tldw_Server_API/app/core/RAG/README.md`, `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`, `tldw_Server_API/app/core/RAG/UNIFIED_PIPELINE_EXAMPLES.md`, `tldw_Server_API/app/core/RAG/CAPABILITIES.md`
+
+### API Capabilities
+- **OpenAI Compatible** [Stable]: `/chat/completions` endpoint for drop-in replacement
+- **RESTful Design** [Stable]: Consistent endpoint patterns following OpenAPI 3.0
+- **WebSocket Support** [Stable]: Real-time connections via MCP (Model Context Protocol)
+- **Comprehensive Docs** [Stable]: Auto-generated OpenAPI documentation at `/docs`
+
+### Knowledge Management
+- **Note System** [Stable]: Create, search, and organize research notes
+- **Prompt Library** [Stable]: Store and manage reusable prompts with import/export
+- **Character Chat** [Stable]: SillyTavern-compatible character cards
+- **Soft Delete** [Stable]: Trash system with recovery options
+
+### Flashcards
+- **Flashcards API** [WIP]: Deck + card CRUD, tags, review scheduling (SM-2), import (CSV/TSV, JSON/JSONL), and export (CSV/TSV, `.apkg`) (`tldw_Server_API/app/api/v1/endpoints/flashcards.py`)
+- **Anki Export** [WIP]: `.apkg` generation with Basic/Cloze models (`tldw_Server_API/app/core/Flashcards/apkg_exporter.py`)
+- Status: Experimental in 0.1 (tagged as such in OpenAPI); underlying DB is ChaChaNotes v5/v6 (`tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py`)
+- Design notes: `Docs/Design/Flashcards.md`
+
+### Chatbooks - Portable Content Archives
+- **Export/Import** [Stable]: Back up and migrate your content between servers
+- **Selective Export** [Stable]: Choose specific conversations, notes, and characters to include
+- **Media Preservation** [Stable]: Optionally include images, audio, and video files
+- **Conflict Resolution** [Stable]: Smart handling of duplicate content during import
+- **Background Processing** [Stable]: Async job queue for large exports/imports
+- **Version Control** [Stable]: Create snapshots of your knowledge base at specific points
+- **Sharing** [Stable]: Share curated collections with colleagues or team members
+
+### Advanced Features
+- **MCP Unified** [Stable core]: Production MCP server + tools with JWT/RBAC and WS/HTTP; Experimental tag in 0.1 OpenAPI. Endpoints: `/api/v1/mcp/ws`, `/api/v1/mcp/request`, `/api/v1/mcp/tools`, `/api/v1/mcp/tools/execute`, `/api/v1/mcp/modules`, `/api/v1/mcp/modules/health`, `/api/v1/mcp/status`, `/api/v1/mcp/metrics`, `/api/v1/mcp/health` (see `app/api/v1/endpoints/mcp_unified_endpoint.py`).
+- **Database Migrations** [Stable]: Automatic schema updates with versioning
+- **Authentication** [Stable]: JWT-based auth with RBAC for MCP connections
+- **Evaluation Tools** [Stable]: Benchmark your configurations and LLM performance
+- **Prompt Studio** [WIP]: Projects, prompts, tests, optimization, reports; HTTP + WebSocket APIs under `/api/v1/prompt-studio/*`
+
+### Core Platform
+- **AuthNZ** [Stable]: Single-user API key and multi-user JWT (`app/core/AuthNZ/`); endpoints `/api/v1/auth/*`
+- **Security & Rate Limiting** [Stable]: CORS, headers, request limiters (`app/core/Security/`, `app/core/RateLimiting/`)
+- **DB Management** [Stable]: SQLite defaults, FTS5, versioning, sync log (`app/core/DB_Management/`)
+- **Web UI** [Stable]: Integrated UI at `/webui` (`tldw_Server_API/WebUI/`)
+
+### Evaluations
+- **Unified Evaluations** [Stable]: Geval/RAG/batch/metrics (`/api/v1/evaluations/*`, `app/core/Evaluations/`)
+- **Prompt Studio Jobs** [WIP]: Lightweight background execution + polling
+
+### Research & Web
+- **Paper Search** [Stable]: arXiv and related endpoints (`/api/v1/paper-search/*`)
+- **Web Search Aggregator** [WIP]: Multi-provider search + aggregation (`/api/v1/research/websearch`)
+- **Browser Extension** [WIP]: `https://github.com/rmusser01/tldw_browser_assistant`
+
+### Tooling & Integration
+- **Metrics/Observability** [Stable]: Prometheus/OTel metrics & logging (`app/core/Metrics/`, Loguru throughout). Endpoints: root Prometheus `/metrics`, JSON `/api/v1/metrics`, plus `/api/v1/metrics/json`, `/api/v1/metrics/health`, `/api/v1/metrics/chat`.
+- **Scheduler/Services** [Stable]: Background services & job helpers (`app/core/Scheduler/`, `app/services/`)
+- **Sync** [Stable]: Sync logging and higher-level flows (`app/core/Sync/`)
+- **Utilities & Third-Party** [Stable]: Helpers and vendor shims (`app/core/Utils/`, `app/core/Third_Party/`)
+- **Flashcards** [WIP]: Early features for study workflows (`app/core/Flashcards/`)
+- **Writing Tools** [Planned]: Expanded drafting/editing utilities (`app/core/Writing/`)
+
+### Workflows
+- **Composable Steps** [WIP]: Linear workflows with adapters for `prompt`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, and `wait_for_human` (`tldw_Server_API/app/core/Workflows/`)
+- **Execution Modes** [WIP]: Async/sync runs with in-process scheduler, per-tenant/workflow concurrency, and heartbeats
+- **Resilience** [WIP]: Per-step retries, timeouts, cooperative cancel/pause; emits structured events for observability
+- **State + Metrics** [WIP]: Persists run/step state in SQLite (`Workflows_DB.py`); integrates counters, histograms, spans
+- **Templating** [WIP]: Jinja-sandboxed prompt templating with artifact capture
+- **API** [WIP]: Definitions + runs + control under `/api/v1/workflows` (`endpoints/workflows.py`, `engine.py`, `registry.py`)
+  - Status: Experimental in 0.1 (tagged in OpenAPI; engine labeled scaffolding in code)
+
+### Deployment & Ops
+- **Config & Env** [Stable]: `.env`, `config.txt`, examples (`tldw_Server_API/Config_Files/`)
+- **Containers** [Stable]: Dockerfiles, compose, samples (`tldw_Server_API/Dockerfiles/`, `docker-compose.yml`)
+- **Samples & Docs** [Stable]: Reverse proxy, Prometheus, Grafana (`Samples/*`, `Docs/*`)
+
+</details>
+
 
 ## Samples (Quick Links)
 
@@ -20,7 +156,7 @@
 - Nginx sample config: `Samples/Nginx/nginx.conf`
 - Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
 - Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
- - Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
+- Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
 
 ## QuickStart
 
@@ -29,10 +165,10 @@ git clone https://github.com/rmusser01/tldw_server
 cd tldw_server
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r tldw_Server_API/requirements.txt
 
-# Configure API providers
-cp config.txt.example config.txt  # Add your LLM API keys
+# Configure API providers (add keys to .env or tldw_Server_API/Config_Files/config.txt)
+# ffmpeg is required for media/audio processing (brew install ffmpeg | apt install ffmpeg)
 
 # Setup authentication (choose single or multi-user mode)
 cp .env.authnz.template .env
@@ -47,360 +183,18 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 # Your API key will be shown in console (single-user mode)
 ```
 
-## Modules & Status
-
-- Legend: Stable = production‑ready; WIP = actively evolving; Planned = not yet implemented
-
-### Core Platform
-- AuthNZ: Stable — Single‑user API key and multi‑user JWT (`app/core/AuthNZ/`); endpoints in `/api/v1/auth/*`.
-- Security & Rate Limiting: Stable — CORS, headers, request limiters (`app/core/Security/`, `app/core/RateLimiting/`).
-- DB Management: Stable — SQLite defaults, FTS5, versioning, sync log (`app/core/DB_Management/`).
-- Web UI: Stable — Integrated UI at `/webui` (`tldw_Server_API/WebUI/`).
-
-### Media & Ingestion
-- Ingestion Pipeline: Stable — Video/Audio/PDF/EPUB/DOCX/HTML/Markdown/XML, yt‑dlp, metadata (`app/core/Ingestion_Media_Processing/`).
-- Chunking: Stable — Enhanced structure‑aware chunker + parent/sibling context (`app/core/Chunking/`).
-- Media Management: Stable — Utilities and helpers for media organization (`app/core/Media_Management/`).
-
-### Retrieval & Knowledge
-- Embeddings: Stable — ChromaDB integration, batching, cache (`app/core/Embeddings/`, `POST /api/v1/embeddings`).
-- RAG Service: Stable — Hybrid FTS5 + vector + re‑ranking, contextual expansion (`app/core/RAG/`, `POST /api/v1/rag/search`).
-- Re‑ranking: Stable — FlashRank/cross‑encoder/Hybrid options within RAG.
-- Notes/Knowledge: Stable — Notes DB, tagging, soft delete (`app/core/Notes/`, Chatbooks import/export).
-
-### Chat & LLM
-- Chat API: Stable — OpenAI‑compatible chat, history, dictionaries (`/api/v1/chat/completions`, `app/core/Chat/`).
-- Chat Dictionaries: Stable — CRUD + processing endpoints (`/api/v1/chat/*dictionaries*`).
-- Character Chat: Stable — Character cards and sessions (`app/core/Character_Chat/`).
-- Providers: Stable — 16+ providers + local backends; listing/health (`/api/v1/llm/*`, `app/core/LLM_Calls/`, `app/core/Local_LLM/`).
-
-### Audio
-- Speech‑to‑Text: Stable — faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`).
-- File Transcription: Stable — OpenAI‑compatible file API (`/api/v1/audio/transcriptions`).
-- Text‑to‑Speech: Stable — OpenAI‑compatible TTS + local Kokoro ONNX (`/api/v1/audio/speech`, `app/core/TTS/`).
-
-### Evaluations
-- Unified Evaluations: Stable — Geval/RAG/batch/metrics (`/api/v1/evaluations/*`, `app/core/Evaluations/`).
-- Prompt Studio (Experimental): WIP — Projects, Prompts, Test Cases, Evaluations, Optimizations (`/api/v1/prompt-studio/*`, `app/core/Prompt_Management/`).
-- Prompt Studio Jobs: WIP — Lightweight background execution + polling.
-
-### Research & Web
-- Web Scraping: Stable — Scrapers/utilities (`app/core/Web_Scraping/`).
-- Paper Search: Stable — arXiv and related endpoints (`/api/v1/paper-search/*`).
-- Web Search Aggregator: WIP — Multi‑provider search + aggregation (`app/core/Search_and_Research/`, `/api/v1/research/websearch`).
-- Browser Extension: WIP - https://github.com/rmusser01/tldw_browser_assistant
-
-### Tooling & Integration
-- MCP Unified: Stable — Production‑grade MCP server + endpoints/WS (`app/core/MCP_unified/`).
-- Metrics/Observability: Stable — Prometheus/OTel metrics & logging (`app/core/Metrics/`, Loguru throughout).
-- Scheduler/Services: Stable — Background services & job helpers (`app/core/Scheduler/`, `app/services/`).
-- Sync & Workflows: Stable — Sync logging and higher‑level flows (`app/core/Sync/`, `app/core/Workflows/`).
-- Utilities & Third‑Party: Stable — Helpers and vendor shims (`app/core/Utils/`, `app/core/Third_Party/`).
-- Flashcards: WIP — Early features for study workflows (`app/core/Flashcards/`).
-- Writing Tools: Planned — Expanded drafting/editing utilities (`app/core/Writing/`).
-
-### Deployment & Ops
-- Config & Env: Stable — `.env`, `config.txt`, examples (`tldw_Server_API/Config_Files/`).
-- Containers: Stable — Dockerfiles, compose, samples (`tldw_Server_API/Dockerfiles/`, `docker-compose.yml`).
-- Samples & Docs: Stable — Reverse proxy, Prometheus, Grafana (`Samples/*`, `Docs/*`).
-
-Note: If a module has both stable and experimental parts, the most frequently used paths are stable; experimental pieces are called out as WIP above. This table aims to cover all major directories under `app/core` and key API surfaces.
-
-### RAG Quickstart
-
-<summary>- Unified RAG search (all options shown):</summary>
-
-<details>
-
-```bash
-# Required: query; choose sources and search_mode
-# Optional groups to toggle:
-# - Query Enhancement (expand_query, expansion_strategies, spell_check)
-# - Caching (enable_cache, cache_threshold, adaptive_cache)
-# - Security (enable_security_filter, detect_pii, redact_pii, sensitivity_level, content_filter)
-# - Table Processing (enable_table_processing, table_method)
-# - Context (chunk_type_filter, enable_parent_expansion, parent_context_size, include_sibling_chunks, sibling_window, include_parent_document, parent_max_tokens)
-# - Claims/APS (enable_claims, claim_extractor, claim_verifier, claims_top_k, claims_conf_threshold, claims_max, nli_model)
-# - Reranking (enable_reranking, reranking_strategy, rerank_top_k)
-# - Citations (enable_citations, citation_style, include_page_numbers, enable_chunk_citations)
-# - Generation (enable_generation, generation_model, generation_prompt, max_generation_tokens)
-# - Feedback/Analytics/Monitoring (collect_feedback, feedback_user_id, apply_feedback_boost, enable_monitoring, enable_analytics)
-# - Observability/Performance (use_connection_pool, use_embedding_cache, enable_observability, trace_id, enable_performance_analysis, timeout_seconds)
-# - Quick Wins (highlight_results, highlight_query_terms, track_cost, debug_mode)
-# - Batch flags (enable_batch, batch_queries, batch_concurrent)
-# - Resilience (enable_resilience, retry_attempts, circuit_breaker)
-# - User Context (user_id, session_id)
-curl -X POST "http://127.0.0.1:8000/api/v1/rag/search" \
-  -H "Content-Type: application/json" \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -d '{
-    "query": "Comprehensive unified RAG example",
-    "sources": ["media_db", "notes", "characters", "chats"],
-    "search_mode": "hybrid",
-    "hybrid_alpha": 0.7,
-    "top_k": 10,
-    "min_score": 0.0,
-
-    "expand_query": true,
-    "expansion_strategies": ["acronym", "synonym", "domain", "entity", "semantic"],
-    "spell_check": true,
-
-    "enable_cache": true,
-    "cache_threshold": 0.85,
-    "adaptive_cache": true,
-
-    "keyword_filter": ["neural", "training"],
-
-    "enable_security_filter": true,
-    "detect_pii": true,
-    "redact_pii": true,
-    "sensitivity_level": "internal",
-    "content_filter": true,
-
-    "enable_table_processing": true,
-    "table_method": "markdown",
-
-    "chunk_type_filter": ["text", "code", "table", "list"],
-    "enable_parent_expansion": true,
-    "parent_context_size": 800,
-    "include_sibling_chunks": true,
-    "sibling_window": 2,
-    "include_parent_document": false,
-    "parent_max_tokens": 1200,
-
-    "enable_claims": true,
-    "claim_extractor": "aps",
-    "claim_verifier": "hybrid",
-    "claims_top_k": 5,
-    "claims_conf_threshold": 0.7,
-    "claims_max": 25,
-    "nli_model": "roberta-large-mnli",
-
-    "enable_reranking": true,
-    "reranking_strategy": "hybrid",
-    "rerank_top_k": 20,
-
-    "enable_citations": true,
-    "citation_style": "apa",
-    "include_page_numbers": true,
-    "enable_chunk_citations": true,
-
-    "enable_generation": true,
-    "generation_model": "gpt-4o",
-    "generation_prompt": "You are a helpful assistant. Provide a concise, grounded answer.",
-    "max_generation_tokens": 500,
-
-    "collect_feedback": true,
-    "feedback_user_id": "user123",
-    "apply_feedback_boost": true,
-
-    "enable_monitoring": true,
-    "enable_analytics": true,
-    "use_connection_pool": true,
-    "use_embedding_cache": true,
-    "enable_observability": false,
-    "trace_id": "trace-abc-123",
-
-    "enable_performance_analysis": false,
-    "timeout_seconds": 10.0,
-
-    "highlight_results": true,
-    "highlight_query_terms": true,
-    "track_cost": false,
-    "debug_mode": false,
-
-    "enable_batch": false,
-    "batch_queries": ["extra question 1", "extra question 2"],
-    "batch_concurrent": 3,
-
-    "enable_resilience": true,
-    "retry_attempts": 3,
-    "circuit_breaker": true,
-
-    "user_id": "user123",
-    "session_id": "session-456"
-  }'
-```
-Remove optional blocks you don’t need; unspecified fields use sensible defaults.
-
-More: see `tldw_Server_API/app/core/RAG/README.md` and `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`.
-
-</details>
-
-### RAG Capabilities
-
-<summary> Discover available features, defaults, and limits at runtime:</summary>
-
-<details>
-
-```bash
-curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
-```
-
-Sample response (abridged but complete in structure):
-
-```json
-{
-  "pipeline": "unified",
-  "version": "1.0.0",
-  "features": {
-    "query_expansion": {
-      "supported": true,
-      "methods": ["acronym", "synonym", "domain", "entity"]
-    },
-    "claims": {
-      "supported": true,
-      "extractors": ["aps", "claimify", "auto"],
-      "verifiers": ["nli", "llm", "hybrid"],
-      "defaults": {"top_k": 5, "confidence_threshold": 0.7, "max": 25},
-      "nli": {"env": ["RAG_NLI_MODEL", "RAG_NLI_MODEL_PATH"], "override_param": "nli_model"}
-    },
-    "semantic_cache": {
-      "supported": true,
-      "adaptive_thresholds": true,
-      "config": {"similarity_threshold": 0.85}
-    },
-    "sources": {
-      "supported": true,
-      "datastores": ["media_db", "notes_db", "character_db"]
-    },
-    "security_filtering": {"supported": true, "pii_detection": true},
-    "citation_generation": {
-      "supported": true,
-      "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
-      "include_page_numbers": true
-    },
-    "answer_generation": {"supported": true, "configurable_model": true},
-    "reranking": {
-      "supported": true,
-      "strategies": ["flashrank", "cross_encoder", "hybrid"],
-      "models": ["flashrank", "cross-encoder/ms-marco-MiniLM-L-12-v2"]
-    },
-    "table_processing": {"supported": true, "methods": ["markdown", "html", "hybrid"]},
-    "enhanced_chunking": {
-      "supported": true,
-      "parent_context": true,
-      "sibling_context": true,
-      "parameters": [
-        "parent_context_size",
-        "include_parent_document",
-        "parent_max_tokens",
-        "include_sibling_chunks",
-        "sibling_window",
-        "chunk_type_filter"
-      ]
-    },
-    "feedback": {"supported": true, "apply_feedback_boost": true},
-    "monitoring": {"supported": true, "observability": true, "trace_id": true},
-    "analytics": {"supported": true},
-    "batch_processing": {"supported": true, "concurrent": true, "defaults": {"max_concurrent": 5}, "limits": {"max_concurrent_max": 20}},
-    "resilience": {"supported": true, "retries": true, "circuit_breakers": true},
-    "streaming": {"supported": true, "endpoint": "/api/v1/rag/search/stream", "media_type": "application/x-ndjson", "events": ["delta", "claims_overlay", "final_claims"]},
-    "quick_wins": {"supported": true, "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode"]},
-    "user_context": {"supported": true, "fields": ["user_id", "session_id"]}
-  },
-  "search": {
-    "modes": ["hybrid", "semantic", "fulltext"],
-    "hybrid": {
-      "alpha_default": 0.7,
-      "alpha_range": [0.0, 1.0],
-      "normalize_scores": true
-    },
-    "vector": {"top_k_default": 10, "top_k_max": 100},
-    "fts": {"top_k_default": 10, "query_expansion": true, "fuzzy_matching": true}
-  },
-  "defaults": {
-    "retriever": {"hybrid_alpha": 0.7, "vector_top_k": 10, "fts_top_k": 10},
-    "processor": {},
-    "cache": {"similarity_threshold": 0.85},
-    "batch_size": 32,
-    "num_workers": 4,
-    "min_score": 0.0,
-    "use_connection_pool": true,
-    "use_embedding_cache": true
-  },
-  "limits": {"top_k_max": 100, "documents_per_db_max": 1000, "answer_tokens_max": 2048, "timeout_seconds_max": 60.0},
-  "auth": {"mode": "single_user", "user_scoped": true}
-}
-```
-
-Notes:
-- Capability labels “fulltext” and “semantic” correspond to request values `"fts"` and `"vector"` for `search_mode`.
-- Source values `"characters"` and `"chats"` both map to the `character_db` datastore internally.
-
-</details>
-
-## Auth Quickstart
-
-- Single-user mode:
-  - Use the API key printed at startup in the `X-API-KEY` header.
-  - Example: `curl -H "X-API-KEY: <your_key>" http://127.0.0.1:8000/api/v1/media/search`
-
-- Multi-user mode:
-  - Login with form-encoded credentials to get JWTs:
-    ```bash
-    curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
-      -H "Content-Type: application/x-www-form-urlencoded" \
-      -d "username=<user>&password=<pass>"
-    ```
-  - Use the access token: `Authorization: Bearer <token>`
-  - Get current user: `GET /api/v1/auth/me`
-
-More details: see `Docs/API-related/AuthNZ-API-Guide.md` and `tldw_Server_API/app/core/AuthNZ/API_INTEGRATION_GUIDE.md`.
-
 ## Web UI
 
 - Navigate to `http://127.0.0.1:8000/webui/` for the integrated Web UI.
 - Use the tabs to explore API features, run requests, and view responses.
  - For reverse proxy and TLS examples (Nginx/Traefik), see `Docs/Deployment/Reverse_Proxy_Examples.md`.
 
-### Chat Dictionaries UI
-- Location: Chat → Dictionaries
-- Capabilities:
-  - Create/activate/deactivate/delete dictionaries
-  - Add entries (pattern, replacement, type literal/regex, probability 0.0–1.0, enabled, case sensitivity, group, max replacements)
-  - Inline edit entries and toggle enabled state
-  - Filter entries by pattern and type
-  - Process sample text through a dictionary with optional token budget and group filter
-  - Import dictionaries from markdown content and export the current dictionary to markdown
-- API Reference: see `Docs/API-related/Chatbook_Features_API_Documentation.md` → Chat Dictionary API
+### Web UI Feature Details
+- Chat Dictionaries UI and Providers UI details have moved to: `tldw_Server_API/WebUI/README.md#ui-feature-details`
+  - Chat Dictionary API docs: `Docs/API-related/Chatbook_Features_API_Documentation.md`
+  - Providers API docs: `Docs/API-related/Providers_API_Documentation.md`
 
-### Providers UI
-- Location: Providers tab (or Settings → Providers) in the WebUI.
-- Capabilities:
-  - List configured providers and available models with basic metadata
-  - Inspect provider health (status, circuit breaker, recent performance)
-  - View request queue status (size, workers) and rate limiter settings
-  - Copy `<provider>/<model>` names for use in Chat and RAG requests
-- Backed by the Providers API:
-  - `GET /api/v1/llm/health`
-  - `GET /api/v1/llm/providers`
-  - `GET /api/v1/llm/providers/{provider}`
-  - `GET /api/v1/llm/models`
-  - `GET /api/v1/llm/models/metadata`
-- Docs: `Docs/API-related/Providers_API_Documentation.md`
-
-<details>
-<summary>What is this? - Click-here</summary>
-
-### What is tldw_server?
-**tldw_server** was originally `tldw`, a versatile tool designed to help you manage and interact with media content (videos, audio, documents, web articles, and books) via:
-1. **Ingesting**: Importing media from URLs or local files into an offline database.
-2. **Transcribing**: Automatically generating text transcripts from videos and audio using various whisper models using faster_whisper.
-3. **Analyzing(Not Just Summarizing)**: Using LLMs (local or API-based) to perform analyses of the ingested content.
-4. **Searching**: Full-text search across ingested content, including metadata like titles, authors, and keywords.
-5. **Chatting**: Interacting with ingested content using natural language queries through supported LLMs.
-
-All features were (are) designed to run **locally** on your device, ensuring privacy and data ownership. The tool was (is) open-source and free to use, with the goal of supporting research, learning, and personal knowledge management.
-
-It has now been rewritten as a FastAPI Python server to support larger deployments and multiple users. This includes:
-- A modern FastAPI backend with OpenAPI docs and integrated WebUI
-- OpenAI-compatible Chat, Embeddings, STT/TTS endpoints
-- AuthNZ module with single-user (API key) and multi-user (JWT) modes
-- Hybrid RAG (FTS5 + vector + re-ranking) and a unified RAG API
-- Multi-provider LLM integration (commercial + local)
-
-</details>
+Note: Background and project story moved to `Docs/About.md`.
 
 
 ---
@@ -440,68 +234,6 @@ See the [Migration Guide](#migration-guide) if upgrading from a previous version
 
 ---
 
-## Core Features
-
-<summary>Core Features</summary>
-
-<details>
-
-### Media Processing
-- **Multi-format Support**: Video, audio, PDF, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps
-- **Advanced Transcription**: 
-  - **Multiple Engines**: faster_whisper, NVIDIA Nemo (Canary, Parakeet), Qwen2Audio
-  - **Live Transcription**: Real-time audio streaming with VAD and silence detection
-  - **OpenAI Compatible API**: Drop-in replacement for OpenAI's audio transcription endpoints
-  - **Model Variants**: Support for ONNX and MLX optimized models
-- **Web Scraping**: Advanced pipeline with job queue, rate limiting, and progress tracking
-- **Batch Processing**: Handle multiple files/URLs simultaneously
-- **1000+ Sites**: Compatible with any site supported by yt-dlp
-
-### Content Analysis
-- **16+ LLM Providers**: 
-  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
-  - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite
-- **Flexible Analysis**: Multiple chunking strategies and prompt customization
-- **Evaluation System**: G-Eval, RAG evaluation, response quality metrics
-
-### Search & Retrieval (Unified RAG)
-- **Unified Pipeline**: Async architecture with a single, parameter-driven pipeline
-- **Hybrid Search**: BM25 (SQLite FTS5) + vector embeddings (ChromaDB) with Reciprocal Rank Fusion
-- **Advanced Strategies**: Query Fusion, HyDE (Hypothetical Document Embeddings), vanilla search
-- **Multi-Source Retrieval**: Search across media, notes, characters, and chat history simultaneously
-- **Smart Caching**: LRU cache with semantic matching and TTL management
-- **Flexible Configuration**: Tune FTS/vector weights, thresholds, and reranking
-
-### API Capabilities
-- **OpenAI Compatible**: `/chat/completions` endpoint for drop-in replacement
-- **RESTful Design**: Consistent endpoint patterns following OpenAPI 3.0
-- **WebSocket Support**: Real-time connections via MCP (Model Context Protocol)
-- **Comprehensive Docs**: Auto-generated OpenAPI documentation at `/docs`
-
-### Knowledge Management
-- **Note System**: Create, search, and organize research notes
-- **Prompt Library**: Store and manage reusable prompts with import/export
-- **Character Chat**: SillyTavern-compatible character cards
-- **Soft Delete**: Trash system with recovery options
-
-### Chatbooks - Portable Content Archives
-- **Export/Import**: Back up and migrate your content between servers
-- **Selective Export**: Choose specific conversations, notes, and characters to include
-- **Media Preservation**: Optionally include images, audio, and video files
-- **Conflict Resolution**: Smart handling of duplicate content during import
-- **Background Processing**: Async job queue for large exports/imports
-- **Version Control**: Create snapshots of your knowledge base at specific points
-- **Sharing**: Share curated collections with colleagues or team members
-
-### Advanced Features
-- **MCP Server**: Model Context Protocol for tool integration and extensibility
-- **Database Migrations**: Automatic schema updates with versioning
-- **Authentication**: JWT-based auth with RBAC for MCP connections
-- **Evaluation Tools**: Benchmark your configurations and LLM performance
-
-</details>
----
-
 ## Architecture
 
 <summary>Architecture</summary>
@@ -533,7 +265,8 @@ tldw_server/
 │   └── tests/               # Test suite
 ├── Docs/                    # Documentation
 ├── Helper_Scripts/          # Utilities
-└── config.txt              # Configuration
+├── tldw_Server_API/Config_Files/config.txt  # Configuration
+└── start-webui.sh          # Convenience script (optional)
 ```
 </details>
 
@@ -563,11 +296,10 @@ python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r tldw_Server_API/requirements.txt
 
 # Configure
-cp config.txt.example config.txt
-# Edit config.txt with your API keys
+# Configure provider keys in .env or edit tldw_Server_API/Config_Files/config.txt
 
 # Setup Authentication (First Time Only)
 cp .env.authnz.template .env
@@ -661,139 +393,7 @@ See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Dock
 
 ## Metrics Cheatsheet
 
-The server exports extensive metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Scrape `GET /api/v1/metrics` for Prometheus text or `GET /api/v1/metrics/json` for structured stats. Also available:
-- `GET /api/v1/metrics/health`: Health snapshot with `status`, `active_requests`, `active_streams`, `active_transactions`.
-- `GET /api/v1/metrics/chat`: Chat‑specific metrics and `token_costs` map.
-
-### HTTP
-- `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
-- `http_request_duration_seconds{method,endpoint}`: Histogram of request latency.
-
-Example PromQL:
-- P95 latency by route: `histogram_quantile(0.95, sum by (le,endpoint) (rate(http_request_duration_seconds_bucket[5m])))`
-- Error rate: `sum by (endpoint) (increase(http_requests_total{status=~"5.."}[5m]))`
-
-### Database
-- `db_connections_active{database}`: Gauge of active DB connections.
-- `db_queries_total{database,operation}`: Counter of DB queries.
-- `db_query_duration_seconds{database,operation}`: Histogram of DB latency.
-
-### LLM
-- `llm_requests_total{provider,model,status}`: Counter of LLM calls.
-- `llm_tokens_used_total{provider,model,type}`: Counter of tokens by type `prompt|completion`.
-- `llm_request_duration_seconds{provider,model}`: Histogram of call latency.
-- `llm_cost_dollars{provider,model}`: Counter of cumulative cost (USD).
-
-Example PromQL:
-- P95 latency per model: `histogram_quantile(0.95, sum by (le,provider,model) (rate(llm_request_duration_seconds_bucket[5m])))`
-- Cost per minute by provider: `sum by (provider) (rate(llm_cost_dollars[5m]))`
-
-### RAG
-- `rag_queries_total{pipeline,status}`: Counter of RAG queries.
-- `rag_retrieval_latency_seconds{source,pipeline}`: Histogram of retrieval latency.
-- `rag_documents_retrieved{source,pipeline}`: Histogram of docs retrieved.
-- `rag_cache_hits_total{cache_type}` / `rag_cache_misses_total{cache_type}`: Counters of cache results.
-
-Example PromQL:
-- P95 retrieval latency by source: `histogram_quantile(0.95, sum by (le,source) (rate(rag_retrieval_latency_seconds_bucket[5m])))`
-- Cache hit rate: `sum(rate(rag_cache_hits_total[5m])) / (sum(rate(rag_cache_hits_total[5m])) + sum(rate(rag_cache_misses_total[5m])))`
-
-### Embeddings (core)
-- `embeddings_generated_total{provider,model}`: Counter of embeddings created.
-- `embedding_generation_duration_seconds{provider,model}`: Histogram of generation time.
-
-### Embeddings v5 endpoint
-- `embedding_requests_total{provider,model,status}`: Counter of embedding requests.
-- `embedding_request_duration_seconds{provider,model}`: Histogram of request latency.
-- `embedding_cache_hits_total{provider,model}`: Counter of cache hits.
-- `embedding_cache_size`: Gauge of current embedding cache size.
-- `active_embedding_requests`: Gauge of in‑flight embedding requests.
-
-### Uploads & Storage
-- `uploads_total{user_id,media_type}`: Counter of uploaded files.
-- `upload_bytes_total{user_id,media_type}`: Counter of uploaded bytes. Includes bytes ingested via URL downloads attributed to the user.
-- `user_storage_used_mb{user_id}`: Gauge of current storage used (MB).
-- `user_storage_quota_mb{user_id}`: Gauge of configured storage quota (MB).
-
-Example PromQL:
-- Upload throughput (bytes/s): `rate(upload_bytes_total[1m])`
-- Top users by bytes (1h): `sum by (user_id) (increase(upload_bytes_total[1h]))`
-- Users near quota: `user_storage_used_mb / user_storage_quota_mb > 0.9`
-
-### System
-- `system_cpu_usage_percent`: Gauge of CPU usage percent.
-- `system_memory_usage_bytes`: Gauge of memory usage.
-- `system_disk_usage_bytes{mount_point}`: Gauge of disk usage by mount.
-
-### Errors & Security
-- `errors_total{component,error_type}`: Counter of errors by component.
-- `security_ssrf_block_total`: Counter of outbound URL validations blocked.
-- `security_headers_responses_total`: Counter of responses with security headers applied.
-
-### Circuit Breakers
-- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half‑open).
-- `circuit_breaker_trips_total{service,reason}`: Counter of trips.
-
-### Chat (OpenAI‑compatible Chat API)
-- Requests: `chat_requests_total{provider,model,status}`; latency: `chat_request_duration_seconds{provider,model}`.
-- Streaming: `chat_streaming_duration_seconds{conversation_id}`, `chat_streaming_chunks_total{conversation_id}`, `chat_streaming_heartbeats_total{conversation_id}`, `chat_streaming_timeouts_total{conversation_id}`.
-- Tokens: `chat_tokens_prompt{provider,model}`, `chat_tokens_completion{provider,model}`, `chat_tokens_total{provider,model}`.
-- LLM calls: `chat_llm_requests_total{provider,model,status}`, `chat_llm_latency_seconds{provider,model}`, `chat_llm_errors_total{provider,model,error_type}`, `chat_llm_cost_estimate_usd{provider,model}`.
-- Conversations: `chat_conversations_created_total{conversation_id}`, `chat_conversations_resumed_total{conversation_id}`, `chat_messages_saved_total{conversation_id,message_type}`.
-- Validation & DB: `chat_validation_failures_total`, `chat_validation_duration_seconds`, `chat_db_transactions_total{status}`, `chat_db_retries_total{retry_count}`, `chat_db_rollbacks_total`, `chat_db_operation_duration_seconds{operation}`.
-- Auth/limits: `chat_rate_limits_total{client_id}`, `chat_auth_failures_total`.
-
-Example PromQL:
-- Chat error rate: `sum(increase(chat_errors_total[5m]))`
-- Streaming timeouts (rate): `rate(chat_streaming_timeouts_total[5m])`
-
-Note: Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
-
-### Chunking Module
-- Requests: `chunking_requests_total{method,status}`.
-- Latency: `chunking_duration_seconds{method}`.
-- Sizes: `chunk_size_characters{method}`, `chunking_input_size_bytes{method}`.
-- Output: `chunks_per_request{method}`.
-- Cache: `chunking_cache_hits_total{method}`, `chunking_cache_misses_total{method}`, `chunking_cache_size`.
-- Errors: `chunking_errors_total{method,error_type}`.
-- Additional server metrics: `chunk_time_seconds{method,unit,splitter,language,stream}`, `chunk_output_bytes{...}`, `chunk_input_bytes{...}`, `chunk_count{...}`, `chunk_avg_chunk_size_bytes{...}`, plus gauges `chunk_last_count{...}`, `chunk_last_output_bytes{...}`.
-
-### MCP Unified
-- Requests: `mcp_requests_total{method,status}`, latency: `mcp_request_duration_seconds{method}`.
-- Modules: `mcp_module_health{module}`, `mcp_module_operations_total{module,operation,status}`.
-- Connections: `mcp_active_connections{type}`, `mcp_connection_errors_total{type,error}`.
-- Rate limits: `mcp_rate_limit_hits_total{key_type}`.
-- Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
-- System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
-
-### Prompt Studio
-- Executions: `prompt_studio.executions.total{provider,model,status}`, `prompt_studio.executions.duration_seconds{provider,model}`.
-- Tokens/Cost: `prompt_studio.tokens.used{provider,model,type}`, `prompt_studio.cost.total{provider,model}`.
-- Tests/Evals: `prompt_studio.tests.total{project,status}`, `prompt_studio.evaluations.score{project,metric_type}`, `prompt_studio.evaluations.duration_seconds{project}`.
-- Optimizations: `prompt_studio.optimizations.total{strategy,status}`, `prompt_studio.optimizations.improvement{strategy}`, `prompt_studio.optimizations.iterations{strategy}`.
-- Jobs: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.completed{job_type,status}`, `prompt_studio.jobs.duration_seconds{job_type}`.
-- WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
-- DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
-
-Grafana: Import `Samples/Grafana/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
-
-### Platform-Specific Notes
-
-**Windows**: If you need CUDA support for transcription without full CUDA installation:
-- Download [Faster-Whisper-XXL](https://github.com/Purfview/whisper-standalone-win/releases/download/Faster-Whisper-XXL/Faster-Whisper-XXL_r192.3.4_windows.7z)
-- Extract `cudnn_ops_infer64_8.dll` and `cudnn_cnn_infer64_8.dll` to the tldw_server directory
-
-**Linux/macOS**: Install system dependencies:
-```bash
-# Debian/Ubuntu
-sudo apt install ffmpeg portaudio19-dev gcc build-essential python3-dev
-
-# Fedora
-sudo dnf install ffmpeg portaudio-devel gcc gcc-c++ python3-devel
-
-# macOS
-brew install ffmpeg portaudio
-```
+- Moved to: `Docs/Monitoring/Metrics_Cheatsheet.md` (Prometheus endpoints, metric names, and PromQL examples).
 
 </details>
 
@@ -801,218 +401,9 @@ brew install ffmpeg portaudio
 
 ## Authentication Setup
 
-<summary>Authentication Setup</summary>
-
-<details>
-
-The tldw_server uses the AuthNZ module for authentication, supporting both single-user (personal) and multi-user (team) deployments.
-
-### Quick Setup (Single-User Mode)
-
-For personal use, the simplest setup:
-
-```bash
-# 1. Copy the authentication template
-cp .env.authnz.template .env
-
-# 2. Generate a secure API key
-python -c "import secrets; print('SINGLE_USER_API_KEY=' + secrets.token_urlsafe(32))"
-
-# 3. Add the generated key to your .env file
-# Edit .env and replace SINGLE_USER_API_KEY value
-
-# 4. Set AUTH_MODE to single_user in .env
-AUTH_MODE=single_user
-
-# 5. Initialize the authentication system
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-
-# 6. Start the server - your API key will be displayed in the console
-python -m uvicorn tldw_Server_API.app.main:app --reload
-```
-
-When the server starts, you'll see:
-```
-INFO: 🔑 Single-user mode active
-INFO: 📌 API Key: your-generated-api-key-here
-INFO: Use header 'X-API-KEY: your-key' for authentication
-```
-
-Use this API key in all requests:
-```bash
-curl -H "X-API-KEY: your-api-key" http://localhost:8000/api/v1/media/search
-```
-
-### Multi-User Setup (Team/Production)
-
-For team deployments with user management:
-
-```bash
-# 1. Copy and configure authentication
-cp .env.authnz.template .env
-
-# 2. Generate secure keys
-python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
-python -c "from cryptography.fernet import Fernet; print('SESSION_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
-
-# 3. Edit .env file:
-#    - Set AUTH_MODE=multi_user
-#    - Add generated JWT_SECRET_KEY
-#    - Add generated SESSION_ENCRYPTION_KEY
-#    - Configure database settings
-
-# 4. Initialize and create admin user
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-# You'll be prompted to create an admin user
-
-# 5. Start the server
-python -m uvicorn tldw_Server_API.app.main:app --reload
-```
-
-Login to get JWT token:
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "your-password"}'
-```
-
-Use the token in requests:
-```bash
-curl -H "Authorization: Bearer your-jwt-token" \
-  http://localhost:8000/api/v1/media/search
-```
-
-### Configuration Options
-
-Key settings in `.env`:
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `AUTH_MODE` | `single_user` or `multi_user` | `multi_user` |
-| `JWT_SECRET_KEY` | Secret for JWT signing (multi-user) | Required for multi-user |
-| `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
-| `ENABLE_REGISTRATION` | Allow new user registration | `false` |
-| `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
-
-### Single-User API Key (How to obtain)
-
-- Recommended: set `SINGLE_USER_API_KEY` explicitly in your `.env` (or environment). You know the key because you set it.
-- Development logs: in dev mode (default), the server prints the full key at startup.
-- Production logs: set `tldw_production=true` to mask the key in logs. To briefly show it once on startup (e.g., for initial bootstrap), also set `SHOW_API_KEY_ON_STARTUP=true`, then remove it.
-- Programmatic retrieval:
-  - Python (same env as server):
-    ```bash
-    python -c "from tldw_Server_API.app.core.AuthNZ.settings import get_settings; print(get_settings().SINGLE_USER_API_KEY)"
-    ```
-  - Docker Compose:
-    ```bash
-    docker compose exec app printenv SINGLE_USER_API_KEY
-    ```
-- WebUI convenience (dev): `GET /webui/config.json` returns the key in single-user mode so the WebUI can auto-configure. Avoid relying on this in production.
-  - In production (`tldw_production=true`), `/webui/config.json` omits the `apiKey` field for security.
-- Important: Always set a secure `SINGLE_USER_API_KEY` in production. If unset, the server may use a deterministic test key for convenience during development/testing.
-  - When `tldw_production=true`, the server refuses to start if `SINGLE_USER_API_KEY` is missing, a default/test value, or shorter than 24 characters.
-
-### Multi-User JWT Secret (production)
-
-- When `tldw_production=true` and `AUTH_MODE=multi_user`, the server refuses to start unless `JWT_SECRET_KEY` is set via environment, at least 32 characters, and not the default template value.
-
-### Database (production, multi-user mode)
-
-- When `tldw_production=true` and `AUTH_MODE=multi_user`, SQLite is not supported and startup will fail if `DATABASE_URL` points to SQLite.
-- Configure PostgreSQL via `DATABASE_URL` (examples):
-  - Local:
-    ```bash
-    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
-    ```
-  - With docker-compose (service name `postgres`):
-    ```bash
-    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
-    ```
-  - See Multi-User Deployment Guide for more details.
-
-### Security Best Practices
-
-1. **Never commit `.env` to version control** - Add to `.gitignore`
-2. **Use strong, unique keys** - Generate with the provided commands
-3. **Enable HTTPS in production** - Required for secure cookies
-4. **Rotate keys periodically** - Use the API key rotation feature
-5. **Monitor authentication failures** - Check logs for attacks
-6. See the Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
-
-### Security Controls (env)
-
-- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs, WebUI config hardening).
-- `ENABLE_OPENAPI`: Set `false` to hide docs/Redoc/OpenAPI; defaults to `false` in production when unspecified.
-- `ALLOWED_ORIGINS`: Comma-separated list or JSON array to restrict CORS in production.
-- `ENABLE_SECURITY_HEADERS`: Enable/disable security headers middleware (defaults to `true` in production).
-
-### Troubleshooting
-
-**"JWT_SECRET_KEY not set"**
-- Ensure JWT_SECRET_KEY is set in your .env file for multi-user mode
-
-**"API key not found"**
-- Check that X-API-KEY header is included in requests
-- Verify the API key matches what's in .env (single-user) or displayed at startup
-
-**"Rate limit exceeded"**
-- Default: 60 requests/minute for authenticated users
-- Adjust RATE_LIMIT_PER_MINUTE in .env if needed
-
-### Documentation
-
-- **[AuthNZ Developer Guide](Docs/Development/AuthNZ-Developer-Guide.md)** - Architecture and extending the authentication system
-- **[AuthNZ API Guide](Docs/API-related/AuthNZ-API-Guide.md)** - Complete API reference with examples
-
-</details>
-
-### Quick Setup (Multi‑User with SQLite – Dev)
-
-For local/dev multi-user without Postgres:
-
-```bash
-# 1) Enable multi-user mode with SQLite AuthNZ DB
-export AUTH_MODE=multi_user
-export DATABASE_URL=sqlite:///./Databases/users.db
-
-# 2) Initialize the AuthNZ database
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-
-# 3) Start the server
-uvicorn tldw_Server_API.app.main:app --reload
-
-# 4) Open the simple auth page to register/login and get a JWT
-open http://127.0.0.1:8000/webui/auth.html   # macOS
-# xdg-open on Linux, or just paste the URL in a browser
-```
-
-Notes
-- This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
-- The auth page posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
-
-### Using config.txt for AuthNZ
-
-You can configure authentication and the AuthNZ database in `Config_Files/config.txt` (env still overrides):
-
-```
-[AuthNZ]
-auth_mode = multi_user
-# Option A: full URL
-database_url = postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
-# Option B: structured fields (used if DATABASE_URL not set)
-db_type = postgresql
-pg_host = localhost
-pg_port = 5432
-pg_db = tldw_users
-pg_user = tldw_user
-pg_password = ChangeMeStrong123!
-pg_sslmode = prefer
-enable_registration = true
-require_registration_code = false
-```
-
-Environment precedence and a complete list of environment variables is in `Env_Vars.md`.
+- Single-user (X-API-KEY): `cp .env.authnz.template .env` → set `AUTH_MODE=single_user` and `SINGLE_USER_API_KEY` → `python -m tldw_Server_API.app.core.AuthNZ.initialize`. The API key prints at startup (masked in production).
+- Multi-user (JWT): set `AUTH_MODE=multi_user`, `JWT_SECRET_KEY`, and `DATABASE_URL` (PostgreSQL in production) → initialize → login via `/api/v1/auth/login`.
+- Full guide: `Docs/User_Guides/Authentication_Setup.md` • API reference: `Docs/API-related/AuthNZ-API-Guide.md` • Dev guide: `Docs/Development/AuthNZ-Developer-Guide.md`
 
 ---
 
@@ -1030,6 +421,7 @@ Environment precedence and a complete list of environment variables is in `Env_V
   - `ocr_dpi`: integer (72–600, default 300)
   - `ocr_mode`: `always` or `fallback` (default `fallback`)
   - `ocr_min_page_text_chars`: int threshold per page to trigger fallback (default 40)
+  - API docs: `Docs/API-related/OCR_API_Documentation.md`
 
 ---
 

@@ -38,6 +38,8 @@
                 <h2>Guided Setup</h2>
                 <p>Answer a few quick questions so we can highlight the settings that matter most. You can always skip and edit everything manually.</p>
             </div>
+            <div id="wizardProgress" class="wizard-progress" aria-live="polite"></div>
+            <div id="wizardMessage" class="wizard-message" role="alert" aria-live="assertive" hidden></div>
             <div id="wizardContent" class="wizard-content"></div>
             <div class="wizard-footer">
                 <button id="wizardBack" class="btn subtle" type="button" disabled>Back</button>
@@ -75,6 +77,31 @@
             </div>
             <div id="actionMessage" class="action-message" role="status"></div>
         </section>
+    </div>
+
+    <div id="assistantRoot" class="assistant-root" aria-live="polite">
+        <button id="assistantToggle" class="assistant-toggle" type="button" aria-expanded="false" aria-controls="assistantPanel">
+            <span class="assistant-icon" aria-hidden="true">🤖</span>
+            <span class="assistant-label">Setup Assistant</span>
+        </button>
+        <div id="assistantPanel" class="assistant-panel" role="dialog" aria-modal="false" aria-labelledby="assistantTitle" hidden>
+            <header class="assistant-header">
+                <div id="assistantTitle" class="assistant-title">
+                    <span class="assistant-icon" aria-hidden="true">🤖</span>
+                    <span>Setup Assistant</span>
+                </div>
+                <button id="assistantClose" class="assistant-close" type="button" aria-label="Close assistant">×</button>
+            </header>
+            <div id="assistantMessages" class="assistant-messages" role="log" aria-live="polite"></div>
+            <div id="assistantTyping" class="assistant-typing" hidden>Thinking…</div>
+            <form id="assistantForm" class="assistant-form">
+                <label class="sr-only" for="assistantInput">Ask a question about configuration</label>
+                <textarea id="assistantInput" class="assistant-input" name="question" rows="2" placeholder="Ask how to configure something…" required></textarea>
+                <div class="assistant-actions">
+                    <button id="assistantSend" class="btn primary assistant-send" type="submit">Send</button>
+                </div>
+            </form>
+        </div>
     </div>
 </body>
 </html>

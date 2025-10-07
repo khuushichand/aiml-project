@@ -63,6 +63,7 @@
   - MCP Unified: `Docs/MCP_Docs/MCP_Unified_Developer_Guide.md`
   - Embeddings: `Docs/Embeddings/Embeddings-Developer-Guide.md`
   - Providers API: `Docs/API-related/Providers_API_Documentation.md`
+  - OCR: `Docs/API-related/OCR_API_Documentation.md`
 
 ------------------------------------------------------------------------------------------------------------------------
 

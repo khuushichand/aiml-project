@@ -26,6 +26,10 @@ class SetupCompleteRequest(BaseModel):
     )
 
 
+class AssistantQuestion(BaseModel):
+    question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
+
+
 @router.get("/status", openapi_extra={"security": []})
 async def get_setup_status() -> Dict[str, Any]:
     """Return setup availability and placeholder diagnostics."""
@@ -93,3 +97,12 @@ async def mark_setup_complete(payload: SetupCompleteRequest) -> Dict[str, Any]:
         "message": "Setup marked as complete. Restart the server to load new configuration.",
         "requires_restart": True,
     }
+
+
+@router.post("/assistant", openapi_extra={"security": []})
+async def ask_setup_assistant(payload: AssistantQuestion) -> Dict[str, Any]:
+    """Provide contextual help for setup questions using local configuration knowledge."""
+    try:
+        return setup_manager.answer_setup_question(payload.question)
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

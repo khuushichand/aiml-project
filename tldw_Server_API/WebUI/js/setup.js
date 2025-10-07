@@ -10,11 +10,70 @@
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
-  const FEATURE_SECTION_MAP = {
-    chat: ['API', 'Chat-Module', 'Embeddings', 'RAG'],
-    media: ['Processing', 'Media-Processing'],
-    audio: ['STT-Settings', 'TTS-Settings'],
-  };
+  function humaniseKey(value) {
+    if (!value) {
+      return '';
+    }
+    return String(value)
+      .split(/[_-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+  const FEATURE_OPTIONS = [
+    {
+      value: 'chat',
+      label: 'Chat & Conversations',
+      hint: 'Configure chat behaviour, fallbacks, and persona tooling.',
+      sections: ['API', 'Chat-Module', 'Character-Chat', 'Settings'],
+    },
+    {
+      value: 'rag',
+      label: 'Retrieval (RAG)',
+      hint: 'Tune retrieval pipelines, hybrid search, and augmentation.',
+      sections: ['RAG', 'Embeddings', 'Chunking'],
+    },
+    {
+      value: 'chunking',
+      label: 'Chunking & Ingestion',
+      hint: 'Control how documents are chunked and normalised when ingested.',
+      sections: ['Chunking', 'Processing', 'Media-Processing'],
+    },
+    {
+      value: 'embeddings',
+      label: 'Embeddings Service',
+      hint: 'Manage embedding providers, context strategies, and caching.',
+      sections: ['Embeddings', 'RAG', 'API'],
+    },
+    {
+      value: 'audio',
+      label: 'Speech (STT & TTS)',
+      hint: 'Highlight transcription, streaming audio, and voice synthesis.',
+      sections: ['STT-Settings', 'TTS-Settings'],
+    },
+    {
+      value: 'media',
+      label: 'Media & Downloads',
+      hint: 'Adjust file limits, conversions, and yt-dlp ingestion defaults.',
+      sections: ['Processing', 'Media-Processing', 'Settings'],
+    },
+    {
+      value: 'mcp',
+      label: 'MCP Integrations',
+      hint: 'Surface Model Context Protocol tools, auth, and service hosts.',
+      sections: ['MCP', 'MCP-Unified', 'AuthNZ', 'API'],
+    },
+    {
+      value: 'extensions',
+      label: 'Automation & Extras',
+      hint: 'Expose optional modules like Prompt Studio or search providers.',
+      sections: ['Prompts', 'Search-Engines', 'Auto-Save'],
+    },
+  ];
+  const FEATURE_SECTION_MAP = FEATURE_OPTIONS.reduce((accumulator, option) => {
+    accumulator[option.value] = option.sections;
+    return accumulator;
+  }, {});
   const SECTION_INFO_DESCRIPTIONS = {
     Setup: 'Controls the guided setup flow that appears on first launch and handles completion flags.',
     AuthNZ: 'Configure authentication mode, API keys, and multi-user security policies.',
@@ -23,13 +82,22 @@
     'Media-Processing': 'Fine-tune how videos, audio, and documents are chunked, converted, and analyzed.',
     'Chat-Module': 'Adjust chat behaviour, default providers, streaming responses, and moderation settings.',
     'Character-Chat': 'Manage persona chat options, character cards, and session persistence.',
+    'Chat-Dictionaries': 'Control dictionary-driven replacements and prompt snippets used in chat flows.',
     Settings: 'General server preferences covering UI, rate limiting, and miscellaneous toggles.',
     'Auto-Save': 'Control how frequently notes, chats, and prompts are saved and versioned.',
+    Server: 'Toggle deployment-wide behaviours like CORS, feature guards, and server defaults.',
     Database: 'Set database engines and file paths for auth, media content, and per-user data.',
     Embeddings: 'Choose embedding providers, models, and batching options for retrieval.',
     RAG: 'Tune retrieval parameters, hybrid search weights, and reranking behaviour.',
+    Chunking: 'Define chunk sizes, overlap, and adaptive options for each media type.',
     'STT-Settings': 'Pick speech-to-text models, diarization, and streaming transcription preferences.',
     'TTS-Settings': 'Configure text-to-speech voices, codecs, and streaming output.',
+    Prompts: 'Manage system prompts and templates for summarisation, chat, and automation.',
+    'Search-Engines': 'Configure web search providers, query budgets, and language defaults.',
+    'Local-API': 'Point to locally hosted model servers such as Ollama, Kobold, or vLLM.',
+    Claims: 'Enable claim extraction workflows and related LLM providers.',
+    MCP: 'Manage Model Context Protocol host settings, tokens, and exposed tools.',
+    'MCP-Unified': 'Unified MCP service configuration including tool registry and RBAC.',
     Logging: 'Direct logs to files or services, adjust verbosity, and enable observability hooks.',
   };
   const WIZARD_STEPS = [
@@ -58,26 +126,7 @@
       type: 'multi',
       title: 'Which capabilities do you plan to use first?',
       description: 'We will surface the settings that unlock these features right away.',
-      options: [
-        {
-          value: 'chat',
-          label: 'AI chat & retrieval (RAG)',
-          hint: 'Configure API providers, chat behaviour, embeddings, and retrieval settings.',
-          sections: FEATURE_SECTION_MAP.chat,
-        },
-        {
-          value: 'media',
-          label: 'Media ingestion & document analysis',
-          hint: 'Focus on processing pipelines for video, audio, and documents.',
-          sections: FEATURE_SECTION_MAP.media,
-        },
-        {
-          value: 'audio',
-          label: 'Speech-to-text & text-to-speech',
-          hint: 'Highlight audio transcription and TTS configuration.',
-          sections: FEATURE_SECTION_MAP.audio,
-        },
-      ],
+      options: FEATURE_OPTIONS.map(({ value, label, hint }) => ({ value, label, hint })),
     },
     {
       id: 'depth',
@@ -104,6 +153,8 @@
       description: '',
     },
   ];
+  const QUESTION_STEPS = WIZARD_STEPS.filter((step) => step.type !== 'summary');
+  const TOTAL_GUIDED_STEPS = QUESTION_STEPS.length;
   const state = {
     dirty: {},
     sections: [],
@@ -121,6 +172,13 @@
       completed: false,
       skipped: false,
     },
+    assistant: {
+      open: false,
+      sending: false,
+      greeted: false,
+      history: [],
+      initialised: false,
+    },
   };
 
   const elements = {};
@@ -132,6 +190,7 @@
 
   async function init() {
     cacheElements();
+    initAssistant();
     hideConfigSection();
     setLoading(true);
 
@@ -172,11 +231,22 @@
     elements.actionMessage = document.getElementById('actionMessage');
     elements.wizardSection = document.getElementById('guidedWizard');
     elements.wizardContent = document.getElementById('wizardContent');
+    elements.wizardProgress = document.getElementById('wizardProgress');
+    elements.wizardMessage = document.getElementById('wizardMessage');
     elements.wizardBack = document.getElementById('wizardBack');
     elements.wizardNext = document.getElementById('wizardNext');
     elements.wizardSkip = document.getElementById('wizardSkip');
     elements.wizardSummary = document.getElementById('wizardSummary');
     elements.showAllSections = document.getElementById('showAllSections');
+    elements.assistantRoot = document.getElementById('assistantRoot');
+    elements.assistantToggle = document.getElementById('assistantToggle');
+    elements.assistantPanel = document.getElementById('assistantPanel');
+    elements.assistantMessages = document.getElementById('assistantMessages');
+    elements.assistantForm = document.getElementById('assistantForm');
+    elements.assistantInput = document.getElementById('assistantInput');
+    elements.assistantSend = document.getElementById('assistantSend');
+    elements.assistantClose = document.getElementById('assistantClose');
+    elements.assistantTyping = document.getElementById('assistantTyping');
   }
 
   function hasPendingChanges() {
@@ -253,19 +323,27 @@
     const hiddenNames = [];
 
     sections.forEach((section) => {
-      const isHidden = shouldHideSection(section.name);
+      const hasGuidedView = !!state.visibleSections;
       const isRecommended = !state.visibleSections || state.visibleSections.has(section.name);
-      if (isHidden && !state.showHiddenSections) {
+      const isAdditional = !!state.visibleSections && !state.visibleSections.has(section.name);
+
+      if (isAdditional) {
         hiddenNames.push(section.name);
+      }
+
+      if (isAdditional && !state.showHiddenSections) {
         return;
       }
 
       const details = document.createElement('details');
       details.className = 'section-card';
-      if (isHidden) {
+      if (isAdditional) {
         details.classList.add('wizard-additional');
       }
       details.open = shouldExpandSection(section, isRecommended);
+      const sectionSlug = section.name.replace(/[^A-Za-z0-9_-]/g, '-');
+      details.dataset.sectionName = section.name;
+      details.id = `setup-section-${sectionSlug}`;
 
       const summary = document.createElement('summary');
       summary.className = 'section-summary';
@@ -274,12 +352,12 @@
       summaryTitle.textContent = section.label || section.name;
       summary.appendChild(summaryTitle);
 
-      if (isRecommended && !state.showHiddenSections) {
+      if (hasGuidedView && isRecommended) {
         const badge = document.createElement('span');
         badge.className = 'section-pill recommended';
         badge.textContent = 'Recommended';
         summary.appendChild(badge);
-      } else if (!isRecommended) {
+      } else if (hasGuidedView && isAdditional) {
         const badge = document.createElement('span');
         badge.className = 'section-pill optional';
         badge.textContent = 'Additional';
@@ -335,10 +413,6 @@
       content.appendChild(fieldsWrapper);
       details.appendChild(content);
       container.appendChild(details);
-
-      if (isHidden && state.showHiddenSections) {
-        hiddenNames.push(section.name);
-      }
     });
 
     state.hiddenSections = hiddenNames;
@@ -412,37 +486,63 @@
     }
 
     clearMessage();
+    clearWizardMessage();
     elements.wizardContent.innerHTML = '';
     elements.wizardBack.disabled = state.wizard.currentStep === 0;
     elements.wizardNext.textContent = step.type === 'summary' ? 'Open configuration' : 'Next';
     elements.wizardSkip.hidden = step.type === 'summary';
 
+    updateWizardProgress(step);
+
     if (step.type === 'summary') {
-      renderWizardSummary();
+      const heading = renderWizardSummary();
+      focusWizardHeading(heading);
       return;
     }
 
+    const heading = renderWizardQuestionStep(step);
+    focusWizardHeading(heading);
+  }
+
+  function renderWizardQuestionStep(step) {
+    const fragment = document.createDocumentFragment();
+
     const title = document.createElement('h3');
     title.className = 'wizard-step-title';
+    title.id = `wizard-step-${step.id}`;
     title.textContent = step.title;
-    elements.wizardContent.appendChild(title);
+    fragment.appendChild(title);
 
+    let descriptionId;
     if (step.description) {
       const description = document.createElement('p');
       description.className = 'wizard-step-description';
+      description.id = `wizard-step-${step.id}-description`;
       description.textContent = step.description;
-      elements.wizardContent.appendChild(description);
+      fragment.appendChild(description);
+      descriptionId = description.id;
     }
 
-    const optionsWrapper = document.createElement('div');
-    optionsWrapper.className = 'wizard-options';
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'wizard-options';
+    fieldset.setAttribute('aria-labelledby', title.id);
+    if (descriptionId) {
+      fieldset.setAttribute('aria-describedby', descriptionId);
+    }
+
+    const legend = document.createElement('legend');
+    legend.className = 'sr-only';
+    legend.textContent = step.title;
+    fieldset.appendChild(legend);
 
     step.options.forEach((option) => {
-      optionsWrapper.appendChild(createWizardOption(step, option));
+      fieldset.appendChild(createWizardOption(step, option));
     });
 
-    elements.wizardContent.appendChild(optionsWrapper);
+    fragment.appendChild(fieldset);
+    elements.wizardContent.appendChild(fragment);
     updateWizardOptionStyles(step.id);
+    return title;
   }
 
   function renderWizardSummary() {
@@ -451,11 +551,17 @@
 
     const heading = document.createElement('h3');
     heading.className = 'wizard-step-title';
+    heading.id = 'wizard-step-summary';
     heading.textContent = 'All set! Here’s what we’ll focus on.';
     summaryContainer.appendChild(heading);
 
     const summaryList = document.createElement('ul');
-    const recommended = Array.from(computeRecommendedSections()).map((name) => escapeHtml(getSectionLabelByName(name)));
+    let recommendedNames = Array.from(computeRecommendedSections());
+    if (state.sections.length) {
+      const availableNames = new Set(state.sections.map((section) => section.name));
+      recommendedNames = recommendedNames.filter((name) => availableNames.has(name));
+    }
+    const recommended = recommendedNames.map((name) => escapeHtml(getSectionLabelByName(name)));
     const featureSelections = Array.from(state.wizard.answers.features || []).map((value) => escapeHtml(getWizardOptionLabel('features', value)));
 
     const lines = [];
@@ -482,6 +588,78 @@
     summaryContainer.appendChild(body);
     summaryContainer.appendChild(summaryList);
     elements.wizardContent.appendChild(summaryContainer);
+    return heading;
+  }
+
+  function updateWizardProgress(step) {
+    if (!elements.wizardProgress) {
+      return;
+    }
+
+    if (!step) {
+      elements.wizardProgress.textContent = '';
+      return;
+    }
+
+    if (step.type === 'summary') {
+      elements.wizardProgress.innerHTML = '<strong>Review</strong> · Confirm your selections';
+      return;
+    }
+
+    const stepIndex = QUESTION_STEPS.findIndex((item) => item.id === step.id);
+    const position = stepIndex >= 0 ? stepIndex + 1 : state.wizard.currentStep + 1;
+    const safeTitle = escapeHtml(step.title);
+    const total = TOTAL_GUIDED_STEPS || QUESTION_STEPS.length || 1;
+    elements.wizardProgress.innerHTML = `<strong>Step ${position} of ${total}</strong> · ${safeTitle}`;
+  }
+
+  function setWizardMessage(level, message) {
+    if (!elements.wizardMessage) {
+      return;
+    }
+
+    const classes = ['wizard-message', 'visible'];
+    if (level) {
+      classes.push(level);
+    }
+
+    elements.wizardMessage.className = classes.join(' ');
+    elements.wizardMessage.textContent = message;
+    elements.wizardMessage.hidden = false;
+  }
+
+  function clearWizardMessage() {
+    if (!elements.wizardMessage) {
+      return;
+    }
+
+    elements.wizardMessage.className = 'wizard-message';
+    elements.wizardMessage.textContent = '';
+    elements.wizardMessage.hidden = true;
+  }
+
+  function focusWizardHeading(element) {
+    if (!element) {
+      return;
+    }
+
+    element.setAttribute('tabindex', '-1');
+    element.focus();
+    element.addEventListener('blur', () => {
+      element.removeAttribute('tabindex');
+    }, { once: true });
+  }
+
+  function focusWizardMessage() {
+    if (!elements.wizardMessage || elements.wizardMessage.hidden) {
+      return;
+    }
+
+    elements.wizardMessage.setAttribute('tabindex', '-1');
+    elements.wizardMessage.focus();
+    elements.wizardMessage.addEventListener('blur', () => {
+      elements.wizardMessage.removeAttribute('tabindex');
+    }, { once: true });
   }
 
   function createWizardOption(step, option) {
@@ -581,7 +759,8 @@
     if (step.type === 'single') {
       const choice = state.wizard.answers[step.id];
       if (!choice) {
-        setMessage('info', 'Please choose an option to continue.');
+        setWizardMessage('info', 'Please choose an option to continue.');
+        focusWizardMessage();
         return;
       }
     }
@@ -589,7 +768,8 @@
     if (step.type === 'multi') {
       const selections = state.wizard.answers[step.id] || [];
       if (!selections.length) {
-        setMessage('info', 'Select at least one capability or skip the wizard to continue.');
+        setWizardMessage('info', 'Select at least one capability or skip the wizard to continue.');
+        focusWizardMessage();
         return;
       }
     }
@@ -617,6 +797,7 @@
     state.visibleSections = null;
     state.showHiddenSections = true;
     state.recommendedSections = new Set();
+    clearWizardMessage();
     hideWizard();
     ensureConfigLoaded();
     if (!silent) {
@@ -628,6 +809,7 @@
     state.wizard.active = false;
     state.wizard.completed = true;
     clearMessage();
+    clearWizardMessage();
 
     const depthPreference = state.wizard.answers.depth;
     const recommended = computeRecommendedSections();
@@ -650,6 +832,10 @@
   function hideWizard() {
     if (elements.wizardSection) {
       elements.wizardSection.hidden = true;
+    }
+    clearWizardMessage();
+    if (elements.wizardProgress) {
+      elements.wizardProgress.textContent = '';
     }
   }
 
@@ -689,13 +875,6 @@
     updateSaveState();
   }
 
-  function shouldHideSection(sectionName) {
-    if (!state.visibleSections || state.showHiddenSections) {
-      return false;
-    }
-    return !state.visibleSections.has(sectionName);
-  }
-
   function computeRecommendedSections() {
     const sections = new Set(['Setup']);
     const authChoice = state.wizard.answers.auth;
@@ -728,7 +907,9 @@
       return;
     }
 
-    const recommendedList = Array.from(state.recommendedSections || []).filter((section) => state.visibleSections.has(section));
+    const availableNames = new Set(state.sections.map((entry) => entry.name));
+    const recommendedList = Array.from(state.recommendedSections || [])
+      .filter((section) => state.visibleSections.has(section) && availableNames.has(section));
     const sectionItems = recommendedList
       .map((section) => `<span>${escapeHtml(getSectionLabelByName(section))}</span>`)
       .join(', ');
@@ -790,12 +971,206 @@
     }
   }
 
+  function initAssistant() {
+    if (!elements.assistantRoot || state.assistant.initialised) {
+      return;
+    }
+
+    elements.assistantToggle?.addEventListener('click', () => toggleAssistant(!state.assistant.open));
+    elements.assistantClose?.addEventListener('click', () => toggleAssistant(false));
+    elements.assistantForm?.addEventListener('submit', handleAssistantSubmit);
+    elements.assistantInput?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        handleAssistantSubmit(event);
+      }
+    });
+    elements.assistantPanel?.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        toggleAssistant(false);
+      }
+    });
+
+    state.assistant.initialised = true;
+  }
+
+  function toggleAssistant(forceOpen) {
+    if (!elements.assistantPanel) {
+      return;
+    }
+
+    const targetOpen = typeof forceOpen === 'boolean' ? forceOpen : !state.assistant.open;
+    if (targetOpen === state.assistant.open) {
+      return;
+    }
+
+    state.assistant.open = targetOpen;
+    elements.assistantPanel.hidden = !targetOpen;
+    elements.assistantRoot?.classList.toggle('assistant-open', targetOpen);
+    elements.assistantToggle?.setAttribute('aria-expanded', targetOpen ? 'true' : 'false');
+
+    if (targetOpen) {
+      if (!state.assistant.greeted) {
+        addAssistantMessage('assistant', 'Hi! I’m here to help with configuration. Try asking “Where do I set the API keys?”');
+        state.assistant.greeted = true;
+      }
+      setTimeout(() => {
+        elements.assistantInput?.focus();
+      }, 120);
+    } else if (elements.assistantToggle) {
+      elements.assistantToggle.focus();
+    }
+  }
+
+  function handleAssistantSubmit(event) {
+    event?.preventDefault();
+    if (!elements.assistantInput || state.assistant.sending) {
+      return;
+    }
+
+    const question = elements.assistantInput.value.trim();
+    if (!question) {
+      return;
+    }
+
+    addAssistantMessage('user', question);
+    elements.assistantInput.value = '';
+    sendAssistantQuestion(question);
+  }
+
+  function addAssistantMessage(role, content, matches = []) {
+    if (!elements.assistantMessages) {
+      return;
+    }
+
+    const message = {
+      role,
+      content,
+      matches,
+      timestamp: Date.now(),
+    };
+    state.assistant.history.push(message);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = `assistant-message ${role}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'assistant-bubble';
+    bubble.innerHTML = String(content || '')
+      .split('\n')
+      .map((line) => escapeHtml(line))
+      .join('<br />');
+    wrapper.appendChild(bubble);
+
+    if (role === 'assistant' && Array.isArray(matches) && matches.length) {
+      const suggestions = document.createElement('ul');
+      suggestions.className = 'assistant-suggestions';
+
+      matches.forEach((entry) => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'assistant-link';
+        const label = entry.label || humaniseKey(entry.key || '') || entry.section_label || 'View section';
+        const sectionLabel = entry.section_label ? ` (${entry.section_label})` : '';
+        button.textContent = `${label}${sectionLabel}`;
+        button.addEventListener('click', () => focusSectionFromAssistant(entry.section, entry.key));
+        item.appendChild(button);
+        suggestions.appendChild(item);
+      });
+
+      wrapper.appendChild(suggestions);
+    }
+
+    elements.assistantMessages.appendChild(wrapper);
+    scrollAssistantMessages();
+  }
+
+  function scrollAssistantMessages() {
+    if (!elements.assistantMessages) {
+      return;
+    }
+    elements.assistantMessages.scrollTop = elements.assistantMessages.scrollHeight;
+  }
+
+  function sendAssistantQuestion(question) {
+    setAssistantLoading(true);
+    setAssistantTyping(true);
+
+    fetchJson(`${API_BASE}/assistant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    })
+      .then((response) => {
+        addAssistantMessage('assistant', response.answer || 'Here is what I found.', response.matches || []);
+      })
+      .catch((error) => {
+        const message = `Sorry, I ran into a problem: ${error.message || error}`;
+        addAssistantMessage('assistant', message);
+      })
+      .finally(() => {
+        setAssistantTyping(false);
+        setAssistantLoading(false);
+      });
+  }
+
+  function setAssistantLoading(isLoading) {
+    state.assistant.sending = isLoading;
+    if (elements.assistantInput) {
+      elements.assistantInput.disabled = isLoading;
+    }
+    if (elements.assistantSend) {
+      elements.assistantSend.disabled = isLoading;
+      elements.assistantSend.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+    }
+  }
+
+  function setAssistantTyping(isTyping) {
+    if (!elements.assistantTyping) {
+      return;
+    }
+    elements.assistantTyping.hidden = !isTyping;
+  }
+
+  function focusSectionFromAssistant(sectionName, key) {
+    if (!sectionName || !elements.configSections) {
+      return;
+    }
+
+    const selector = `.section-card[data-section-name="${cssEscape(sectionName)}"]`;
+    const sectionCard = elements.configSections.querySelector(selector);
+    if (!sectionCard) {
+      return;
+    }
+
+    sectionCard.open = true;
+    sectionCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    if (key) {
+      const fieldSelector = `[data-section="${cssEscape(sectionName)}"][data-key="${cssEscape(key)}"]`;
+      const targetInput = sectionCard.querySelector(fieldSelector);
+      if (targetInput) {
+        targetInput.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+      return window.CSS.escape(String(value));
+    }
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+
   function renderField(sectionName, field) {
     const wrapper = document.createElement('div');
     wrapper.className = 'field-card';
     if (field.placeholder) {
       wrapper.classList.add('placeholder');
     }
+    wrapper.dataset.sectionName = sectionName;
+    wrapper.dataset.fieldKey = field.key;
 
     if (shouldUseWideLayout(field)) {
       wrapper.classList.add('wide');
@@ -837,12 +1212,13 @@
 
     wrapper.appendChild(label);
     wrapper.appendChild(inputContainer);
-    if (field.hint) {
-      const hint = document.createElement('p');
-      hint.className = 'field-hint';
-      hint.textContent = field.hint;
-      wrapper.appendChild(hint);
-    }
+    const hintText = (field.hint || '').trim();
+    const friendlyKey = humaniseKey(field.key) || field.key;
+    const fallbackHint = `Adjust ${friendlyKey} in ${getSectionLabelByName(sectionName)}.`;
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.textContent = hintText || fallbackHint;
+    wrapper.appendChild(hint);
     return wrapper;
   }
 

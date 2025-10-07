@@ -188,6 +188,34 @@ WebUI/
     └── webscraping_content.html
 ```
 
+## UI Feature Details
+
+### Chat Dictionaries UI
+- Location: Chat → Dictionaries
+- Capabilities:
+  - Create/activate/deactivate/delete dictionaries
+  - Add entries (pattern, replacement, type literal/regex, probability 0.0–1.0, enabled, case sensitivity, group, max replacements)
+  - Inline edit entries and toggle enabled state
+  - Filter entries by pattern and type
+  - Process sample text through a dictionary with optional token budget and group filter
+  - Import dictionaries from markdown content and export the current dictionary to markdown
+- Related API docs: `Docs/API-related/Chatbook_Features_API_Documentation.md` → Chat Dictionary API
+
+### Providers UI
+- Location: Providers tab (or Settings → Providers) in the WebUI
+- Capabilities:
+  - List configured providers and available models with metadata
+  - Inspect provider health (status, circuit breaker, recent performance)
+  - View request queue status (size, workers) and rate limiter settings
+  - Copy `<provider>/<model>` names for use in Chat and RAG requests
+- Backed by Providers API endpoints:
+  - `GET /api/v1/llm/health`
+  - `GET /api/v1/llm/providers`
+  - `GET /api/v1/llm/providers/{provider}`
+  - `GET /api/v1/llm/models`
+  - `GET /api/v1/llm/models/metadata`
+- Docs: `Docs/API-related/Providers_API_Documentation.md`
+
 ## Configuration
 
 ### Auto-Configuration (New in v1.2.0)

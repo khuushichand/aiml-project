@@ -130,8 +130,9 @@ app/core/Embeddings/
 ```
 
 Notes:
-- Inputs must be a string or list of strings (token arrays are not currently accepted).
+- Inputs may be a string, list of strings, or token arrays (`List[int]` or `List[List[int]]`). Token arrays are decoded to text using the model’s tokenizer when available or `cl100k_base` fallback; usage accounting uses the supplied token counts.
 - Up to 2048 inputs per request; per-model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
+- Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post-processing step (policy: `reduce` slices to first-N, `pad` zero-pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
 
 **Error Responses:**
 - `400 Bad Request`: Invalid input or parameters
@@ -245,6 +246,12 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export COHERE_API_KEY="..."
 export EMBEDDING_CACHE_SIZE="10000"
 export EMBEDDING_CACHE_TTL="3600"
+
+# Policy and fallback
+export EMBEDDINGS_ENFORCE_POLICY=true            # Enforce provider/model allowlists in production
+export EMBEDDINGS_ENFORCE_POLICY_STRICT=false    # If true, admin bypass disabled
+export EMBEDDINGS_DIMENSION_POLICY=reduce        # reduce|pad|ignore for non-native dimension requests
+export EMBEDDINGS_FALLBACK_CHAIN='{"openai":["huggingface","onnx","local_api"]}'
 ```
 
 ---
@@ -432,6 +439,12 @@ embedding_cache_size 5678
 
 # Latency
 embedding_latency_seconds{quantile="0.99"} 0.250
+
+# Fallback and policy metrics
+embedding_provider_failures_total{provider="openai",model="text-embedding-3-small",reason="http_503"} 2
+embedding_fallbacks_total{from_provider="openai",to_provider="huggingface"} 1
+embedding_policy_denied_total{provider="huggingface",model="some-model",policy_type="model"} 3
+embedding_dimension_adjustments_total{provider="huggingface",model="sentence-transformers/all-MiniLM-L6-v2",method="reduce"} 5
 ```
 
 ### Logging

@@ -195,6 +195,14 @@ async def generate_embeddings(texts: List[str]):
         dimensions=1536  # optional; applies to specific providers only
     )
     return embeddings
+
+"""
+Notes:
+- Token arrays are accepted by the REST API (`POST /api/v1/embeddings`); the service decodes tokens with the model tokenizer or `cl100k_base` fallback.
+- Provider fallback is configurable via `EMBEDDINGS_FALLBACK_CHAIN` or defaults (e.g., openai→huggingface→onnx→local_api).
+- Policy enforcement can be enabled via `EMBEDDINGS_ENFORCE_POLICY`; admin bypass can be disabled with `EMBEDDINGS_ENFORCE_POLICY_STRICT=true`.
+- For non‑OpenAI providers, `dimensions` is applied as post‑processing based on `EMBEDDINGS_DIMENSION_POLICY` (reduce|pad|ignore).
+"""
 ```
 
 ### Using the Job-Based System

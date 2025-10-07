@@ -254,7 +254,7 @@ GET /api/v1/media/embeddings/jobs?status=completed&limit=50&offset=0
 }
 ```
 
-Note: Token-array inputs are not currently accepted by the endpoint (even though the schema includes them). Send strings or list of strings. Non-string items will return HTTP 400.
+Token-array inputs are supported. If `input` is a token array (`List[int]` or `List[List[int]]`), tokens are decoded to text using the model’s tokenizer when available, or `cl100k_base` as a fallback. Token usage is counted from the supplied token arrays.
 
 ### Output Formats
 
@@ -279,7 +279,7 @@ Note: Token-array inputs are not currently accepted by the endpoint (even though
 }
 ```
 
-### Provider Selection
+### Provider Selection & Fallback
 
 #### Method 1: Header-based
 ```http
@@ -302,6 +302,18 @@ x-provider: huggingface
     "model": "text-embedding-3-small"  // Uses default provider (OpenAI)
 }
 ```
+
+#### Provider Fallback
+- If the chosen provider is temporarily unavailable, the service can fall back to others.
+- Configure `EMBEDDINGS_FALLBACK_CHAIN` (settings) to control order, or rely on defaults:
+  - `openai` → `huggingface` → `onnx` → `local_api`
+  - `huggingface` → `onnx` → `local_api`
+  - `onnx` → `huggingface` → `local_api`
+  - `local_api` → `huggingface`
+  
+Prometheus counters:
+- `embedding_provider_failures_total{provider,model,reason}`
+- `embedding_fallbacks_total{from_provider,to_provider}`
 
 ## Providers & Models
 
