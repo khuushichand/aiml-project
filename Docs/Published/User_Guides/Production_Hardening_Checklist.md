@@ -30,7 +30,7 @@ Reverse Proxy & TLS
   - `/api/v1/mcp/*` (if using MCP)
 - Set appropriate timeouts and keep-alive settings for long-running requests.
 - If exposing the WebUI, prefer serving the WebUI from the same origin as the API to avoid CORS complexity.
- - See reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
+ - See reverse proxy examples: `../Deployment/Reverse_Proxy_Examples.md`
 
 CORS & CSRF
 - Restrict CORS to trusted origins only (avoid wildcard in production).
@@ -74,5 +74,5 @@ Incident Response
 - Configure backups and validate restore procedures.
 
 References
-- Multi-User Deployment Guide: `Docs/User_Guides/Multi-User_Deployment_Guide.md`
+- Multi-User Deployment Guide: `./Multi-User_Deployment_Guide.md`
 - README sections: Authentication Setup, Configuration Options

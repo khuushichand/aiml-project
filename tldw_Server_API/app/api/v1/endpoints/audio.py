@@ -279,7 +279,7 @@ async def create_transcription(
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
-    timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities (comma-separated)"),
+    timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities: 'segment', 'word' (comma-separated or JSON array)"),
     # Auto-segmentation options
     segment: bool = Form(default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"),
     seg_K: int = Form(default=6, description="Max segments for TreeSeg (if segment=true)"),
@@ -345,6 +345,25 @@ async def create_transcription(
         # Load audio data
         audio_data, sample_rate = sf.read(temp_audio_path)
         
+        # Parse timestamp granularities (flexible: CSV or JSON array)
+        granularity_tokens = set()
+        try:
+            if timestamp_granularities:
+                s = str(timestamp_granularities).strip()
+                if s.startswith("["):
+                    # JSON array
+                    arr = json.loads(s)
+                    if isinstance(arr, list):
+                        granularity_tokens = {str(x).strip().lower() for x in arr}
+                else:
+                    # Comma-separated string
+                    granularity_tokens = {t.strip().lower() for t in s.split(',') if t.strip()}
+        except Exception:
+            # Non-fatal: default to {'segment'}
+            granularity_tokens = {"segment"}
+        if not granularity_tokens:
+            granularity_tokens = {"segment"}
+
         # Map OpenAI model names to our providers
         provider_map = {
             "whisper-1": "faster-whisper",
@@ -357,27 +376,46 @@ async def create_transcription(
         
         provider = provider_map.get(model.lower(), "faster-whisper")
         
-        # Import transcription function
+        # Import transcription functions
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            transcribe_audio
+            transcribe_audio,
+            speech_to_text as fw_speech_to_text,
         )
         
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
         
-        # Prepare transcription parameters
-        transcribe_params = {
-            "audio_data": audio_data,
-            "sample_rate": sample_rate,
-            "transcription_provider": provider,
-            "speaker_lang": language
-        }
-        
-        # Add provider-specific parameters
+        # Prepare transcription
+        detected_language: Optional[str] = None
         if provider == "faster-whisper":
-            transcribe_params["whisper_model"] = "large-v3"  # Use best model by default
-            transcribed_text = transcribe_audio(**transcribe_params)
+            # For Whisper, support word-level timestamps and language detection
+            try:
+                # Use best model by default (consistent with prior behavior)
+                whisper_model_name = "large-v3"
+                result = fw_speech_to_text(
+                    temp_audio_path,
+                    whisper_model=whisper_model_name,
+                    selected_source_lang=language if language else None,
+                    vad_filter=False,
+                    diarize=False,
+                    word_timestamps=("word" in granularity_tokens),
+                    return_language=True,
+                )
+                if isinstance(result, tuple) and len(result) == 2:
+                    segments_list, detected_language = result
+                else:
+                    # Fallback: handle as plain segments list
+                    segments_list, detected_language = result, None
+
+                # Merge text
+                transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
+            except Exception as e:
+                logger.error(f"Whisper transcription failed: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Whisper transcription failed"
+                )
         elif provider == "parakeet" and config:
             variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
             # For Parakeet, we need to use the Nemo module directly
@@ -392,6 +430,12 @@ async def create_transcription(
             transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
         else:
             # Use the general transcribe_audio function
+            transcribe_params = {
+                "audio_data": audio_data,
+                "sample_rate": sample_rate,
+                "transcription_provider": provider,
+                "speaker_lang": language,
+            }
             transcribed_text = transcribe_audio(**transcribe_params)
         
         # Check for errors in transcription
@@ -417,32 +461,45 @@ async def create_transcription(
             return Response(content=vtt_content, media_type="text/vtt")
         
         else:  # json or verbose_json
-            response_data = {
-                "text": transcribed_text
-            }
-            
-            # Add language if detected/specified
+            response_data: Dict[str, Any] = {"text": transcribed_text}
+
+            # Language: prefer explicit request; else detected for Whisper
             if language:
                 response_data["language"] = language
-            
-            # Calculate duration
+            elif detected_language:
+                response_data["language"] = detected_language
+
+            # Duration
             duration = len(audio_data) / sample_rate
             response_data["duration"] = duration
-            
-            # Add segments if requested (simplified - real implementation would need actual segments)
-            if "segment" in timestamp_granularities:
-                response_data["segments"] = [{
-                    "id": 0,
-                    "seek": 0,
-                    "start": 0.0,
-                    "end": duration,
-                    "text": transcribed_text,
-                    "tokens": [],
-                    "temperature": temperature,
-                    "avg_logprob": -0.5,
-                    "compression_ratio": 1.0,
-                    "no_speech_prob": 0.01
-                }]
+
+            # Segments (prefer real segments when Whisper used)
+            if "segment" in granularity_tokens:
+                if provider == "faster-whisper" and 'segments_list' in locals() and isinstance(segments_list, list) and segments_list:
+                    segs = []
+                    for i, seg in enumerate(segments_list):
+                        start = float(seg.get("start_seconds", 0.0))
+                        end = float(seg.get("end_seconds", duration))
+                        seg_obj: Dict[str, Any] = {
+                            "id": i,
+                            "start": start,
+                            "end": end,
+                            "text": seg.get("Text", ""),
+                        }
+                        # Attach word-level timestamps if requested and available
+                        if "word" in granularity_tokens and isinstance(seg.get("words"), list):
+                            seg_obj["words"] = seg["words"]
+                        segs.append(seg_obj)
+                    response_data["segments"] = segs
+                else:
+                    # Fallback single segment
+                    response_data["segments"] = [{
+                        "id": 0,
+                        "seek": 0,
+                        "start": 0.0,
+                        "end": duration,
+                        "text": transcribed_text,
+                    }]
             
             # Optional: auto-run segmentation in JSON responses
             if segment:

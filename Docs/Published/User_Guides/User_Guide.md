@@ -28,7 +28,7 @@ Look at:
 
 ### <a name="quick-start"></a>Quick Start
 Quick Start: Just click on the appropriate tab for what you're trying to do and fill in the required fields. Click "Process <video/audio/article/etc>" and wait for the results.
-Simple Instructions
+## Simple Instructions
 
     Basic Usage:
         If you don't have an API key/don't know what an LLM is/don't know what an API key is, please look further down the page for information on getting started.
@@ -108,3 +108,12 @@ This is a user guide for the tldw project. The tldw project is a web-based tool 
 - [Troubleshooting](#troubleshooting)
 - [Feedback](#feedback)
 - [Contributing](#contributing)
+
+## Troubleshooting
+Coming soon — common issues and fixes.
+
+## Feedback
+Coming soon — how to share suggestions and report issues.
+
+## Contributing
+Coming soon — contribution guidelines and workflow.

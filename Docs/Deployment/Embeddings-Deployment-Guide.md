@@ -647,7 +647,7 @@ curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 For issues or questions:
 - GitHub Issues: [tldw_server/issues](https://github.com/your-repo/issues)
-- Documentation: [/Docs/Embeddings/](./Docs/Embeddings/)
+- Documentation: [Embeddings Module](../API-related/Embeddings_Module_Documentation.md)
 - Logs: Check `/var/log/tldw/embeddings.log`
 
 ---

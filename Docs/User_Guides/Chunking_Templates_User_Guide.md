@@ -442,8 +442,8 @@ response = requests.post(
 ## Examples Repository
 
 For more examples and use cases, check:
-- `/Docs/API-related/Chunking_Templates_API_Documentation.md` - Full API reference
-- `/Docs/Code_Documentation/Chunking_Templates_Developer_Guide.md` - Technical details
+- `../API-related/Chunking_Templates_API_Documentation.md` - Full API reference
+- `../Code_Documentation/Chunking_Templates_Developer_Guide.md` - Technical details
 - `/tests/Chunking/test_chunking_templates.py` - Working code examples
 
 ---

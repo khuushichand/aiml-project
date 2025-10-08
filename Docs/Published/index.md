@@ -4,12 +4,11 @@ Welcome to the tldw_Server documentation site. This site publishes a curated set
 
 Use the left sidebar to browse sections, or jump directly:
 
-- [API Related](API-related/)
-- [Code Documentation](Code_Documentation/)
-- [Deployment](Deployment/)
-- [Evaluations](Evaluations/)
-- [Monitoring](Monitoring/)
-- [User Guides](User_Guides/)
+- [API Related](API-related/index.md)
+- [Code Documentation](Code_Documentation/index.md)
+- [Deployment](Deployment/index.md)
+- [Evaluations](Evaluations/index.md)
+- [Monitoring](Monitoring/index.md)
+- [User Guides](User_Guides/index.md)
 
 For project overview and development guidelines, see `README.md` at the repository root.
-

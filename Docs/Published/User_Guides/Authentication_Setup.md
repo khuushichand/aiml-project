@@ -133,7 +133,7 @@ Key settings in `.env`:
 3. **Enable HTTPS in production** - Required for secure cookies
 4. **Rotate keys periodically** - Use the API key rotation feature
 5. **Monitor authentication failures** - Check logs for attacks
-6. See the Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
+6. See the Production Hardening Checklist: `./Production_Hardening_Checklist.md`
 
 ### Security Controls (env)
 
@@ -157,8 +157,7 @@ Key settings in `.env`:
 
 ### Documentation
 
-- AuthNZ Developer Guide: `Docs/Development/AuthNZ-Developer-Guide.md`
-- AuthNZ API Guide: `Docs/API-related/AuthNZ-API-Guide.md`
+- AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
 
 ## Quick Setup (Multi‑User with SQLite – Dev)
 
@@ -206,4 +205,3 @@ require_registration_code = false
 ```
 
 Environment precedence and a complete list of environment variables is in `Env_Vars.md`.
-

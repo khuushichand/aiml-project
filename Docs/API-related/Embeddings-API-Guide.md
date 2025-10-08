@@ -1066,3 +1066,12 @@ For more information:
 - [System Documentation](./Embeddings-Documentation.md)
 - [Developer Guide](./Embeddings-Developer-Guide.md)
 - [API Reference](https://api.tldw.example.com/docs)
+> Note (Auth): In single-user mode you can use either `Authorization: Bearer <API_KEY>` or `X-API-KEY: <API_KEY>`. The examples above show Bearer; the header is interchangeable in single-user mode.
+
+Alt cURL (single-user X-API-KEY):
+```bash
+curl -X POST "http://localhost:8000/api/v1/embeddings" \
+  -H "X-API-KEY: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Transform this text into embeddings", "model": "text-embedding-3-small"}'
+```

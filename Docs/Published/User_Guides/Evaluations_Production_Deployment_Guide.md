@@ -544,7 +544,7 @@ curl http://localhost:8000/api/v1/health/evaluations
 
 ### Contact
 - GitHub Issues: [tldw_server/issues](https://github.com/yourusername/tldw_server/issues)
-- Documentation: [/Docs/User_Guides/](../User_Guides/)
+- Documentation: [User Guides](../User_Guides/index.md)
 
 ## Appendix
 

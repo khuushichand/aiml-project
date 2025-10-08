@@ -38,7 +38,7 @@ import sqlite3
 import threading
 import time
 import uuid  # For UUID generation
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
 from math import ceil
@@ -67,6 +67,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseBackend,
     DatabaseConfig,
     DatabaseError as BackendDatabaseError,
+    QueryResult,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
@@ -103,6 +104,45 @@ class ConflictError(DatabaseError):
         if self.identifier:
             details.append(f"ID: {self.identifier}")
         return f"{base} ({', '.join(details)})" if details else base
+
+
+class BackendCursorAdapter:
+    """Adapter exposing QueryResult via a sqlite3-like cursor interface."""
+
+    def __init__(self, result: QueryResult):
+        self._result = result
+        self._index = 0
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+
+    def fetchall(self):
+        return list(self._result.rows)
+
+    def fetchone(self):
+        if self._index >= len(self._result.rows):
+            return None
+        row = self._result.rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size: int | None = None):
+        if size is None or size <= 0:
+            size = len(self._result.rows) - self._index
+        end = min(self._index + size, len(self._result.rows))
+        rows = self._result.rows[self._index:end]
+        self._index = end
+        return list(rows)
+
+    def __iter__(self):
+        return iter(self._result.rows)
+
+    def close(self):
+        self._result = QueryResult(rows=[], rowcount=0)
+        self.rowcount = 0
+        self.lastrowid = None
+        self.description = None
+
 
 # --- Database Class ---
 class MediaDatabase:
@@ -618,6 +658,178 @@ class MediaDatabase:
         )
         return DatabaseBackendFactory.create_backend(fallback_config)
 
+    # --- Backend Statement Preparation Helpers ---
+    def _prepare_backend_statement(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ) -> tuple[str, Optional[Union[Tuple, Dict]]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params
+        converted_query = self._convert_sqlite_placeholders_to_postgres(query)
+        prepared_params = self._normalise_params(params)
+        return converted_query, prepared_params
+
+    def _prepare_backend_many_statement(
+        self,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict]],
+    ) -> tuple[str, List[Union[Tuple, Dict]]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params_list
+        converted_query = self._convert_sqlite_placeholders_to_postgres(query)
+        prepared_params = [self._normalise_params(params) for params in params_list]
+        return converted_query, prepared_params
+
+    def _normalise_params(
+        self,
+        params: Optional[Any],
+    ) -> Optional[Union[Tuple, Dict]]:
+        if params is None:
+            return None
+        if isinstance(params, dict):
+            return params
+        if isinstance(params, tuple):
+            return params
+        if isinstance(params, list):
+            return tuple(params)
+        return (params,)
+
+    def _convert_sqlite_placeholders_to_postgres(self, query: str) -> str:
+        if "?" not in query:
+            return query
+
+        result: List[str] = []
+        in_single = False
+        in_double = False
+        i = 0
+        length = len(query)
+
+        while i < length:
+            ch = query[i]
+
+            if ch == "'" and not in_double:
+                if in_single:
+                    if i + 1 < length and query[i + 1] == "'":
+                        result.append("''")
+                        i += 2
+                        continue
+                    in_single = False
+                    result.append(ch)
+                    i += 1
+                    continue
+                else:
+                    in_single = True
+                    result.append(ch)
+                    i += 1
+                    continue
+
+            if ch == '"' and not in_single:
+                if in_double:
+                    if i + 1 < length and query[i + 1] == '"':
+                        result.append('""')
+                        i += 2
+                        continue
+                    in_double = False
+                    result.append(ch)
+                    i += 1
+                    continue
+                else:
+                    in_double = True
+                    result.append(ch)
+                    i += 1
+                    continue
+
+            if ch == "?" and not in_single and not in_double:
+                result.append("%s")
+                i += 1
+                continue
+
+            result.append(ch)
+            i += 1
+
+        return ''.join(result)
+
+    def _execute_with_connection(
+        self,
+        conn,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ):
+        prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+
+        if self.backend_type == BackendType.SQLITE:
+            cursor = conn.cursor()
+            cursor.execute(prepared_query, prepared_params or ())
+            return cursor
+
+        try:
+            result = self.backend.execute(
+                prepared_query,
+                prepared_params,
+                connection=conn,
+            )
+            return BackendCursorAdapter(result)
+        except BackendDatabaseError as exc:
+            logging.error(
+                "Backend execute failed: %s... Error: %s",
+                prepared_query[:200],
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Backend execute failed: {exc}") from exc
+
+    def _executemany_with_connection(
+        self,
+        conn,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict]],
+    ):
+        prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
+
+        if self.backend_type == BackendType.SQLITE:
+            cursor = conn.cursor()
+            cursor.executemany(prepared_query, prepared_params_list)
+            return cursor
+
+        try:
+            result = self.backend.execute_many(
+                prepared_query,
+                prepared_params_list,
+                connection=conn,
+            )
+            return BackendCursorAdapter(result)
+        except BackendDatabaseError as exc:
+            logging.error(
+                "Backend execute_many failed: %s... Error: %s",
+                prepared_query[:200],
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
+
+    def _fetchone_with_connection(
+        self,
+        conn,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        cursor = self._execute_with_connection(conn, query, params)
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def _fetchall_with_connection(
+        self,
+        conn,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ) -> List[Dict[str, Any]]:
+        cursor = self._execute_with_connection(conn, query, params)
+        rows = cursor.fetchall() or []
+        return [dict(r) for r in rows]
+
     # --- Connection Management ---
     def _get_thread_connection(self):
         conn = getattr(self._local, 'conn', None)
@@ -706,7 +918,13 @@ class MediaDatabase:
             )
 
     # --- Query Execution (Unchanged, catches IntegrityError from validation triggers) ---
-    def execute_query(self, query: str, params: tuple = None, *, commit: bool = False) -> sqlite3.Cursor:
+    def execute_query(
+        self,
+        query: str,
+        params: Optional[Union[tuple, list, Dict]] = None,
+        *,
+        commit: bool = False,
+    ):
         """
          Executes a single SQL query.
 
@@ -725,29 +943,71 @@ class MediaDatabase:
              sqlite3.IntegrityError: Specifically re-raised if a sync validation
                                      trigger (defined in schema) fails.
          """
-        self._ensure_sqlite_backend()
         conn = self.get_connection()
-        try:
-            cursor = conn.cursor()
-            logging.debug(f"Executing Query: {query[:200]}... Params: {str(params)[:100]}...")
-            cursor.execute(query, params or ())
-            if commit:
-                conn.commit()
-                logging.debug("Committed.")
-            return cursor
-        except sqlite3.IntegrityError as e:  # Catch validation errors specifically
-            msg = str(e).lower()
-            if "sync error" in msg:
-                logging.error(f"Sync Validation Failed: {e}")
-                raise e  # Re-raise the specific IntegrityError
-            else:  # Other integrity errors
-                logging.error(f"Integrity error: {query[:200]}... Error: {e}", exc_info=True)
-                raise DatabaseError(f"Integrity constraint violation: {e}") from e
-        except sqlite3.Error as e:  # Other SQLite errors
-            logging.error(f"Query failed: {query[:200]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Query execution failed: {e}") from e
+        prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
-    def execute_many(self, query: str, params_list: List[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                cursor = conn.cursor()
+                logging.debug(
+                    "Executing Query: %s... Params: %s...",
+                    prepared_query[:200],
+                    str(prepared_params)[:100],
+                )
+                cursor.execute(prepared_query, prepared_params or ())
+                if commit:
+                    conn.commit()
+                    logging.debug("Committed.")
+                return cursor
+            except sqlite3.IntegrityError as e:  # Catch validation errors specifically
+                msg = str(e).lower()
+                if "sync error" in msg:
+                    logging.error(f"Sync Validation Failed: {e}")
+                    raise e  # Re-raise the specific IntegrityError
+                logging.error(
+                    "Integrity error: %s... Error: %s",
+                    prepared_query[:200],
+                    e,
+                    exc_info=True,
+                )
+                raise DatabaseError(f"Integrity constraint violation: {e}") from e
+            except sqlite3.Error as e:  # Other SQLite errors
+                logging.error(
+                    "Query failed: %s... Error: %s",
+                    prepared_query[:200],
+                    e,
+                    exc_info=True,
+                )
+                raise DatabaseError(f"Query execution failed: {e}") from e
+
+        try:
+            logging.debug(
+                "Executing Backend Query (Postgres): %s... Params: %s...",
+                prepared_query[:200],
+                str(prepared_params)[:100],
+            )
+            result = self.backend.execute(
+                prepared_query,
+                prepared_params,
+                connection=conn,
+            )
+            return BackendCursorAdapter(result)
+        except BackendDatabaseError as exc:
+            logging.error(
+                "Backend query failed: %s... Error: %s",
+                prepared_query[:200],
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Backend query execution failed: {exc}") from exc
+
+    def execute_many(
+        self,
+        query: str,
+        params_list: List[Union[tuple, list, Dict]],
+        *,
+        commit: bool = False,
+    ) -> Optional[object]:
         """
         Executes a SQL query for multiple sets of parameters.
 
@@ -766,29 +1026,72 @@ class MediaDatabase:
             TypeError: If `params_list` is not a list or contains invalid data types.
             DatabaseError: For general SQLite errors or integrity violations.
         """
-        self._ensure_sqlite_backend()
         conn = self.get_connection()
         if not isinstance(params_list, list):
-            raise TypeError("params_list must be a list.")
+            raise TypeError("params_list must be a list of parameter iterables for execute_many().")
         if not params_list:
+            logging.debug("execute_many received empty params_list; nothing to execute.")
             return None
+
+        prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
+
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                cursor = conn.cursor()
+                logging.debug(
+                    "Executing Many: %s... with %s sets.",
+                    prepared_query[:150],
+                    len(prepared_params_list),
+                )
+                cursor.executemany(prepared_query, prepared_params_list)
+                if commit:
+                    conn.commit()
+                    logging.debug("Committed Many.")
+                return cursor
+            except sqlite3.IntegrityError as e:
+                logging.error(
+                    "Integrity error during Execute Many: %s... Error: %s",
+                    prepared_query[:150],
+                    e,
+                    exc_info=True,
+                )
+                raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e
+            except sqlite3.Error as e:
+                logging.error(
+                    "Execute Many failed: %s... Error: %s",
+                    prepared_query[:150],
+                    e,
+                    exc_info=True,
+                )
+                raise DatabaseError(f"Execute Many failed: {e}") from e
+            except TypeError as te:
+                logging.error(
+                    "TypeError during Execute Many: %s. Check params_list format.",
+                    te,
+                    exc_info=True,
+                )
+                raise TypeError(f"Parameter list format error: {te}") from te
+
         try:
-            cursor = conn.cursor()
-            logging.debug(f"Executing Many: {query[:150]}... with {len(params_list)} sets.")
-            cursor.executemany(query, params_list)
-            if commit:
-                conn.commit()
-                logging.debug("Committed Many.")
-            return cursor
-        except sqlite3.IntegrityError as e:
-            logging.error(f"Integrity error during Execute Many: {query[:150]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e
-        except sqlite3.Error as e:
-            logging.error(f"Execute Many failed: {query[:150]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Execute Many failed: {e}") from e
-        except TypeError as te:
-            logging.error(f"TypeError during Execute Many: {te}. Check params_list format.", exc_info=True)
-            raise TypeError(f"Parameter list format error: {te}") from te
+            logging.debug(
+                "Executing Backend Many (Postgres): %s... with %s sets.",
+                prepared_query[:150],
+                len(prepared_params_list),
+            )
+            result = self.backend.execute_many(
+                prepared_query,
+                prepared_params_list,
+                connection=conn,
+            )
+            return BackendCursorAdapter(result)
+        except BackendDatabaseError as exc:
+            logging.error(
+                "Backend execute_many failed: %s... Error: %s",
+                prepared_query[:150],
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
 
     # --- Transaction Context (Unchanged) ---
     @contextmanager
@@ -807,27 +1110,45 @@ class MediaDatabase:
             Exception: Re-raises any exception that occurs within the block
                        after attempting a rollback.
         """
-        self._ensure_sqlite_backend()
         conn = self.get_connection()
-        in_outer = conn.in_transaction
+
+        if self.backend_type == BackendType.SQLITE:
+            in_outer = conn.in_transaction
+            try:
+                if not in_outer:
+                    conn.execute("BEGIN")
+                    logging.debug("Started transaction.")
+                yield conn
+                if not in_outer:
+                    conn.commit()
+                    logging.debug("Committed transaction.")
+            except Exception as e:
+                if not in_outer:
+                    logging.error(
+                        "Transaction failed, rolling back: %s - %s",
+                        type(e).__name__,
+                        e,
+                        exc_info=False,
+                    )
+                    try:
+                        conn.rollback()
+                        logging.debug("Rollback successful.")
+                    except sqlite3.Error as rb_err:
+                        logging.error(f"Rollback FAILED: {rb_err}", exc_info=True)
+                raise e
+            return
+
+        depth = getattr(self._local, "tx_depth", 0)
+        ctx = self.backend.transaction(conn) if depth == 0 else nullcontext(conn)
+        self._local.tx_depth = depth + 1
         try:
-            if not in_outer:
-                conn.execute("BEGIN")
-                logging.debug("Started transaction.")
-            # Yield the connection
-            yield conn
-            if not in_outer:
-                conn.commit()
-                logging.debug("Committed transaction.")
-        except Exception as e:
-            if not in_outer:
-                logging.error(f"Transaction failed, rolling back: {type(e).__name__} - {e}", exc_info=False)
-                try:
-                    conn.rollback()
-                    logging.debug("Rollback successful.")
-                except sqlite3.Error as rb_err:
-                    logging.error(f"Rollback FAILED: {rb_err}", exc_info=True)
-            raise e
+            with ctx as tx_conn:
+                yield tx_conn
+        except Exception as exc:
+            logging.error("Backend transaction failed: %s", exc, exc_info=False)
+            raise
+        finally:
+            self._local.tx_depth = depth
 
     # --- Schema Initialization and Migration ---
     def _get_db_version(self, conn: sqlite3.Connection) -> int:
@@ -1419,6 +1740,8 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS update fails.
         """
+        if self.backend_type != BackendType.SQLITE:
+            return
         content = content or ""
         try:
             # Use INSERT OR REPLACE
@@ -1444,6 +1767,8 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS deletion fails (excluding 'not found').
         """
+        if self.backend_type != BackendType.SQLITE:
+            return
         try:
             # Delete based on rowid, ignore if not found
             conn.execute("DELETE FROM media_fts WHERE rowid = ?", (media_id,))
@@ -1467,6 +1792,8 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS update fails.
         """
+        if self.backend_type != BackendType.SQLITE:
+            return
         try:
             # Use INSERT OR REPLACE
             conn.execute("INSERT OR REPLACE INTO keyword_fts (rowid, keyword) VALUES (?, ?)",
@@ -1491,6 +1818,8 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS deletion fails (excluding 'not found').
         """
+        if self.backend_type != BackendType.SQLITE:
+            return
         try:
             conn.execute("DELETE FROM keyword_fts WHERE rowid = ?", (keyword_id,))
             logging.debug(f"Deleted FTS entry for Keyword ID {keyword_id}")
@@ -2052,24 +2381,34 @@ class MediaDatabase:
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute('SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?', (keyword,))
-                existing = cursor.fetchone()
+                existing = self._fetchone_with_connection(
+                    conn,
+                    'SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?',
+                    (keyword,),
+                )
 
                 if existing:
-                    kw_id, kw_uuid, is_deleted, current_version = existing['id'], existing['uuid'], existing['deleted'], existing['version']
+                    kw_id = existing['id']
+                    kw_uuid = existing['uuid']
+                    is_deleted = existing['deleted']
+                    current_version = existing['version']
                     if is_deleted:
                         new_version = current_version + 1
                         logger.info(f"Undeleting keyword '{keyword}' (ID: {kw_id}). New ver: {new_version}")
-                        # Pass current_time for last_modified
-                        cursor.execute("UPDATE Keywords SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                                       (current_time, new_version, client_id, kw_id, current_version))
-                        if cursor.rowcount == 0:
+                        update_cursor = self._execute_with_connection(
+                            conn,
+                            "UPDATE Keywords SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                            (current_time, new_version, client_id, kw_id, current_version),
+                        )
+                        if update_cursor.rowcount == 0:
                             raise ConflictError("Keywords", kw_id)
 
                         # Fetch data for payload AFTER update to get correct last_modified
-                        cursor.execute("SELECT * FROM Keywords WHERE id=?", (kw_id,))
-                        payload_data = dict(cursor.fetchone())
+                        payload_data = self._fetchone_with_connection(
+                            conn,
+                            "SELECT * FROM Keywords WHERE id=?",
+                            (kw_id,),
+                        ) or {}
                         self._log_sync_event(conn, 'Keywords', kw_uuid, 'update', new_version, payload_data)
                         self._update_fts_keyword(conn, kw_id, keyword)
                         return kw_id, kw_uuid
@@ -2080,16 +2419,34 @@ class MediaDatabase:
                     new_uuid = self._generate_uuid()
                     new_version = 1
                     logger.info(f"Adding new keyword '{keyword}' UUID {new_uuid}")
-                    # Pass current_time for last_modified
-                    cursor.execute("INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, 0)",
-                                   (keyword, new_uuid, current_time, new_version, client_id))
-                    kw_id = cursor.lastrowid
+                    insert_sql = (
+                        "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id, deleted) "
+                        "VALUES (?, ?, ?, ?, ?, 0)"
+                    )
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        insert_sql += " RETURNING id"
+
+                    insert_cursor = self._execute_with_connection(
+                        conn,
+                        insert_sql,
+                        (keyword, new_uuid, current_time, new_version, client_id),
+                    )
+
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        inserted_row = insert_cursor.fetchone()
+                        kw_id = inserted_row["id"] if inserted_row else None
+                    else:
+                        kw_id = insert_cursor.lastrowid
+
                     if not kw_id:
                         raise DatabaseError("Failed to get last row ID for new keyword.")
 
                     # Fetch data for payload AFTER insert to get correct last_modified
-                    cursor.execute("SELECT * FROM Keywords WHERE id=?", (kw_id,))
-                    payload_data = dict(cursor.fetchone())
+                    payload_data = self._fetchone_with_connection(
+                        conn,
+                        "SELECT * FROM Keywords WHERE id=?",
+                        (kw_id,),
+                    ) or {}
                     self._log_sync_event(conn, 'Keywords', new_uuid, 'create', new_version, payload_data)
                     self._update_fts_keyword(conn, kw_id, keyword)
                     return kw_id, new_uuid
@@ -2189,8 +2546,8 @@ class MediaDatabase:
         results_by_keyword: Dict[str, List[Dict[str, Any]]] = {kw: [] for kw in unique_clean_keywords}
 
         try:
-            cursor = self.execute_query(query, params)
-            rows = cursor.fetchall()
+            conn = self.get_connection()
+            rows = self._fetchall_with_connection(conn, query, params)
 
             for row in rows:
                 # keyword_text from DB is the canonical version (e.g. "recipe")
@@ -2237,11 +2594,6 @@ class MediaDatabase:
 
             return results_by_keyword
 
-        except sqlite3.Error as e:
-            logger.error(f"SQLite error fetching media for keywords from DB {self.db_path_str}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to fetch media for keywords due to SQLite error: {e}") from e
-        except DatabaseError:  # Re-raise DatabaseError if execute_query raised it
-            raise
         except Exception as e:
             logger.error(f"Unexpected error fetching media for keywords from DB {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred while fetching media for keywords: {e}") from e
@@ -2272,10 +2624,10 @@ class MediaDatabase:
             query += " LIMIT ?"
             params.append(limit)
         try:
-            cursor = self.execute_query(query, tuple(params))
+            conn = self.get_connection()
+            rows = self._fetchall_with_connection(conn, query, tuple(params))
             results = []
-            for row in cursor.fetchall():
-                row_dict = dict(row)
+            for row_dict in rows:
                 if row_dict.get('payload'):
                     try:
                         row_dict['payload'] = json.loads(row_dict['payload'])
@@ -2284,7 +2636,9 @@ class MediaDatabase:
                         row_dict['payload'] = None
                 results.append(row_dict)
             return results
-        except (DatabaseError, sqlite3.Error) as e:
+        except DatabaseError:
+            raise
+        except Exception as e:
             logger.error(f"Error fetching sync log entries from DB '{self.db_path_str}': {e}")
             raise DatabaseError("Failed to fetch sync log entries") from e
 
@@ -2312,13 +2666,16 @@ class MediaDatabase:
         query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
         try:
             with self.transaction():
-                cursor = self.execute_query(query, tuple(change_ids), commit=False)
+                cursor = self._execute_with_connection(
+                    self.get_connection(),
+                    query,
+                    tuple(change_ids),
+                )
                 deleted_count = cursor.rowcount
                 logger.info(f"Deleted {deleted_count} sync log entries from DB '{self.db_path_str}'.")
                 return deleted_count
-        except (DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error deleting sync log entries from DB '{self.db_path_str}': {e}")
-            raise DatabaseError("Failed to delete sync log entries") from e
+        except DatabaseError:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error deleting sync log entries from DB '{self.db_path_str}': {e}")
             raise DatabaseError(f"Unexpected error deleting sync log entries: {e}") from e
@@ -2345,13 +2702,16 @@ class MediaDatabase:
         query = "DELETE FROM sync_log WHERE change_id <= ?"
         try:
             with self.transaction():
-                cursor = self.execute_query(query, (change_id_threshold,), commit=False)
+                cursor = self._execute_with_connection(
+                    self.get_connection(),
+                    query,
+                    (change_id_threshold,),
+                )
                 deleted_count = cursor.rowcount
                 logger.info(f"Deleted {deleted_count} sync log entries before or at ID {change_id_threshold} from DB '{self.db_path_str}'.")
                 return deleted_count
-        except (DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error deleting sync log entries before {change_id_threshold} from DB '{self.db_path_str}': {e}")
-            raise DatabaseError("Failed to delete sync log entries before threshold") from e
+        except DatabaseError:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error deleting sync log entries before {change_id_threshold} from DB '{self.db_path_str}': {e}")
             raise DatabaseError(f"Unexpected error deleting sync log entries before threshold: {e}") from e
@@ -2388,9 +2748,11 @@ class MediaDatabase:
 
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT uuid, version FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                media_info = cursor.fetchone()
+                media_info = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
                 if not media_info:
                     logger.warning(f"Cannot soft delete: Media ID {media_id} not found or already deleted.")
                     return False
@@ -2398,9 +2760,12 @@ class MediaDatabase:
                 new_media_version = current_media_version + 1
 
                 # Update Media: Pass current_time for last_modified
-                cursor.execute("UPDATE Media SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
-                               (current_time, new_media_version, client_id, media_id, current_media_version))
-                if cursor.rowcount == 0:
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    "UPDATE Media SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
+                    (current_time, new_media_version, client_id, media_id, current_media_version),
+                )
+                if update_cursor.rowcount == 0:
                     raise ConflictError(entity="Media", identifier=media_id)
 
                 # Payload reflects the state *after* the update
@@ -2411,12 +2776,22 @@ class MediaDatabase:
                 if cascade:
                     logger.info(f"Performing explicit cascade delete for Media ID: {media_id}")
                     # Unlinking MediaKeywords - logic remains the same
-                    cursor.execute("SELECT mk.id, k.uuid AS keyword_uuid FROM MediaKeywords mk JOIN Keywords k ON mk.keyword_id = k.id WHERE mk.media_id = ? AND k.deleted = 0", (media_id,))
-                    keywords_to_unlink = cursor.fetchall()
+                    keywords_to_unlink = self._fetchall_with_connection(
+                        conn,
+                        "SELECT mk.id, k.uuid AS keyword_uuid FROM MediaKeywords mk "
+                        "JOIN Keywords k ON mk.keyword_id = k.id "
+                        "WHERE mk.media_id = ? AND k.deleted = 0",
+                        (media_id,),
+                    )
                     if keywords_to_unlink:
                         keyword_ids = [k['id'] for k in keywords_to_unlink]
                         placeholders = ','.join('?' * len(keyword_ids))
-                        cursor.execute(f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})", (media_id, *keyword_ids))
+                        params = (media_id, *keyword_ids)
+                        self._execute_with_connection(
+                            conn,
+                            f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})",
+                            params,
+                        )
                         unlink_version = 1
                         for kw_link in keywords_to_unlink:
                             link_uuid = f"{media_uuid}_{kw_link['keyword_uuid']}"
@@ -2427,8 +2802,11 @@ class MediaDatabase:
                     child_tables = [("Transcripts", "media_id", "uuid"), ("MediaChunks", "media_id", "uuid"),
                                     ("UnvectorizedMediaChunks", "media_id", "uuid"), ("DocumentVersions", "media_id", "uuid")]
                     for table, fk_col, uuid_col in child_tables:
-                        cursor.execute(f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0", (media_id,))
-                        children = cursor.fetchall()
+                        children = self._fetchall_with_connection(
+                            conn,
+                            f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0",
+                            (media_id,),
+                        )
                         if not children:
                             continue
                         # Pass current_time for last_modified in child update
@@ -2439,8 +2817,7 @@ class MediaDatabase:
                             child_new_version = child_current_version + 1
                             # Pass current_time here
                             params = (current_time, child_new_version, client_id, child_id, child_current_version)
-                            child_cursor = conn.cursor()
-                            child_cursor.execute(update_sql, params)
+                            child_cursor = self._execute_with_connection(conn, update_sql, params)
                             if child_cursor.rowcount == 1:
                                 processed_children_count += 1
                                 # Ensure payload includes correct last_modified and deleted status
@@ -2574,21 +2951,26 @@ class MediaDatabase:
         # ------------------------------------------------------------------
         try:
             with self.transaction() as conn:
-                cur = conn.cursor()
+                def _exec(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                    return self._execute_with_connection(conn, query, params)
+
+                def _fetchone(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                    return self._fetchone_with_connection(conn, query, params)
+
+                def _fetchall(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                    return self._fetchall_with_connection(conn, query, params)
 
                 # Find existing record by URL or content_hash
-                cur.execute(
+                row = _fetchone(
                     "SELECT id, uuid, version, url, content_hash FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
                     (url,),
                 )
-                row = cur.fetchone()
 
                 if not row:
-                    cur.execute(
+                    row = _fetchone(
                         "SELECT id, uuid, version, url, content_hash FROM Media WHERE content_hash = ? AND deleted = 0 LIMIT 1",
                         (content_hash,),
                     )
-                    row = cur.fetchone()
 
                 # --- Path A: Record exists, handle UPDATE, CANONICALIZATION, or SKIP ---
                 if row:
@@ -2613,12 +2995,12 @@ class MediaDatabase:
                             if chunks is not None:
                                 logging.info(f"Chunks provided for identical media; updating media chunk_status and version for ID {media_id}.")
                                 new_ver = current_ver + 1
-                                cur.execute(
+                                update_cursor = _exec(
                                     """UPDATE Media SET chunking_status = 'completed', version = ?, last_modified = ?
                                        WHERE id = ? AND version = ?""",
-                                    (new_ver, now, media_id, current_ver)
+                                    (new_ver, now, media_id, current_ver),
                                 )
-                                if cur.rowcount == 0:
+                                if update_cursor.rowcount == 0:
                                     raise ConflictError(f"Media (updating chunk status for identical content id={media_id})", media_id)
 
                                 self._log_sync_event(conn, "Media", media_uuid, "update", new_ver, {"chunking_status": "completed", "last_modified": now})
@@ -2628,17 +3010,37 @@ class MediaDatabase:
                         # Case A.1.b: Content is different. Proceed with a full versioned update.
                         new_ver = current_ver + 1
                         payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
-                        cur.execute(
-                            """UPDATE Media
-                               SET url=:url, title=:title, type=:type, content=:content, author=:author,
-                                   ingestion_date=:ingestion_date, transcription_model=:transcription_model,
-                                   content_hash=:content_hash, is_trash=:is_trash, trash_date=:trash_date,
-                                   chunking_status=:chunking_status, vector_processing=:vector_processing,
-                                   last_modified=:last_modified, version=:version, client_id=:client_id, deleted=:deleted
-                               WHERE id = :id AND version = :ver""",
-                            {**payload, "id": media_id, "ver": current_ver},
+                        update_sql = """
+                            UPDATE Media
+                               SET url = ?, title = ?, type = ?, content = ?, author = ?,
+                                   ingestion_date = ?, transcription_model = ?,
+                                   content_hash = ?, is_trash = ?, trash_date = ?,
+                                   chunking_status = ?, vector_processing = ?,
+                                   last_modified = ?, version = ?, client_id = ?, deleted = ?
+                               WHERE id = ? AND version = ?
+                        """
+                        update_params = (
+                            payload['url'],
+                            payload['title'],
+                            payload['type'],
+                            payload['content'],
+                            payload['author'],
+                            payload['ingestion_date'],
+                            payload['transcription_model'],
+                            payload['content_hash'],
+                            payload['is_trash'],
+                            payload['trash_date'],
+                            payload['chunking_status'],
+                            payload['vector_processing'],
+                            payload['last_modified'],
+                            payload['version'],
+                            payload['client_id'],
+                            payload['deleted'],
+                            media_id,
+                            current_ver,
                         )
-                        if cur.rowcount == 0:
+                        update_cursor = _exec(update_sql, update_params)
+                        if update_cursor.rowcount == 0:
                             raise ConflictError(f"Media (full update id={media_id})", media_id)
 
                         self._log_sync_event(conn, "Media", media_uuid, "update", new_ver, payload)
@@ -2660,11 +3062,11 @@ class MediaDatabase:
                         if is_canonicalisation:
                             logging.info(f"Canonicalizing URL for media_id {media_id} to {url}")
                             new_ver = current_ver + 1
-                            cur.execute(
+                            canon_cursor = _exec(
                                 "UPDATE Media SET url = ?, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
                                 (url, now, new_ver, client_id, media_id, current_ver),
                             )
-                            if cur.rowcount == 0:
+                            if canon_cursor.rowcount == 0:
                                 raise ConflictError(f"Media (canonicalization id={media_id})", media_id)
 
                             self._log_sync_event(
@@ -2675,11 +3077,11 @@ class MediaDatabase:
                         # Touch last_modified to reflect recent access so listing surfaces it
                         try:
                             new_ver = current_ver + 1
-                            cur.execute(
+                            touch_cursor = _exec(
                                 "UPDATE Media SET last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
                                 (now, new_ver, client_id, media_id, current_ver),
                             )
-                            if cur.rowcount == 1:
+                            if touch_cursor.rowcount == 1:
                                 self._log_sync_event(
                                     conn, "Media", media_uuid, "update", new_ver, {"last_modified": now, "touched": True}
                                 )
@@ -2696,10 +3098,10 @@ class MediaDatabase:
                     # Use lock to prevent race conditions during concurrent inserts
                     with self._media_insert_lock:
                         # Double-check within lock that record still doesn't exist
-                        cur.execute(
-                            "SELECT id, uuid, version FROM Media WHERE url = ? AND deleted = 0", (url,)
+                        recheck_row = _fetchone(
+                            "SELECT id, uuid, version FROM Media WHERE url = ? AND deleted = 0",
+                            (url,),
                         )
-                        recheck_row = cur.fetchone()
                         if recheck_row:
                             # Another thread inserted while we were waiting for lock
                             media_id, media_uuid, current_ver = recheck_row["id"], recheck_row["uuid"], recheck_row["version"]
@@ -2712,19 +3114,41 @@ class MediaDatabase:
                         # Proceed with INSERT - now protected by lock
                         media_uuid = self._generate_uuid()
                         payload = _media_payload(media_uuid, 1, chunk_status=final_chunk_status)
-
-                        cur.execute(
-                            """INSERT INTO Media (url, title, type, content, author, ingestion_date,
-                                                  transcription_model, content_hash, is_trash, trash_date,
-                                                  chunking_status, vector_processing, uuid, last_modified,
-                                                  version, client_id, deleted)
-                               VALUES (:url, :title, :type, :content, :author, :ingestion_date,
-                                       :transcription_model, :content_hash, :is_trash, :trash_date,
-                                       :chunking_status, :vector_processing, :uuid, :last_modified,
-                                       :version, :client_id, :deleted)""",
-                            payload,
+                        insert_sql = """
+                            INSERT INTO Media (url, title, type, content, author, ingestion_date,
+                                               transcription_model, content_hash, is_trash, trash_date,
+                                               chunking_status, vector_processing, uuid, last_modified,
+                                               version, client_id, deleted)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """
+                        insert_params = (
+                            payload['url'],
+                            payload['title'],
+                            payload['type'],
+                            payload['content'],
+                            payload['author'],
+                            payload['ingestion_date'],
+                            payload['transcription_model'],
+                            payload['content_hash'],
+                            payload['is_trash'],
+                            payload['trash_date'],
+                            payload['chunking_status'],
+                            payload['vector_processing'],
+                            payload['uuid'],
+                            payload['last_modified'],
+                            payload['version'],
+                            payload['client_id'],
+                            payload['deleted'],
                         )
-                        media_id = cur.lastrowid
+                        if self.backend_type == BackendType.POSTGRESQL:
+                            insert_sql += " RETURNING id"
+
+                        insert_cursor = _exec(insert_sql, insert_params)
+                        if self.backend_type == BackendType.POSTGRESQL:
+                            inserted_row = insert_cursor.fetchone()
+                            media_id = inserted_row['id'] if inserted_row else None
+                        else:
+                            media_id = insert_cursor.lastrowid
                         if not media_id:
                             raise DatabaseError("Failed to obtain new media ID.")
 
@@ -2786,15 +3210,25 @@ class MediaDatabase:
         # Assumes called within an existing transaction (e.g., from add_media_with_keywords)
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT uuid FROM Media WHERE id = ? AND deleted = 0", (media_id,))  # Ensure parent active
-            media_info = cursor.fetchone()
+            def _exec(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                return self._execute_with_connection(conn, query, params)
+
+            def _fetchone(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                return self._fetchone_with_connection(conn, query, params)
+
+            media_info = _fetchone(
+                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
+                (media_id,),
+            )
             if not media_info:
                 raise InputError(f"Parent Media ID {media_id} not found or deleted.")
             media_uuid = media_info['uuid']
 
-            cursor.execute('SELECT COALESCE(MAX(version_number), 0) + 1 FROM DocumentVersions WHERE media_id = ?', (media_id,))
-            local_version_number = cursor.fetchone()[0]
+            next_version_row = _fetchone(
+                'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM DocumentVersions WHERE media_id = ?',
+                (media_id,),
+            )
+            local_version_number = next_version_row['next_version'] if next_version_row else 1
             logger.debug(f"Creating document version {local_version_number} for media ID {media_id}, UUID {new_uuid}")
 
             insert_data = {  # Prepare dict for easier payload generation
@@ -2808,31 +3242,62 @@ class MediaDatabase:
                 'media_uuid': media_uuid  # Add parent uuid for context in payload
             }
             try:
-                cursor.execute(
-                    """INSERT INTO DocumentVersions (media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
-                       uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (insert_data['media_id'], insert_data['version_number'], insert_data['content'], insert_data['prompt'],
-                     insert_data['analysis_content'], insert_data['safe_metadata'],
-                     insert_data['created_at'],
-                     insert_data['uuid'],
-                     insert_data['last_modified'],
-                     insert_data['version'], insert_data['client_id'], insert_data['deleted'])
+                insert_sql = """
+                    INSERT INTO DocumentVersions (
+                        media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
+                        uuid, last_modified, version, client_id, deleted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                insert_params = (
+                    insert_data['media_id'],
+                    insert_data['version_number'],
+                    insert_data['content'],
+                    insert_data['prompt'],
+                    insert_data['analysis_content'],
+                    insert_data['safe_metadata'],
+                    insert_data['created_at'],
+                    insert_data['uuid'],
+                    insert_data['last_modified'],
+                    insert_data['version'],
+                    insert_data['client_id'],
+                    insert_data['deleted'],
                 )
-            except sqlite3.OperationalError as oe:
-                if "no column named safe_metadata" in str(oe).lower():
-                    cursor.execute(
-                        """INSERT INTO DocumentVersions (media_id, version_number, content, prompt, analysis_content, created_at,
-                           uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (insert_data['media_id'], insert_data['version_number'], insert_data['content'], insert_data['prompt'],
-                         insert_data['analysis_content'],
-                         insert_data['created_at'],
-                         insert_data['uuid'],
-                         insert_data['last_modified'],
-                         insert_data['version'], insert_data['client_id'], insert_data['deleted'])
+                if self.backend_type == BackendType.POSTGRESQL:
+                    insert_sql += " RETURNING id"
+                insert_cursor = _exec(insert_sql, insert_params)
+            except DatabaseError as oe:
+                message = str(oe).lower()
+                if "safe_metadata" in message and "no column" in message:
+                    insert_sql = """
+                        INSERT INTO DocumentVersions (
+                            media_id, version_number, content, prompt, analysis_content, created_at,
+                            uuid, last_modified, version, client_id, deleted
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    insert_params = (
+                        insert_data['media_id'],
+                        insert_data['version_number'],
+                        insert_data['content'],
+                        insert_data['prompt'],
+                        insert_data['analysis_content'],
+                        insert_data['created_at'],
+                        insert_data['uuid'],
+                        insert_data['last_modified'],
+                        insert_data['version'],
+                        insert_data['client_id'],
+                        insert_data['deleted'],
                     )
+                    insert_data['safe_metadata'] = None
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        insert_sql += " RETURNING id"
+                    insert_cursor = _exec(insert_sql, insert_params)
                 else:
                     raise
-            version_id = cursor.lastrowid
+            if self.backend_type == BackendType.POSTGRESQL:
+                inserted_row = insert_cursor.fetchone()
+                version_id = inserted_row['id'] if inserted_row else None
+            else:
+                version_id = insert_cursor.lastrowid
             if not version_id:
                 raise DatabaseError("Failed to get last row ID for new document version.")
 
@@ -2851,14 +3316,24 @@ class MediaDatabase:
                         arxiv_id = smd.get('arxiv_id') or smd.get('arxiv') or smd.get('ArXiv')
                         s2id = smd.get('s2_paper_id') or smd.get('paperId')
                         try:
-                            cursor.execute(
-                                """
-                                INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                                """,
-                                (version_id, doi, pmid, pmcid, arxiv_id, s2id)
+                            if self.backend_type == BackendType.POSTGRESQL:
+                                ident_sql = (
+                                    "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                                    "VALUES (?, ?, ?, ?, ?, ?) "
+                                    "ON CONFLICT (dv_id) DO UPDATE SET "
+                                    "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                                    "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
+                                )
+                            else:
+                                ident_sql = (
+                                    "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                                    "VALUES (?, ?, ?, ?, ?, ?)"
+                                )
+                            _exec(
+                                ident_sql,
+                                (version_id, doi, pmid, pmcid, arxiv_id, s2id),
                             )
-                        except sqlite3.OperationalError:
+                        except DatabaseError:
                             # Table may not exist; ignore
                             pass
             except Exception as _ident_ex:
@@ -2908,15 +3383,23 @@ class MediaDatabase:
         # Assumes called within an existing transaction
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT uuid FROM Media WHERE id = ? AND deleted = 0", (media_id,))  # Check parent active
-            media_info = cursor.fetchone()
+            media_info = self._fetchone_with_connection(
+                conn,
+                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
+                (media_id,),
+            )
             if not media_info:
                 raise InputError(f"Cannot update keywords: Media ID {media_id} not found or deleted.")
             media_uuid = media_info['uuid']
 
-            cursor.execute("SELECT mk.keyword_id, k.uuid AS keyword_uuid FROM MediaKeywords mk JOIN Keywords k ON k.id = mk.keyword_id WHERE mk.media_id = ? AND k.deleted = 0", (media_id,))
-            current_links = {row['keyword_id']: row['keyword_uuid'] for row in cursor.fetchall()}
+            current_rows = self._fetchall_with_connection(
+                conn,
+                "SELECT mk.keyword_id, k.uuid AS keyword_uuid "
+                "FROM MediaKeywords mk JOIN Keywords k ON k.id = mk.keyword_id "
+                "WHERE mk.media_id = ? AND k.deleted = 0",
+                (media_id,),
+            )
+            current_links = {row['keyword_id']: row['keyword_uuid'] for row in current_rows}
             current_keyword_ids = set(current_links.keys())
 
             target_keyword_data = {}
@@ -2935,7 +3418,12 @@ class MediaDatabase:
 
             if ids_to_remove:
                 remove_placeholders = ','.join('?' * len(ids_to_remove))
-                cursor.execute(f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})", (media_id, *list(ids_to_remove)))
+                params = (media_id, *list(ids_to_remove))
+                self._execute_with_connection(
+                    conn,
+                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",
+                    params,
+                )
                 for removed_id in ids_to_remove:
                     keyword_uuid = current_links.get(removed_id)
                     if keyword_uuid:
@@ -2945,7 +3433,10 @@ class MediaDatabase:
 
             if ids_to_add:
                 insert_params = [(media_id, kid) for kid in ids_to_add]
-                cursor.executemany("INSERT OR IGNORE INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)", insert_params)
+                insert_sql = "INSERT INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)"
+                if self.backend_type == BackendType.POSTGRESQL:
+                    insert_sql += " ON CONFLICT DO NOTHING"
+                self._executemany_with_connection(conn, insert_sql, insert_params)
                 # Log links - Note: IGNORE means we might log links that weren't actually inserted if race condition. Robust check is complex.
                 for added_id in ids_to_add:
                     keyword_uuid = target_keyword_data.get(added_id)

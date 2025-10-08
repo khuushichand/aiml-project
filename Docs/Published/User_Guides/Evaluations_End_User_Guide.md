@@ -469,7 +469,7 @@ Before requesting help:
 
 ### Contact
 - GitHub Issues: Report bugs or request features
-- Documentation: Check `/Docs/` for detailed guides
+- Documentation: See the site navigation (start at `../index.md`)
 - Logs: Include evaluation_id in support requests
 
 ---

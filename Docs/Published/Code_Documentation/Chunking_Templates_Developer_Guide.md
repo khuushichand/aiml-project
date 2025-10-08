@@ -566,7 +566,7 @@ Planned improvements for the chunking templates system:
 ## API Reference
 
 For complete API documentation, see:
-- [Chunking Templates API Documentation](/Docs/API-related/Chunking_Templates_API_Documentation.md)
+- [Chunking Templates API Documentation](../API-related/Chunking_Templates_API_Documentation.md)
 
 ## Support
 

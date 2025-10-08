@@ -16,19 +16,21 @@
 
 ## Overview
 
-The Embeddings Module provides a unified interface for generating text embeddings across multiple providers with built-in caching, optional rate limiting, and resource management. Today the production path supports OpenAI and HuggingFace; the core engine also supports ONNX (optimum + onnxruntime) and a Local API mode. Additional providers (Cohere, Google, Mistral, Voyage) are planned but not fully integrated end-to-end yet.
+The Embeddings Module provides a unified interface for generating text embeddings across multiple providers with built‑in caching, optional rate limiting, resource management, and observability. Today the production path supports OpenAI and HuggingFace; the core engine also supports ONNX (optimum + onnxruntime) and a Local API mode. Additional providers (Cohere, Google, Mistral, Voyage) are defined in configuration and provider resolution but are not yet fully integrated end‑to‑end in the embedding engine.
 
 ### Key Features
-- OpenAI-compatible synchronous API with circuit breaker and resilient connection handling
-- TTL-based caching with background cleanup and Prometheus metrics
+- OpenAI‑compatible synchronous API with circuit breaker and resilient connection handling
+- Token‑array inputs supported (single `List[int]` or batch `List[List[int]]`)
+- TTL‑based caching with background cleanup and Prometheus metrics
+- Provider fallback chain with model mapping and response headers (`X-Embeddings-Provider`, `X-Embeddings-Fallback-From`)
+- Dimension policy for non‑native sizes (`reduce`, `pad`, `ignore`) with `X-Embeddings-Dimensions-Policy`
 - Resource management and model caching (LRU eviction) in the engine
 - Security hardening with input validation and audit logging
 - Optional rate limiting (disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`)
-- OpenAI-compatible API for easy integration
 
 ### Current Version
 - Production System: `embeddings_v5_production_enhanced.py` (circuit breaker, caching, metrics)
-- Future System: Worker-based scale-out architecture (implemented here, not yet exposed via API routes)
+- Future System: Worker‑based scale‑out architecture (implemented under `/app/core/Embeddings/`, not yet exposed via API routes)
 
 ---
 
@@ -131,14 +133,40 @@ app/core/Embeddings/
 
 Notes:
 - Inputs may be a string, list of strings, or token arrays (`List[int]` or `List[List[int]]`). Token arrays are decoded to text using the model’s tokenizer when available or `cl100k_base` fallback; usage accounting uses the supplied token counts.
-- Up to 2048 inputs per request; per-model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
-- Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post-processing step (policy: `reduce` slices to first-N, `pad` zero-pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
+- Up to 2048 inputs per request; per‑model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
+- Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post‑processing step (policy: `reduce` slices to first‑N, `pad` zero‑pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
+- Provider selection: set header `x-provider: openai|huggingface|onnx|local_api`, or prefix the model `provider:model` (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`). If omitted, the server auto‑detects from the model name or defaults to OpenAI.
+- Authentication: Bearer JWT in multi‑user mode; in single‑user mode you can use either `Authorization: Bearer <key>` or `X-API-KEY: <key>`.
 
 **Error Responses:**
 - `400 Bad Request`: Invalid input or parameters
 - `401 Unauthorized`: Missing or invalid API key
 - `403 Forbidden`: Rate limit exceeded
 - `500 Internal Server Error`: Provider failure
+
+### Batch Embeddings (strings only)
+
+**Endpoint:** `POST /api/v1/embeddings/batch`
+
+**Request:**
+```json
+{
+  "texts": ["First", "Second"],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "dimensions": 512
+}
+```
+
+**Response:**
+```json
+{
+  "embeddings": [[0.1, 0.2, ...], [0.05, -0.12, ...]],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "count": 2
+}
+```
 
 ### Health Check
 
@@ -156,7 +184,12 @@ Notes:
 }
 ```
 
-### Admin Endpoints
+### Configuration and Admin Endpoints
+
+#### Providers/Models Configuration
+**Endpoint:** `GET /api/v1/embeddings/providers-config`
+
+Returns default provider/model and enabled providers with their models (from simplified embeddings configuration).
 
 #### Clear Cache (Admin Only)
 **Endpoint:** `DELETE /api/v1/embeddings/cache`
@@ -169,8 +202,26 @@ Notes:
 
 Returns known models with allowlist/default flags.
 
+#### Model Metadata
+**Endpoint:** `GET /api/v1/embeddings/models/{model_id}`
+
+Returns provider autodetection, dimension, and max tokens for a model.
+
 #### Reset Circuit Breaker (Admin Only)
 **Endpoint:** `POST /api/v1/embeddings/circuit-breakers/{provider}/reset`
+
+#### Model Warmup/Download (Admin Only)
+- `POST /api/v1/embeddings/models/warmup`
+- `POST /api/v1/embeddings/models/download`
+
+Preload or prepare a model.
+
+### ChromaDB Collection Management
+
+- `POST /api/v1/embeddings/collections` — Create a collection (auto‑detects embedding dimension)
+- `GET /api/v1/embeddings/collections` — List collections
+- `DELETE /api/v1/embeddings/collections/{collection_name}` — Delete a collection
+- `GET /api/v1/embeddings/collections/{collection_name}/stats` — Collection size and embedding dimension
 
 ---
 
@@ -304,46 +355,23 @@ Security events are logged to `logs/embeddings_audit.jsonl`:
 
 ### Rate Limiting
 
-Per-user rate limiting with configurable tiers:
-
-```python
-# Default limits
-FREE_TIER: 60 requests/minute
-PREMIUM_TIER: 200 requests/minute
-ENTERPRISE_TIER: 1000 requests/minute
-
-# Burst allowance: 1.5x normal limit
-```
+Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`), the create‑embeddings endpoint applies a limit of `5/second` using SlowAPI. Adjust the limit string in code if you need different rates.
 
 ---
 
 ## Provider Integration
 
-### Adding a New Provider
+### Adding a New Provider (engine path)
 
-1. **Create Provider Adapter:**
-```python
-# app/core/Embeddings/providers/new_provider.py
-class NewProviderEmbedder:
-    def __init__(self, config: dict):
-        self.api_key = config.get("api_key")
-        self.model = config.get("model")
-    
-    async def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        # Implementation
-        pass
-```
+The current engine implements OpenAI, HuggingFace, ONNX, and Local API. To add a new provider end‑to‑end:
 
-2. **Register Provider:**
-```python
-# In Embeddings_Create.py
-PROVIDERS = {
-    "openai": OpenAIEmbedder,
-    "new_provider": NewProviderEmbedder,
-}
-```
+1. Extend the model config types in `Embeddings_Create.py` (add a new `BaseModelCfg` subclass if needed).
+2. Add a provider branch in `create_embeddings_batch(...)` to call the new backend and return `List[List[float]]`.
+3. Update `build_provider_config(...)` in `embeddings_v5_production_enhanced.py` to construct the provider‑specific config.
+4. Optionally update provider detection in `guess_provider_for_model(...)` and model mapping in `map_model_for_provider(...)`.
+5. Wire any keys via `Config_Files/config.txt` (merged under `EMBEDDING_CONFIG`).
 
-3. **Add Configuration:**
+Example config:
 ```ini
 [Embeddings]
 embedding_provider = new_provider
@@ -373,8 +401,8 @@ Response headers for observability:
 
 **TTL-based LRU Cache:**
 - Default TTL: 1 hour
-- Max size: 10,000 entries
-- Cache key: SHA256(text + model)
+- Max size: 5,000 entries
+- Cache key: SHA256 of `text|provider|model[|dimensions]`
 
 ```python
 # Cache hit example
@@ -407,7 +435,7 @@ Optimize for throughput with batching:
 ```python
 # Automatic batching
 texts = ["text1", "text2", ..., "text100"]
-# Processed in batches of 32 (configurable)
+# Processed in batches of ~100 (configurable)
 ```
 
 ### Connection Pooling
@@ -416,8 +444,7 @@ Reuse connections for better performance:
 
 ```python
 # HTTP connection pooling
-max_connections = 10
-keepalive_timeout = 30
+max_connections = 20
 ```
 
 ---
@@ -426,27 +453,28 @@ keepalive_timeout = 30
 
 ### Prometheus Metrics
 
-Available at `http://localhost:9090/metrics`:
+Available at `/metrics` (Prometheus scrape endpoint) and JSON summary at `/api/v1/metrics`:
 
 ```
-# Active models
-embedding_models_active{provider="openai",model="text-embedding-3-small"} 1
-
 # Request rate
-embedding_requests_total{provider="openai",status="success"} 12345
+embedding_requests_total{provider="openai",model="text-embedding-3-small",status="success"} 12345
 
 # Cache performance
-embedding_cache_hit_rate 0.85
+embedding_cache_hits_total{provider="openai",model="text-embedding-3-small"} 6789
 embedding_cache_size 5678
 
-# Latency
-embedding_latency_seconds{quantile="0.99"} 0.250
+# In‑flight
+active_embedding_requests 2
+
+# Latency (histogram)
+embedding_request_duration_seconds_bucket{provider="openai",model="text-embedding-3-small",le="0.1"} 100
 
 # Fallback and policy metrics
 embedding_provider_failures_total{provider="openai",model="text-embedding-3-small",reason="http_503"} 2
 embedding_fallbacks_total{from_provider="openai",to_provider="huggingface"} 1
 embedding_policy_denied_total{provider="huggingface",model="some-model",policy_type="model"} 3
 embedding_dimension_adjustments_total{provider="huggingface",model="sentence-transformers/all-MiniLM-L6-v2",method="reduce"} 5
+embedding_token_inputs_total{mode="batch"} 42
 ```
 
 ### Logging
@@ -467,12 +495,7 @@ CRITICAL: Critical failures (non-recoverable)
 
 ### Health Monitoring
 
-```python
-# Health check intervals
-PROVIDER_CHECK: Every 30 seconds
-CACHE_CLEANUP: Every 5 minutes
-METRIC_COLLECTION: Every 60 seconds
-```
+Use `GET /api/v1/embeddings/health` for service status (includes cache stats and circuit breaker states).
 
 ---
 
@@ -681,14 +704,9 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 | HuggingFace | all-mpnet-base-v2 | 768 | 512 | Free |
 | Cohere | embed-english-v3.0 | 1024 | 512 | $0.00010 |
 
-### Performance Benchmarks
+### Performance Notes
 
-| Operation | Latency (p50) | Latency (p99) | Throughput |
-|-----------|---------------|---------------|------------|
-| Single embedding (cached) | 2ms | 5ms | 500 req/s |
-| Single embedding (uncached) | 50ms | 200ms | 20 req/s |
-| Batch (32 texts) | 100ms | 500ms | 320 texts/s |
-| Model loading | 2s | 5s | - |
+- Throughput and latency depend on the chosen provider and model, batching, and hardware. For best performance, use batching, enable caching, and select lighter models when possible.
 
 ### Security Checklist
 
@@ -703,10 +721,8 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ### Support
 
-- **GitHub Issues**: https://github.com/your-org/tldw_server/issues
-- **Documentation**: https://docs.your-org.com/embeddings
-- **Community Discord**: https://discord.gg/your-org
-- **Email Support**: support@your-org.com
+- **GitHub Issues**: https://github.com/cpacker/tldw_server/issues
+- **Documentation**: See this MkDocs site (Edit link in page footer)
 
 ---
 

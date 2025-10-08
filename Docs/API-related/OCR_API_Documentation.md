@@ -59,8 +59,8 @@ Enable OCR in media ingestion (illustrative JSON fragment)
 
 ## Backend Notes
 
-- POINTS Reader: see `Docs/OCR/POINTS-Reader.md`
-- OCR Providers overview: see `Docs/OCR/OCR_Providers.md`
+- POINTS Reader: documentation coming soon
+- OCR Providers overview: documentation coming soon
 
 ## Roadmap (Placeholder)
 
@@ -71,4 +71,3 @@ Enable OCR in media ingestion (illustrative JSON fragment)
 ---
 
 If you need additional OCR endpoints or deeper docs, please open an issue with your use case.
-

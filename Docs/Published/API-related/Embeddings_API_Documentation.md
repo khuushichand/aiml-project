@@ -490,9 +490,9 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ## Related Documentation
 
-- [RAG Service Documentation](./RAG_Service_Documentation.md)
+- [RAG API Documentation](./RAG_API_Documentation.md)
 - [API Design Guide](./API_Design.md)
-- [Authentication Documentation](./Authentication_Documentation.md)
+- [AuthNZ API Guide](./AuthNZ-API-Guide.md)
 
 ## Version History
 

@@ -3,11 +3,11 @@
 # LLM-generated documentation for the SQLite database used in the ChaChaNotes application. (Needs to be reviewed)
 
 ## Table of Contents
-1.  [Overview](#overview)
-2.  [Key Features](#key-features)
-3.  [Getting Started](#getting-started)
-4.  [Database Schema](#database-schema)
-5.  [Core Concepts](#core-concepts)
+1.  [Overview](#1-overview)
+2.  [Key Features](#2-key-features)
+3.  [Getting Started](#3-getting-started)
+4.  [Database Schema](#4-database-schema)
+5.  [Core Concepts](#5-core-concepts)
     *   [Schema Versioning and Initialization](#schema-versioning-and-initialization)
     *   [Client ID](#client-id)
     *   [Optimistic Locking (Versioning)](#optimistic-locking-versioning)
@@ -16,7 +16,7 @@
     *   [Synchronization Log](#synchronization-log)
     *   [Thread Safety](#thread-safety)
     *   [JSON Fields](#json-fields)
-6.  [API Reference: `CharactersRAGDB` Class](#api-reference-charactersragdb-class)
+6.  [API Reference: `CharactersRAGDB` Class](#6-api-reference-charactersragdb-class)
     *   [Initialization](#initialization)
     *   [Connection Management](#connection-management)
     *   [Query Execution](#query-execution)
@@ -29,8 +29,8 @@
     *   [Note Methods](#note-methods)
     *   [Linking Table Methods](#linking-table-methods)
     *   [Sync Log Methods](#sync-log-methods)
-7.  [Custom Exceptions](#custom-exceptions)
-8.  [Logging](#logging)
+7.  [Custom Exceptions](#7-custom-exceptions)
+8.  [Logging](#8-logging)
 
 ---
 

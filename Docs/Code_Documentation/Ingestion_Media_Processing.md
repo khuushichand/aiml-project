@@ -328,9 +328,9 @@ Maintainers: keep this page aligned with the code. If you add new formats or alt
 
 ## Further Reading
 
-- Audio Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`
-- Video Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_Video.md`
-- PDF Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_PDF.md`
-- EPUB Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md`
-- Documents Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_Documents.md`
-- MediaWiki Pipeline: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
+- Audio Pipeline: `./Ingestion_Pipeline_Audio.md`
+- Video Pipeline: `./Ingestion_Pipeline_Video.md`
+- PDF Pipeline: `./Ingestion_Pipeline_PDF.md`
+- EPUB Pipeline: `./Ingestion_Pipeline_Ebooks.md`
+- Documents Pipeline: `./Ingestion_Pipeline_Documents.md`
+- MediaWiki Pipeline: `./Ingestion_Pipeline_MediaWiki.md`

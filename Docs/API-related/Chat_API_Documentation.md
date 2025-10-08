@@ -3,7 +3,7 @@
 ## Overview
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
-- Scope note: Chat Dictionaries and the Document Generator are implemented as sub‑routes under `/api/v1/chat`, but documented in Chatbook features. See `Docs/API-related/Chatbook_Features_API_Documentation.md`.
+- Scope note: Chat Dictionaries and the Document Generator are implemented as sub‑routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 
 ## Authentication
 - Single-user: `X-API-KEY: <key>`
@@ -135,8 +135,8 @@ When exceeded, the endpoint returns `429`.
 - Providers/models: Dropdowns reflect configured providers and models.
 
 ## Related Documentation
-- Chatbook features (Dictionaries, Document Generator, Import/Export): `Docs/API-related/Chatbook_Features_API_Documentation.md`
-- Character chat sessions API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
+- Chatbook features (Dictionaries, Document Generator, Import/Export): `./Chatbook_Features_API_Documentation.md`
+- Character chat sessions API: see `./API_Design.md` (character chat endpoints overview)
 
 ## Providers API
 Supporting endpoints for discovering providers and models:

@@ -684,10 +684,8 @@ graph LR
 ## Next Steps
 
 For detailed implementation guidance, see:
-- [Developer Guide](./Embeddings-Developer-Guide.md) — working with the codebase
-- [API Consumer Guide](./Embeddings-API-Guide.md) — using the HTTP API and media embeddings
+- [Embeddings Module Documentation](../API-related/Embeddings_Module_Documentation.md)
+- [Embeddings API Guide](../API-related/Embeddings-API-Guide.md)
 
 For specific deployment scenarios, refer to:
-- [Single Server Setup](../Deployment/single-server.md)
-- [Docker Compose Setup](../Deployment/docker-compose.md)
-- [Kubernetes Deployment](../Deployment/kubernetes.md)
+- [Embeddings Deployment Guide](../Deployment/Embeddings-Deployment-Guide.md)

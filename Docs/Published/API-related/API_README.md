@@ -27,7 +27,7 @@ See [API Design](API_Design.md) for more details.
   - Create/list/update/delete chats, send/edit/delete/search messages
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`
-  - See: [Character Chat API Documentation](../CHARACTER_CHAT_API_DOCUMENTATION.md)
+  - See: [API Design](API_Design.md) for character chat endpoints overview
 
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`
 
@@ -68,5 +68,4 @@ The RAG module provides advanced search and question-answering capabilities acro
 
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
-- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
-
+- [RAG API Reference](RAG_API_Documentation.md) - Architecture and implementation details
