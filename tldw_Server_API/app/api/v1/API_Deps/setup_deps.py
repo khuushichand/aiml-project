@@ -16,19 +16,36 @@ from loguru import logger
 
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "testserver"}
+_FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
+
+
+def _should_trust_proxy() -> bool:
+    """Decide whether to honor proxy headers for locality checks.
+
+    We default to trusting local reverse proxies unless ops explicitly
+    disable it by setting ``TLDW_SETUP_TRUST_PROXY`` to a false-like value
+    (e.g. ``0`` or ``false``). This preserves the historical behaviour where
+    ``X-Forwarded-For`` was always honored, preventing proxy bypasses by
+    remote clients.
+    """
+
+    raw = os.getenv("TLDW_SETUP_TRUST_PROXY")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in _FALSEY_ENV_VALUES
 
 
 def _first_forwarded_ip(request: Request) -> str | None:
-    """Return the left-most IP from X-Forwarded-For if present.
+    """Return the left-most IP from X-Forwarded-For when proxy trust enabled."""
 
-    We read at most the first token to avoid trusting a chain of proxies. If the
-    header is missing or malformed, returns None.
-    """
-    raw = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if not _should_trust_proxy():
+        return None
+    raw = request.headers.get("x-forwarded-for")
     if not raw:
         return None
-    # header can be comma-separated list of IPs
     try:
+        # header can be comma-separated list of IPs; take the first hop
         first = raw.split(",", 1)[0].strip()
         return first or None
     except Exception:  # noqa: BLE001
@@ -36,12 +53,35 @@ def _first_forwarded_ip(request: Request) -> str | None:
 
 
 def _is_local_host(host: str | None, forwarded_ip: str | None) -> bool:
-    # If a forwarded IP is present, prefer it for locality decisions.
-    if forwarded_ip:
-        return forwarded_ip in LOCAL_HOSTS
+    # We do not trust forwarded IPs unless explicitly allowed elsewhere.
     if not host:
         return False
     return host in LOCAL_HOSTS
+
+
+def _has_proxy_headers(request: Request) -> bool:
+    # Treat any of these headers as evidence of a proxy hop; block by default.
+    proxy_headers = (
+        "x-forwarded-for",
+        "forwarded",
+        "x-real-ip",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+    )
+    headers = request.headers
+    for key in proxy_headers:
+        if key in headers or key.title() in headers:
+            return True
+    return False
+
+
+def _host_header_is_local(request: Request) -> bool:
+    host = request.headers.get("host") or request.headers.get("Host")
+    if not host:
+        return False
+    # Strip port if present
+    hostname = host.split(":", 1)[0].strip().lower()
+    return hostname in LOCAL_HOST_HEADERS
 
 
 async def require_local_setup_access(request: Request) -> None:
@@ -53,13 +93,24 @@ async def require_local_setup_access(request: Request) -> None:
     if allow_remote:
         return
 
-    forwarded = _first_forwarded_ip(request)
+    # If we detect proxy-related headers, block by default to avoid local spoofing via reverse proxies.
+    if _has_proxy_headers(request):
+        logger.warning("Blocked setup access due to proxy headers present")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Setup changes are restricted to local requests (no proxies). Set TLDW_SETUP_ALLOW_REMOTE=1 "
+                "to permit remote access temporarily."
+            ),
+        )
+
+    # Require both client host to be local and Host header to target local
     host = request.client.host if request.client else None
-    if _is_local_host(host, forwarded):
+    if _is_local_host(host, None) and _host_header_is_local(request):
         return
 
     logger.warning(
-        "Blocked remote setup access from host=%s forwarded=%s", host, forwarded,
+        "Blocked remote setup access from host=%s", host,
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -68,4 +119,3 @@ async def require_local_setup_access(request: Request) -> None:
             "to permit remote access temporarily."
         ),
     )
-

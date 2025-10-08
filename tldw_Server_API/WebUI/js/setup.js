@@ -3074,6 +3074,27 @@ function renderWizardSummary() {
     elements.actionMessage.textContent += `\n${additional}`;
   }
 
+  async function handleResetSetup() {
+    const confirmed = window.confirm('This will reset setup flags and require a server restart. Continue?');
+    if (!confirmed) return;
+
+    setSaving(true);
+    try {
+      const response = await fetchJson(`${API_BASE}/reset`, { method: 'POST' });
+      const message = response && response.message ? response.message : 'Setup flags reset. Restart the server and revisit /setup.';
+      setMessage('success', message);
+    } catch (error) {
+      const text = String(error && error.message ? error.message : error || 'Unknown error');
+      if (/401|403/.test(text)) {
+        setMessage('error', 'Reset denied: admin access required.');
+      } else {
+        setMessage('error', `Reset failed: ${text}`);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function fetchJson(url, options) {
     const response = await fetch(url, options);
     if (!response.ok) {

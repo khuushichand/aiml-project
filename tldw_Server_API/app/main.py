@@ -203,6 +203,17 @@ async def lifespan(app: FastAPI):
             logger.warning("App Startup: OpenTelemetry not available, using fallback metrics")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize telemetry: {e}")
+
+    # Startup: Warn if first-time setup is enabled (local-only, no proxies)
+    try:
+        if needs_setup():
+            logger.warning(
+                "First-time setup is enabled. The setup API is local-only and blocks proxied requests. "
+                "If running behind a reverse proxy, ensure /setup and /api/v1/setup are not publicly exposed, or "
+                "set TLDW_SETUP_ALLOW_REMOTE=1 temporarily on trusted networks."
+            )
+    except Exception as e:
+        logger.debug(f"Setup status check failed during startup: {e}")
     
     # Startup: Initialize auth services
     logger.info("App Startup: Initializing authentication services...")

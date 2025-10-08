@@ -97,3 +97,20 @@ Because `update_config()` now preserves comments, developers should continue to 
 
 - Swap the fuzzy matcher for a vector-store when a lightweight embedding pipeline is available.
 - Add automated UI tests (Playwright) to cover wizard validation and assistant interactions once test infrastructure is in place.
+
+## Security Model
+
+- Setup API is unauthenticated during first-run but restricted to local requests by default.
+- Mutating endpoints (POST `/api/v1/setup/config`, `/api/v1/setup/complete`, `/api/v1/setup/assistant`) are local-only.
+- Read endpoint GET `/api/v1/setup/config` is also local-only to reduce configuration surface exposure.
+- Environment variables:
+  - `TLDW_SETUP_ALLOW_REMOTE=1` — temporarily allows remote access to setup endpoints on trusted networks.
+  - `TLDW_SETUP_TRUST_PROXY=1` — when set, honors `X-Forwarded-For` to determine client origin; otherwise the header is ignored.
+- Secret values never leave the server; snapshot marks them with `is_secret: true`, returns an empty `value`, and includes an `is_set` flag.
+
+## Update Validation
+
+Setup writes are validated against the existing configuration:
+
+- Sections and keys must already exist; unknown sections/keys are rejected.
+- Values must conform to the inferred type of the current value for boolean/integer/number fields (strings are accepted as-is).

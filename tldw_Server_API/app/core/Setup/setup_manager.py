@@ -379,6 +379,9 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
     parser = _load_config_parser()
     config_path = get_config_file_path()
 
+    # Validate sections/keys and types against existing config
+    _validate_updates(parser, updates)
+
     for section, items in updates.items():
         if not parser.has_section(section):
             parser.add_section(section)
@@ -397,6 +400,48 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
 
     logger.info("Configuration file updated via setup manager")
     return backup_path
+
+
+def _validate_updates(parser: ConfigParser, updates: Dict[str, Dict[str, Any]]) -> None:
+    """Validate sections, keys, and basic types for setup updates.
+
+    Rules:
+      - Section must already exist in config.
+      - Key must already exist in the section.
+      - Type of new value must match the inferred type of the current value when
+        the current value is boolean/integer/number. String values accept any.
+    """
+    for section, items in updates.items():
+        if not parser.has_section(section):
+            raise ValueError(f"Unknown section '{section}' in updates")
+        for key, new_value in items.items():
+            if not parser.has_option(section, key):
+                raise ValueError(f"Unknown key '{key}' in section '{section}'")
+
+            current_value = parser.get(section, key, fallback="")
+            expected_type = _infer_type(current_value)
+
+            # Accept any string when expected type is string
+            if expected_type == "string":
+                continue
+
+            raw = str(new_value)
+            if expected_type == "boolean":
+                lowered = raw.strip().lower()
+                if lowered not in {"true", "false", "yes", "no", "on", "off", "1", "0"}:
+                    raise ValueError(
+                        f"Invalid boolean for {section}.{key}: '{new_value}'. Use true/false or on/off/1/0."
+                    )
+            elif expected_type == "integer":
+                try:
+                    int(raw)
+                except Exception:  # noqa: BLE001
+                    raise ValueError(f"Invalid integer for {section}.{key}: '{new_value}'") from None
+            elif expected_type == "number":
+                try:
+                    float(raw)
+                except Exception:  # noqa: BLE001
+                    raise ValueError(f"Invalid number for {section}.{key}: '{new_value}'") from None
 
 
 def mark_setup_completed(completed: bool = True) -> None:

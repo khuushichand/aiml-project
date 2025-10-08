@@ -1,5 +1,7 @@
 # Media_DB_v2.py (Refactored for Multi-DB Instances & Internal Sync Meta)
 #########################################
+from __future__ import annotations
+
 # Media_DB_v2 Library
 # Manages Media_DB_v2 operations for specific instances, handling sync metadata internally.
 # Requires a client_id during Database initialization.
@@ -36,6 +38,7 @@ import threading
 import time
 import uuid  # For UUID generation
 from contextlib import contextmanager
+from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
 from math import ceil
 from pathlib import Path
@@ -58,6 +61,15 @@ import yaml
 
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseBackend,
+    DatabaseConfig,
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.config import load_comprehensive_config
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -485,14 +497,24 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_claims_deleted ON Claims(deleted);
     """
 
-    def __init__(self, db_path: Union[str, Path], client_id: str):
+    def __init__(
+        self,
+        db_path: Union[str, Path],
+        client_id: str,
+        *,
+        backend: DatabaseBackend | None = None,
+        config: ConfigParser | None = None,
+    ):
         """
         Initializes the Database instance, sets up the connection pool (via threading.local),
         and ensures the database schema is correctly initialized or migrated.
 
         Args:
-            db_path (Union[str, Path]): The path to the SQLite database file or ':memory:'.
+            db_path (Union[str, Path]): The path to the database file or ':memory:'.
             client_id (str): A unique identifier for the client using this database instance.
+            backend (Optional[DatabaseBackend]): Pre-instantiated backend (for tests or DI).
+            config (Optional[ConfigParser]): Config parser used to resolve backend when one
+                is not explicitly provided. Falls back to comprehensive config loader.
 
         Raises:
             ValueError: If client_id is empty or None.
@@ -528,6 +550,10 @@ class MediaDatabase:
 
         logging.info(f"Initializing Database object for path: {self.db_path_str} [Client ID: {self.client_id}]")
 
+        # Resolve database backend (defaults to sqlite when none configured)
+        self.backend = self._resolve_backend(backend=backend, config=config)
+        self.backend_type = self.backend.backend_type
+
         # Initialize thread-local storage for connections
         self._local = threading.local()
         # Add lock for media insertion to prevent race conditions in concurrent uploads
@@ -541,7 +567,7 @@ class MediaDatabase:
             # and applies/verifies the schema.
             self._initialize_schema()
             initialization_successful = True  # Mark as successful if no exception occurred
-        except (DatabaseError, SchemaError, sqlite3.Error) as e:
+        except (DatabaseError, SchemaError, sqlite3.Error, BackendDatabaseError) as e:
             # Catch specific DB/Schema errors and general SQLite errors during init
             logging.critical(f"FATAL: DB Initialization failed for {self.db_path_str}: {e}", exc_info=True)
             # Attempt to clean up the connection before raising
@@ -564,67 +590,119 @@ class MediaDatabase:
                 # Logging here provides context that the __init__ block finished, albeit with failure.
                 logging.error(f"Database initialization block finished for {self.db_path_str}, but failed.")
 
-    # --- Connection Management (Unchanged) ---
-    def _get_thread_connection(self) -> sqlite3.Connection:
+    # --- Backend Resolution Helpers ---
+    def _resolve_backend(
+        self,
+        *,
+        backend: DatabaseBackend | None,
+        config: ConfigParser | None,
+    ) -> DatabaseBackend:
+        if backend is not None:
+            return backend
+
+        parser: ConfigParser | None = config
+        if parser is None:
+            try:
+                parser = load_comprehensive_config()
+            except Exception:
+                parser = None
+
+        resolved = get_content_backend(parser) if parser else None
+        if resolved is not None:
+            return resolved
+
+        fallback_config = DatabaseConfig(
+            backend_type=BackendType.SQLITE,
+            sqlite_path=self.db_path_str,
+        )
+        return DatabaseBackendFactory.create_backend(fallback_config)
+
+    # --- Connection Management ---
+    def _get_thread_connection(self):
         conn = getattr(self._local, 'conn', None)
-        is_closed = True
-        if conn:
-            try:
-                conn.execute("SELECT 1")  # Simple check
-                is_closed = False
-            except (sqlite3.ProgrammingError, sqlite3.OperationalError):
-                logging.warning(f"Thread-local connection to {self.db_path_str} was closed. Reopening.")
-                is_closed = True
+        pool = self.backend.get_pool()
+        if conn is not None:
+            if self.backend_type == BackendType.SQLITE:
                 try:
-                    conn.close()
-                except Exception as e:
-                    logging.warning(f"Failed to close database connection: {e}")
-                self._local.conn = None
+                    conn.execute("SELECT 1")
+                    return conn
+                except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+                    logging.warning(
+                        "Thread-local connection to %s was closed. Reopening.",
+                        self.db_path_str,
+                    )
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                    thread_id = threading.get_ident()
+                    try:
+                        pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    except AttributeError:
+                        pass
+                    try:
+                        if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                            pool._local.connection = None  # type: ignore[attr-defined]
+                    except AttributeError:
+                        pass
+                    conn = None
+                    self._local.conn = None
+            else:
+                if getattr(conn, "closed", False):
+                    self._release_connection(conn)
+                    conn = None
+                    self._local.conn = None
+                else:
+                    return conn
 
-        if is_closed:
-            try:
-                conn = sqlite3.connect(
-                    self.db_path_str,
-                    detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-                    check_same_thread=False,
-                    timeout=10
-                )
-                conn.row_factory = sqlite3.Row
-                if not self.is_memory_db:
-                    conn.execute("PRAGMA journal_mode=WAL;")
-                conn.execute("PRAGMA foreign_keys = ON;")
-                self._local.conn = conn
-                logging.debug(f"Opened/Reopened SQLite connection to {self.db_path_str} [Client: {self.client_id}, Thread: {threading.current_thread().name}]")
-            except sqlite3.Error as e:
-                logging.error(f"Failed to connect to database at {self.db_path_str}: {e}", exc_info=True)
-                self._local.conn = None
-                raise DatabaseError(f"Failed to connect to database '{self.db_path_str}': {e}") from e
-        return self._local.conn
+        if conn is None:
+            conn = self._open_new_connection()
+            self._local.conn = conn
+        return conn
 
-    def get_connection(self) -> sqlite3.Connection:
-        """
-        Provides the active database connection for the current thread.
+    def _open_new_connection(self):
+        try:
+            pool = self.backend.get_pool()
+            return pool.get_connection()
+        except BackendDatabaseError as exc:
+            raise DatabaseError(f"Failed to acquire database connection: {exc}") from exc
 
-        This is the public method to retrieve a connection managed by this instance.
+    def _release_connection(self, connection) -> None:
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                thread_id = threading.get_ident()
+                try:
+                    pool = self.backend.get_pool()
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
+            else:
+                self.backend.get_pool().return_connection(connection)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Error while releasing connection: %s", exc)
 
-        Returns:
-            sqlite3.Connection: The thread-local database connection.
-        """
+    def get_connection(self):
+        """Provides the active database connection for the current thread."""
         return self._get_thread_connection()
 
     def close_connection(self):
-        """Closes the database connection for the current thread, if open."""
+        """Closes or returns the database connection for the current thread, if open."""
         if hasattr(self._local, 'conn') and self._local.conn is not None:
-            try:
-                conn = self._local.conn
-                self._local.conn = None  # Remove ref before closing
-                conn.close()
-                logging.debug(f"Closed connection for thread {threading.current_thread().name}.")
-            except sqlite3.Error as e:
-                logging.warning(f"Error closing connection: {e}")
-            finally:
-                if hasattr(self._local, 'conn'):  # Paranoid check
-                    self._local.conn = None
+            conn = self._local.conn
+            self._local.conn = None
+            self._release_connection(conn)
+
+    def _ensure_sqlite_backend(self) -> None:
+        if self.backend_type != BackendType.SQLITE:
+            raise NotImplementedError(
+                "PostgreSQL support for MediaDatabase operations is still under development."
+            )
 
     # --- Query Execution (Unchanged, catches IntegrityError from validation triggers) ---
     def execute_query(self, query: str, params: tuple = None, *, commit: bool = False) -> sqlite3.Cursor:
@@ -646,6 +724,7 @@ class MediaDatabase:
              sqlite3.IntegrityError: Specifically re-raised if a sync validation
                                      trigger (defined in schema) fails.
          """
+        self._ensure_sqlite_backend()
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -686,6 +765,7 @@ class MediaDatabase:
             TypeError: If `params_list` is not a list or contains invalid data types.
             DatabaseError: For general SQLite errors or integrity violations.
         """
+        self._ensure_sqlite_backend()
         conn = self.get_connection()
         if not isinstance(params_list, list):
             raise TypeError("params_list must be a list.")
@@ -726,6 +806,7 @@ class MediaDatabase:
             Exception: Re-raises any exception that occurs within the block
                        after attempting a rollback.
         """
+        self._ensure_sqlite_backend()
         conn = self.get_connection()
         in_outer = conn.in_transaction
         try:

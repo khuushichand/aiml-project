@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
@@ -45,7 +46,7 @@ async def get_setup_status() -> Dict[str, Any]:
 
 
 @router.get("/config", openapi_extra={"security": []})
-async def get_setup_config() -> Dict[str, Any]:
+async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
     """Return the current configuration grouped by section for the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -144,4 +145,30 @@ async def ask_setup_assistant(
     try:
         return setup_manager.answer_setup_question(payload.question)
     except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    
+    "/reset",
+    summary="Reset first-time setup flags (admin)",
+    description=(
+        "Admin-only recovery endpoint to re-enable the guided setup flow by setting "
+        "enable_first_time_setup=true and setup_completed=false. Requires server restart."
+    ),
+)
+async def reset_setup_flags(_admin: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Admin-only: reset first-time setup flags for recovery.
+
+    Sets `enable_first_time_setup = true` and `setup_completed = false` in config.txt.
+    """
+    try:
+        setup_manager.reset_setup_flags()
+        return {
+            "success": True,
+            "message": "Setup flags reset. Restart the server and revisit /setup.",
+            "requires_restart": True,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to reset setup flags")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
