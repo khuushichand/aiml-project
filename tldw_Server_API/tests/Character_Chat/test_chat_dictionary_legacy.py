@@ -17,8 +17,7 @@ from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.exceptions import InputError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
 
 
 @pytest.fixture

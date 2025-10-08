@@ -56,6 +56,13 @@
                 <p>Review each section below. Update any values that still use placeholders or defaults.</p>
             </div>
             <div id="wizardSummary" class="wizard-summary" hidden></div>
+            <div id="moduleWalkthroughs" class="module-walkthroughs" hidden>
+                <div class="module-walkthrough-header">
+                    <h3>Module Walkthroughs</h3>
+                    <p>Optional deep dives for complex areas. Jump in when you want hands-on guidance.</p>
+                </div>
+                <div id="moduleWalkthroughList" class="module-walkthrough-list"></div>
+            </div>
             <button id="showAllSections" class="btn subtle show-all" type="button" hidden></button>
             <div id="configSections" class="config-sections">
                 <div class="empty-state" id="configLoading">Loading configuration…</div>
@@ -76,6 +83,15 @@
                 <button id="completeSetup" class="btn success" disabled>Mark Setup Complete</button>
             </div>
             <div id="actionMessage" class="action-message" role="status"></div>
+            <div id="installStatusPanel" class="install-status-panel" hidden aria-live="polite">
+                <div class="install-status-header">
+                    <h3 id="installStatusHeading">Installer Progress</h3>
+                    <span id="installStatusState" class="status-badge">Idle</span>
+                </div>
+                <p id="installStatusMessage" class="install-status-message"></p>
+                <ul id="installStatusSteps" class="install-status-steps"></ul>
+                <div id="installStatusErrors" class="install-status-errors" role="alert" hidden></div>
+            </div>
         </section>
     </div>
 
@@ -101,6 +117,30 @@
                     <button id="assistantSend" class="btn primary assistant-send" type="submit">Send</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <div id="moduleOverlay" class="module-overlay" role="dialog" aria-modal="true" aria-labelledby="moduleOverlayTitle" tabindex="-1" hidden>
+        <div class="module-overlay-content">
+            <header class="module-overlay-header">
+                <div class="module-overlay-title-group">
+                    <span class="module-overlay-icon" aria-hidden="true">🧭</span>
+                    <h3 id="moduleOverlayTitle" class="module-overlay-title"></h3>
+                </div>
+                <button id="moduleOverlayClose" class="module-overlay-close" type="button" aria-label="Close walkthrough">×</button>
+            </header>
+            <p id="moduleOverlayIntro" class="module-overlay-intro"></p>
+            <div class="module-overlay-step-status">
+                <span id="moduleOverlayStep"></span>
+            </div>
+            <div id="moduleOverlayBody" class="module-overlay-body"></div>
+            <footer class="module-overlay-footer">
+                <button id="moduleOverlayBack" class="btn subtle" type="button">Back</button>
+                <div class="module-overlay-actions">
+                    <button id="moduleOverlaySkip" class="btn subtle" type="button">Skip walkthrough</button>
+                    <button id="moduleOverlayNext" class="btn primary" type="button">Next</button>
+                </div>
+            </footer>
         </div>
     </div>
 </body>

@@ -327,14 +327,28 @@ def get_config_snapshot() -> Dict[str, Any]:
                 field_hint = section_comments.get(section)
             if not field_hint:
                 field_hint = _generate_default_hint(section, key)
-            entries.append({
+
+            is_secret = _is_sensitive_key(key)
+            # Determine placeholder against the real value before masking
+            placeholder_flag = _is_placeholder(value)
+
+            # Never return secret values to the client. Indicate if it is set without exposing it.
+            presented_value = "" if is_secret else value
+            presented_type = "string" if is_secret else _infer_type(value)
+
+            entry: Dict[str, Any] = {
                 "key": key,
-                "value": value,
-                "type": _infer_type(value),
-                "is_secret": _is_sensitive_key(key),
-                "placeholder": _is_placeholder(value),
+                "value": presented_value,
+                "type": presented_type,
+                "is_secret": is_secret,
+                "placeholder": placeholder_flag,
                 "hint": field_hint,
-            })
+            }
+            # Extra hint for clients if a secret exists but is intentionally masked
+            if is_secret:
+                entry["is_set"] = bool(str(value).strip()) and not placeholder_flag
+
+            entries.append(entry)
 
         sections.append({
             "name": section,

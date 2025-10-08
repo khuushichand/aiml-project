@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from loguru import logger
 
 from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.core.Setup import install_manager
+from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
+from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
@@ -23,6 +27,10 @@ class SetupCompleteRequest(BaseModel):
     disable_first_time_setup: Optional[bool] = Field(
         False,
         description="If true, flips enable_first_time_setup to false so the screen stays hidden",
+    )
+    install_plan: Optional[InstallPlan] = Field(
+        None,
+        description="Backend installation instructions to execute after setup completes.",
     )
 
 
@@ -52,8 +60,26 @@ async def get_setup_config() -> Dict[str, Any]:
     return setup_manager.get_config_snapshot()
 
 
+@router.get("/install-status", openapi_extra={"security": []})
+async def get_install_status() -> Dict[str, Any]:
+    """Return the current installation plan progress if available."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    install_status = install_manager.get_install_status_snapshot()
+    if not install_status:
+        return {"status": "idle"}
+
+    return install_status
+
+
 @router.post("/config", openapi_extra={"security": []})
-async def update_setup_config(payload: ConfigUpdates) -> Dict[str, Any]:
+async def update_setup_config(
+    payload: ConfigUpdates,
+    _guard: None = Depends(require_local_setup_access),
+) -> Dict[str, Any]:
     """Persist configuration updates coming from the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -78,7 +104,11 @@ async def update_setup_config(payload: ConfigUpdates) -> Dict[str, Any]:
 
 
 @router.post("/complete", openapi_extra={"security": []})
-async def mark_setup_complete(payload: SetupCompleteRequest) -> Dict[str, Any]:
+async def mark_setup_complete(
+    payload: SetupCompleteRequest,
+    background_tasks: BackgroundTasks,
+    _guard: None = Depends(require_local_setup_access),
+) -> Dict[str, Any]:
     """Mark the setup workflow as complete and optionally disable future prompts."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -89,6 +119,11 @@ async def mark_setup_complete(payload: SetupCompleteRequest) -> Dict[str, Any]:
 
     setup_manager.mark_setup_completed(True)
 
+    plan_requested = False
+    if payload.install_plan and not payload.install_plan.is_empty():
+        plan_requested = True
+        background_tasks.add_task(execute_install_plan, payload.install_plan.dict())
+
     if payload.disable_first_time_setup:
         setup_manager.update_config({setup_manager.SETUP_SECTION: {"enable_first_time_setup": False}}, create_backup=False)
 
@@ -96,11 +131,15 @@ async def mark_setup_complete(payload: SetupCompleteRequest) -> Dict[str, Any]:
         "success": True,
         "message": "Setup marked as complete. Restart the server to load new configuration.",
         "requires_restart": True,
+        "install_plan_submitted": plan_requested,
     }
 
 
 @router.post("/assistant", openapi_extra={"security": []})
-async def ask_setup_assistant(payload: AssistantQuestion) -> Dict[str, Any]:
+async def ask_setup_assistant(
+    payload: AssistantQuestion,
+    _guard: None = Depends(require_local_setup_access),
+) -> Dict[str, Any]:
     """Provide contextual help for setup questions using local configuration knowledge."""
     try:
         return setup_manager.answer_setup_question(payload.question)
