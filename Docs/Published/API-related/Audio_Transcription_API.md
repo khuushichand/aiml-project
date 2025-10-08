@@ -27,7 +27,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ### Advanced Features
 - **Voice Activity Detection (VAD)**: Intelligent speech segmentation
 - **Streaming Support**: Process long audio files efficiently
-- **Language Detection**: Whisper can auto-detect language when none is provided (detection is not currently returned in API JSON fields)
+- **Language Detection**: Whisper can auto-detect language when none is provided; the detected language is returned in the JSON response
 - **Partial Transcriptions**: Get interim results during live transcription
 - **Model Caching**: Efficient model management for repeated use
 
@@ -85,7 +85,7 @@ Transcribe audio into text.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
-| timestamp_granularities | string | No | Comma-separated values. Currently only `segment` is used |
+| timestamp_granularities | string | No | Comma-separated values or JSON array. Supported: `segment`, `word` (word-level for Whisper only) |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
 | seg_min_segment_size | integer | No | Min items per segment (default 5) |
@@ -93,6 +93,8 @@ Transcribe audio into text.
 | seg_utterance_expansion_width | integer | No | Context width per block (default 2) |
 | seg_embeddings_provider | string | No | Embeddings provider override (optional) |
 | seg_embeddings_model | string | No | Embeddings model override (optional) |
+
+When `timestamp_granularities` includes `word` (Whisper only), each segment includes a `words` array with `{start, end, word}` entries.
 
 **Response (JSON format):**
 ```json

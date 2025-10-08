@@ -3621,9 +3621,11 @@ class MediaDatabase:
         logger.debug(f"Marking media {media_id} as trash.")
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT uuid, version, is_trash FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                media_info = cursor.fetchone()
+                media_info = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, is_trash FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
                 if not media_info:
                     logger.warning(f"Cannot trash: Media {media_id} not found/deleted.")
                     return False
@@ -3634,13 +3636,19 @@ class MediaDatabase:
                 new_version = current_version + 1
 
                 # Pass current_time for both trash_date and last_modified
-                cursor.execute("UPDATE Media SET is_trash=1, trash_date=?, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                               (current_time, current_time, new_version, client_id, media_id, current_version))
-                if cursor.rowcount == 0:
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    "UPDATE Media SET is_trash=1, trash_date=?, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                    (current_time, current_time, new_version, client_id, media_id, current_version),
+                )
+                if update_cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)
 
-                cursor.execute("SELECT * FROM Media WHERE id = ?", (media_id,))  # Fetch updated state for payload
-                sync_payload = dict(cursor.fetchone())
+                sync_payload = self._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
                 self._log_sync_event(conn, 'Media', media_uuid, 'update', new_version, sync_payload)
                 # No FTS change needed for trash status itself
                 logger.info(f"Media {media_id} marked as trash. New ver: {new_version}")
@@ -3678,9 +3686,11 @@ class MediaDatabase:
         logger.debug(f"Restoring media {media_id} from trash.")
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT uuid, version, is_trash FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                media_info = cursor.fetchone()
+                media_info = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, is_trash FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
                 if not media_info:
                     logger.warning(f"Cannot restore: Media {media_id} not found/deleted.")
                     return False
@@ -3691,13 +3701,19 @@ class MediaDatabase:
                 new_version = current_version + 1
 
                 # Pass current_time for last_modified, set trash_date to NULL
-                cursor.execute("UPDATE Media SET is_trash=0, trash_date=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                               (current_time, new_version, client_id, media_id, current_version))
-                if cursor.rowcount == 0:
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    "UPDATE Media SET is_trash=0, trash_date=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                    (current_time, new_version, client_id, media_id, current_version),
+                )
+                if update_cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)
 
-                cursor.execute("SELECT * FROM Media WHERE id = ?", (media_id,))  # Fetch updated state for payload
-                sync_payload = dict(cursor.fetchone())
+                sync_payload = self._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
                 self._log_sync_event(conn, 'Media', media_uuid, 'update', new_version, sync_payload)
                 # No FTS change needed
                 logger.info(f"Media {media_id} restored from trash. New ver: {new_version}")
@@ -6096,9 +6112,12 @@ def soft_delete_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> 
     logger.debug(f"Attempting soft delete Transcript UUID: {transcript_uuid}")
     try:
         with db_instance.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT t.id, t.version, m.uuid as media_uuid FROM Transcripts t JOIN Media m ON t.media_id = m.id WHERE t.uuid = ? AND t.deleted = 0", (transcript_uuid,))
-            info = cursor.fetchone()
+            info = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT t.id, t.version, m.uuid as media_uuid FROM Transcripts t JOIN Media m ON t.media_id = m.id "
+                "WHERE t.uuid = ? AND t.deleted = 0",
+                (transcript_uuid,),
+            )
             if not info:
                 logger.warning(f"Transcript UUID {transcript_uuid} not found or already deleted.")
                 return False
@@ -6106,9 +6125,12 @@ def soft_delete_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> 
             new_version = current_version + 1
 
             # Pass current_time for last_modified
-            cursor.execute("UPDATE Transcripts SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                    (current_time, new_version, client_id, t_id, current_version))
-            if cursor.rowcount == 0:
+            update_cursor = db_instance._execute_with_connection(
+                conn,
+                "UPDATE Transcripts SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                (current_time, new_version, client_id, t_id, current_version),
+            )
+            if update_cursor.rowcount == 0:
                 raise ConflictError("Transcripts", t_id)
 
             # Payload reflects the state *after* the update
@@ -6159,9 +6181,11 @@ def clear_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> bo
     logger.debug(f"Clearing analysis for DocVersion UUID: {version_uuid}")
     try:
         with db_instance.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, version FROM DocumentVersions WHERE uuid = ? AND deleted = 0", (version_uuid,))
-            info = cursor.fetchone()
+            info = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT id, version FROM DocumentVersions WHERE uuid = ? AND deleted = 0",
+                (version_uuid,),
+            )
             if not info:
                 logger.warning(f"DocVersion UUID {version_uuid} not found or already deleted.")
                 return False
@@ -6169,14 +6193,20 @@ def clear_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> bo
             new_version = current_version + 1
 
             # Pass current_time for last_modified
-            cursor.execute("UPDATE DocumentVersions SET analysis_content=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                           (current_time, new_version, client_id, v_id, current_version))
-            if cursor.rowcount == 0:
+            update_cursor = db_instance._execute_with_connection(
+                conn,
+                "UPDATE DocumentVersions SET analysis_content=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                (current_time, new_version, client_id, v_id, current_version),
+            )
+            if update_cursor.rowcount == 0:
                 raise ConflictError("DocumentVersions", v_id)
 
             # Fetch full data for payload AFTER update
-            cursor.execute("SELECT dv.*, m.uuid as media_uuid FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.id = ?", (v_id,))
-            payload = dict(cursor.fetchone())
+            payload = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT dv.*, m.uuid as media_uuid FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.id = ?",
+                (v_id,),
+            ) or {}
             db_instance._log_sync_event(conn, 'DocumentVersions', version_uuid, 'update', new_version, payload)  # Call instance method for logging
             logger.info(f"Cleared analysis for DocVersion UUID {version_uuid}. New ver: {new_version}")
             return True
@@ -6221,9 +6251,11 @@ def clear_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> bool
     logger.debug(f"Clearing prompt for DocVersion UUID: {version_uuid}")
     try:
         with db_instance.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, version FROM DocumentVersions WHERE uuid = ? AND deleted = 0", (version_uuid,))
-            info = cursor.fetchone()
+            info = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT id, version FROM DocumentVersions WHERE uuid = ? AND deleted = 0",
+                (version_uuid,),
+            )
             if not info:
                 logger.warning(f"DocVersion UUID {version_uuid} not found or already deleted.")
                 return False
@@ -6231,14 +6263,20 @@ def clear_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> bool
             new_version = current_version + 1
 
             # Pass current_time for last_modified
-            cursor.execute("UPDATE DocumentVersions SET prompt=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                           (current_time, new_version, client_id, v_id, current_version))
-            if cursor.rowcount == 0:
+            update_cursor = db_instance._execute_with_connection(
+                conn,
+                "UPDATE DocumentVersions SET prompt=NULL, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
+                (current_time, new_version, client_id, v_id, current_version),
+            )
+            if update_cursor.rowcount == 0:
                 raise ConflictError("DocumentVersions", v_id)
 
             # Fetch full data for payload AFTER update
-            cursor.execute("SELECT dv.*, m.uuid as media_uuid FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.id = ?", (v_id,))
-            payload = dict(cursor.fetchone())
+            payload = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT dv.*, m.uuid as media_uuid FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.id = ?",
+                (v_id,),
+            ) or {}
             db_instance._log_sync_event(conn, 'DocumentVersions', version_uuid, 'update', new_version, payload)  # Call instance method for logging
             logger.info(f"Cleared prompt for DocVersion UUID {version_uuid}. New ver: {new_version}")
             return True

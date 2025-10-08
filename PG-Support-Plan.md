@@ -1,15 +1,15 @@
 # PostgreSQL Support Implementation Plan
 
 ## ⚠️ ACTUAL IMPLEMENTATION STATUS ⚠️
-**As of 2025-09-07 (revised 2025-10-07):**
-- **Integration Progress**: ~25% – Media and ChaCha database classes now resolve the shared backend factory and route connection pooling through it.
-- **Functional PostgreSQL Support**: Partial – Media schema/FTS bootstrap runs on Postgres, but query paths still execute SQLite SQL and writes are disabled pending backend-aware refactors.
+**As of 2025-09-07 (revised 2025-10-08):**
+- **Integration Progress**: ~40% – MediaDatabase now runs through backend helpers for keyword sync, soft delete, document versions, and sync-log paths; remaining Media CRUD and ChaCha integration still pending.
+- **Functional PostgreSQL Support**: Partial – Schema bootstrap and several write paths execute via the Postgres backend, but trash/restore flows, transcript handling, and analytics queries still rely on SQLite SQL or features.
 - **Tests Written**: 0 tests (Postgres CI coverage still outstanding).
-- **Files Created**: Backend abstraction (~2200 LOC) lives under `app/core/DB_Management/backends/` and is tracked.
-- **Git Status**: Backend modules plus new factory helpers are committed; no orphaned files.
+- **Files Created**: Backend abstraction (~2200 LOC) lives under `app/core/DB_Management/backends/`; MediaDatabase refactor in progress.
+- **Git Status**: Backend modules plus new factory helpers are committed; ongoing refactor tracked in working tree.
 - **Dependencies**: psycopg deps remain commented out in `requirements.txt` (runtime opt-in still pending).
-- **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager now provides backend-aware factory helpers.
-- **Main Issue**: Query/CRUD layers remain SQLite-only; Postgres migrations/tests not yet implemented.
+- **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager factories reuse shared backend.
+- **Main Issue**: Residual SQLite-specific SQL across Media/ChaCha code and lack of migrations/tests block full Postgres enablement.
 
 ## Executive Summary
 This document outlines the plan to add PostgreSQL support to the tldw_server RAG system while maintaining full SQLite compatibility. The implementation will allow users to choose their preferred database backend based on their needs.
@@ -20,7 +20,7 @@ This document outlines the plan to add PostgreSQL support to the tldw_server RAG
 - ✅ Created backend factory with configuration support (wired through `content_backend.py` and `DB_Manager` helpers)
 - ✅ Implemented PostgreSQL backend adapter (schema bootstrap invoked for Media DB)
 - ✅ Created FTS query translator with bidirectional conversion (used for schema translation only)
-- 🔄 Integration with existing code IN PROGRESS — Media/ChaCha classes instantiate via `DatabaseBackend`, but CRUD paths still run SQLite SQL
+- 🔄 Integration with existing code IN PROGRESS — Media CRUD paths are being migrated to backend helpers; ChaCha routines untouched and several Media flows still execute SQLite-specific SQL
 - ❌ Testing framework NOT CREATED (no automated Postgres coverage yet)
 - ❌ Migration tools NOT CREATED
 
@@ -86,11 +86,11 @@ class PostgreSQLBackend(DatabaseBackend):
 ```
 
 ### Phase 3: Query Layer Refactor
-**Status**: Not Started
+**Status**: IN PROGRESS
 **Timeline**: Day 8-10
 
 Tasks:
-- [ ] Replace inline sqlite3 calls with backend-aware helpers in `Media_DB_v2` (reads, writes, transactions)
+- [~] Replace inline sqlite3 calls with backend-aware helpers in `Media_DB_v2` (keyword sync, soft delete, document versions, sync log paths migrated; trash/restore, transcripts, analytics still pending)
 - [ ] Mirror backend-aware helpers across ChaChaNotes DB CRUD code
 - [ ] Introduce shared SQL builders (per-backend) for high-traffic operations
 - [ ] Add regression/unit coverage for new helpers (SQLite + Postgres)

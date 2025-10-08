@@ -12,6 +12,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - [Live Transcription](#live-transcription)
 - [Usage Examples](#usage-examples)
 - [Performance Comparison](#performance-comparison)
+ - [Notes & Limitations](#notes--limitations)
 
 ## Features
 
@@ -26,7 +27,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ### Advanced Features
 - **Voice Activity Detection (VAD)**: Intelligent speech segmentation
 - **Streaming Support**: Process long audio files efficiently
-- **Language Detection**: Automatic language identification
+- **Language Detection**: Automatic language identification (Whisper). When no `language` is provided, the API returns the detected language in JSON.
 - **Partial Transcriptions**: Get interim results during live transcription
 - **Model Caching**: Efficient model management for repeated use
 
@@ -63,7 +64,14 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 
 ## API Endpoints
 
-### POST /v1/audio/transcriptions
+Authentication
+- Single-user mode: send `X-API-KEY: <your_key>`
+- Multi-user mode (JWT): send `Authorization: Bearer <JWT>`
+
+Base path
+- All endpoints in this document are served under `/api/v1`.
+
+### POST /api/v1/audio/transcriptions
 
 Transcribe audio into text.
 
@@ -77,7 +85,7 @@ Transcribe audio into text.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
-| timestamp_granularities | array | No | Timestamp levels: `segment`, `word` |
+| timestamp_granularities | string | No | Comma-separated values or JSON array. Supported tokens: `segment`, `word` |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
 | seg_min_segment_size | integer | No | Min items per segment (default 5) |
@@ -85,6 +93,8 @@ Transcribe audio into text.
 | seg_utterance_expansion_width | integer | No | Context width per block (default 2) |
 | seg_embeddings_provider | string | No | Embeddings provider override (optional) |
 | seg_embeddings_model | string | No | Embeddings model override (optional) |
+
+When `timestamp_granularities` includes `word` (Whisper only), each segment includes a `words` array with `{start, end, word}` entries.
 
 **Response (JSON format):**
 ```json
@@ -110,7 +120,7 @@ Transcribe audio into text.
 }
 ```
 
-### POST /v1/audio/translations
+### POST /api/v1/audio/translations
 
 Translate audio into English.
 
@@ -150,14 +160,37 @@ nemo_cache_dir = ./models/nemo
 
 ### Environment Variables
 
-You can override config settings with environment variables:
-- `TLDW_DEFAULT_TRANSCRIBER`: Set default transcription provider
-- `TLDW_NEMO_DEVICE`: Set device for Nemo models
-- `TLDW_NEMO_CACHE_DIR`: Set model cache directory
+Note: In the current codebase, STT configuration is read from `Config_Files/config.txt`. Environment variable overrides for STT (e.g., default transcriber, Nemo device, cache dir) are not wired up yet. Use `config.txt` to change these settings.
 
 ## Live Transcription
 
-### Basic Live Transcription
+### WebSocket API (Real-time)
+
+- Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
+- Authentication:
+  - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
+  - Multi-user JWT: not currently supported via WebSocket; use single-user token
+- Protocol:
+  - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
+  - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
+  - Optional finalize: `{ "type": "commit" }`
+  - Server messages include:
+    - `{ "type": "status", "message": "Authenticated" }`
+    - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false }`
+    - `{ "type": "transcription", "text": "...", "timestamp": ..., "is_final": true }`
+    - `{ "type": "full_transcript", "text": "..." }`
+    - `{ "type": "error", "message": "..." }`
+
+Helper endpoints
+- `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
+- `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
+
+Example (wscat)
+```bash
+wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=YOUR_SINGLE_USER_API_KEY"
+```
+
+### Basic Live Transcription (Local Python)
 
 ```python
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Live_Transcription_Nemo import (
@@ -184,7 +217,7 @@ transcriber.start()
 transcriber.stop()
 ```
 
-### Streaming File Transcription
+### Streaming File Transcription (Local Python)
 
 ```python
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Live_Transcription_Nemo import (
@@ -224,28 +257,28 @@ full_text = transcriber.get_full_transcription()
 ```bash
 # Basic transcription with Whisper
 curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \
-  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "X-API-KEY: YOUR_SINGLE_USER_API_KEY" \
   -F "file=@audio.wav" \
   -F "model=whisper-1" \
   -F "response_format=json"
 
 # Fast transcription with Parakeet
 curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \
-  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "X-API-KEY: YOUR_SINGLE_USER_API_KEY" \
   -F "file=@audio.wav" \
   -F "model=parakeet" \
   -F "response_format=json"
 
 # Multi-lingual with Canary (Spanish)
 curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \
-  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "X-API-KEY: YOUR_SINGLE_USER_API_KEY" \
   -F "file=@spanish_audio.wav" \
   -F "model=canary" \
   -F "language=es"
 
 # Get SRT subtitles
 curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \
-  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "X-API-KEY: YOUR_SINGLE_USER_API_KEY" \
   -F "file=@video_audio.wav" \
   -F "model=whisper-1" \
   -F "response_format=srt"
@@ -259,7 +292,10 @@ from openai import OpenAI
 # Configure client to use tldw_server
 client = OpenAI(
     base_url="http://localhost:8000/api/v1",
-    api_key="YOUR_API_TOKEN"
+    # In single-user mode, the OpenAI client sends Bearer by default.
+    # Provide your API key via X-API-KEY header instead:
+    api_key="not-used",
+    default_headers={"X-API-KEY": "YOUR_SINGLE_USER_API_KEY"}
 )
 
 # Basic transcription
@@ -308,7 +344,7 @@ import requests
 
 # Transcribe with Parakeet
 url = "http://localhost:8000/api/v1/audio/transcriptions"
-headers = {"Authorization": "Bearer YOUR_API_TOKEN"}
+headers = {"X-API-KEY": "YOUR_SINGLE_USER_API_KEY"}
 
 with open("audio.wav", "rb") as f:
     files = {"file": ("audio.wav", f, "audio/wav")}
@@ -379,6 +415,14 @@ except KeyboardInterrupt:
 3. **For Multi-lingual**: Use Canary (4 languages) or Whisper (99+ languages)
 4. **For Live Transcription**: Use Parakeet with VAD mode
 5. **For Resource-Constrained**: Use Parakeet ONNX or Whisper tiny
+
+## Notes & Limitations
+
+- Endpoint paths include `/api/v1` (examples reflect this; headings updated accordingly).
+- `timestamp_granularities` supports `segment` and `word`; send as CSV or JSON array. Word-level timestamps are available for Whisper only.
+- Language detection: When `language` is omitted and Whisper is used, the API returns the detected language in the JSON response.
+- Authentication: Single-user mode uses `X-API-KEY`. The OpenAI Python client defaults to Bearer; pass `default_headers={"X-API-KEY": "..."}`.
+- SRT/VTT outputs are basic placeholders without precise per-segment timings.
 
 ## Troubleshooting
 
