@@ -4,7 +4,8 @@
 # Imports
 import configparser
 import os
-from typing import List, Tuple, Union, Dict
+from pathlib import Path
+from typing import List, Tuple, Union, Dict, Optional
 #
 # 3rd-Party Libraries
 #from elasticsearch import Elasticsearch
@@ -25,7 +26,9 @@ from tldw_Server_API.app.core.Utils.Utils import get_database_path, get_project_
 from tldw_Server_API.app.core.DB_Management.content_backend import (
     ContentDatabaseSettings,
     load_content_db_settings,
+    get_content_backend,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
     import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
@@ -46,7 +49,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ingest_article_to_db_new as sqlite_ingest_article_to_db, \
     get_unprocessed_media as sqlite_get_unprocessed_media,\
     )
-#from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import
+# ChaChaNotes database
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 #
 # End of imports
 ############################################################################################################
@@ -60,9 +64,60 @@ single_user_config.read(single_user_config_path)
 
 content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
 
+# Resolve shared backend instance for content databases (Media/ChaCha).
+_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = get_content_backend(single_user_config)
+
 single_user_db_path: str = content_db_settings.sqlite_path or './Databases/server_media_summary.db'
 single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
 single_user_backup_dir: Union[str, bytes] = os.environ.get('DB_BACKUP_DIR', single_user_backup_path)
+single_user_chacha_path: str = single_user_config.get('Database', 'chacha_path', fallback='Databases/ChaChaNotes.db')
+
+
+def get_content_backend_instance() -> Optional[DatabaseBackend]:
+    """Return the shared content DatabaseBackend instance (if configured)."""
+    return _CONTENT_DB_BACKEND
+
+
+def create_media_database(
+    client_id: str,
+    *,
+    db_path: Union[str, Path, None] = None,
+    backend: Optional[DatabaseBackend] = None,
+    config: Optional[configparser.ConfigParser] = None,
+) -> MediaDatabase:
+    """Factory for MediaDatabase instances using the shared backend wiring."""
+
+    target_path = Path(db_path) if db_path else Path(single_user_db_path)
+    backend_to_use = backend or _CONTENT_DB_BACKEND
+    cfg = config or single_user_config
+
+    return MediaDatabase(
+        db_path=str(target_path),
+        client_id=client_id,
+        backend=backend_to_use,
+        config=cfg,
+    )
+
+
+def create_chacha_database(
+    client_id: str,
+    *,
+    db_path: Union[str, Path, None] = None,
+    backend: Optional[DatabaseBackend] = None,
+    config: Optional[configparser.ConfigParser] = None,
+) -> CharactersRAGDB:
+    """Factory for ChaChaNotes database instances with backend support."""
+
+    target_path = Path(db_path) if db_path else Path(single_user_chacha_path)
+    backend_to_use = backend or _CONTENT_DB_BACKEND
+    cfg = config or single_user_config
+
+    return CharactersRAGDB(
+        db_path=str(target_path),
+        client_id=client_id,
+        backend=backend_to_use,
+        config=cfg,
+    )
 
 
 def get_db_config():

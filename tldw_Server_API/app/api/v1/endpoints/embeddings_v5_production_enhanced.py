@@ -808,6 +808,53 @@ def resolve_fallback_chain(primary_provider: str) -> List[str]:
     }
     return defaults.get(primary_provider, [primary_provider])
 
+def _fallback_model_map() -> Dict[str, Dict[str, str]]:
+    """Return mapping for provider-specific model fallbacks.
+
+    Shape: {"<src_provider>:<src_model>": {"<dst_provider>": "<dst_model>"}}
+    """
+    try:
+        m = settings.get("EMBEDDINGS_FALLBACK_MODEL_MAP", None)
+        if isinstance(m, dict) and m:
+            return m
+    except Exception:
+        pass
+    # Sensible defaults for common OpenAI → HF mapping
+    return {
+        "openai:text-embedding-3-small": {
+            "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
+            "onnx": "sentence-transformers/all-MiniLM-L6-v2",
+            "local_api": "sentence-transformers/all-MiniLM-L6-v2",
+        },
+        "openai:text-embedding-3-large": {
+            "huggingface": "sentence-transformers/all-mpnet-base-v2",
+            "onnx": "sentence-transformers/all-mpnet-base-v2",
+            "local_api": "sentence-transformers/all-mpnet-base-v2",
+        },
+        "openai:text-embedding-ada-002": {
+            "huggingface": "sentence-transformers/all-mpnet-base-v2",
+            "onnx": "sentence-transformers/all-mpnet-base-v2",
+            "local_api": "sentence-transformers/all-mpnet-base-v2",
+        },
+    }
+
+def map_model_for_provider(src_provider: str, dst_provider: str, model_id: str) -> str:
+    """Map a model id to the destination provider if a mapping exists."""
+    if not src_provider or not dst_provider:
+        return model_id
+    if src_provider == dst_provider:
+        return model_id
+    key = f"{src_provider}:{model_id}"
+    mapping = _fallback_model_map()
+    try:
+        dst_map = mapping.get(key, {})
+        mapped = dst_map.get(dst_provider)
+        if isinstance(mapped, str) and mapped:
+            return mapped
+    except Exception:
+        pass
+    return model_id
+
 # Models that require trust_remote_code=True for HuggingFace loading
 def _hf_trusts_remote_code(model_name: str) -> bool:
     try:
@@ -1157,7 +1204,8 @@ async def create_embedding_endpoint(
     embedding_request: CreateEmbeddingRequest = Body(...),
     current_user: User = Depends(get_request_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    x_provider: Optional[str] = Header(None, alias="x-provider")
+    x_provider: Optional[str] = Header(None, alias="x-provider"),
+    response: Response = None
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
     
@@ -1304,6 +1352,9 @@ async def create_embedding_endpoint(
 
         embeddings: List[List[float]] = []
 
+        original_provider = provider
+        original_model = model
+
         if use_synthetic_openai:
             dim = 1536
             mid = (model or "").lower()
@@ -1325,17 +1376,29 @@ async def create_embedding_endpoint(
             chain = resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
+            fallback_from: Optional[str] = None
             for p in chain:
                 try:
                     if p != provider:
                         embedding_fallbacks_total.labels(from_provider=provider, to_provider=p).inc()
+                        fallback_from = provider
+                    # Map model id to destination provider if needed
+                    target_model_id = map_model_for_provider(original_provider, p, original_model)
                     embeddings = await create_embeddings_batch_async(
                         texts=texts_to_embed,
                         provider=p,
-                        model_id=model,
+                        model_id=target_model_id,
                         dimensions=embedding_request.dimensions
                     )
                     provider = p
+                    # Add response headers to indicate fallback
+                    try:
+                        if response is not None:
+                            response.headers['X-Embeddings-Provider'] = provider
+                            if fallback_from and fallback_from != provider:
+                                response.headers['X-Embeddings-Fallback-From'] = fallback_from
+                    except Exception:
+                        pass
                     break
                 except HTTPException as he:
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
@@ -1354,8 +1417,16 @@ async def create_embedding_endpoint(
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding providers unavailable")
 
         # Optional dimension adjustment (post-process)
+        dims_policy_used = None
         if embedding_request.dimensions:
+            dims_policy_used = _dimension_policy()
             embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            # Add response header for visibility
+            try:
+                if response is not None:
+                    response.headers['X-Embeddings-Dimensions-Policy'] = dims_policy_used
+            except Exception:
+                pass
         
         # Format response
         output_data = []
@@ -1402,7 +1473,9 @@ async def create_embedding_endpoint(
                 "user_id": current_user.id,
                 "provider": provider,
                 "model": model,
-                "duration": duration
+                "duration": duration,
+                "fallback_from": original_provider if original_provider != provider else None,
+                "dimensions_policy": dims_policy_used,
             }
         )
         
@@ -1911,16 +1984,63 @@ async def get_metrics(
     
     require_admin(current_user)
     
-    return {
+    # Helper to sum counters across all labels
+    def _sum_counter(c):
+        try:
+            total = 0.0
+            for metric in c.collect():
+                for s in metric.samples:
+                    # Only sum the main counter samples (exclude created/_total duplicates if any appear)
+                    if s.name.endswith('_total') or s.name == metric.name:
+                        total += float(s.value)
+            return int(total)
+        except Exception:
+            return None
+
+    def _safe_gauge_value(g):
+        try:
+            return g._value.get()
+        except Exception:
+            return None
+
+    def _details(metric):
+        try:
+            samples = []
+            for m in metric.collect():
+                for s in m.samples:
+                    entry = {"name": s.name, "value": float(s.value)}
+                    try:
+                        entry.update(s.labels)
+                    except Exception:
+                        pass
+                    samples.append(entry)
+            return samples
+        except Exception:
+            return []
+
+    payload = {
         "cache": embedding_cache.stats(),
-        "active_requests": active_embedding_requests._value.get(),
+        "active_requests": _safe_gauge_value(active_embedding_requests),
         "circuit_breakers": circuit_breaker_registry.get_all_status(),
-        "total_requests": {
-            "success": embedding_requests_total.labels(
-                provider="all", model="all", status="success"
-            )._value.get(),
-            "error": embedding_requests_total.labels(
-                provider="all", model="all", status="error"
-            )._value.get()
+        "counters": {
+            "requests_total": _sum_counter(embedding_requests_total),
+            "provider_failures_total": _sum_counter(embedding_provider_failures),
+            "fallbacks_total": _sum_counter(embedding_fallbacks_total),
+            "policy_denied_total": _sum_counter(embedding_policy_denied_total),
+            "dimension_adjustments_total": _sum_counter(embedding_dimension_adjustments_total),
+            "token_inputs_total": _sum_counter(embedding_token_inputs_total),
+        },
+        "details": {
+            "requests": _details(embedding_requests_total),
+            "provider_failures": _details(embedding_provider_failures),
+            "fallbacks": _details(embedding_fallbacks_total),
+            "policy_denied": _details(embedding_policy_denied_total),
+            "dimension_adjustments": _details(embedding_dimension_adjustments_total),
+            "token_inputs": _details(embedding_token_inputs_total),
+        },
+        "config": {
+            "enforce_policy": _should_enforce_policy(current_user),
+            "dimension_policy": _dimension_policy(),
         }
     }
+    return payload

@@ -1,30 +1,30 @@
 # PostgreSQL Support Implementation Plan
 
 ## ⚠️ ACTUAL IMPLEMENTATION STATUS ⚠️
-**As of 2025-09-07 (revised 2025-XX-XX):**
-- **Integration Progress**: 0% – Media/notes still hardcode SQLite; backend abstraction unused.
-- **Functional PostgreSQL Support**: 0% – Endpoints continue to rely on SQLite-only code paths.
-- **Tests Written**: 0 tests
+**As of 2025-09-07 (revised 2025-10-07):**
+- **Integration Progress**: ~25% – Media and ChaCha database classes now resolve the shared backend factory and route connection pooling through it.
+- **Functional PostgreSQL Support**: Partial – Media schema/FTS bootstrap runs on Postgres, but query paths still execute SQLite SQL and writes are disabled pending backend-aware refactors.
+- **Tests Written**: 0 tests (Postgres CI coverage still outstanding).
 - **Files Created**: Backend abstraction (~2200 LOC) lives under `app/core/DB_Management/backends/` and is tracked.
-- **Git Status**: Backend modules are committed; no orphaned files.
-- **Dependencies**: psycopg2 deps remain commented out in `requirements.txt` (opt-in only).
-- **Configuration**: `config.txt` now exposes PostgreSQL fields (`pg_host`, `pg_database`, etc.) but runtime wiring is pending.
-- **Main Issue**: `Media_DB_v2.py` and `ChaChaNotes_DB.py` still use sqlite3 directly, ignoring the abstraction work.
+- **Git Status**: Backend modules plus new factory helpers are committed; no orphaned files.
+- **Dependencies**: psycopg deps remain commented out in `requirements.txt` (runtime opt-in still pending).
+- **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager now provides backend-aware factory helpers.
+- **Main Issue**: Query/CRUD layers remain SQLite-only; Postgres migrations/tests not yet implemented.
 
 ## Executive Summary
 This document outlines the plan to add PostgreSQL support to the tldw_server RAG system while maintaining full SQLite compatibility. The implementation will allow users to choose their preferred database backend based on their needs.
 
 ## Current Status
-- ✅ Created database backend abstraction base classes (NOT INTEGRATED)
-- ✅ Implemented SQLite backend adapter (NOT INTEGRATED)
-- ✅ Created backend factory with configuration support (NOT INTEGRATED)
-- ✅ Implemented PostgreSQL backend adapter (NOT INTEGRATED)
-- ✅ Created FTS query translator with bidirectional conversion (NOT INTEGRATED)
-- ❌ Integration with existing code NOT STARTED
-- ❌ Testing framework NOT CREATED
+- ✅ Created database backend abstraction base classes (in use via factories)
+- ✅ Implemented SQLite backend adapter
+- ✅ Created backend factory with configuration support (wired through `content_backend.py` and `DB_Manager` helpers)
+- ✅ Implemented PostgreSQL backend adapter (schema bootstrap invoked for Media DB)
+- ✅ Created FTS query translator with bidirectional conversion (used for schema translation only)
+- 🔄 Integration with existing code IN PROGRESS — Media/ChaCha classes instantiate via `DatabaseBackend`, but CRUD paths still run SQLite SQL
+- ❌ Testing framework NOT CREATED (no automated Postgres coverage yet)
 - ❌ Migration tools NOT CREATED
 
-**CRITICAL NOTE**: While backend files exist (~2200 lines), they are completely disconnected from the application. Media_DB_v2.py still uses sqlite3 directly. Zero integration has occurred.
+**CRITICAL NOTE**: Query execution layers still issue SQLite-specific SQL. PostgreSQL paths cannot yet service live traffic until CRUD logic is ported and tests are added.
 
 ## Architecture Overview
 
@@ -65,14 +65,14 @@ Key Files:
 - `backends/factory.py` - Factory pattern
 
 ### Phase 2: PostgreSQL Backend
-**Status**: MISLEADING - Files exist but not functional
+**Status**: PARTIAL – Backend factory in use; Media schema boots on Postgres, CRUD still pending
 **Timeline**: Day 4-7
 
 Tasks:
 - [x] Implement PostgreSQL connection pooling (CODE EXISTS, NOT TESTED)
-- [x] Create PostgreSQL schema converter (PARTIAL IMPLEMENTATION)
-- [x] Implement FTS using tsvector/tsquery (CODE EXISTS, NOT TESTED)
-- [x] Handle transaction differences (CODE EXISTS, NOT TESTED)
+- [x] Create PostgreSQL schema converter (used for initial Media schema bootstrap)
+- [x] Implement FTS using tsvector/tsquery (Media tables wired through backend helper)
+- [x] Handle transaction differences (backend transaction wrapper exercised via schema init)
 - [ ] Write PostgreSQL-specific tests (NO TESTS EXIST)
 - [ ] Add psycopg2 to requirements.txt (MISSING)
 
@@ -85,25 +85,15 @@ class PostgreSQLBackend(DatabaseBackend):
         # Set up triggers for auto-update
 ```
 
-### Phase 3: Query Translation
+### Phase 3: Query Layer Refactor
 **Status**: Not Started
 **Timeline**: Day 8-10
 
 Tasks:
-- [ ] Build FTS5 to PostgreSQL translator
-- [ ] Handle PRAGMA to PostgreSQL config mapping
-- [ ] Create query optimization layer
-- [ ] Test query compatibility
-
-Translation Examples:
-```sql
--- SQLite FTS5
-SELECT * FROM media_fts WHERE media_fts MATCH 'python'
-
--- PostgreSQL
-SELECT * FROM media 
-WHERE to_tsvector('english', content) @@ to_tsquery('english', 'python')
-```
+- [ ] Replace inline sqlite3 calls with backend-aware helpers in `Media_DB_v2` (reads, writes, transactions)
+- [ ] Mirror backend-aware helpers across ChaChaNotes DB CRUD code
+- [ ] Introduce shared SQL builders (per-backend) for high-traffic operations
+- [ ] Add regression/unit coverage for new helpers (SQLite + Postgres)
 
 ### Phase 4: Integration
 **Status**: Not Started

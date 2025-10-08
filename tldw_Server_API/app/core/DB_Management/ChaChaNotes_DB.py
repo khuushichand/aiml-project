@@ -1,6 +1,8 @@
 # ChaChaNotes_DB.py
 # Description: DB Library for Character Cards, Chats, and Notes.
 #
+from __future__ import annotations
+
 """
 ChaChaNotes_DB.py
 -----------------
@@ -37,6 +39,7 @@ changes in the `sync_log` and in individual records.
 import sqlite3
 import json
 import uuid
+from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import threading
@@ -47,6 +50,16 @@ from typing import List, Dict, Optional, Any, Union, Set
 from loguru import logger
 #
 # Local Imports
+#
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseBackend,
+    DatabaseConfig,
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.config import load_comprehensive_config
 #
 ########################################################################################################################
 #
@@ -1145,7 +1158,14 @@ UPDATE db_schema_version
    AND version < 7;
 """
 
-    def __init__(self, db_path: Union[str, Path], client_id: str):
+    def __init__(
+        self,
+        db_path: Union[str, Path],
+        client_id: str,
+        *,
+        backend: DatabaseBackend | None = None,
+        config: ConfigParser | None = None,
+    ):
         """
         Initializes the CharactersRAGDB instance.
 
@@ -1166,24 +1186,38 @@ UPDATE db_schema_version
             SchemaError: If schema migration or versioning issues occur.
         """
         if isinstance(db_path, Path):
-            self.is_memory_db = False
-            self.db_path = db_path.resolve()
+            resolved_path = db_path.resolve()
+            is_memory = False
         else:
-            self.is_memory_db = (db_path == ':memory:')
-            self.db_path = Path(db_path).resolve() if not self.is_memory_db else Path(":memory:")
-        self.db_path_str = str(self.db_path) if not self.is_memory_db else ':memory:'
+            is_memory = db_path == ':memory:'
+            resolved_path = Path(db_path).resolve() if not is_memory else Path(":memory:")
+
+        self.is_memory_db = is_memory
+        self.db_path = resolved_path
+        self.db_path_str = ':memory:' if self.is_memory_db else str(self.db_path)
 
         if not client_id:
             raise ValueError("Client ID cannot be empty or None.")
         self.client_id = client_id
 
-        if not self.is_memory_db:
+        self.backend = self._resolve_backend(backend=backend, config=config)
+        self.backend_type = self.backend.backend_type
+
+        if self.backend_type != BackendType.SQLITE:
+            self.is_memory_db = False
+
+        if self.backend_type == BackendType.SQLITE and not self.is_memory_db:
             try:
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                raise CharactersRAGDBError(f"Failed to create database directory {self.db_path.parent}: {e}")
+                raise CharactersRAGDBError(
+                    f"Failed to create database directory {self.db_path.parent}: {e}"
+                ) from e
 
-        logger.info(f"Initializing CharactersRAGDB for path: {self.db_path_str} [Client ID: {self.client_id}]")
+        logger.info(
+            f"Initializing CharactersRAGDB for path: {self.db_path_str} "
+            f"[Client ID: {self.client_id}] (backend={self.backend_type.value})"
+        )
         self._local = threading.local()
         try:
             self._initialize_schema()
@@ -1197,6 +1231,66 @@ UPDATE db_schema_version
                             exc_info=True)
             self.close_connection()
             raise CharactersRAGDBError(f"Unexpected database initialization error: {e}") from e
+
+    # --- Backend Resolution Helpers ---
+    def _resolve_backend(
+        self,
+        *,
+        backend: DatabaseBackend | None,
+        config: ConfigParser | None,
+    ) -> DatabaseBackend:
+        if backend is not None:
+            return backend
+
+        parser: ConfigParser | None = config
+        if parser is None:
+            try:
+                parser = load_comprehensive_config()
+            except Exception:
+                parser = None
+
+        resolved = get_content_backend(parser) if parser else None
+        if resolved is not None:
+            return resolved
+
+        fallback_config = DatabaseConfig(
+            backend_type=BackendType.SQLITE,
+            sqlite_path=self.db_path_str,
+        )
+        return DatabaseBackendFactory.create_backend(fallback_config)
+
+    def _open_new_connection(self):
+        try:
+            pool = self.backend.get_pool()
+            return pool.get_connection()
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc
+
+    def _release_connection(self, connection) -> None:
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                thread_id = threading.get_ident()
+                try:
+                    pool = self.backend.get_pool()
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
+            else:
+                self.backend.get_pool().return_connection(connection)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Error while releasing connection: %s", exc)
+
+    def _ensure_sqlite_backend(self) -> None:
+        if self.backend_type != BackendType.SQLITE:
+            raise NotImplementedError(
+                "PostgreSQL support for CharactersRAGDB operations is still under development."
+            )
 
     # --- Connection Management ---
     def _get_thread_connection(self) -> sqlite3.Connection:
@@ -1214,40 +1308,40 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: If connecting to the database fails.
         """
+        self._ensure_sqlite_backend()
         conn = getattr(self._local, 'conn', None)
-        if conn:
+        pool = self.backend.get_pool()
+        if conn is not None:
             try:
-                conn.execute("SELECT 1")  # Check if connection is still alive
+                conn.execute("SELECT 1")
+                return conn
             except (sqlite3.ProgrammingError, sqlite3.OperationalError):
                 logger.warning(
-                    f"Thread-local connection for {self.db_path_str} was closed or became unusable. Reopening.")
+                    f"Thread-local connection for {self.db_path_str} was closed or became unusable. Reopening."
+                )
                 try:
                     conn.close()
-                except Exception as e:
-                    logger.warning(f"Failed to close database connection: {e}")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Failed to close database connection: {exc}")
+                thread_id = threading.get_ident()
+                try:
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
                 conn = None
-
-        if not conn:
-            try:
-                conn = sqlite3.connect(
-                    self.db_path_str,
-                    detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-                    check_same_thread=False, # Required for threading.local approach
-                    timeout=15 # Maybe slightly increase timeout?
-                )
-                conn.row_factory = sqlite3.Row
-                if not self.is_memory_db:
-                    conn.execute("PRAGMA journal_mode=WAL;")
-
-                conn.execute("PRAGMA foreign_keys = ON;")
-                self._local.conn = conn
-                logger.debug(
-                    f"Opened/Reopened SQLite connection to {self.db_path_str} (Journal: {conn.execute('PRAGMA journal_mode;').fetchone()[0]}) for thread {threading.get_ident()}")
-            except sqlite3.Error as e:
-                logger.error(f"Failed to connect to database {self.db_path_str}: {e}", exc_info=True)
                 self._local.conn = None
-                raise CharactersRAGDBError(f"Failed to connect to database '{self.db_path_str}': {e}") from e
-        return self._local.conn
+
+        if conn is None:
+            conn = self._open_new_connection()
+            self._local.conn = conn
+            logger.debug(
+                "Opened/Reopened SQLite connection to %s for thread %s",
+                self.db_path_str,
+                threading.get_ident(),
+            )
+        return conn
 
     def get_connection(self) -> sqlite3.Connection:
         """
@@ -1270,6 +1364,7 @@ UPDATE db_schema_version
         If a transaction is active and uncommitted on this connection, it attempts a rollback.
         Clears the connection reference from `threading.local` for the current thread.
         """
+        self._ensure_sqlite_backend()
         conn = getattr(self._local, 'conn', None)
         if conn is not None:
             try:
@@ -1308,6 +1403,14 @@ UPDATE db_schema_version
                 # even if conn.close() itself raised an exception.
                 if hasattr(self._local, 'conn'):
                     self._local.conn = None
+                thread_id = threading.get_ident()
+                try:
+                    pool = self.backend.get_pool()
+                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                        pool._local.connection = None  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
 
     def backup_database(self, backup_file_path: str) -> bool:
         """
@@ -1387,6 +1490,7 @@ UPDATE db_schema_version
             ConflictError: If an SQLite IntegrityError due to a "unique constraint failed" occurs.
             CharactersRAGDBError: For other SQLite errors or general query execution failures.
         """
+        self._ensure_sqlite_backend()
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -1431,6 +1535,7 @@ UPDATE db_schema_version
             ConflictError: If an SQLite IntegrityError due to a "unique constraint failed" occurs during batch.
             CharactersRAGDBError: For other SQLite errors or general batch execution failures.
         """
+        self._ensure_sqlite_backend()
         conn = self.get_connection()
         if not isinstance(params_list, list) or not params_list:
             logger.debug("execute_many called with empty or invalid params_list.")
@@ -1466,6 +1571,7 @@ UPDATE db_schema_version
         Returns:
             TransactionContextManager: An object to be used in a `with` statement.
         """
+        self._ensure_sqlite_backend()
         return TransactionContextManager(self)
 
     # --- Schema Initialization and Migration ---
@@ -1595,6 +1701,16 @@ UPDATE db_schema_version
             raise SchemaError(f"Unexpected error migrating to V7 for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema(self):
+        if self.backend_type == BackendType.SQLITE:
+            self._initialize_schema_sqlite()
+        elif self.backend_type == BackendType.POSTGRESQL:
+            self._initialize_schema_postgres()
+        else:
+            raise NotImplementedError(
+                f"Schema initialization not implemented for backend {self.backend_type}"
+            )
+
+    def _initialize_schema_sqlite(self):
         """
         Initializes or migrates the database schema to `_CURRENT_SCHEMA_VERSION`.
 
@@ -1687,6 +1803,9 @@ UPDATE db_schema_version
         except Exception as e:
             logger.error(f"Unexpected error during schema initialization for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise CharactersRAGDBError(f"Unexpected error applying schema for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _initialize_schema_postgres(self):
+        raise NotImplementedError("PostgreSQL schema initialization is not yet implemented.")
 
     # --- Internal Helpers ---
     def _get_current_utc_timestamp_iso(self) -> str:
@@ -4714,6 +4833,7 @@ class TransactionContextManager:
         self.is_outermost_transaction = False
 
     def __enter__(self) -> sqlite3.Connection:
+        self.db._ensure_sqlite_backend()
         self.conn = self.db.get_connection()
         if not self.conn.in_transaction:
             # Using deferred transaction by default. Could be "IMMEDIATE" or "EXCLUSIVE" if needed.
@@ -4729,6 +4849,7 @@ class TransactionContextManager:
         return self.conn
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.db._ensure_sqlite_backend()
         if not self.conn:  # Should not happen if __enter__ succeeded
             logger.error("Transaction context: Connection is None in __exit__.")
             return False # Re-raise exception if any

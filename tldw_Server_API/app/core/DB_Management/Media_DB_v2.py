@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -845,7 +846,7 @@ class MediaDatabase:
     def _SCHEMA_UPDATE_VERSION_SQL_V1(self):
         return f"UPDATE schema_version SET version = {self._CURRENT_SCHEMA_VERSION} WHERE version = 0;"
 
-    def _apply_schema_v1(self, conn: sqlite3.Connection):
+    def _apply_schema_v1_sqlite(self, conn: sqlite3.Connection):
         """Applies the full Version 1 schema, ensuring version update is part of the main script."""
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
         try:
@@ -902,11 +903,9 @@ class MediaDatabase:
             # --- Create FTS Tables Separately (Remains the same) ---
             try:
                 logging.debug("[Schema V1] Applying FTS Tables...")
-                conn.executescript(self._FTS_TABLES_SQL)
-                conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
-                conn.commit()
+                self._ensure_fts_structures(conn)
                 logging.info("[Schema V1] FTS Tables created successfully.")
-            except sqlite3.Error as fts_err:
+            except (sqlite3.Error, DatabaseError) as fts_err:
                 logging.error(f"[Schema V1] Failed to create FTS tables: {fts_err}", exc_info=True)
 
         except sqlite3.Error as e:
@@ -916,8 +915,108 @@ class MediaDatabase:
             logging.error(f"[Schema V1] Unexpected error during schema V1 application: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema V1: {e}") from e
 
+    def _convert_sqlite_sql_to_postgres_statements(self, sql: str) -> List[str]:
+        """Convert SQLite-oriented SQL blob into Postgres-compatible statements."""
+
+        statements: List[str] = []
+        buffer: List[str] = []
+        for raw_line in sql.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('--'):
+                continue
+            upper = line.upper()
+            if upper.startswith('PRAGMA'):
+                continue
+            if 'VIRTUAL TABLE' in upper and 'FTS5' in upper:
+                continue
+            if upper.startswith('DROP TRIGGER') or upper.startswith('CREATE TRIGGER'):
+                continue
+            buffer.append(raw_line)
+            if line.endswith(';'):
+                stmt = '\n'.join(buffer)
+                buffer = []
+                transformed = self._transform_sqlite_statement_to_postgres(stmt)
+                if transformed:
+                    statements.append(transformed)
+        return statements
+
+    def _transform_sqlite_statement_to_postgres(self, statement: str) -> Optional[str]:
+        """Apply token-level rewrites so a SQLite statement can run on Postgres."""
+
+        stmt = statement.strip()
+        if not stmt:
+            return None
+
+        upper = stmt.upper()
+        # Skip WAL/FTS helper blocks that aren't relevant post-conversion
+        if upper.startswith('ANALYZE '):
+            return None
+
+        # Normalize whitespace for easier pattern replacements
+        stmt = re.sub(r'\s+', ' ', stmt)
+
+        # Data type adjustments
+        stmt = re.sub(r'INTEGER PRIMARY KEY AUTOINCREMENT', 'BIGSERIAL PRIMARY KEY', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'INTEGER PRIMARY KEY', 'BIGINT PRIMARY KEY', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN NOT NULL DEFAULT 0', 'BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN NOT NULL DEFAULT 1', 'BOOLEAN NOT NULL DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN DEFAULT 0', 'BOOLEAN DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN DEFAULT 1', 'BOOLEAN DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'DATETIME', 'TIMESTAMPTZ', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BLOB', 'BYTEA', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'REAL', 'DOUBLE PRECISION', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'COLLATE NOCASE', '', stmt, flags=re.IGNORECASE)
+
+        # Partial index predicate conversion
+        stmt = re.sub(r'WHERE deleted = 0', 'WHERE deleted = FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'WHERE deleted = 1', 'WHERE deleted = TRUE', stmt, flags=re.IGNORECASE)
+
+        # Insert semantics
+        if stmt.upper().startswith('INSERT OR IGNORE'):
+            stmt = re.sub(r'INSERT OR IGNORE', 'INSERT', stmt, flags=re.IGNORECASE, count=1)
+            if stmt.endswith(';'):
+                stmt = stmt[:-1] + ' ON CONFLICT DO NOTHING;'
+            else:
+                stmt = stmt + ' ON CONFLICT DO NOTHING;'
+
+        # Ensure statement ends with semicolon
+        if not stmt.endswith(';'):
+            stmt = stmt + ';'
+        return stmt
+
+    def _apply_schema_v1_postgres(self, conn) -> None:
+        """Apply the Version 1 schema using Postgres-compatible statements."""
+
+        table_statements = self._convert_sqlite_sql_to_postgres_statements(self._TABLES_SQL_V1)
+        table_statements += self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
+        index_statements = self._convert_sqlite_sql_to_postgres_statements(self._INDICES_SQL_V1)
+
+        for stmt in table_statements + index_statements:
+            self.backend.execute(stmt, connection=conn)
+
+        # Ensure schema_version reflects the current code version
+        self.backend.execute(
+            "INSERT INTO schema_version (version) VALUES (%s) ON CONFLICT DO NOTHING",
+            (self._CURRENT_SCHEMA_VERSION,),
+            connection=conn,
+        )
+        self.backend.execute(
+            "UPDATE schema_version SET version = %s",
+            (self._CURRENT_SCHEMA_VERSION,),
+            connection=conn,
+        )
     def _initialize_schema(self):
         """Checks schema version and applies initial schema or migrations."""
+        if self.backend_type == BackendType.SQLITE:
+            self._initialize_schema_sqlite()
+        elif self.backend_type == BackendType.POSTGRESQL:
+            self._initialize_schema_postgres()
+        else:
+            raise NotImplementedError(
+                f"Schema initialization not implemented for backend {self.backend_type}"
+            )
+
+    def _initialize_schema_sqlite(self):
         conn = self.get_connection()
         try:
             current_db_version = self._get_db_version(conn)
@@ -931,12 +1030,9 @@ class MediaDatabase:
                 try:
                     # Ensure Claims table exists for older DBs without bumping version
                     conn.executescript(self._CLAIMS_TABLE_SQL)
-                    # Ensure FTS (including claims_fts) exists
-                    conn.executescript(self._FTS_TABLES_SQL)
-                    conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
-                    conn.commit()
+                    self._ensure_fts_structures(conn)
                     logging.debug("Verified FTS tables exist.")
-                except sqlite3.Error as fts_err:
+                except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
                 return
 
@@ -946,7 +1042,7 @@ class MediaDatabase:
             # --- Apply Migrations ---
             if current_db_version == 0:
                 # Fresh database, apply base schema directly at current version
-                self._apply_schema_v1(conn)
+                self._apply_schema_v1_sqlite(conn)
                 # Verify version update
                 final_db_version = self._get_db_version(conn)
                 if final_db_version != target_version:
@@ -978,8 +1074,7 @@ class MediaDatabase:
                         if not self.is_memory_db:
                             conn = self.get_connection()
                         # Ensure FTS tables exist
-                        conn.executescript(self._FTS_TABLES_SQL)
-                        conn.commit()
+                        self._ensure_fts_structures(conn)
                     else:
                         raise SchemaError(f"Migration failed: {result}")
                     
@@ -995,6 +1090,74 @@ class MediaDatabase:
         except Exception as e:
             logging.error(f"Unexpected error during schema initialization: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema: {e}") from e
+
+    def _initialize_schema_postgres(self):
+        target_version = self._CURRENT_SCHEMA_VERSION
+        backend = self.backend
+
+        with backend.transaction() as conn:
+            schema_exists = backend.table_exists('schema_version', connection=conn)
+
+            if not schema_exists:
+                self._apply_schema_v1_postgres(conn)
+                self._ensure_postgres_fts(conn)
+                return
+
+            result = backend.execute("SELECT version FROM schema_version LIMIT 1", connection=conn)
+            current_version = result.scalar if result else None
+
+            if current_version is None:
+                self._apply_schema_v1_postgres(conn)
+                self._ensure_postgres_fts(conn)
+                return
+
+            if current_version > target_version:
+                raise SchemaError(
+                    f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
+                )
+
+            if current_version < target_version:
+                raise NotImplementedError(
+                    "PostgreSQL schema migrations are not yet implemented."
+                )
+
+            self._ensure_postgres_fts(conn)
+
+    def _ensure_fts_structures(self, conn) -> None:
+        if self.backend_type == BackendType.SQLITE:
+            self._ensure_sqlite_fts(conn)
+        elif self.backend_type == BackendType.POSTGRESQL:
+            self._ensure_postgres_fts(conn)
+        else:
+            raise NotImplementedError(
+                f"FTS bootstrap not implemented for backend {self.backend_type}"
+            )
+
+    def _ensure_sqlite_fts(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(self._FTS_TABLES_SQL)
+        conn.executescript(self._CLAIMS_FTS_TRIGGERS_SQL)
+        conn.commit()
+
+    def _ensure_postgres_fts(self, conn) -> None:
+        backend = self.backend
+        backend.create_fts_table(
+            table_name='media_fts',
+            source_table='media',
+            columns=['title', 'content'],
+            connection=conn,
+        )
+        backend.create_fts_table(
+            table_name='keyword_fts',
+            source_table='keywords',
+            columns=['keyword'],
+            connection=conn,
+        )
+        backend.create_fts_table(
+            table_name='claims_fts',
+            source_table='claims',
+            columns=['claim_text'],
+            connection=conn,
+        )
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
