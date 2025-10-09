@@ -5,7 +5,7 @@
 from typing import Optional
 #
 # 3rd-Party Libraries
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, status, Header, Request
 from pydantic import BaseModel, ValidationError
 #
 # Local Imports
@@ -74,7 +74,7 @@ async def verify_single_user_api_key(api_key: str = Header(..., alias="X-API-KEY
     return True
 
 
-async def verify_jwt_and_fetch_user(token: str = Depends(oauth2_scheme)) -> User:
+async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth2_scheme)) -> User:
     """
     Dependency to verify JWT and fetch user details in multi-user mode.
     Uses the new JWT service for token validation.
@@ -173,6 +173,11 @@ async def verify_jwt_and_fetch_user(token: str = Depends(oauth2_scheme)) -> User
         logger.warning(f"Authentication attempt by inactive user: {user.username} (ID: {user.id})")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
 
+    # Attach user id for downstream context (usage logging, RBAC rate limits)
+    try:
+        request.state.user_id = user.id
+    except Exception:
+        pass
     logger.info(f"Authenticated active user: {user.username} (ID: {user.id})")
     return user
 
@@ -180,6 +185,7 @@ async def verify_jwt_and_fetch_user(token: str = Depends(oauth2_scheme)) -> User
 # --- Combined Primary Authentication Dependency ---
 
 async def get_request_user(
+    request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     token: Optional[str] = Depends(oauth2_scheme) # No need for use_cache=False if auto_error handles it
     ) -> User:
@@ -229,13 +235,18 @@ async def get_request_user(
             else:
                 logger.debug("X-API-KEY matched fallback app settings; accepting.")
         logger.debug("Single-user API Key verified. Returning fixed user object.")
-        return get_single_user_instance()  # Use the getter function
+        user = get_single_user_instance()  # Use the getter function
+        try:
+            request.state.user_id = user.id
+        except Exception:
+            pass
+        return user
     else:
         # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
         logger.debug("get_request_user: In MULTI_USER_MODE.")
         if token:
             logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
-            return await verify_jwt_and_fetch_user(token)
+            return await verify_jwt_and_fetch_user(request, token)
 
         # If no Bearer token but an API key is provided, validate via API key manager
         if api_key:
@@ -254,6 +265,12 @@ async def get_request_user(
                 user_data = await _get_user(user_id)
                 if not user_data:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+                # Attach context for downstream
+                try:
+                    request.state.user_id = user_id
+                    request.state.api_key_id = key_info.get("id")
+                except Exception:
+                    pass
 
                 return User(**user_data)
             except HTTPException:

@@ -28,6 +28,11 @@
 
 The RAG (Retrieval-Augmented Generation) API provides powerful search and AI-powered question-answering capabilities across your indexed content. It uses a **functional pipeline architecture** where composable functions are chained together to create custom retrieval workflows.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; unified `/rag/search` enforces typical RPM. Streaming endpoints count per-chunk toward limits in some deployments.
+
 ### Key Features
 
 - **Functional Pipeline**: Composable pure functions for flexible workflows
@@ -413,9 +418,9 @@ import asyncio
 
 async def search(query: str):
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/simple",
-            json={"query": query},
+        response = await client.get(
+            "http://localhost:8000/api/v1/rag/simple",
+            params={"query": query},
             headers={"X-API-Key": "your-api-key"}
         )
         return response.json()
@@ -432,9 +437,9 @@ async def complex_search(query: str):
     }
     
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/complex",
-            json={"query": query, "config": config},
+        response = await client.get(
+            "http://localhost:8000/api/v1/rag/advanced",
+            params={"query": query, "with_citations": True, "with_answer": True},
             headers={"X-API-Key": "your-api-key"}
         )
         return response.json()
@@ -444,10 +449,9 @@ async def complex_search(query: str):
 
 ```bash
 # Simple search
-curl -X POST http://localhost:8000/api/v1/rag/search/simple \
-  -H "Content-Type: application/json" \
+curl -G http://localhost:8000/api/v1/rag/simple \
   -H "X-API-Key: your-api-key" \
-  -d '{"query": "machine learning"}'
+  --data-urlencode "query=machine learning"
 
 # Unified search (hybrid)
 curl -X POST http://localhost:8000/api/v1/rag/search \
@@ -476,15 +480,12 @@ interface SearchRequest {
 }
 
 async function search(request: SearchRequest): Promise<any> {
-  const response = await fetch('http://localhost:8000/api/v1/rag/search/simple', {
-    method: 'POST',
+  const params = new URLSearchParams({ query: request.query, top_k: String(request.top_k ?? 10) });
+  const response = await fetch(`http://localhost:8000/api/v1/rag/simple?${params.toString()}`, {
     headers: {
-      'Content-Type': 'application/json',
       'X-API-Key': 'your-api-key'
-    },
-    body: JSON.stringify(request)
+    }
   });
-  
   return response.json();
 }
 
@@ -504,7 +505,7 @@ The v3 API uses a functional pipeline architecture. Key changes:
 
 1. **Endpoint Consolidation**
    - Old: `/api/v1/rag/v2/search`, `/api/v1/rag/v3/search`
-   - New: `/api/v1/rag/search/simple`, `/api/v1/rag/search/complex`
+   - New: `/api/v1/rag/simple`, `/api/v1/rag/advanced`
 
 2. **Configuration Structure**
    ```python

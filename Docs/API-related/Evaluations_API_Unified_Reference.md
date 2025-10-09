@@ -8,6 +8,11 @@ The tldw_server Evaluations API provides a comprehensive, OpenAI-compatible eval
 **Base URL**: `/api/v1/evaluations`  
 **Standards**: OpenAI Evals compatible with extensions
 
+Authentication
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+Rate limiting is enforced on core run endpoints (geval, rag, response-quality, propositions, batch).
+
 ## Architecture
 
 ### Core Components
@@ -414,6 +419,64 @@ Process multiple evaluations in parallel.
 }
 ```
 
+Example (curl):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "geval",
+        "items": [
+          {
+            "source_text": "The mitochondrion is the powerhouse of the cell.",
+            "summary": "Mitochondria produce energy in cells.",
+            "metrics": ["coherence", "consistency"]
+          },
+          {
+            "source_text": "Deep learning uses neural networks to model complex patterns.",
+            "summary": "Neural networks model complex patterns in deep learning.",
+            "metrics": ["coherence"]
+          }
+        ],
+        "parallel_workers": 2,
+        "continue_on_error": true
+      }'
+```
+
+Example response:
+```json
+{
+  "total_items": 2,
+  "successful": 2,
+  "failed": 0,
+  "results": [
+    {
+      "evaluation_id": "eval_01HXXXX",
+      "status": "completed",
+      "results": {
+        "metrics": {
+          "coherence": {"score": 0.94, "explanation": "Strong logical flow"},
+          "consistency": {"score": 0.91, "explanation": "Consistent details"}
+        },
+        "average_score": 0.925
+      }
+    },
+    {
+      "evaluation_id": "eval_01HYYYY",
+      "status": "completed",
+      "results": {
+        "metrics": {
+          "coherence": {"score": 0.89, "explanation": "Minor clarity issues"}
+        },
+        "average_score": 0.89
+      }
+    }
+  ],
+  "aggregate_metrics": {"coherence": 0.915},
+  "processing_time": 1.82
+}
+```
+
 ### Propositions Evaluation
 `POST /api/v1/evaluations/propositions`
 
@@ -426,6 +489,43 @@ Request (example):
   "reference": ["Claim A", "Claim C"],
   "method": "semantic",
   "threshold": 0.7
+}
+```
+
+Example (curl):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/propositions" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "extracted": ["Mitochondria produce ATP", "Cells contain nuclei"],
+        "reference": ["Mitochondria produce energy", "Cells contain nuclei"],
+        "method": "semantic",
+        "threshold": 0.7
+      }'
+```
+
+Example response:
+```json
+{
+  "precision": 0.50,
+  "recall": 1.00,
+  "f1": 0.67,
+  "matched": 1,
+  "total_extracted": 2,
+  "total_reference": 2,
+  "claim_density_per_100_tokens": 2.3,
+  "avg_prop_len_tokens": 7.8,
+  "dedup_rate": 0.0,
+  "details": {
+    "matches": [
+      {"extracted": "Cells contain nuclei", "reference": "Cells contain nuclei", "score": 1.0}
+    ],
+    "misses": [
+      {"extracted": "Mitochondria produce ATP", "closest": "Mitochondria produce energy", "score": 0.65}
+    ]
+  },
+  "metadata": {"evaluation_id": "eval_01HZZZZ", "evaluation_time": 0.21}
 }
 ```
 

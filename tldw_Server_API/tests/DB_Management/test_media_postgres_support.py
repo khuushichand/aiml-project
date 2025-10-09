@@ -111,3 +111,134 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
     )
     assert executed[0][0].startswith("UPDATE claims ")
     assert executed[1][0] == "SELECT COUNT(*) AS total FROM claims WHERE deleted = 0"
+
+
+def test_postgres_migrations_include_v6() -> None:
+    migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
+    assert 6 in migrations
+
+
+def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.backend = MagicMock()
+
+    conn = object()
+    db._postgres_migrate_to_v6(conn)
+
+    create_call = db.backend.execute.call_args_list[0]
+    sql_text = create_call.args[0]
+    assert "CREATE TABLE IF NOT EXISTS \"DocumentVersionIdentifiers\"" in sql_text
+    assert "REFERENCES \"DocumentVersions\"" in sql_text
+
+    index_calls = [call.args[0] for call in db.backend.execute.call_args_list[1:]]
+    expected_indices = {
+        'idx_dvi_doi',
+        'idx_dvi_pmid',
+        'idx_dvi_pmcid',
+        'idx_dvi_arxiv',
+        'idx_dvi_s2',
+    }
+    assert all(any(name in sql for sql in index_calls) for name in expected_indices)
+
+
+def test_update_fts_media_postgres_updates_vector() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
+
+    conn = object()
+    db._update_fts_media(conn, 9, "Title", "Body")
+
+    db._execute_with_connection.assert_called_once()
+    sql, params = db._execute_with_connection.call_args.args[1:]
+    assert "UPDATE media SET media_fts_tsv" in sql
+    assert params == (9,)
+
+
+def test_delete_fts_media_postgres_nulls_vector() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
+
+    conn = object()
+    db._delete_fts_media(conn, 11)
+
+    db._execute_with_connection.assert_called_once()
+    sql, params = db._execute_with_connection.call_args.args[1:]
+    assert sql.strip().startswith("UPDATE media SET media_fts_tsv = NULL")
+    assert params == (11,)
+
+
+def test_update_fts_keyword_postgres_updates_vector() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
+
+    conn = object()
+    db._update_fts_keyword(conn, 5, "science")
+
+    db._execute_with_connection.assert_called_once()
+    sql, params = db._execute_with_connection.call_args.args[1:]
+    assert "UPDATE keywords SET keyword_fts_tsv" in sql
+    assert params == (5,)
+
+
+def test_delete_fts_keyword_postgres_nulls_vector() -> None:
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
+
+    conn = object()
+    db._delete_fts_keyword(conn, 7)
+
+    db._execute_with_connection.assert_called_once()
+    sql, params = db._execute_with_connection.call_args.args[1:]
+    assert sql.strip().startswith("UPDATE keywords SET keyword_fts_tsv = NULL")
+    assert params == (7,)
+
+
+def test_search_media_db_postgres_uses_tsquery():
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.client_id = "pg-test"
+    db.db_path_str = "pg-test-db"
+
+    calls: List[Tuple[str, Tuple[Any, ...]]] = []
+
+    class _CountCursor:
+        def fetchone(self):
+            return (1,)
+
+    class _ResultCursor:
+        def fetchall(self):
+            return [{"id": 1, "title": "Deep Learning", "relevance_score": 0.5}]
+
+    def fake_execute(sql: str, params: Tuple[Any, ...] | None = None):
+        captured_params = tuple(params) if params is not None else tuple()
+        calls.append((sql, captured_params))
+        if "COUNT" in sql:
+            return _CountCursor()
+        return _ResultCursor()
+
+    # Bind helpers expected by search_media_db
+    db.execute_query = fake_execute  # type: ignore[assignment]
+    db._append_case_insensitive_like = MediaDatabase._append_case_insensitive_like.__get__(db, MediaDatabase)
+
+    results, total = db.search_media_db(
+        "deep learning",
+        search_fields=["title"],
+        sort_by="relevance",
+    )
+
+    assert total == 1
+    assert results and results[0]["title"] == "Deep Learning"
+
+    count_sql, count_params = calls[0]
+    assert "m.media_fts_tsv @@ to_tsquery('english', ?)" in count_sql
+    assert count_params[0] == "deep & learning"
+
+    result_sql, result_params = calls[1]
+    assert "ts_rank(m.media_fts_tsv, to_tsquery('english', ?))" in result_sql
+    assert result_params[0] == "deep & learning"
+    assert result_params[1] == "deep & learning"

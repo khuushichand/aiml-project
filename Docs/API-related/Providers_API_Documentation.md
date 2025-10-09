@@ -4,11 +4,12 @@
 - Purpose: Discover configured LLM providers, their models and capabilities, and the health of the LLM inference subsystem. These endpoints are useful for client UIs and for operational monitoring.
 - OpenAPI tag: `llm`
 
-## Authentication
-- By default these endpoints are accessible without authentication. Deployments may enforce AuthNZ globally.
-- If required by your deployment:
+## Auth + Rate Limits
+- These endpoints follow the server’s standard AuthNZ settings and typically require authentication.
+- Headers:
   - Single-user: `X-API-KEY: <key>`
   - Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; these endpoints are lightweight and primarily used by UIs/ops. Deployments can choose to relax access via gateway configuration, but the default app configuration applies global security to API routes.
 
 ## Endpoints
 

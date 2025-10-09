@@ -152,7 +152,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 5  # Add safe_metadata column to DocumentVersions
+    _CURRENT_SCHEMA_VERSION = 6  # Introduce DocumentVersionIdentifiers helper table
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -295,6 +295,17 @@ class MediaDatabase:
         UNIQUE (media_id, version_number)
     );
 
+    -- DocumentVersionIdentifiers Table --
+    CREATE TABLE IF NOT EXISTS DocumentVersionIdentifiers (
+        dv_id INTEGER PRIMARY KEY,
+        doi TEXT,
+        pmid TEXT,
+        pmcid TEXT,
+        arxiv_id TEXT,
+        s2_paper_id TEXT,
+        FOREIGN KEY (dv_id) REFERENCES DocumentVersions(id) ON DELETE CASCADE
+    );
+
     -- Sync Log Table --
     CREATE TABLE IF NOT EXISTS sync_log (
         change_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,6 +394,12 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_documentversions_deleted ON DocumentVersions(deleted);
     CREATE INDEX IF NOT EXISTS idx_documentversions_prev_version ON DocumentVersions(prev_version);
     CREATE INDEX IF NOT EXISTS idx_documentversions_merge_parent_uuid ON DocumentVersions(merge_parent_uuid);
+
+    CREATE INDEX IF NOT EXISTS idx_dvi_doi ON DocumentVersionIdentifiers(doi);
+    CREATE INDEX IF NOT EXISTS idx_dvi_pmid ON DocumentVersionIdentifiers(pmid);
+    CREATE INDEX IF NOT EXISTS idx_dvi_pmcid ON DocumentVersionIdentifiers(pmcid);
+    CREATE INDEX IF NOT EXISTS idx_dvi_arxiv ON DocumentVersionIdentifiers(arxiv_id);
+    CREATE INDEX IF NOT EXISTS idx_dvi_s2 ON DocumentVersionIdentifiers(s2_paper_id);
 
     CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sync_log_entity_uuid ON sync_log(entity_uuid);
@@ -1392,34 +1409,42 @@ class MediaDatabase:
                 logging.info(f"Database schema initialized to version {target_version}.")
             
             elif current_db_version < target_version:
-                # Use the new migration system for existing databases
+                # Use the migration system for existing databases.
+                # Special-case in-memory DBs: treat them as fresh and apply base schema,
+                # since migration helpers open separate connections that won't share :memory: state.
                 try:
-                    # Close the current connection to avoid locks, but not for in-memory DBs
-                    if not self.is_memory_db:
+                    if self.is_memory_db:
+                        self._apply_schema_v1_sqlite(conn)
+                    else:
+                        # Close the current connection to avoid locks
                         conn.close()
-                    
-                    # Run migrations
-                    # For test databases, use the migrations from the source code directory
-                    migrations_dir = None
-                    if not self.is_memory_db:
-                        # Check if this is a test database by looking for test_ in the path or temp directories
+
+                        # Run migrations
+                        # For test databases, use the migrations from the source code directory
+                        migrations_dir = None
+                        # Treat common test/temp locations as needing source-bound migrations
                         db_name = os.path.basename(self.db_path_str)
                         db_dir = os.path.dirname(self.db_path_str)
-                        if "test_" in db_name or "tmp" in db_dir or "temp" in db_dir.lower():
+                        db_dir_lower = db_dir.lower()
+                        if (
+                            "test_" in db_name
+                            or "tmp" in db_dir_lower
+                            or "temp" in db_dir_lower
+                            or "pytest" in db_dir_lower
+                        ):
                             migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
-                    migrator = DatabaseMigrator(self.db_path_str, migrations_dir=migrations_dir)
-                    result = migrator.migrate_to_version(target_version)
-                    
-                    if result["status"] == "success":
-                        logging.info(f"Database migrated from version {result['previous_version']} to {result['current_version']}")
-                        # Get a new connection after migration (unless in-memory)
-                        if not self.is_memory_db:
+                        migrator = DatabaseMigrator(self.db_path_str, migrations_dir=migrations_dir)
+                        result = migrator.migrate_to_version(target_version)
+
+                        if result["status"] == "success":
+                            logging.info(f"Database migrated from version {result['previous_version']} to {result['current_version']}")
+                            # Get a new connection after migration
                             conn = self.get_connection()
-                        # Ensure FTS tables exist
-                        self._ensure_fts_structures(conn)
-                    else:
-                        raise SchemaError(f"Migration failed: {result}")
-                    
+                            # Ensure FTS tables exist
+                            self._ensure_fts_structures(conn)
+                        else:
+                            raise SchemaError(f"Migration failed: {result}")
+
                 except MigrationError as e:
                     raise SchemaError(f"Database migration failed: {e}") from e
 
@@ -1483,6 +1508,7 @@ class MediaDatabase:
 
         return {
             5: self._postgres_migrate_to_v5,
+            6: self._postgres_migrate_to_v6,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -1497,6 +1523,43 @@ class MediaDatabase:
             ),
             connection=conn,
         )
+
+    def _postgres_migrate_to_v6(self, conn) -> None:
+        """Introduce the DocumentVersionIdentifiers table and supporting indexes."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        backend.execute(
+            (
+                f"CREATE TABLE IF NOT EXISTS {ident('DocumentVersionIdentifiers')} ("
+                f"{ident('dv_id')} BIGINT PRIMARY KEY REFERENCES {ident('DocumentVersions')}({ident('id')}) ON DELETE CASCADE,"
+                f"{ident('doi')} TEXT,"
+                f"{ident('pmid')} TEXT,"
+                f"{ident('pmcid')} TEXT,"
+                f"{ident('arxiv_id')} TEXT,"
+                f"{ident('s2_paper_id')} TEXT"
+                ")"
+            ),
+            connection=conn,
+        )
+
+        index_defs = [
+            ("idx_dvi_doi", "doi"),
+            ("idx_dvi_pmid", "pmid"),
+            ("idx_dvi_pmcid", "pmcid"),
+            ("idx_dvi_arxiv", "arxiv_id"),
+            ("idx_dvi_s2", "s2_paper_id"),
+        ]
+
+        for index_name, column in index_defs:
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident(index_name)} "
+                    f"ON {ident('DocumentVersionIdentifiers')} ({ident(column)})"
+                ),
+                connection=conn,
+            )
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -1967,17 +2030,35 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS update fails.
         """
-        if self.backend_type != BackendType.SQLITE:
+        if self.backend_type == BackendType.SQLITE:
+            content = content or ""
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO media_fts (rowid, title, content) VALUES (?, ?, ?)",
+                    (media_id, title, content),
+                )
+                logging.debug("Updated SQLite FTS entry for Media ID %s", media_id)
+            except sqlite3.Error as e:
+                logging.error("Failed to update media_fts for Media ID %s: %s", media_id, e, exc_info=True)
+                raise DatabaseError(f"Failed to update FTS for Media ID {media_id}: {e}") from e
             return
-        content = content or ""
-        try:
-            # Use INSERT OR REPLACE
-            conn.execute("INSERT OR REPLACE INTO media_fts (rowid, title, content) VALUES (?, ?, ?)",
-                           (media_id, title, content))
-            logging.debug(f"Updated FTS (insert or replace) for Media ID {media_id}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to update media_fts for Media ID {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to update FTS for Media ID {media_id}: {e}") from e
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE media SET media_fts_tsv = CASE "
+                        "WHEN deleted IS FALSE THEN to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')) "
+                        "ELSE NULL END WHERE id = ?"
+                    ),
+                    (media_id,),
+                )
+                logging.debug("Updated PostgreSQL FTS vector for Media ID %s", media_id)
+            except DatabaseError as exc:
+                logging.error("Failed to update PostgreSQL FTS for Media ID %s: %s", media_id, exc, exc_info=True)
+                raise
+            return
 
     def _delete_fts_media(self, conn: sqlite3.Connection, media_id: int):
         """
@@ -1994,15 +2075,27 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS deletion fails (excluding 'not found').
         """
-        if self.backend_type != BackendType.SQLITE:
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                conn.execute("DELETE FROM media_fts WHERE rowid = ?", (media_id,))
+                logging.debug("Deleted SQLite FTS entry for Media ID %s", media_id)
+            except sqlite3.Error as e:
+                logging.error("Failed to delete from media_fts for Media ID %s: %s", media_id, e, exc_info=True)
+                raise DatabaseError(f"Failed to delete FTS for Media ID {media_id}: {e}") from e
             return
-        try:
-            # Delete based on rowid, ignore if not found
-            conn.execute("DELETE FROM media_fts WHERE rowid = ?", (media_id,))
-            logging.debug(f"Deleted FTS entry for Media ID {media_id}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to delete from media_fts for Media ID {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to delete FTS for Media ID {media_id}: {e}") from e
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                self._execute_with_connection(
+                    conn,
+                    "UPDATE media SET media_fts_tsv = NULL WHERE id = ?",
+                    (media_id,),
+                )
+                logging.debug("Cleared PostgreSQL FTS vector for Media ID %s", media_id)
+            except DatabaseError as exc:
+                logging.error("Failed to clear PostgreSQL FTS for Media ID %s: %s", media_id, exc, exc_info=True)
+                raise
+            return
 
     def _update_fts_keyword(self, conn: sqlite3.Connection, keyword_id: int, keyword: str):
         """
@@ -2019,16 +2112,34 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS update fails.
         """
-        if self.backend_type != BackendType.SQLITE:
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO keyword_fts (rowid, keyword) VALUES (?, ?)",
+                    (keyword_id, keyword),
+                )
+                logging.debug("Updated SQLite FTS entry for Keyword ID %s", keyword_id)
+            except sqlite3.Error as e:
+                logging.error("Failed to update keyword_fts for Keyword ID %s: %s", keyword_id, e, exc_info=True)
+                raise DatabaseError(f"Failed to update FTS for Keyword ID {keyword_id}: {e}") from e
             return
-        try:
-            # Use INSERT OR REPLACE
-            conn.execute("INSERT OR REPLACE INTO keyword_fts (rowid, keyword) VALUES (?, ?)",
-                           (keyword_id, keyword))
-            logging.debug(f"Updated FTS (insert or replace) for Keyword ID {keyword_id}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to update keyword_fts for Keyword ID {keyword_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to update FTS for Keyword ID {keyword_id}: {e}") from e
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE keywords SET keyword_fts_tsv = CASE "
+                        "WHEN deleted IS FALSE THEN to_tsvector('english', coalesce(keyword, '')) "
+                        "ELSE NULL END WHERE id = ?"
+                    ),
+                    (keyword_id,),
+                )
+                logging.debug("Updated PostgreSQL FTS vector for Keyword ID %s", keyword_id)
+            except DatabaseError as exc:
+                logging.error("Failed to update PostgreSQL FTS for Keyword ID %s: %s", keyword_id, exc, exc_info=True)
+                raise
+            return
 
     def _delete_fts_keyword(self, conn: sqlite3.Connection, keyword_id: int):
         """
@@ -2045,14 +2156,27 @@ class MediaDatabase:
         Raises:
             DatabaseError: If the FTS deletion fails (excluding 'not found').
         """
-        if self.backend_type != BackendType.SQLITE:
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                conn.execute("DELETE FROM keyword_fts WHERE rowid = ?", (keyword_id,))
+                logging.debug("Deleted SQLite FTS entry for Keyword ID %s", keyword_id)
+            except sqlite3.Error as e:
+                logging.error("Failed to delete from keyword_fts for Keyword ID %s: %s", keyword_id, e, exc_info=True)
+                raise DatabaseError(f"Failed to delete FTS for Keyword ID {keyword_id}: {e}") from e
             return
-        try:
-            conn.execute("DELETE FROM keyword_fts WHERE rowid = ?", (keyword_id,))
-            logging.debug(f"Deleted FTS entry for Keyword ID {keyword_id}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to delete from keyword_fts for Keyword ID {keyword_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to delete FTS for Keyword ID {keyword_id}: {e}") from e
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                self._execute_with_connection(
+                    conn,
+                    "UPDATE keywords SET keyword_fts_tsv = NULL WHERE id = ?",
+                    (keyword_id,),
+                )
+                logging.debug("Cleared PostgreSQL FTS vector for Keyword ID %s", keyword_id)
+            except DatabaseError as exc:
+                logging.error("Failed to clear PostgreSQL FTS for Keyword ID %s: %s", keyword_id, exc, exc_info=True)
+                raise
+            return
 
         # In Media_DB_v2.py (within the Database class)
 
@@ -2171,6 +2295,10 @@ class MediaDatabase:
         conditions = []
         params = []
 
+        fts_select_params: List[Any] = []
+        fts_condition_params: List[Any] = []
+        postgres_tsquery: Optional[str] = None
+
         # Basic filters
         if not include_deleted:
             conditions.append("m.deleted = 0")
@@ -2248,66 +2376,56 @@ class MediaDatabase:
 
         # Text Search Logic (FTS or LIKE)
         fts_search_active = False
-        if search_query: # search_query is the actual text to match (e.g., "my query" or "\"exact phrase\"")
-            # LIKE search conditions
+        if search_query:  # search_query is the actual text to match (e.g., "my query" or "\"exact phrase\"")
             like_conditions = []
             like_params = []
-            
-            # For LIKE queries, strip quotes from phrase searches
+
             like_search_query = search_query.strip('"') if search_query.startswith('"') and search_query.endswith('"') else search_query
 
-            # FTS on 'title', 'content'
             if any(f in sanitized_text_search_fields for f in ["title", "content"]):
                 fts_search_active = True
-                if not any("media_fts fts" in j_item for j_item in joins): # Ensure FTS join is added only once
-                    joins.append("JOIN media_fts fts ON fts.rowid = m.id")
+                fts_query_parts: List[str] = []
 
-                # SQLite FTS doesn't allow multiple MATCH conditions combined with OR
-                # Instead, we'll use a single MATCH condition with the OR operator inside the FTS query
-                fts_query_parts = []
-
-                # For very short search terms (1-2 characters), add wildcards to improve matching
                 if len(search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
-                    # Add suffix wildcard for better partial matching with short terms
                     fts_query_parts.append(f"{search_query}*")
-
-                    # Note: SQLite FTS5 doesn't support prefix wildcards (*term)
-                    # We'll handle "ends with" matching using LIKE conditions instead
-
-                    # Add case-insensitive versions if needed
                     if search_query.lower() != search_query:
                         fts_query_parts.append(f"{search_query.lower()}*")
                 else:
-                    # For longer terms, use the original query
                     fts_query_parts.append(search_query)
-
-                    # Add case-insensitive version if needed
                     if not (search_query.startswith('"') and search_query.endswith('"')) and search_query.lower() != search_query:
                         fts_query_parts.append(search_query.lower())
 
-                # Combine all FTS query parts with OR
                 combined_fts_query = " OR ".join(fts_query_parts)
                 logging.debug(f"Combined FTS query: '{combined_fts_query}'")
                 logging.info(f"Search using FTS with query parts: {fts_query_parts}")
 
-                # Add a single MATCH condition
-                conditions.append("fts.media_fts MATCH ?")
-                params.append(combined_fts_query)
+                if self.backend_type == BackendType.SQLITE:
+                    if not any("media_fts fts" in j_item for j_item in joins):
+                        joins.append("JOIN media_fts fts ON fts.rowid = m.id")
+                    conditions.append("fts.media_fts MATCH ?")
+                    params.append(combined_fts_query)
+                elif self.backend_type == BackendType.POSTGRESQL:
+                    postgres_tsquery = FTSQueryTranslator.normalize_query(combined_fts_query, 'postgresql')
+                    if postgres_tsquery:
+                        conditions.append("m.media_fts_tsv @@ to_tsquery('english', ?)")
+                        fts_condition_params.append(postgres_tsquery)
+                    else:
+                        logging.debug("PostgreSQL tsquery normalization produced empty output; falling back to LIKE-only search.")
+                        fts_search_active = False
+                else:
+                    logging.warning("FTS requested for unsupported backend %s", self.backend_type)
+                    fts_search_active = False
 
-                # Add LIKE search for 'title' and 'content' to ensure partial matches work
                 title_content_like_parts: List[str] = []
                 for field in ["title", "content"]:
                     if field in sanitized_text_search_fields:
                         column = f"m.{field}"
-                        # Contains matching (standard)
                         self._append_case_insensitive_like(
                             title_content_like_parts,
                             like_params,
                             column,
                             f"%{like_search_query}%",
                         )
-
-                        # For short search terms, also add "ends with" matching to catch cases like "ToDo" when searching for "Do"
                         if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
                             self._append_case_insensitive_like(
                                 title_content_like_parts,
@@ -2318,25 +2436,20 @@ class MediaDatabase:
                 if title_content_like_parts:
                     like_conditions.append(f"({' OR '.join(title_content_like_parts)})")
 
-            # LIKE search for 'author', 'type'
             like_fields_to_search = [f for f in sanitized_text_search_fields if f in ["author", "type"]]
             if like_fields_to_search:
                 like_parts: List[str] = []
                 for field in like_fields_to_search:
-                    # Avoid LIKE on 'type' if 'media_types' filter is already active for 'type'
                     if field == "type" and media_types:
-                        logging.debug(f"LIKE search on 'type' skipped due to active 'media_types' filter.")
+                        logging.debug("LIKE search on 'type' skipped due to active 'media_types' filter.")
                         continue
 
-                    # Contains matching (standard)
                     self._append_case_insensitive_like(
                         like_parts,
                         like_params,
                         f"m.{field}",
                         f"%{like_search_query}%",
-                    )  # search_query here should be the raw query, not the FTS one
-
-                    # For short search terms, also add "ends with" matching to catch cases like "ToDo" when searching for "Do"
+                    )
                     if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
                         self._append_case_insensitive_like(
                             like_parts,
@@ -2347,28 +2460,30 @@ class MediaDatabase:
                 if like_parts:
                     like_conditions.append(f"({' OR '.join(like_parts)})")
 
-            # Add LIKE conditions to the main conditions list
             if like_conditions:
                 logging.info(f"Search using LIKE with patterns: {like_params}")
                 conditions.append(f"({' OR '.join(like_conditions)})")
                 params.extend(like_params)
 
         elif sanitized_text_search_fields:
-            # If no search query but fields are specified, add a condition that always evaluates to true
-            # This ensures all records are considered when no search query is provided
             conditions.append("1=1")
+
 
         # Order By Clause
         order_by_clause_str = ""
         default_order_by = "ORDER BY m.last_modified DESC, m.id DESC"
 
         if fts_search_active and (sort_by == "relevance" or not sort_by):
-            # FTS results are naturally sorted by relevance by SQLite.
-            # We can add secondary sort criteria.
-            # To explicitly use rank, it must be selected.
-            if "fts.rank AS relevance_score" not in " ".join(base_select_parts):
-                 base_select_parts.append("fts.rank AS relevance_score")
+            # Ensure relevance score is available for ordering.
+            if self.backend_type == BackendType.SQLITE:
+                if not any("fts.rank AS relevance_score" in part for part in base_select_parts):
+                    base_select_parts.append("fts.rank AS relevance_score")
+            elif self.backend_type == BackendType.POSTGRESQL and postgres_tsquery:
+                if not any("relevance_score" in part for part in base_select_parts):
+                    base_select_parts.append("ts_rank(m.media_fts_tsv, to_tsquery('english', ?)) AS relevance_score")
+                    fts_select_params.append(postgres_tsquery)
             order_by_clause_str = "ORDER BY relevance_score DESC, m.last_modified DESC, m.id DESC"
+
         else:
             if sort_by == "date_desc":
                 order_by_clause_str = "ORDER BY m.ingestion_date DESC, m.last_modified DESC, m.id DESC"
@@ -2402,10 +2517,14 @@ class MediaDatabase:
             # Count Query
             count_sql = f"SELECT {count_select} {base_from} {join_clause} {where_clause}"
             logging.debug(f"Search Count SQL ({self.db_path_str}): {count_sql}")
-            logging.debug(f"Search Count Params: {params}")
+            if self.backend_type == BackendType.POSTGRESQL:
+                count_params_seq = list(fts_condition_params) + list(params)
+            else:
+                count_params_seq = list(params)
+            logging.debug(f"Search Count Params: {count_params_seq}")
 
             try:
-                count_cursor = self.execute_query(count_sql, tuple(params))
+                count_cursor = self.execute_query(count_sql, tuple(count_params_seq))
                 total_matches_row = count_cursor.fetchone()
                 total_matches = total_matches_row[0] if total_matches_row else 0
                 logging.info(f"Search query '{search_query}' found {total_matches} total matches")
@@ -2450,7 +2569,10 @@ class MediaDatabase:
             if total_matches > 0 and offset < total_matches:
                 # Results Query
                 results_sql = f"{final_select_stmt} {base_from} {join_clause} {where_clause} {order_by_clause_str} LIMIT ? OFFSET ?"
-                paginated_params = tuple(params + [results_per_page, offset])
+                if self.backend_type == BackendType.POSTGRESQL:
+                    paginated_params = tuple(list(fts_select_params) + list(fts_condition_params) + list(params) + [results_per_page, offset])
+                else:
+                    paginated_params = tuple(params + [results_per_page, offset])
                 logging.debug(f"Search Results SQL ({self.db_path_str}): {results_sql}")
                 logging.debug(f"Search Results Params: {paginated_params}")
 

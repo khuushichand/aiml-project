@@ -22,9 +22,9 @@ Notes:
 | `audio` | API-related/Audio_Transcription_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
 | `benchmarks` | Coming soon |
-| `characters` | Coming soon |
-| `character-chat-sessions` | Coming soon |
-| `character-messages` | Coming soon |
+| `characters` | CHARACTER_CHAT_API_DOCUMENTATION.md |
+| `character-chat-sessions` | API-related/Character_Chat_Sessions_API.md |
+| `character-messages` | API-related/Character_Messages_API.md |
 | `flashcards` | Coming soon |
 | `mcp-unified` | Coming soon |
 | `workflows` | Coming soon |

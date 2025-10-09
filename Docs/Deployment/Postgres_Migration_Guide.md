@@ -61,13 +61,18 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   sqlite3 Databases/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
   ```
 
-- Run the new dual-backend unit tests to ensure the application-level routines behave correctly:
+- Run the dual-backend regression tests to ensure the application-level routines behave correctly (requires a Postgres instance with `POSTGRES_TEST_*` env vars):
 
   ```bash
-  pytest tldw_Server_API/tests/DB_Management/test_media_postgres_support.py              tldw_Server_API/tests/RAG/test_analytics_backend.py              tldw_Server_API/tests/DB_Management/test_migration_tools.py
+  pytest tldw_Server_API/tests/DB_Management/test_media_postgres_support.py \
+         tldw_Server_API/tests/DB_Management/test_media_postgres_migrations.py \
+         tldw_Server_API/tests/RAG/test_analytics_backend.py \
+         tldw_Server_API/tests/RAG/test_dual_backend_rag_flow.py \
+         tldw_Server_API/tests/RAG/test_dual_backend_end_to_end.py \
+         tldw_Server_API/tests/DB_Management/test_migration_tools.py \
+         tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py
   ```
 
-  *(These tests use fakes/stubs and do not require a live PostgreSQL instance.)*
 
 ## Step 4 – Switch the application configuration
 

@@ -14,7 +14,7 @@ load_dotenv()
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
 # Import helpers from conftest
-from .conftest import get_auth_headers
+# get_auth_headers is defined locally below for clarity
 # Import schemas from your actual file path
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
@@ -1022,4 +1022,3 @@ def test_create_chat_completion_template_file_not_found(
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
-

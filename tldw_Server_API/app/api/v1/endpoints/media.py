@@ -60,6 +60,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 # from tldw_Server_API.app.core.config import settings, config
 # Authentication & User Identification (Primary Dependency)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker, MEDIA_CREATE
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 # Database Instance Dependency (Gets DB based on User)
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user, try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token
@@ -3070,7 +3072,11 @@ def _determine_final_status(results: List[Dict[str, Any]]) -> int:
 # --- Main Endpoint ---
 @router.post("/add",
              # status_code=status.HTTP_200_OK, # Determined dynamically
-             dependencies=[Depends(get_media_db_for_user)],
+             dependencies=[
+                 Depends(get_media_db_for_user),
+                 Depends(PermissionChecker(MEDIA_CREATE)),
+                 Depends(rbac_rate_limit("media.create"))
+             ],
              summary="Add media (URLs/files) with processing and persistence",
              tags=["Media Ingestion & Persistence"], # Changed tag
              )
@@ -6387,7 +6393,8 @@ class WebScrapingRequest(BaseModel):
     user_agent: Optional[str] = None
     custom_headers: Optional[Dict[str, str]] = None
 
-@router.post("/process-web-scraping")
+@router.post("/process-web-scraping",
+             dependencies=[Depends(PermissionChecker(MEDIA_CREATE)), Depends(rbac_rate_limit("media.create"))])
 async def process_web_scraping_endpoint(
         payload: WebScrapingRequest,
         # 1. Auth + UserID Determined through `get_db_by_user`

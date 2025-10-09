@@ -20,12 +20,12 @@ The Chunking Templates API provides a powerful way to define, manage, and apply 
 http://localhost:8000/api/v1/chunking/templates
 ```
 
-## Authentication
+## Auth + Rate Limits
 
 Authentication is required and follows the server’s AuthNZ mode:
 - Single-user mode: include `X-API-KEY: <your_key>` header
 - Multi-user mode: include `Authorization: Bearer <JWT>` header
-The same requirements apply to all endpoints documented below.
+The same requirements apply to all endpoints documented below. Standard limits apply; template operations are lightweight and subject to standard RPM.
 
 ## Endpoints
 

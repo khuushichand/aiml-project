@@ -17,6 +17,11 @@ https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
 https://arxiv.org/abs/2411.19352
 https://www.newsminimalist.com/
 https://www.memeorandum.com/m/
+https://github.com/CrociDB/bulletty
+https://github.com/FreshRSS/FreshRSS
+https://github.com/prof18/feed-flow
+https://github.com/AboutRSS/ALL-about-RSS
+https://github.com/plenaryapp/awesome-rss-feeds
 https://www.usedigest.com/
 https://www.reddit.com/r/aiagents/comments/1neabnf/if_it_helps_heres_my_workflow_n8n_gpt5_for
 https://huggingface.co/datasets/yandex/yambda

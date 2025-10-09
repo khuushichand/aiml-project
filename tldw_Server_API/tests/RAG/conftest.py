@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import hashlib
+import os
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator, Optional
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+
+try:  # Optional dependency; Postgres tests are skipped when unavailable
+    import psycopg2
+except ImportError:  # pragma: no cover - the skip hook handles missing driver
+    psycopg2 = None
+
+
+_POSTGRES_ENV_VARS = (
+    "POSTGRES_TEST_HOST",
+    "POSTGRES_TEST_PORT",
+    "POSTGRES_TEST_DB",
+    "POSTGRES_TEST_USER",
+    "POSTGRES_TEST_PASSWORD",
+)
+
+_HAS_POSTGRES = psycopg2 is not None and all(env in os.environ for env in _POSTGRES_ENV_VARS)
+
+
+@dataclass
+class DualBackendEnv:
+    """Container for the dual-backend regression fixtures."""
+
+    label: str
+    media_db: MediaDatabase
+    chacha_db: CharactersRAGDB
+
+
+def _reset_postgres_database(config: DatabaseConfig) -> None:
+    """Drop and recreate the public schema so each test gets a clean slate."""
+
+    assert psycopg2 is not None
+    conn = psycopg2.connect(
+        host=config.pg_host,
+        port=config.pg_port,
+        database=config.pg_database,
+        user=config.pg_user,
+        password=config.pg_password,
+    )
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    finally:
+        conn.close()
+
+
+def _build_postgres_config() -> DatabaseConfig:
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=os.environ["POSTGRES_TEST_HOST"],
+        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
+        pg_database=os.environ["POSTGRES_TEST_DB"],
+        pg_user=os.environ["POSTGRES_TEST_USER"],
+        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
+    )
+
+
+@pytest.fixture(params=[
+    "sqlite",
+    pytest.param("postgres", marks=pytest.mark.skipif(not _HAS_POSTGRES, reason="Postgres fixtures unavailable")),
+])
+def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[DualBackendEnv]:
+    """Yield Media + ChaCha database instances for the requested backend."""
+
+    label: str = request.param
+    media_db: Optional[MediaDatabase] = None
+    chacha_db: Optional[CharactersRAGDB] = None
+
+    if label == "sqlite":
+        # Use file-backed DBs under pytest tmp_path so migration helper can operate
+        media_path = tmp_path / "media.sqlite"
+        chacha_path = tmp_path / "chacha.sqlite"
+        media_db = MediaDatabase(db_path=str(media_path), client_id="dual-sqlite-media")
+        chacha_db = CharactersRAGDB(db_path=str(chacha_path), client_id="dual-sqlite-chacha")
+    else:  # postgres
+        config = _build_postgres_config()
+        _reset_postgres_database(config)
+
+        media_backend = DatabaseBackendFactory.create_backend(config)
+        chacha_backend = DatabaseBackendFactory.create_backend(config)
+
+        media_db = MediaDatabase(db_path=":memory:", client_id="dual-postgres-media", backend=media_backend)
+        chacha_db = CharactersRAGDB(db_path=":memory:", client_id="dual-postgres-chacha", backend=chacha_backend)
+
+    try:
+        yield DualBackendEnv(label=label, media_db=media_db, chacha_db=chacha_db)
+    finally:
+        if chacha_db is not None:
+            chacha_db.close_connection()
+            if chacha_db.backend_type == BackendType.POSTGRESQL:
+                chacha_db.backend.get_pool().close_all()
+
+        if media_db is not None:
+            media_db.close_connection()
+            if media_db.backend_type == BackendType.POSTGRESQL:
+                media_db.backend.get_pool().close_all()
+
+
+@pytest.fixture
+def deterministic_embeddings(monkeypatch: pytest.MonkeyPatch):
+    """Patch embedding helpers to produce deterministic vectors for regression tests."""
+
+    def _create_embeddings_batch(texts, config, metadata):  # noqa: ANN001 - external signature contract
+        vectors = []
+        for text in texts:
+            seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest(), 16)
+            rng = random.Random(seed)
+            vectors.append([round(rng.uniform(-1.0, 1.0), 6) for _ in range(16)])
+        return vectors
+
+    def _get_embedding_config():  # noqa: ANN001 - matches production helper
+        return {"provider": "deterministic-test"}
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch",
+        _create_embeddings_batch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.get_embedding_config",
+        _get_embedding_config,
+        raising=False,
+    )
+
+    return _create_embeddings_batch

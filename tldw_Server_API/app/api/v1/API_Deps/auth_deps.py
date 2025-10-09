@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -106,7 +106,29 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
-    # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite multi-user or general).
+    # Single-user mode: honor the configured SINGLE_USER_API_KEY directly (no DB lookups)
+    try:
+        if is_single_user_mode() and x_api_key:
+            settings = get_settings()
+            if x_api_key == settings.SINGLE_USER_API_KEY:
+                user = {
+                    "id": settings.SINGLE_USER_FIXED_ID,
+                    "username": "single_user",
+                    "email": None,
+                    "role": "admin",
+                    "is_active": True,
+                    "is_verified": True,
+                }
+                try:
+                    request.state.user_id = settings.SINGLE_USER_FIXED_ID
+                except Exception:
+                    pass
+                return user
+    except Exception:
+        # Fall through to other mechanisms if any issue arises
+        pass
+
+    # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
     if not credentials and x_api_key:
         try:
             api_mgr = await get_api_key_manager()
@@ -135,6 +157,7 @@ async def get_current_user(
             # Attach user_id for downstream rate limiting where used
             try:
                 request.state.user_id = user_id
+                request.state.api_key_id = key_info.get("id")
             except Exception:
                 pass
 
@@ -541,6 +564,13 @@ async def enforce_rbac_rate_limit(
             logger.debug(f"RBAC rate-limit: no configured limits for user {user_id}, resource {resource}")
     except Exception as e:
         logger.debug(f"RBAC rate-limit selection failed: {e}")
+
+
+def rbac_rate_limit(resource: str):
+    """Factory returning a dependency that logs selected RBAC limits for the given resource."""
+    async def _dep(request: Request, db_pool: DatabasePool = Depends(get_db_pool)):
+        await enforce_rbac_rate_limit(request, resource, db_pool)
+    return _dep
 #
 # End of auth_deps.py
 #######################################################################################################################

@@ -228,7 +228,7 @@ async def lifespan(app: FastAPI):
             if getattr(db_pool, 'pool', None) is None and getattr(db_pool, 'db_path', None):
                 from pathlib import Path as _Path
                 from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz
-                _ensure_authnz_tables(_Path(db_pool.db_path))
+                _ensure_authnz(_Path(db_pool.db_path))
                 logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
         except Exception as _e:
             logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
@@ -454,6 +454,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
     
+    # Start usage aggregator (if enabled)
+    try:
+        from tldw_Server_API.app.services.usage_aggregator import start_usage_aggregator
+        usage_task = await start_usage_aggregator()
+        if usage_task:
+            logger.info("Usage aggregator started")
+    except Exception as e:
+        logger.warning(f"Failed to start usage aggregator: {e}")
+
     # Display authentication mode (mask API key in production)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -630,6 +639,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error cleaning up CPU pools: {e}")
     
+    # Stop usage aggregator
+    try:
+        if 'usage_task' in locals() and usage_task:
+            from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator
+            await stop_usage_aggregator(usage_task)
+            logger.info("Usage aggregator stopped")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error stopping usage aggregator: {e}")
+
     # Shutdown telemetry
     try:
         shutdown_telemetry()
@@ -1015,6 +1033,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
+from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 
 _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
 _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
@@ -1025,6 +1044,9 @@ if _enable_sec_headers:
 
 # HTTP request metrics middleware (records count and latency per route)
 app.add_middleware(HTTPMetricsMiddleware)
+
+# Per-request usage logging (guarded by settings flag)
+app.add_middleware(UsageLoggingMiddleware)
 
 # Request ID propagation (adds X-Request-ID header)
 app.add_middleware(RequestIDMiddleware)

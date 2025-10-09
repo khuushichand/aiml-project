@@ -154,6 +154,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_placeholders
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 import os
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -418,7 +419,8 @@ async def _save_message_turn_to_db(
         status.HTTP_502_BAD_GATEWAY: {"description": "Error received from an upstream LLM provider."},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Service temporarily unavailable or misconfigured (e.g., provider API key issue)."},
         status.HTTP_504_GATEWAY_TIMEOUT: {"description": "Upstream LLM provider timed out."},
-    }
+    },
+    dependencies=[Depends(rbac_rate_limit("chat.create"))]
 )
 async def create_chat_completion(
     request_data: ChatCompletionRequest = Body(...),

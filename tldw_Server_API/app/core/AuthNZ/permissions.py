@@ -14,7 +14,7 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 
 ########################################################################################################################
 # Database Instance Management
@@ -154,6 +154,15 @@ class PermissionChecker:
             HTTPException: If user lacks required permission
         """
         if not check_permission(user, self.permission):
+            # Soft-enforce option: log and allow if enabled
+            try:
+                if get_settings().RBAC_SOFT_ENFORCE:
+                    logger.warning(
+                        f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' — allowing (soft mode)"
+                    )
+                    return user
+            except Exception:
+                pass
             logger.warning(f"User {user.username} denied access - lacks permission: {self.permission}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -16,6 +16,11 @@ Authentication follows the server’s AuthNZ mode:
 - Multi-user mode: include `Authorization: Bearer <JWT>` header
 All endpoints require authentication; some endpoints are admin-only and enforce additional checks.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; batching and large inputs consume more TPM and may be rate-limited.
+
 ## Key Concepts
 
 ### What are Embeddings?

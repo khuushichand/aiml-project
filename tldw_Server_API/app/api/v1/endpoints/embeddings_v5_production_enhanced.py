@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Configuration
@@ -1196,7 +1197,8 @@ def require_admin(user: User) -> None:
     "/embeddings",
     response_model=CreateEmbeddingResponse,
     status_code=status.HTTP_200_OK,
-    summary="Create embeddings (enhanced with circuit breaker)"
+    summary="Create embeddings (enhanced with circuit breaker)",
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))]
 )
 @apply_rate_limit("5/second")
 async def create_embedding_endpoint(

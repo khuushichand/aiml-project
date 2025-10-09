@@ -346,6 +346,16 @@ class CharactersRAGDB:
         ),
     ]
 
+    _POSTGRES_SEQUENCE_TABLES: Tuple[Tuple[str, str], ...] = (
+        ("character_cards", "id"),
+        ("keywords", "id"),
+        ("keyword_collections", "id"),
+        ("sync_log", "change_id"),
+        ("decks", "id"),
+        ("flashcards", "id"),
+        ("flashcard_reviews", "id"),
+    )
+
     _FULL_SCHEMA_SQL_V4 = """
 /*───────────────────────────────────────────────────────────────
   RAG Character-Chat Schema  –  Version 4   (2025-05-14)
@@ -2439,6 +2449,7 @@ UPDATE db_schema_version
         for stmt in statements:
             self.backend.execute(stmt, connection=conn)
         self._set_schema_version_postgres(conn, expected_version)
+        self._sync_postgres_sequences(conn)
 
     def _get_schema_version_postgres(self, conn) -> int:
         result = self.backend.execute(
@@ -2461,15 +2472,54 @@ UPDATE db_schema_version
         )
 
     def _sync_postgres_sequences(self, conn) -> None:
-        """Ensure PostgreSQL sequences are aligned after seeding default rows."""
+        """Ensure PostgreSQL sequences match current maxima for managed tables."""
 
-        try:
-            self.backend.execute(
-                "SELECT setval(pg_get_serial_sequence('character_cards', 'id'), COALESCE(MAX(id), 0), true) FROM character_cards",
-                connection=conn,
-            )
-        except BackendDatabaseError as exc:  # noqa: BLE001
-            logger.warning("Failed to synchronize character_cards sequence: %s", exc)
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        for table_name, column_name in self._POSTGRES_SEQUENCE_TABLES:
+            try:
+                seq_result = backend.execute(
+                    "SELECT pg_get_serial_sequence(%s, %s) AS seq",
+                    (table_name, column_name),
+                    connection=conn,
+                )
+                sequence_name = seq_result.scalar if seq_result else None
+                if not sequence_name:
+                    continue
+
+                max_result = backend.execute(
+                    (
+                        f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                        f"FROM {ident(table_name)}"
+                    ),
+                    connection=conn,
+                )
+
+                try:
+                    max_id = int(max_result.scalar or 0)
+                except (TypeError, ValueError):
+                    max_id = 0
+
+                if max_id <= 0:
+                    backend.execute(
+                        "SELECT setval(%s, %s, false)",
+                        (sequence_name, 1),
+                        connection=conn,
+                    )
+                else:
+                    backend.execute(
+                        "SELECT setval(%s, %s)",
+                        (sequence_name, max_id),
+                        connection=conn,
+                    )
+            except BackendDatabaseError as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to synchronize PostgreSQL sequence for %s.%s: %s",
+                    table_name,
+                    column_name,
+                    exc,
+                )
 
     # --- Internal Helpers ---
     def _get_current_utc_timestamp_iso(self) -> str:
@@ -4268,6 +4318,16 @@ UPDATE db_schema_version
             logger.error(f"Database error fetching {table_name} by {unique_col_name} '{value}': {e}")
             raise
 
+    def _case_insensitive_order_expression(self, column: str, direction: Optional[str] = None) -> str:
+        direction_clean = (direction or '').strip()
+        direction_clause = f" {direction_clean}" if direction_clean else ""
+        if self.backend_type == BackendType.POSTGRESQL:
+            return f"LOWER({column}){direction_clause}"
+        return f"{column} COLLATE NOCASE{direction_clause}"
+
+    def _case_insensitive_order_clause(self, column: str, direction: Optional[str] = None) -> str:
+        return f"ORDER BY {self._case_insensitive_order_expression(column, direction)}"
+
     def _list_generic_items(self, table_name: str, order_by_col: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """
         Internal helper: Lists non-deleted items from a table, with specified ordering.
@@ -4284,7 +4344,12 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_by_col} LIMIT ? OFFSET ?"
+        order_expression = order_by_col
+        if 'COLLATE NOCASE' in order_by_col.upper():
+            base, _, direction = order_by_col.partition('COLLATE NOCASE')
+            order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
+
+        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_expression} LIMIT ? OFFSET ?"
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -5116,13 +5181,14 @@ UPDATE db_schema_version
                                  "unlink")
 
     def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
@@ -5150,25 +5216,27 @@ UPDATE db_schema_version
                                  "unlink")
 
     def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (collection_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_collections_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
-        query = """
+        order_clause = self._case_insensitive_order_clause("kc.name")
+        query = f"""
                 SELECT kc.* \
                 FROM keyword_collections kc \
                          JOIN collection_keywords ck ON kc.id = ck.collection_id
                 WHERE ck.keyword_id = ? \
                   AND kc.deleted = 0
-                ORDER BY kc.name COLLATE NOCASE LIMIT ? \
+                {order_clause} LIMIT ? \
                 OFFSET ? \
                 """
         cursor = self.execute_query(query, (keyword_id, limit, offset))
@@ -5182,13 +5250,14 @@ UPDATE db_schema_version
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
     def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
-        query = """
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
                 SELECT k.* \
                 FROM keywords k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
-                ORDER BY k.keyword COLLATE NOCASE
+                {order_clause}
                 """
         cursor = self.execute_query(query, (note_id,))
         return [dict(row) for row in cursor.fetchall()]
@@ -5583,10 +5652,7 @@ UPDATE db_schema_version
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
-        if self.backend_type == BackendType.POSTGRESQL:
-            order_clause = "ORDER BY LOWER(kw.keyword)"
-        else:
-            order_clause = "ORDER BY kw.keyword COLLATE NOCASE"
+        order_clause = self._case_insensitive_order_clause("kw.keyword")
         query = f"""
             SELECT kw.*
               FROM flashcards f

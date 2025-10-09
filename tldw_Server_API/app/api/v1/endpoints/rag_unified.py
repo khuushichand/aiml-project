@@ -22,7 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, rbac_rate_limit
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -353,7 +353,7 @@ async def get_capabilities(request: Request):
     except the query itself.
     """,
     response_description="Search results with all requested features applied",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[Depends(check_rate_limit), Depends(rbac_rate_limit("rag.search"))]
 )
 async def unified_search_endpoint(
     request_raw: Request,

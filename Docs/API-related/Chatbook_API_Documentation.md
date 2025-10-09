@@ -4,6 +4,11 @@
 
 The Chatbook API provides functionality for exporting and importing collections of content (conversations, notes, characters, etc.) in a portable archive format. This enables users to backup, share, and migrate their data between instances or users.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; export/import run as background jobs and may be constrained by per-user concurrency.
+
 ## Table of Contents
 
 1. [Introduction](#introduction)

@@ -235,6 +235,22 @@ class Settings(BaseSettings):
         default=False,
         description="If true, log a 'used' event in API key audit log on successful validation"
     )
+
+    # ===== RBAC / Usage Logging =====
+    RBAC_SOFT_ENFORCE: bool = Field(
+        default=False,
+        description="If true, permission checks log warnings instead of 403 (deployment opt-in)"
+    )
+    USAGE_LOG_ENABLED: bool = Field(
+        default=False,
+        description="If true, record lightweight per-request usage into usage_log"
+    )
+    USAGE_LOG_EXCLUDE_PREFIXES: list[str] = Field(
+        default_factory=lambda: [
+            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico", "/webui"
+        ],
+        description="Request path prefixes to exclude from usage logging"
+    )
     
     # ===== Monitoring =====
     ENABLE_HEALTH_CHECK: bool = Field(

@@ -13,7 +13,16 @@ The Prompt Studio module provides a structured workflow to design, version, test
 
 Authentication follows the server's standard modes (single‑user API key or multi‑user JWT). Endpoints are project‑scoped: reads require access, writes require write access. Rate limits apply to generation/optimization endpoints.
 
+### Auth + Rate Limits
+- Single-user: header `X-API-KEY: <key>`
+- Multi-user: header `Authorization: Bearer <JWT>`
+- Rate limits: applied to generation (`/generate`, `/execute`) and optimization endpoints; listing/CRUD use standard limits.
+
 Tag in OpenAPI: `prompt-studio`.
+
+Auth headers
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
 
 ## More Examples
 
@@ -84,6 +93,17 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 ### Projects
 - Create: `POST /api/v1/prompt-studio/projects/`
 - List: `GET /api/v1/prompt-studio/projects/`
+  - Query params: `page`, `per_page`, `status`, `include_deleted`, `search`
+  - Example response:
+    ```json
+    {
+      "success": true,
+      "data": [
+        { "id": 1, "uuid": "f9e3...", "name": "Demo Project", "status": "active" }
+      ],
+      "metadata": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 }
+    }
+    ```
 - Get: `GET /api/v1/prompt-studio/projects/get/{project_id}`
 - Update: `PUT /api/v1/prompt-studio/projects/update/{project_id}`
 - Delete: `DELETE /api/v1/prompt-studio/projects/delete/{project_id}?permanent=false`
@@ -94,15 +114,38 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 ### Prompts (Versioned)
 - Create: `POST /api/v1/prompt-studio/prompts/create`
 - List: `GET /api/v1/prompt-studio/prompts/list/{project_id}`
+  - Query params: `page`, `per_page`, `include_deleted`
+  - Example response:
+    ```json
+    {
+      "success": true,
+      "data": [
+        { "id": 12, "project_id": 1, "name": "Summarizer", "version_number": 2 }
+      ],
+      "metadata": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 }
+    }
+    ```
 - Get: `GET /api/v1/prompt-studio/prompts/get/{prompt_id}`
 - Update (new version): `PUT /api/v1/prompt-studio/prompts/update/{prompt_id}`
 - History: `GET /api/v1/prompt-studio/prompts/history/{prompt_id}`
 - Revert (new version): `POST /api/v1/prompt-studio/prompts/revert/{prompt_id}/{version}`
+- Execute (simple): `POST /api/v1/prompt-studio/prompts/execute`
 
 ### Test Cases
 - Create: `POST /api/v1/prompt-studio/test-cases/create`
 - Bulk Create: `POST /api/v1/prompt-studio/test-cases/bulk`
 - List: `GET /api/v1/prompt-studio/test-cases/list/{project_id}`
+  - Query params: `page`, `per_page`, `is_golden`, `tags`, `search`, `signature_id`
+  - Example response:
+    ```json
+    {
+      "success": true,
+      "data": [
+        { "id": 101, "project_id": 1, "name": "Short text", "is_golden": true }
+      ],
+      "metadata": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 }
+    }
+    ```
 - Get: `GET /api/v1/prompt-studio/test-cases/get/{test_case_id}`
 - Update: `PUT /api/v1/prompt-studio/test-cases/update/{test_case_id}`
 - Delete: `DELETE /api/v1/prompt-studio/test-cases/delete/{test_case_id}?permanent=false`
@@ -126,7 +169,12 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 ### Real‑time API
 - WebSocket base: `WS /api/v1/prompt-studio/ws`
 - WebSocket per project: `WS /api/v1/prompt-studio/ws/{project_id}`
-- SSE fallback: `GET /api/v1/prompt-studio/ws` (text/event-stream)
+- SSE fallback: `GET /api/v1/prompt-studio/ws?client_id=<id>&project_id=<optional>` (text/event-stream)
+  - Requires `client_id` query param; optional `project_id` to scope events
+
+Notes
+- Several endpoints also accept “simple” aliases on the base path without trailing slashes to improve client ergonomics.
+- All list endpoints return a `metadata` object with `page`, `per_page`, `total`, and `total_pages`.
 
 ## Common Schemas
 

@@ -7,10 +7,11 @@
 - Scope note: Chat Dictionaries and the Document Generator are implemented as sub‑routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
-## Authentication
+## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
 - Backward-compatible header alias: `Token: Bearer <JWT>` is accepted.
+- Standard limits apply; heavy operations (streaming, tool calls) count toward per-user RPM/TPM.
 - If authentication is required and missing/invalid, the endpoint returns `401`.
 
 ## Request

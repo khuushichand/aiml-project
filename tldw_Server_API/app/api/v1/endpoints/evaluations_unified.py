@@ -78,6 +78,7 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     run_abtest_full,
 )
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
@@ -550,7 +551,12 @@ async def export_embeddings_abtest(
 
 # ============= OpenAI-Compatible Evaluation Endpoints =============
 
-@router.post("", response_model=EvaluationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=EvaluationResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rbac_rate_limit("evals.create"))]
+)
 async def create_evaluation(
     eval_request: CreateEvaluationRequest,
     user_id: str = Depends(verify_api_key)

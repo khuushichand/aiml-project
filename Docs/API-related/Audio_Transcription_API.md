@@ -4,6 +4,11 @@
 
 The tldw_server provides a comprehensive audio transcription API that is fully compatible with OpenAI's Audio API while offering additional transcription engines including NVIDIA Nemo models (Canary and Parakeet) for improved performance and flexibility.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; real-time WebSocket transcription enforces per-connection and per-minute usage.
+
 ## Table of Contents
 - [Features](#features)
 - [Supported Models](#supported-models)
