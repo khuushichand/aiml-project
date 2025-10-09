@@ -84,9 +84,9 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSear
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 # Media Processing
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import process_epub
-from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
+import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_lib
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
@@ -2832,7 +2832,7 @@ async def _process_document_like_item(
         if media_type == 'pdf':
              # --- FIX: Check file_bytes which were read earlier ---
              if file_bytes is None: raise ValueError("PDF processing requires file bytes, but they were not read.")
-             processing_func = process_pdf_task # Use the async task wrapper
+             processing_func = pdf_lib.process_pdf_task # Use the async task wrapper
              run_in_executor = False # Task is already async
              specific_args = {
                  "file_bytes": file_bytes,
@@ -2850,7 +2850,7 @@ async def _process_document_like_item(
 
         elif media_type == "document":
              if not processing_filepath: raise ValueError("Document processing requires a file path.")
-             processing_func = process_document_content
+             processing_func = docs.process_document_content
              specific_args = {"doc_path": processing_filepath} # Pass Path object
              # --- FIX: Ensure process_document_content receives all its required args ---
              # Common args already contain api_name, api_key, prompts etc.
@@ -2859,7 +2859,7 @@ async def _process_document_like_item(
              if not processing_filepath: raise ValueError("Ebook processing requires a file path.")
              # Need a wrapper if process_epub is sync
              def _sync_process_ebook_wrapper(**kwargs):
-                 return process_epub(**kwargs)
+                return books.process_epub(**kwargs)
              processing_func = _sync_process_ebook_wrapper
              specific_args = {
                  "file_path": str(processing_filepath),
@@ -4349,7 +4349,7 @@ def _process_single_ebook(
     try:
         logger.info(f"Worker processing ebook: {original_ref} from path {ebook_path}")
         # Call the main library processing function
-        result_dict = process_epub(
+        result_dict = books.process_epub(
             file_path=str(ebook_path),
             title_override=title_override,
             author_override=author_override,
@@ -5432,7 +5432,7 @@ async def _single_pdf_worker(
         }
 
         # process_pdf_task is async
-        raw = await process_pdf_task(**pdf_kwargs)
+        raw = await pdf_lib.process_pdf_task(**pdf_kwargs)
 
         # Ensure minimal envelope consistency
         if isinstance(raw, dict):
@@ -5660,7 +5660,7 @@ async def process_pdfs_endpoint(
                  f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
              # Create the async task
              task = asyncio.create_task(
-                 process_pdf_task(
+                 pdf_lib.process_pdf_task(
                      file_bytes=file_bytes,
                      filename=original_ref, # Use original ref as filename hint
                      parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",

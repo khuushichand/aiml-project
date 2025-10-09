@@ -656,9 +656,25 @@ class MediaDatabase:
         backend: DatabaseBackend | None,
         config: ConfigParser | None,
     ) -> DatabaseBackend:
+        # 1) Explicit backend passed in takes full precedence
         if backend is not None:
             return backend
 
+        # 2) If a concrete db_path (including ':memory:') was provided at construction,
+        #    prefer a SQLite backend bound to that path. This ensures test fixtures and
+        #    callers using custom paths do not accidentally share the global content DB
+        #    from configuration.
+        #    Only fall back to config-resolved backend when no usable path is present.
+        provided_path = self.db_path_str
+        if provided_path:
+            fallback_config = DatabaseConfig(
+                backend_type=BackendType.SQLITE,
+                sqlite_path=provided_path,
+            )
+            return DatabaseBackendFactory.create_backend(fallback_config)
+
+        # 3) As a last resort (should not happen under normal ctor usage),
+        #    resolve from comprehensive config.
         parser: ConfigParser | None = config
         if parser is None:
             try:
@@ -670,11 +686,12 @@ class MediaDatabase:
         if resolved is not None:
             return resolved
 
-        fallback_config = DatabaseConfig(
+        # 4) Fallback to a local SQLite backend in the working directory
+        default_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
-            sqlite_path=self.db_path_str,
+            sqlite_path="./Databases/Media_DB_v2.db",
         )
-        return DatabaseBackendFactory.create_backend(fallback_config)
+        return DatabaseBackendFactory.create_backend(default_config)
 
     # --- Backend Statement Preparation Helpers ---
     def _prepare_backend_statement(
@@ -3170,13 +3187,14 @@ class MediaDatabase:
                     # Unlinking MediaKeywords - logic remains the same
                     keywords_to_unlink = self._fetchall_with_connection(
                         conn,
-                        "SELECT mk.id, k.uuid AS keyword_uuid FROM MediaKeywords mk "
+                        "SELECT mk.keyword_id AS keyword_id, k.uuid AS keyword_uuid FROM MediaKeywords mk "
                         "JOIN Keywords k ON mk.keyword_id = k.id "
                         "WHERE mk.media_id = ? AND k.deleted = 0",
                         (media_id,),
                     )
                     if keywords_to_unlink:
-                        keyword_ids = [k['id'] for k in keywords_to_unlink]
+                        # Delete links by the actual keyword_id values (not the MediaKeywords row id)
+                        keyword_ids = [k['keyword_id'] for k in keywords_to_unlink]
                         placeholders = ','.join('?' * len(keyword_ids))
                         params = (media_id, *keyword_ids)
                         self._execute_with_connection(
