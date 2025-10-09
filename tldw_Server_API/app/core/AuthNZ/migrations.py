@@ -380,6 +380,246 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 011: Created enhanced authentication tables")
 
 
+def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
+    """Create core RBAC tables: roles, permissions, mappings, and user overrides."""
+    # Roles
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            is_system INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    # Permissions (use column name 'name' to match existing DB accessors)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            category TEXT
+        )
+        """
+    )
+
+    # Role -> Permission mapping
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, permission_id),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User -> Role mapping (with optional expiration)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            granted_by INTEGER,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, role_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User permission overrides (allow/deny via boolean 'granted')
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            granted INTEGER NOT NULL DEFAULT 1, -- 1 = allow, 0 = deny
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, permission_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Helpful indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON role_permissions(role_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_permissions_user ON user_permissions(user_id)")
+
+    conn.commit()
+    logger.info("Migration 012: Created RBAC core tables (roles, permissions, mappings, overrides)")
+
+
+def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None:
+    """Create optional RBAC rate limit and usage tables (SQLite)."""
+    # Role-level rate limits
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
+            role_id INTEGER NOT NULL,
+            resource TEXT NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (role_id, resource),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # User-level rate limits (override role defaults)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
+            user_id INTEGER NOT NULL,
+            resource TEXT NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (user_id, resource),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Lightweight per-request usage (for API analytics)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            key_id INTEGER,
+            endpoint TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            bytes INTEGER,
+            meta TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Daily aggregate for reporting
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_daily (
+            user_id INTEGER NOT NULL,
+            day DATE NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            bytes_total INTEGER DEFAULT 0,
+            latency_avg_ms REAL,
+            PRIMARY KEY (user_id, day),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 013: Created RBAC rate limit and usage tables")
+
+
+def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
+    """Seed default roles and a baseline permission catalog."""
+    # Seed roles
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO roles (name, description, is_system)
+        VALUES
+          ('admin', 'Administrator (full access)', 1),
+          ('user', 'Standard user (baseline permissions)', 1),
+          ('moderator', 'Moderator (curated elevated access)', 1)
+        """
+    )
+
+    # Seed permissions (align with AuthNZ/permissions.py constants; use name column)
+    perms = [
+        # media
+        ('media.create','Create media','media'),
+        ('media.read','Read media','media'),
+        ('media.update','Update media','media'),
+        ('media.delete','Delete media','media'),
+        ('media.transcribe','Transcribe audio/video','media'),
+        ('media.export','Export media','media'),
+        # users
+        ('users.create','Create users','users'),
+        ('users.read','Read users','users'),
+        ('users.update','Update users','users'),
+        ('users.delete','Delete users','users'),
+        ('users.manage_roles','Manage user roles','users'),
+        ('users.invite','Invite users','users'),
+        # system
+        ('system.configure','Configure system','system'),
+        ('system.backup','Backup system','system'),
+        ('system.export','Export system data','system'),
+        ('system.logs','View system logs','system'),
+        ('system.maintenance','Maintenance operations','system'),
+        # api
+        ('api.generate_keys','Generate API keys','api'),
+        ('api.manage_webhooks','Manage webhooks','api'),
+        ('api.rate_limit_override','Override rate limits','api')
+    ]
+    for name, description, category in perms:
+        conn.execute(
+            "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)",
+            (name, description, category),
+        )
+
+    # Helper: get id by name
+    def _id(table: str, key: str) -> int:
+        cur = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    admin_id = _id('roles', 'admin')
+    user_id = _id('roles', 'user')
+    mod_id = _id('roles', 'moderator')
+
+    # Grant all permissions to admin
+    cur = conn.execute("SELECT id FROM permissions")
+    for (perm_id,) in cur.fetchall():
+        if admin_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (admin_id, perm_id),
+            )
+
+    # Baseline user permissions
+    baseline = [
+        'media.create','media.read','media.update','media.transcribe',
+        'users.read'
+    ]
+    for code in baseline:
+        pid = _id('permissions', code)
+        if pid is not None and user_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (user_id, pid),
+            )
+
+    # Moderator: baseline + delete and some users.manage_roles
+    mod_extra = ['media.delete', 'users.manage_roles']
+    for code in set(baseline + mod_extra):
+        pid = _id('permissions', code)
+        if pid is not None and mod_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (mod_id, pid),
+            )
+
+    conn.commit()
+    logger.info("Migration 014: Seeded default roles and permissions")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -399,6 +639,9 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(9, "Add session encryption columns", migration_009_add_session_encryption_columns),
         Migration(10, "Add 2FA columns to users", migration_010_add_2fa_columns),
         Migration(11, "Enhanced auth tables + uuid", migration_011_add_enhanced_auth_tables),
+        Migration(12, "Create RBAC core tables", migration_012_create_rbac_tables),
+        Migration(13, "Create RBAC limits and usage tables", migration_013_create_rbac_limits_and_usage),
+        Migration(14, "Seed default roles and permissions", migration_014_seed_roles_permissions),
     ]
 
 

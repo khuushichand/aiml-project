@@ -5035,11 +5035,20 @@ UPDATE db_schema_version
         try:
             with self.transaction() as conn:
                 if operation == "link":
-                    query = f"INSERT OR IGNORE INTO {link_table} ({col1_name}, {col2_name}, created_at) VALUES (?, ?, ?)"
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        query = (
+                            f"INSERT INTO {link_table} ({col1_name}, {col2_name}, created_at) "
+                            f"VALUES (?, ?, ?) ON CONFLICT ({col1_name}, {col2_name}) DO NOTHING"
+                        )
+                    else:
+                        query = (
+                            f"INSERT OR IGNORE INTO {link_table} ({col1_name}, {col2_name}, created_at) "
+                            "VALUES (?, ?, ?)"
+                        )
                     params = (col1_val, col2_val, now_iso)
                     cursor = conn.execute(query, params)
                     rows_affected = cursor.rowcount
-                    if rows_affected > 0: # Link was actually created
+                    if rows_affected > 0:  # Link was actually created
                         log_sync_entry = True
                         sync_payload_dict = {col1_name: col1_val, col2_name: col2_val, 'created_at': now_iso}
                 elif operation == "unlink":
@@ -5047,7 +5056,7 @@ UPDATE db_schema_version
                     params = (col1_val, col2_val)
                     cursor = conn.execute(query, params)
                     rows_affected = cursor.rowcount
-                    if rows_affected > 0: # Link was actually deleted
+                    if rows_affected > 0:  # Link was actually deleted
                         log_sync_entry = True
                         sync_payload_dict = {col1_name: col1_val, col2_name: col2_val}
                 else:
@@ -5073,10 +5082,26 @@ UPDATE db_schema_version
             logger.info(
                 f"{operation.capitalize()}ed {link_table}: {col1_name}={col1_val}, {col2_name}={col2_val}. Rows affected: {rows_affected}")
             return rows_affected > 0
-        except sqlite3.Error as e: # Catch SQLite specific errors from conn.execute
-            logger.error(f"SQLite error during {operation} for {link_table} ({col1_name}={col1_val}, {col2_name}={col2_val}): {e}", exc_info=True)
+        except sqlite3.Error as e:  # Catch SQLite specific errors from conn.execute
+            logger.error(
+                f"SQLite error during {operation} for {link_table} ({col1_name}={col1_val}, {col2_name}={col2_val}): {e}",
+                exc_info=True,
+            )
             raise CharactersRAGDBError(f"Database error during {operation} for {link_table}: {e}") from e
-        except CharactersRAGDBError as e: # Catch custom errors like InputError
+        except BackendDatabaseError as exc:
+            logger.error(
+                "Backend error during %s for %s (%s=%s, %s=%s): %s",
+                operation,
+                link_table,
+                col1_name,
+                col1_val,
+                col2_name,
+                col2_val,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Database error during {operation} for {link_table}: {exc}") from exc
+        except CharactersRAGDBError as e:  # Catch custom errors like InputError
             logger.error(f"Application error during {operation} for {link_table}: {e}", exc_info=True)
             raise
 
@@ -5558,13 +5583,17 @@ UPDATE db_schema_version
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
-        query = """
+        if self.backend_type == BackendType.POSTGRESQL:
+            order_clause = "ORDER BY LOWER(kw.keyword)"
+        else:
+            order_clause = "ORDER BY kw.keyword COLLATE NOCASE"
+        query = f"""
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
               JOIN keywords kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
-             ORDER BY kw.keyword COLLATE NOCASE
+             {order_clause}
         """
         try:
             cur = self.execute_query(query, (card_uuid,))
@@ -5600,9 +5629,18 @@ UPDATE db_schema_version
                         kid = kw['id']
                     desired_kw_ids.add(int(kid))
                 # link missing
+                insert_ts = self._get_current_utc_timestamp_iso()
                 for kid in desired_kw_ids - cur_kw_ids:
-                    conn.execute("INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)",
-                                 (card_id, int(kid), self._get_current_utc_timestamp_iso()))
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        insert_query = (
+                            "INSERT INTO flashcard_keywords(card_id, keyword_id, created_at) "
+                            "VALUES(?, ?, ?) ON CONFLICT (card_id, keyword_id) DO NOTHING"
+                        )
+                    else:
+                        insert_query = (
+                            "INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)"
+                        )
+                    conn.execute(insert_query, (card_id, int(kid), insert_ts))
                 # unlink extras
                 for kid in cur_kw_ids - desired_kw_ids:
                     conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
@@ -5612,6 +5650,8 @@ UPDATE db_schema_version
                 return True
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to set flashcard tags: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to set flashcard tags: {exc}") from exc
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

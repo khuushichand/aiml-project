@@ -222,6 +222,16 @@ async def lifespan(app: FastAPI):
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         db_pool = await get_db_pool()
         logger.info("App Startup: Database pool initialized")
+
+        # Ensure SQLite AuthNZ schema (including RBAC) is migrated to latest
+        try:
+            if getattr(db_pool, 'pool', None) is None and getattr(db_pool, 'db_path', None):
+                from pathlib import Path as _Path
+                from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz
+                _ensure_authnz_tables(_Path(db_pool.db_path))
+                logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
+        except Exception as _e:
+            logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
         
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager

@@ -255,6 +255,239 @@
         <pre id="adminUserGet_response">---</pre>
     </div>
 
+    <div class="endpoint-section" id="adminUserApiKeys">
+        <h2>
+            <span class="endpoint-method get">GET/POST/DELETE</span>
+            <span class="endpoint-path">/api/v1/admin/users/{user_id}/api-keys - Manage User API Keys</span>
+        </h2>
+        <p>List, create, rotate, or revoke API keys for a specific user.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminApiKeys_userId">User ID <span class="required">*</span>:</label>
+                    <input type="number" id="adminApiKeys_userId" placeholder="123" />
+                </div>
+                <div class="form-group">
+                    <label for="adminApiKeys_includeRevoked">Include revoked/expired:</label>
+                    <input type="checkbox" id="adminApiKeys_includeRevoked" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminApiKeys_name">Name:</label>
+                    <input type="text" id="adminApiKeys_name" placeholder="Desktop Key" />
+                </div>
+                <div class="form-group">
+                    <label for="adminApiKeys_scope">Scope:</label>
+                    <select id="adminApiKeys_scope">
+                        <option value="read">read</option>
+                        <option value="write" selected>write</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="adminApiKeys_expiry">Expires (days):</label>
+                    <input type="number" id="adminApiKeys_expiry" value="365" min="1" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="adminListUserApiKeys()">List Keys</button>
+            <button class="api-button" onclick="adminCreateUserApiKey()">Create Key</button>
+        </div>
+
+        <h3>Latest Result:</h3>
+        <pre id="adminUserApiKeys_result">---</pre>
+
+        <h3>Keys:</h3>
+        <div id="adminUserApiKeys_list"></div>
+        
+        <h3>Update Limits</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminApiKeys_keyId">Key ID:</label>
+                    <input type="number" id="adminApiKeys_keyId" placeholder="456" />
+                </div>
+                <div class="form-group">
+                    <label for="adminApiKeys_rate">Rate Limit (rpm):</label>
+                    <input type="number" id="adminApiKeys_rate" placeholder="60" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminApiKeys_allowedIps">Allowed IPs (comma-separated):</label>
+                    <input type="text" id="adminApiKeys_allowedIps" placeholder="127.0.0.1, 10.0.0.5" />
+                </div>
+            </div>
+        </div>
+        <div class="btn-group">
+            <button class="api-button" onclick="adminUpdateKeyLimits()">Update Limits</button>
+        </div>
+
+        <h3>Audit Log</h3>
+        <div class="btn-group">
+            <button class="api-button" onclick="adminLoadKeyAudit()">Load Audit for Key</button>
+        </div>
+        <div id="adminUserApiKeys_audit"></div>
+    </div>
+
+    <script>
+        function _getAdminUserId() {
+            const v = document.getElementById('adminApiKeys_userId').value;
+            const id = parseInt(v, 10);
+            if (!id) {
+                Toast.error('Enter a valid user ID');
+                throw new Error('Missing user id');
+            }
+            return id;
+        }
+
+        async function adminListUserApiKeys() {
+            const userId = _getAdminUserId();
+            const include = document.getElementById('adminApiKeys_includeRevoked').checked;
+            try {
+                const qs = include ? '?include_revoked=true' : '';
+                const res = await apiClient.get(`/api/v1/admin/users/${userId}/api-keys${qs}`);
+                renderAdminUserKeys(res || [], userId);
+                document.getElementById('adminUserApiKeys_result').textContent = 'Loaded';
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to list keys');
+            }
+        }
+
+        async function adminCreateUserApiKey() {
+            const userId = _getAdminUserId();
+            const payload = {
+                name: document.getElementById('adminApiKeys_name').value || null,
+                scope: document.getElementById('adminApiKeys_scope').value || 'write',
+                expires_in_days: parseInt(document.getElementById('adminApiKeys_expiry').value || '365', 10)
+            };
+            try {
+                const res = await apiClient.post(`/api/v1/admin/users/${userId}/api-keys`, payload);
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(res, null, 2);
+                if (res && res.key) {
+                    Toast.success('API key created. Copy it now; it is shown only once.');
+                } else {
+                    Toast.success('API key created.');
+                }
+                await adminListUserApiKeys();
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to create key');
+            }
+        }
+
+        async function adminRotateUserApiKey(keyId, userId) {
+            try {
+                const res = await apiClient.post(`/api/v1/admin/users/${userId}/api-keys/${keyId}/rotate`, { expires_in_days: 365 });
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(res, null, 2);
+                if (res && res.key) {
+                    Toast.success('API key rotated. Copy the new key now.');
+                } else {
+                    Toast.success('API key rotated.');
+                }
+                await adminListUserApiKeys();
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to rotate key');
+            }
+        }
+
+        async function adminRevokeUserApiKey(keyId, userId) {
+            try {
+                if (!confirm('Revoke this key?')) return;
+                const res = await apiClient.delete(`/api/v1/admin/users/${userId}/api-keys/${keyId}`);
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('API key revoked');
+                await adminListUserApiKeys();
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to revoke key');
+            }
+        }
+
+        function renderAdminUserKeys(items, userId) {
+            const container = document.getElementById('adminUserApiKeys_list');
+            if (!items || !items.length) {
+                container.innerHTML = '<p>No keys found.</p>';
+                return;
+            }
+            let html = '<table class="simple-table"><thead><tr>\
+<th>ID</th><th>Name</th><th>Scope</th><th>Status</th><th>Created</th><th>Expires</th><th>Usage</th><th>Actions</th>\
+</tr></thead><tbody>';
+            for (const k of items) {
+                html += `<tr>
+                    <td>${k.id}</td>
+                    <td>${k.name || ''}</td>
+                    <td>${k.scope || ''}</td>
+                    <td>${k.status || ''}</td>
+                    <td>${k.created_at || ''}</td>
+                    <td>${k.expires_at || ''}</td>
+                    <td>${k.usage_count || 0}</td>
+                    <td>
+                        <button class="btn" onclick="adminRotateUserApiKey(${k.id}, ${userId})">Rotate</button>
+                        <button class="btn btn-danger" onclick="adminRevokeUserApiKey(${k.id}, ${userId})">Revoke</button>
+                    </td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function adminUpdateKeyLimits() {
+            const userId = _getAdminUserId();
+            const keyId = parseInt(document.getElementById('adminApiKeys_keyId').value || '0', 10);
+            if (!keyId) { Toast.error('Enter a key id'); return; }
+            const rate = document.getElementById('adminApiKeys_rate').value;
+            const ipsRaw = document.getElementById('adminApiKeys_allowedIps').value;
+            const allowed_ips = ipsRaw ? ipsRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+            const payload = {};
+            if (rate) payload.rate_limit = parseInt(rate, 10);
+            if (allowed_ips !== undefined) payload.allowed_ips = allowed_ips;
+            if (!Object.keys(payload).length) { Toast.error('Provide rate limit or allowed IPs'); return; }
+            try {
+                const res = await apiClient.patch(`/api/v1/admin/users/${userId}/api-keys/${keyId}`, payload);
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Key limits updated');
+                await adminListUserApiKeys();
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to update limits');
+            }
+        }
+
+        async function adminLoadKeyAudit() {
+            const keyId = parseInt(document.getElementById('adminApiKeys_keyId').value || '0', 10);
+            if (!keyId) { Toast.error('Enter a key id'); return; }
+            try {
+                const res = await apiClient.get(`/api/v1/admin/api-keys/${keyId}/audit-log`);
+                const items = (res && res.items) ? res.items : [];
+                const el = document.getElementById('adminUserApiKeys_audit');
+                if (!items.length) { el.innerHTML = '<p>No audit events.</p>'; return; }
+                let html = '<table class="simple-table"><thead><tr><th>Time</th><th>Action</th><th>User</th><th>IP</th><th>User Agent</th><th>Details</th></tr></thead><tbody>';
+                for (const a of items) {
+                    html += `<tr>
+                        <td>${a.created_at || ''}</td>
+                        <td>${a.action || ''}</td>
+                        <td>${a.user_id ?? ''}</td>
+                        <td>${a.ip_address || ''}</td>
+                        <td>${a.user_agent || ''}</td>
+                        <td><code>${typeof a.details === 'object' ? JSON.stringify(a.details) : (a.details || '')}</code></td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                el.innerHTML = html;
+            } catch (e) {
+                document.getElementById('adminUserApiKeys_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load audit log');
+            }
+        }
+    </script>
+
     <div class="endpoint-section" id="adminUserUpdate">
         <h2>
             <span class="endpoint-method put">PUT</span>
@@ -391,4 +624,167 @@
             }
         </script>
     </div>
+</div>
+
+<!-- Access Control (RBAC) Tab -->
+<div id="tabAccessControl" class="tab-content">
+    <div class="endpoint-section">
+        <h2>Access Control</h2>
+        <p>Manage roles, permissions, and per-user overrides.</p>
+        <div class="columns">
+            <div class="column">
+                <h3>Roles</h3>
+                <div class="form-group">
+                    <label for="rbacRoleName">New Role Name:</label>
+                    <input type="text" id="rbacRoleName" placeholder="analyst" />
+                </div>
+                <div class="form-group">
+                    <label for="rbacRoleDesc">Description:</label>
+                    <input type="text" id="rbacRoleDesc" placeholder="Role description" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacCreateRole()">Create Role</button>
+                    <button class="api-button" onclick="rbacListRoles()">List Roles</button>
+                </div>
+                <pre id="rbacRolesOut">---</pre>
+            </div>
+            <div class="column">
+                <h3>Permissions</h3>
+                <div class="form-group">
+                    <label for="rbacPermName">New Permission (e.g., media.read):</label>
+                    <input type="text" id="rbacPermName" placeholder="module.action" />
+                </div>
+                <div class="form-group">
+                    <label for="rbacPermCat">Category:</label>
+                    <input type="text" id="rbacPermCat" placeholder="media" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacCreatePermission()">Create Permission</button>
+                    <button class="api-button" onclick="rbacListPermissions()">List Permissions</button>
+                </div>
+                <pre id="rbacPermsOut">---</pre>
+            </div>
+        </div>
+
+        <hr />
+
+        <h3>User Assignments</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="rbacUserId">User ID:</label>
+                    <input type="number" id="rbacUserId" placeholder="123" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacGetUserRoles()">Get Roles</button>
+                    <button class="api-button" onclick="rbacGetEffectivePerms()">Effective Permissions</button>
+                </div>
+                <pre id="rbacUserRolesOut">---</pre>
+                <pre id="rbacUserEffPermsOut">---</pre>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="rbacAssignRoleId">Role ID to assign:</label>
+                    <input type="number" id="rbacAssignRoleId" placeholder="5" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacAssignRole()">Assign Role</button>
+                    <button class="api-button" onclick="rbacRemoveRole()">Remove Role</button>
+                </div>
+
+                <h4>Overrides</h4>
+                <div class="form-group">
+                    <label for="rbacOverridePerm">Permission (name or id):</label>
+                    <input type="text" id="rbacOverridePerm" placeholder="media.delete or 17" />
+                </div>
+                <div class="form-group">
+                    <label for="rbacOverrideEffect">Effect:</label>
+                    <select id="rbacOverrideEffect">
+                        <option value="allow">allow</option>
+                        <option value="deny">deny</option>
+                    </select>
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacUpsertOverride()">Upsert Override</button>
+                    <button class="api-button" onclick="rbacListOverrides()">List Overrides</button>
+                </div>
+                <pre id="rbacOverridesOut">---</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function rbacListRoles() {
+            const res = await apiClient.get('/api/v1/admin/roles');
+            document.getElementById('rbacRolesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacCreateRole() {
+            const name = document.getElementById('rbacRoleName').value.trim();
+            const description = document.getElementById('rbacRoleDesc').value.trim() || null;
+            if (!name) return Toast.error('Role name required');
+            const res = await apiClient.post('/api/v1/admin/roles', { name, description });
+            Toast.success('Role created');
+            document.getElementById('rbacRolesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacListPermissions() {
+            const res = await apiClient.get('/api/v1/admin/permissions');
+            document.getElementById('rbacPermsOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacCreatePermission() {
+            const name = document.getElementById('rbacPermName').value.trim();
+            const category = document.getElementById('rbacPermCat').value.trim() || null;
+            if (!name) return Toast.error('Permission name required');
+            const res = await apiClient.post('/api/v1/admin/permissions', { name, category });
+            Toast.success('Permission created');
+            document.getElementById('rbacPermsOut').textContent = JSON.stringify(res, null, 2);
+        }
+        function _rbacUserId() {
+            const v = parseInt(document.getElementById('rbacUserId').value, 10);
+            if (!v) throw new Error('User ID required');
+            return v;
+        }
+        async function rbacGetUserRoles() {
+            const uid = _rbacUserId();
+            const res = await apiClient.get(`/api/v1/admin/users/${uid}/roles`);
+            document.getElementById('rbacUserRolesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacAssignRole() {
+            const uid = _rbacUserId();
+            const rid = parseInt(document.getElementById('rbacAssignRoleId').value, 10);
+            if (!rid) return Toast.error('Role ID required');
+            const res = await apiClient.post(`/api/v1/admin/users/${uid}/roles/${rid}`, {});
+            Toast.success('Role assigned');
+            document.getElementById('rbacUserRolesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacRemoveRole() {
+            const uid = _rbacUserId();
+            const rid = parseInt(document.getElementById('rbacAssignRoleId').value, 10);
+            if (!rid) return Toast.error('Role ID required');
+            const res = await apiClient.delete(`/api/v1/admin/users/${uid}/roles/${rid}`);
+            Toast.success('Role removed');
+            document.getElementById('rbacUserRolesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacListOverrides() {
+            const uid = _rbacUserId();
+            const res = await apiClient.get(`/api/v1/admin/users/${uid}/overrides`);
+            document.getElementById('rbacOverridesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacUpsertOverride() {
+            const uid = _rbacUserId();
+            const permField = document.getElementById('rbacOverridePerm').value.trim();
+            const effect = document.getElementById('rbacOverrideEffect').value;
+            if (!permField) return Toast.error('Permission required');
+            let body = { effect };
+            if (/^\d+$/.test(permField)) body.permission_id = parseInt(permField, 10);
+            else body.permission_name = permField;
+            const res = await apiClient.post(`/api/v1/admin/users/${uid}/overrides`, body);
+            Toast.success('Override saved');
+            document.getElementById('rbacOverridesOut').textContent = JSON.stringify(res, null, 2);
+        }
+        async function rbacGetEffectivePerms() {
+            const uid = _rbacUserId();
+            const res = await apiClient.get(`/api/v1/admin/users/${uid}/effective-permissions`);
+            document.getElementById('rbacUserEffPermsOut').textContent = JSON.stringify(res, null, 2);
+        }
+    </script>
 </div>

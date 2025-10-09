@@ -22,6 +22,28 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AuditLogResponse,
     UserQuotaUpdateRequest
 )
+from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
+    APIKeyCreateRequest,
+    APIKeyCreateResponse,
+    APIKeyRotateRequest,
+    APIKeyMetadata,
+    APIKeyUpdateRequest,
+    APIKeyAuditEntry,
+    APIKeyAuditListResponse,
+)
+from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
+    RoleCreateRequest,
+    RoleResponse,
+    PermissionCreateRequest,
+    PermissionResponse,
+    UserRoleListResponse,
+    UserOverrideUpsertRequest,
+    UserOverridesResponse,
+    UserOverrideEntry,
+    EffectivePermissionsResponse,
+    RateLimitUpsertRequest,
+    RateLimitResponse,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_admin,
     get_db_transaction,
@@ -35,6 +57,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     QuotaExceededError
 )
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 
 #######################################################################################################################
 #
@@ -173,6 +197,196 @@ async def list_users(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users"
         )
+
+
+#######################################################################################################################
+#
+# Per-User API Key Management (Admin)
+
+@router.get("/users/{user_id}/api-keys", response_model=list[APIKeyMetadata])
+async def admin_list_user_api_keys(
+    user_id: int,
+    include_revoked: bool = False,
+) -> list[APIKeyMetadata]:
+    """List API keys for a specific user (admin)."""
+    try:
+        api_mgr = await get_api_key_manager()
+        rows = await api_mgr.list_user_keys(user_id=user_id, include_revoked=include_revoked)
+        return [APIKeyMetadata(**row) for row in rows]
+    except Exception as e:
+        logger.error(f"Admin failed to list API keys for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list API keys")
+
+
+@router.post("/users/{user_id}/api-keys", response_model=APIKeyCreateResponse)
+async def admin_create_user_api_key(
+    user_id: int,
+    request: APIKeyCreateRequest,
+) -> APIKeyCreateResponse:
+    """Create a new API key for the given user (admin)."""
+    try:
+        api_mgr = await get_api_key_manager()
+        result = await api_mgr.create_api_key(
+            user_id=user_id,
+            name=request.name,
+            description=request.description,
+            scope=request.scope,
+            expires_in_days=request.expires_in_days,
+        )
+        return APIKeyCreateResponse(**result)
+    except Exception as e:
+        logger.error(f"Admin failed to create API key for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create API key")
+
+
+@router.post("/users/{user_id}/api-keys/{key_id}/rotate", response_model=APIKeyCreateResponse)
+async def admin_rotate_user_api_key(
+    user_id: int,
+    key_id: int,
+    request: APIKeyRotateRequest,
+) -> APIKeyCreateResponse:
+    """Rotate an API key for the given user and return the new key (admin)."""
+    try:
+        api_mgr = await get_api_key_manager()
+        result = await api_mgr.rotate_api_key(
+            key_id=key_id,
+            user_id=user_id,
+            expires_in_days=request.expires_in_days,
+        )
+        return APIKeyCreateResponse(**result)
+    except Exception as e:
+        logger.error(f"Admin failed to rotate API key {key_id} for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to rotate API key")
+
+
+@router.delete("/users/{user_id}/api-keys/{key_id}")
+async def admin_revoke_user_api_key(
+    user_id: int,
+    key_id: int,
+) -> Dict[str, Any]:
+    """Revoke an API key for the given user (admin)."""
+    try:
+        api_mgr = await get_api_key_manager()
+        success = await api_mgr.revoke_api_key(key_id=key_id, user_id=user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="API key not found")
+        return {"message": "API key revoked", "user_id": user_id, "key_id": key_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin failed to revoke API key {key_id} for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke API key")
+
+
+@router.patch("/users/{user_id}/api-keys/{key_id}", response_model=APIKeyMetadata)
+async def admin_update_user_api_key(
+    user_id: int,
+    key_id: int,
+    request: APIKeyUpdateRequest,
+    db=Depends(get_db_transaction)
+) -> APIKeyMetadata:
+    """Update per-key limits like rate_limit and allowed_ips (admin)."""
+    try:
+        import json
+        fields = []
+        params = []
+        if request.rate_limit is not None:
+            fields.append("rate_limit = ${}" if hasattr(db, 'fetchrow') else "rate_limit = ?")
+            params.append(request.rate_limit)
+        if request.allowed_ips is not None:
+            fields.append("allowed_ips = ${}" if hasattr(db, 'fetchrow') else "allowed_ips = ?")
+            params.append(json.dumps(request.allowed_ips))
+        if not fields:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        if hasattr(db, 'fetchrow'):
+            # PostgreSQL numbered params
+            set_clause = ", ".join(fields[i].format(i + 1) for i in range(len(fields)))
+            query = f"UPDATE api_keys SET {set_clause} WHERE id = $ {len(fields) + 1} AND user_id = $ {len(fields) + 2}"
+            # Fix spacing: replace '$ ' with '$'
+            query = query.replace('$ ', '$')
+            await db.execute(query, *params, key_id, user_id)
+            row = await db.fetchrow("SELECT * FROM api_keys WHERE id = $1 AND user_id = $2", key_id, user_id)
+        else:
+            # SQLite
+            set_clause = ", ".join(fields)
+            params2 = list(params) + [key_id, user_id]
+            await db.execute(f"UPDATE api_keys SET {set_clause} WHERE id = ? AND user_id = ?", params2)
+            await db.commit()
+            cursor = await db.execute("SELECT * FROM api_keys WHERE id = ? AND user_id = ?", (key_id, user_id))
+            row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="API key not found")
+
+        # Normalize row to dict
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except Exception:
+                # Map by column order (SQLite fallback)
+                cols = [
+                    'id','user_id','key_hash','key_prefix','name','description','scope','status','created_at','expires_at',
+                    'last_used_at','last_used_ip','usage_count','rate_limit','allowed_ips','metadata','rotated_from','rotated_to',
+                    'revoked_at','revoked_by','revoke_reason'
+                ]
+                row = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+
+        # Drop sensitive hash field and return metadata-like view
+        row.pop('key_hash', None)
+        return APIKeyMetadata(**row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin failed to update API key {key_id} for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update API key")
+
+
+@router.get("/api-keys/{key_id}/audit-log", response_model=APIKeyAuditListResponse)
+async def admin_get_api_key_audit_log(
+    key_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db=Depends(get_db_transaction)
+) -> APIKeyAuditListResponse:
+    """Get audit log entries for a specific API key (admin)."""
+    try:
+        if hasattr(db, 'fetchrow'):
+            rows = await db.fetch(
+                """
+                SELECT id, api_key_id, action, user_id, ip_address, user_agent, details, created_at
+                FROM api_key_audit_log
+                WHERE api_key_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                key_id, limit, offset
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT id, api_key_id, action, user_id, ip_address, user_agent, details, created_at
+                FROM api_key_audit_log
+                WHERE api_key_id = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (key_id, limit, offset)
+            )
+            rows = await cursor.fetchall()
+
+        items: list[APIKeyAuditEntry] = []
+        for r in rows:
+            if isinstance(r, dict):
+                items.append(APIKeyAuditEntry(**r))
+            else:
+                items.append(APIKeyAuditEntry(
+                    id=r[0], api_key_id=r[1], action=r[2], user_id=r[3], ip_address=r[4], user_agent=r[5], details=r[6], created_at=r[7]
+                ))
+        return APIKeyAuditListResponse(key_id=key_id, items=items)
+    except Exception as e:
+        logger.error(f"Admin failed to fetch audit log for key {key_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load audit log")
 
 
 #######################################################################################################################
@@ -370,6 +584,366 @@ async def update_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user"
         )
+
+
+#######################################################################################################################
+#
+# RBAC: Roles, Permissions, Assignments, Overrides
+
+@router.get("/roles", response_model=list[RoleResponse])
+async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch("SELECT id, name, description, COALESCE(is_system, 0) as is_system FROM roles ORDER BY name")
+            return [RoleResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute("SELECT id, name, description, COALESCE(is_system, 0) as is_system FROM roles ORDER BY name")
+            rows = await cur.fetchall()
+            return [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to list roles: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list roles")
+
+
+@router.post("/roles", response_model=RoleResponse)
+async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)) -> RoleResponse:
+    try:
+        if hasattr(db, 'fetchrow'):
+            row = await db.fetchrow(
+                "INSERT INTO roles (name, description, is_system) VALUES ($1, $2, $3) RETURNING id, name, description, is_system",
+                payload.name, payload.description, False,
+            )
+            return RoleResponse(**dict(row))
+        else:
+            cur = await db.execute(
+                "INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?)",
+                (payload.name, payload.description, 0),
+            )
+            await db.commit()
+            rid = cur.lastrowid
+            cur2 = await db.execute("SELECT id, name, description, COALESCE(is_system,0) FROM roles WHERE id = ?", (rid,))
+            row = await cur2.fetchone()
+            return RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3]))
+    except Exception as e:
+        logger.error(f"Failed to create role: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create role")
+
+
+@router.delete("/roles/{role_id}")
+async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute("DELETE FROM roles WHERE id = $1 AND COALESCE(is_system, 0) = 0", role_id)
+        else:
+            await db.execute("DELETE FROM roles WHERE id = ? AND COALESCE(is_system, 0) = 0", (role_id,))
+            await db.commit()
+        return {"message": "Role deleted"}
+    except Exception as e:
+        logger.error(f"Failed to delete role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete role")
+
+
+@router.get("/permissions", response_model=list[PermissionResponse])
+async def list_permissions(category: str | None = None, search: str | None = None, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
+    try:
+        clauses = []
+        params = []
+        if category:
+            clauses.append("category = $1" if hasattr(db, 'fetch') else "category = ?")
+            params.append(category)
+        if search:
+            if hasattr(db, 'fetch'):
+                clauses.append("(name ILIKE $%d OR description ILIKE $%d)" % (len(params)+1, len(params)+1))
+                params.append(f"%{search}%")
+            else:
+                clauses.append("(name LIKE ? OR description LIKE ?)")
+                params.append(f"%{search}%")
+                params.append(f"%{search}%")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", *params)
+            return [PermissionResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", params)
+            rows = await cur.fetchall()
+            return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to list permissions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list permissions")
+
+
+@router.post("/permissions", response_model=PermissionResponse)
+async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_transaction)) -> PermissionResponse:
+    try:
+        if hasattr(db, 'fetchrow'):
+            row = await db.fetchrow(
+                "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) RETURNING id, name, description, category",
+                payload.name, payload.description, payload.category,
+            )
+            return PermissionResponse(**dict(row))
+        else:
+            cur = await db.execute(
+                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
+                (payload.name, payload.description, payload.category),
+            )
+            await db.commit()
+            pid = cur.lastrowid
+            cur2 = await db.execute("SELECT id, name, description, category FROM permissions WHERE id = ?", (pid,))
+            row = await cur2.fetchone()
+            return PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3])
+    except Exception as e:
+        logger.error(f"Failed to create permission: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create permission")
+
+
+@router.post("/roles/{role_id}/permissions/{permission_id}")
+async def grant_permission_to_role(role_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, permission_id)
+        else:
+            await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, permission_id))
+            await db.commit()
+        return {"message": "Permission granted to role"}
+    except Exception as e:
+        logger.error(f"Failed to grant permission {permission_id} to role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to grant permission to role")
+
+
+@router.delete("/roles/{role_id}/permissions/{permission_id}")
+async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, permission_id)
+        else:
+            await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, permission_id))
+            await db.commit()
+        return {"message": "Permission revoked from role"}
+    except Exception as e:
+        logger.error(f"Failed to revoke permission {permission_id} from role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke permission from role")
+
+
+@router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
+async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> UserRoleListResponse:
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                """
+                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0) as is_system
+                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
+                WHERE ur.user_id = $1 AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+                ORDER BY r.name
+                """,
+                user_id,
+            )
+            roles = [RoleResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                """
+                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0)
+                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
+                WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+                ORDER BY r.name
+                """,
+                (user_id,),
+            )
+            rows = await cur.fetchall()
+            roles = [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in rows]
+        return UserRoleListResponse(user_id=user_id, roles=roles)
+    except Exception as e:
+        logger.error(f"Failed to get user roles for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user roles")
+
+
+@router.post("/users/{user_id}/roles/{role_id}")
+async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute(
+                "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT (user_id, role_id) DO NOTHING",
+                user_id, role_id,
+            )
+        else:
+            await db.execute(
+                "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
+                (user_id, role_id),
+            )
+            await db.commit()
+        return {"message": "Role added to user"}
+    except Exception as e:
+        logger.error(f"Failed to add role {role_id} to user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add role to user")
+
+
+@router.delete("/users/{user_id}/roles/{role_id}")
+async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", user_id, role_id)
+        else:
+            await db.execute("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?", (user_id, role_id))
+            await db.commit()
+        return {"message": "Role removed from user"}
+    except Exception as e:
+        logger.error(f"Failed to remove role {role_id} from user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove role from user")
+
+
+@router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
+async def list_user_overrides(user_id: int, db=Depends(get_db_transaction)) -> UserOverridesResponse:
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                """
+                SELECT p.id as permission_id, p.name as permission_name, up.granted, up.expires_at
+                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
+                WHERE up.user_id = $1
+                ORDER BY p.name
+                """,
+                user_id,
+            )
+            entries = [UserOverrideEntry(permission_id=r['permission_id'], permission_name=r['permission_name'], granted=bool(r['granted']), expires_at=str(r['expires_at']) if r['expires_at'] else None) for r in rows]
+        else:
+            cur = await db.execute(
+                """
+                SELECT p.id, p.name, up.granted, up.expires_at
+                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
+                WHERE up.user_id = ? ORDER BY p.name
+                """,
+                (user_id,),
+            )
+            rows = await cur.fetchall()
+            entries = [UserOverrideEntry(permission_id=row[0], permission_name=row[1], granted=bool(row[2]), expires_at=row[3]) for row in rows]
+        return UserOverridesResponse(user_id=user_id, overrides=entries)
+    except Exception as e:
+        logger.error(f"Failed to list overrides for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list user overrides")
+
+
+@router.post("/users/{user_id}/overrides")
+async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest, db=Depends(get_db_transaction)) -> dict:
+    try:
+        # Resolve permission_id if only name provided
+        perm_id = payload.permission_id
+        if not perm_id and payload.permission_name:
+            if hasattr(db, 'fetchval'):
+                perm_id = await db.fetchval("SELECT id FROM permissions WHERE name = $1", payload.permission_name)
+            else:
+                cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (payload.permission_name,))
+                row = await cur.fetchone()
+                perm_id = row[0] if row else None
+        if not perm_id:
+            raise HTTPException(status_code=400, detail="permission_id or permission_name required")
+
+        granted = 1 if payload.effect == 'allow' else 0
+        if hasattr(db, 'execute'):
+            await db.execute(
+                """
+                INSERT INTO user_permissions (user_id, permission_id, granted, expires_at)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, permission_id)
+                DO UPDATE SET granted = EXCLUDED.granted, expires_at = EXCLUDED.expires_at
+                """,
+                user_id, perm_id, granted, payload.expires_at,
+            )
+        else:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO user_permissions (user_id, permission_id, granted, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, perm_id, granted, payload.expires_at),
+            )
+            await db.commit()
+        return {"message": "Override upserted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upsert override for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upsert user override")
+
+
+@router.delete("/users/{user_id}/overrides/{permission_id}")
+async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
+        else:
+            await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
+            await db.commit()
+        return {"message": "Override deleted"}
+    except Exception as e:
+        logger.error(f"Failed to delete override for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete user override")
+
+
+@router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
+async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsResponse:
+    try:
+        perms = get_effective_permissions(user_id)
+        return EffectivePermissionsResponse(user_id=user_id, permissions=perms)
+    except Exception as e:
+        logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute effective permissions")
+
+
+@router.post("/roles/{role_id}/rate-limits", response_model=RateLimitResponse)
+async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute(
+                """
+                INSERT INTO rbac_role_rate_limits (role_id, resource, limit_per_min, burst)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (role_id, resource) DO UPDATE SET
+                    limit_per_min = EXCLUDED.limit_per_min,
+                    burst = EXCLUDED.burst
+                """,
+                role_id, payload.resource, payload.limit_per_min, payload.burst,
+            )
+        else:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO rbac_role_rate_limits (role_id, resource, limit_per_min, burst)
+                VALUES (?, ?, ?, ?)
+                """,
+                (role_id, payload.resource, payload.limit_per_min, payload.burst),
+            )
+            await db.commit()
+        return RateLimitResponse(scope="role", id=role_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
+    except Exception as e:
+        logger.error(f"Failed to upsert role rate limit: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upsert role rate limit")
+
+
+@router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
+async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
+    try:
+        if hasattr(db, 'execute'):
+            await db.execute(
+                """
+                INSERT INTO rbac_user_rate_limits (user_id, resource, limit_per_min, burst)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, resource) DO UPDATE SET
+                    limit_per_min = EXCLUDED.limit_per_min,
+                    burst = EXCLUDED.burst
+                """,
+                user_id, payload.resource, payload.limit_per_min, payload.burst,
+            )
+        else:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO rbac_user_rate_limits (user_id, resource, limit_per_min, burst)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, payload.resource, payload.limit_per_min, payload.burst),
+            )
+            await db.commit()
+        return RateLimitResponse(scope="user", id=user_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
+    except Exception as e:
+        logger.error(f"Failed to upsert user rate limit: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upsert user rate limit")
 
 
 @router.delete("/users/{user_id}")

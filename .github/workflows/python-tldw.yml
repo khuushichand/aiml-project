@@ -288,7 +288,9 @@ jobs:
         run: |
           pytest -v -n auto \
             tldw_Server_API/tests/DB_Management/test_media_postgres_support.py \
+            tldw_Server_API/tests/DB_Management/test_media_postgres_migrations.py \
             tldw_Server_API/tests/RAG/test_analytics_backend.py \
+            tldw_Server_API/tests/RAG/test_dual_backend_rag_flow.py \
             tldw_Server_API/tests/DB_Management/test_migration_tools.py \
             tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py \
             --junit-xml=postgres-tests.xml

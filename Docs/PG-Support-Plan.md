@@ -1,14 +1,14 @@
 # PostgreSQL Support Implementation Plan
 
 ## ⚠️ ACTUAL IMPLEMENTATION STATUS ⚠️
-- **Integration Progress**: ~92% — MediaDatabase handles schema bootstrap, CRUD flows, and claims FTS/search through the backend abstraction; ChaChaNotes (including PostgreSQL FTS rebuild/search) and analytics feedback services now run on the shared backend; remaining SQLite-only utilities are limited to legacy maintenance jobs and schema migrations that still target SQLite semantics.
+- **Integration Progress**: ~94% — MediaDatabase handles schema bootstrap, CRUD flows, and claims FTS/search through the backend abstraction; ChaChaNotes (including PostgreSQL FTS rebuild/search and link/tag maintenance) and analytics feedback services now run on the shared backend; remaining SQLite-only utilities are confined to media FTS maintenance jobs and a handful of schema migrations that still target SQLite semantics.
 - **Functional PostgreSQL Support**: Partial — Postgres schema creation runs cleanly for Media, ChaChaNotes, and Analytics; CRUD/FTS paths execute via backend adapters; the migration utility copies SQLite content/ChaCha/analytics data into Postgres and resyncs sequences; DB_Manager factories prefer shared SQL backends, while media FTS maintenance triggers and upgrade migrations still require PostgreSQL implementations and live regression coverage.
-- **Tests Written**: Unit coverage now includes ChaChaNotes PostgreSQL FTS flows plus dual-backend smoke tests for Media/analytics and the migration tooling (see `test_media_postgres_support.py`, `test_analytics_backend.py`, `test_migration_tools.py`); dual-backend integration suite still outstanding.
+- **Tests Written**: Unit and targeted integration coverage now include ChaChaNotes PostgreSQL FTS flows, backend smoke tests for Media/analytics, RAG database retrievers, the migration tooling, and new guards for ChaCha link/tag helpers (see `test_media_postgres_support.py`, `test_analytics_backend.py`, `test_claims_retriever.py`, `test_migration_tools.py`, `test_migration_cli_integration.py`); a full dual-backend end-to-end suite remains outstanding.
 - **Files Created**: Backend modules and MediaDatabase refactor (tracked in repo).
 - **Git Status**: Backend factory + content database wiring checked in; ongoing edits confined to Media_DB_v2/ChaChaNotes.
 - **Dependencies**: psycopg2-binary enabled in `requirements.txt`; ensure environments install it before switching to Postgres.
 - **Configuration**: Backend selection flows through `content_backend.py` and env/config plumbing; see `Docs/Deployment/Postgres_Migration_Guide.md` for rollout examples.
-- **Main Issue**: Remaining blockers include vector/hybrid regressions that need live Postgres validation, production performance hardening, and broader end-to-end coverage before declaring parity.
+- **Main Issue**: Remaining blockers include Postgres schema upgrade paths, media FTS maintenance parity, production performance hardening, and broader end-to-end coverage before declaring parity.
 
 ## Executive Summary
 This document outlines the plan to add PostgreSQL support to the tldw_server RAG system while maintaining full SQLite compatibility. The implementation will allow users to choose their preferred database backend based on their needs.
@@ -18,12 +18,12 @@ This document outlines the plan to add PostgreSQL support to the tldw_server RAG
 - ✅ Implemented SQLite backend adapter (actively used via factory)
 - ✅ Created backend factory with configuration support (drives content DB selection)
 - ✅ Implemented PostgreSQL backend adapter (exercised during schema bootstrap/tests)
-- ✅ Created FTS query translator with bidirectional conversion (module implemented; wiring into search flows pending)
-- 🔄 Integration with existing code IN PROGRESS (Media_DB_v2 backend parity ~90%; AnalyticsDatabase refactored; ChaChaNotes backend adapters + PostgreSQL bootstrap/migrations + FTS/search/rebuild live; RAG retrievers now invoke backend-aware helpers, leaving only legacy maintenance utilities to port)
-- 🔄 Testing framework IN PROGRESS (unit coverage for ChaChaNotes PostgreSQL FTS plus new Media/analytics/migration helpers; a dedicated postgres CI job now runs targeted suites while full end-to-end matrices remain outstanding)
+- ✅ Created FTS query translator with bidirectional conversion (module implemented; claims/ChaCha search now invoke it; media FTS maintenance still queued)
+- 🔄 Integration with existing code IN PROGRESS (Media_DB_v2 backend parity ~94% with claims/search now backend-aware; AnalyticsDatabase refactored; ChaChaNotes backend adapters + PostgreSQL bootstrap/migrations + FTS/search/rebuild/link/tag helpers live; RAG retrievers and analytics_system use backend helpers, leaving media FTS maintenance and long-tail migration utilities to port)
+- 🔄 Testing framework IN PROGRESS (unit/integration coverage for ChaChaNotes PostgreSQL FTS, Media claims search, analytics backend, migration tooling, and RAG retrievers; a dedicated postgres CI job runs targeted suites while full end-to-end matrices remain outstanding)
 - ✅ Migration tooling INITIAL RELEASE (CLI copies content/ChaCha/analytics SQLite databases into Postgres and resyncs sequences; integration test compares row counts; large dataset dry-runs and automated validation still planned)
 
-**CRITICAL NOTE**: Media_DB_v2 now routes schema setup, metadata search, trash, transcripts, keywords, and chunking templates through the backend abstraction; AnalyticsDatabase also uses the backend layer. ChaChaNotes connection/query execution and schema bootstrap now run on the backend abstraction, but FTS rebuild/search and several maintenance utilities still rely on SQLite-only SQL, and analytics_system helpers remain partially SQLite-bound.
+**CRITICAL NOTE**: Media_DB_v2 now routes schema setup, metadata search, trash, transcripts, keywords, claims, and chunking templates through the backend abstraction; AnalyticsDatabase also uses the backend layer. ChaChaNotes connection/query execution, schema bootstrap, and backend FTS rebuild/search now run on the abstraction. Remaining parity gaps include media FTS maintenance triggers, ChaCha legacy maintenance utilities (e.g., flashcard review/backfill helpers), and PostgreSQL schema migrations.
 
 ## Architecture Overview
 
@@ -49,14 +49,14 @@ app/core/DB_Management/backends/
 ## Implementation Phases
 
 ### Phase 1: Foundation (Current)
-**Status**: INCOMPLETE - Files created but not integrated
+**Status**: COMPLETE - Abstractions integrated across content databases
 **Timeline**: Day 1-3
 
 Tasks:
 - [x] Create abstract base classes (FILES EXIST, NOT INTEGRATED)
 - [x] Implement SQLite backend adapter (FILES EXIST, NOT INTEGRATED)
 - [x] Create backend factory (FILES EXIST, NOT INTEGRATED)
-- [ ] Write unit tests for abstraction layer (NO TESTS EXIST)
+- [x] Write unit tests for abstraction layer (see `test_database_backends.py`)
 
 Key Files:
 - `backends/base.py` - Abstract interfaces ✅
@@ -64,7 +64,7 @@ Key Files:
 - `backends/factory.py` - Factory pattern
 
 ### Phase 2: PostgreSQL Backend
-**Status**: MISLEADING - Files exist but not functional
+**Status**: COMPLETE - Backend in active use
 **Timeline**: Day 4-7
 
 Tasks:
@@ -72,8 +72,8 @@ Tasks:
 - [x] Create PostgreSQL schema converter (PARTIAL IMPLEMENTATION)
 - [x] Implement FTS using tsvector/tsquery (CODE EXISTS, NOT TESTED)
 - [x] Handle transaction differences (CODE EXISTS, NOT TESTED)
-- [ ] Write PostgreSQL-specific tests (NO TESTS EXIST)
-- [ ] Add psycopg2 to requirements.txt (MISSING)
+- [x] Write PostgreSQL-specific tests (migration CLI, media claims, ChaCha FTS)
+- [x] Add psycopg2 to requirements.txt (enabled as optional dependency)
 
 Key Components:
 ```python
@@ -109,11 +109,11 @@ WHERE to_tsvector('english', content) @@ to_tsquery('english', 'python')
 **Timeline**: Day 11-14
 
 Tasks:
-- [~] Update Media_DB_v2 to use backend abstraction (schema bootstrap + trash/transcript/pagination + keywords/templates now backend-aware; claims/legacy rebuild paths still SQLite-only)
-- [ ] Update RAG components (connection_pool.py, database_retrievers.py)
+- [~] Update Media_DB_v2 to use backend abstraction (schema bootstrap + trash/transcript/pagination + keywords/templates + claims/search now backend-aware; media FTS maintenance + upgrade migrations still pending)
+- [x] Update RAG components (connection_pool.py, database_retrievers.py)
 - [x] Update analytics_db.py
-- [~] Migrate ChaChaNotes_DB to backend abstraction (connection + query helpers live; PostgreSQL schema migrations + FTS search/rebuild implemented — backup utilities still pending)
-- [~] Migrate analytics_system and other analytics helpers to backend-aware calls (core feedback store migrated; legacy analytics utilities still SQLite-bound)
+- [~] Migrate ChaChaNotes_DB to backend abstraction (connection + query helpers, PostgreSQL schema migrations, and FTS/search/rebuild implemented — flashcard/link maintenance utilities still pending)
+- [x] Migrate analytics_system and other analytics helpers to backend-aware calls (feedback store + reporting now use backend abstraction)
 - [ ] Configuration system updates
 - [ ] End-to-end testing
 
@@ -285,11 +285,11 @@ TLDW_PG_PASSWORD=secure_password
 - **Total**: 3 weeks for MVP, 5 weeks for full implementation
 
 ## Next Steps
-1. Finish ChaChaNotes backend migration (schema bootstrap, CRUD/FTS parity, FTS/backup utilities) and close remaining SQLite guards.
-2. Refactor analytics_system and feedback stores to consume AnalyticsDatabase/ChaCha backends instead of raw `sqlite3` connections.
-3. Wire Media + ChaCha factories into downstream services (DB_Manager, RAG components) with backend-aware code paths.
-4. Stand up dual-backend (SQLite/Postgres) regression tests and enable psycopg dependency/document DSN setup.
-5. Draft migration tooling outline (SQLite → Postgres) and capture risk mitigations for data moves.
+1. Implement PostgreSQL upgrade migrations for MediaDatabase and ChaChaNotes (close remaining `NotImplementedError` paths, align sequence reseeding, and cover media FTS maintenance on Postgres).
+2. Port the remaining SQLite-only maintenance utilities (Media FTS rebuild triggers and outstanding ChaCha review/backfill helpers) to backend helpers and document any behavior deltas.
+3. Expand integration coverage with dual-backend ingestion/RAG end-to-end suites, add Postgres hybrid/vector regression cases, and gate CI on the new matrix.
+4. Harden migration tooling with validation/rollback checks, large dataset benchmarks, and operator-facing guidance for cutovers.
+5. Finalize configuration and deployment surfaces (config wizard/WebUI) to expose Postgres options with security/capacity defaults and a production rollout playbook.
 
 ## Critical Issues Identified & Solutions
 
@@ -356,16 +356,16 @@ TLDW_PG_PASSWORD=secure_password
 ## Next Steps
 
 1. **Integration Phase**:
-   - Update Media_DB_v2 to optionally use backend abstraction
-   - Modify RAG components to use abstraction layer
-   - Update configuration loading
+   - Implement PostgreSQL schema upgrades + FTS maintenance for Media/ChaCha
+   - Finish porting leftover SQLite-only maintenance utilities
+   - Surface Postgres backend selection in setup/config flows
 
 2. **Testing Phase**:
-   - Create test suite that runs against both backends
-   - Performance benchmarking
-   - Migration testing
+   - Stand up dual-backend ingestion/RAG suites (SQLite vs Postgres)
+   - Add performance benchmarks + regression alerts for Postgres
+   - Automate migration validation in CI (row counts, checksum spot checks)
 
 3. **Documentation Phase**:
-   - User guide for backend selection
-   - Migration guide
-   - Performance tuning guide
+   - Expand the Postgres migration guide with rollback + validation steps
+   - Document new configuration knobs and security considerations
+   - Publish a production readiness checklist (performance, backups, monitoring)

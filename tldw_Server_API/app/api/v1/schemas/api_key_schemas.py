@@ -1,6 +1,6 @@
 """Pydantic schemas for API key management endpoints."""
 
-from typing import Optional
+from typing import Optional, List, Any, Dict
 from pydantic import BaseModel, Field
 
 
@@ -33,3 +33,24 @@ class APIKeyCreateResponse(APIKeyMetadata):
     key: Optional[str] = Field(None, description="The actual API key (returned only at creation/rotation)")
     message: Optional[str] = None
 
+
+class APIKeyUpdateRequest(BaseModel):
+    rate_limit: Optional[int] = Field(None, description="Requests per minute for this key")
+    allowed_ips: Optional[List[str]] = Field(None, description="Restrict usage to these IPs")
+
+
+class APIKeyAuditEntry(BaseModel):
+    id: int
+    api_key_id: int
+    action: str
+    user_id: Optional[int] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    details: Optional[Any] = None
+    created_at: Optional[str] = None
+
+
+class APIKeyAuditListResponse(BaseModel):
+    key_id: int
+    items: List[APIKeyAuditEntry]
+    total: Optional[int] = None

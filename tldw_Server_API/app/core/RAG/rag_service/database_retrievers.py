@@ -73,12 +73,12 @@ class BaseRetriever(ABC):
             path_str = str(abs_path)
             suspicious_patterns = [
                 '../',
-                '..\',
+                '..\\',
                 '/etc/',
                 '/proc/',
                 '/sys/',
-                '\System32\',
-                '\Windows\',
+                '\\System32\\',
+                '\\Windows\\',
             ]
             for pattern in suspicious_patterns:
                 if pattern in path_str:
@@ -708,9 +708,7 @@ class NotesDBRetriever(BaseRetriever):
             documents.append(
                 Document(
                     id=f"note_{row.get('id')}",
-                    content=f"# {row.get('title')}
-
-{row.get('content', '')}",
+                    content=f"# {row.get('title')}\n\n{row.get('content', '')}",
                     source=DataSource.NOTES,
                     metadata=metadata,
                     score=score_val,

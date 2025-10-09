@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -109,3 +109,87 @@ def test_list_flashcards_postgres_translates_fts(monkeypatch: pytest.MonkeyPatch
     sql, params = db.execute_query.call_args[0]
     assert "flashcards_fts_tsv @@ to_tsquery('english', ?)" in sql
     assert "alchemy" in params
+
+
+def test_manage_link_postgres_uses_on_conflict():
+    db = _make_postgres_db()
+    db.client_id = "pg-test"
+    db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
+
+    class _Cursor:
+        def __init__(self, rowcount: int = 0):
+            self.rowcount = rowcount
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: List[str] = []
+
+        def execute(self, sql: str, params: Any = None) -> _Cursor:
+            self.calls.append(sql)
+            return _Cursor(rowcount=1)
+
+    conn = _Conn()
+
+    @contextmanager
+    def fake_transaction():
+        yield conn
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
+
+    assert db._manage_link("flashcard_keywords", "card_id", 1, "keyword_id", 2, "link") is True
+
+    insert_calls = [sql.lower() for sql in conn.calls if sql.lower().startswith("insert into flashcard_keywords")]
+    assert insert_calls, "expected insert into flashcard_keywords to be executed"
+    assert all("on conflict" in sql for sql in insert_calls)
+    assert all("insert or ignore" not in sql for sql in insert_calls)
+
+
+def test_set_flashcard_tags_postgres_uses_on_conflict():
+    db = _make_postgres_db()
+    db.client_id = "pg-test"
+    db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
+    db.get_keyword_by_text = lambda _text: None  # type: ignore[assignment]
+    db.add_keyword = lambda _text: 7  # type: ignore[assignment]
+
+    class _Cursor:
+        def __init__(self, *, rows: Optional[List[Any]] = None, rowcount: int = 0):
+            self._rows = rows or []
+            self.rowcount = rowcount
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: List[str] = []
+
+        def execute(self, sql: str, params: Any = None) -> _Cursor:
+            self.calls.append(sql)
+            sql_upper = sql.strip().upper()
+            if sql_upper.startswith("SELECT ID FROM FLASHCARDS"):
+                return _Cursor(rows=[(1,)])
+            if sql_upper.startswith("SELECT KEYWORD_ID FROM FLASHCARD_KEYWORDS"):
+                return _Cursor(rows=[])
+            if "INSERT INTO FLASHCARD_KEYWORDS" in sql_upper:
+                return _Cursor(rowcount=1)
+            if sql_upper.startswith("UPDATE FLASHCARDS SET"):
+                return _Cursor(rowcount=1)
+            return _Cursor()
+
+    conn = _Conn()
+
+    @contextmanager
+    def fake_transaction():
+        yield conn
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
+
+    assert db.set_flashcard_tags("uuid-123", ["Alpha"]) is True
+
+    insert_calls = [sql.lower() for sql in conn.calls if sql.lower().startswith("insert into flashcard_keywords")]
+    assert insert_calls, "expected flashcard_keywords insert when adding tags"
+    assert all("on conflict (card_id, keyword_id) do nothing" in sql for sql in insert_calls)
+    assert all("insert or ignore" not in sql for sql in insert_calls)

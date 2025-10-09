@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
+from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 
 #######################################################################################################################
 #
@@ -451,6 +452,95 @@ async def check_auth_rate_limit(
         )
 
 
+# ---------------------------------------------------------------------------------
+# RBAC resource-aware rate limit (stub - logs selected limits, no enforcement yet)
+
+async def enforce_rbac_rate_limit(
+    request: Request,
+    resource: str,
+    db_pool: DatabasePool = Depends(get_db_pool)
+):
+    """
+    Resource-aware rate limit selector (stub).
+
+    Reads the strictest configured limit for the current user from rbac_user_rate_limits
+    and rbac_role_rate_limits. Currently logs selected limits without enforcing.
+    """
+    try:
+        user_id = getattr(request.state, 'user_id', None)
+        if not user_id:
+            # Unknown user context; skip
+            return
+
+        # User-level limit
+        user_limit = None
+        role_limit = None
+
+        # SQLite vs Postgres param binding
+        if db_pool.pool:  # Postgres
+            user_limit = await db_pool.fetchone(
+                "SELECT limit_per_min, burst FROM rbac_user_rate_limits WHERE user_id = $1 AND resource = $2",
+                user_id, resource
+            )
+            # Get roles for user
+            role_ids = await db_pool.fetchall(
+                """
+                SELECT role_id FROM user_roles
+                WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                """,
+                user_id
+            )
+            if role_ids:
+                role_ids_list = [r['role_id'] for r in role_ids]
+                # Take the strictest (min) among role limits
+                role_limit = await db_pool.fetchone(
+                    """
+                    SELECT MIN(limit_per_min) as limit_per_min, MIN(burst) as burst
+                    FROM rbac_role_rate_limits WHERE role_id = ANY($1) AND resource = $2
+                    """,
+                    role_ids_list, resource
+                )
+        else:  # SQLite
+            cur = await db_pool.acquire().__aenter__()
+            try:
+                c1 = await cur.execute(
+                    "SELECT limit_per_min, burst FROM rbac_user_rate_limits WHERE user_id = ? AND resource = ?",
+                    (user_id, resource)
+                )
+                user_limit = await c1.fetchone()
+                c2 = await cur.execute(
+                    """
+                    SELECT MIN(rl.limit_per_min), MIN(rl.burst)
+                    FROM rbac_role_rate_limits rl
+                    JOIN user_roles ur ON ur.role_id = rl.role_id
+                    WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+                      AND rl.resource = ?
+                    """,
+                    (user_id, resource)
+                )
+                role_limit = await c2.fetchone()
+            finally:
+                await db_pool.acquire().__aexit__(None, None, None)
+
+        # Choose strictest (lowest) effective limits
+        candidates = []
+        if user_limit:
+            lp = user_limit[0] if not isinstance(user_limit, dict) else user_limit.get('limit_per_min')
+            bp = user_limit[1] if not isinstance(user_limit, dict) else user_limit.get('burst')
+            candidates.append((lp, bp))
+        if role_limit:
+            lp = role_limit[0] if not isinstance(role_limit, dict) else role_limit.get('limit_per_min')
+            bp = role_limit[1] if not isinstance(role_limit, dict) else role_limit.get('burst')
+            candidates.append((lp, bp))
+
+        if candidates:
+            limit_per_min = min([c[0] for c in candidates if c[0] is not None]) if any(c[0] for c in candidates) else None
+            burst = min([c[1] for c in candidates if c[1] is not None]) if any(c[1] for c in candidates) else None
+            logger.debug(f"RBAC rate-limit selected for user {user_id}, resource {resource}: rpm={limit_per_min}, burst={burst}")
+        else:
+            logger.debug(f"RBAC rate-limit: no configured limits for user {user_id}, resource {resource}")
+    except Exception as e:
+        logger.debug(f"RBAC rate-limit selection failed: {e}")
 #
 # End of auth_deps.py
 #######################################################################################################################

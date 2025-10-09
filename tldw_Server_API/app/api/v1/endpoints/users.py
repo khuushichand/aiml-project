@@ -136,7 +136,7 @@ async def update_user_profile(
             )
         
         # Return updated user info
-    return await get_current_user_profile(current_user)
+        return await get_current_user_profile(current_user)
         
     except HTTPException:
         raise

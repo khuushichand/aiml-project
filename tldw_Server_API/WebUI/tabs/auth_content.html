@@ -1,5 +1,8 @@
 <!-- Authentication Tab -->
 <div id="tabAuth" class="tab-content">
+    <div id="authSetupBanner" style="display:none; margin-bottom:12px; padding:10px; border:1px solid #ffe08a; background:#fff7e6; border-radius:6px;">
+        <strong>Setup in progress:</strong> Verify your account locally via <a href="/setup" target="_self">Setup</a> → Account Verification.
+    </div>
     <div class="endpoint-section" id="authLogin">
         <h2>
             <span class="endpoint-method post">POST</span>
@@ -272,6 +275,19 @@ function initializeAuthTab() {
     if (refreshToken) {
         document.getElementById('authRefresh_token').value = refreshToken;
     }
+
+    // Show setup self-verify banner if setup is still active
+    try {
+        fetch('/api/v1/setup/status', { cache: 'no-store' })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (data && data.needs_setup) {
+                    const el = document.getElementById('authSetupBanner');
+                    if (el) el.style.display = '';
+                }
+            })
+            .catch(() => {});
+    } catch (e) { /* ignore */ }
 }
 
 // Call initialization when DOM is ready

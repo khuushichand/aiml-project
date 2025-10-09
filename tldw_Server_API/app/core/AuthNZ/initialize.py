@@ -149,7 +149,7 @@ async def setup_database():
             print("✅ Database is up to date")
     else:
         # Basic Postgres bootstrap: ensure required tables exist
-        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys)...")
+        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys, RBAC)...")
         try:
             # Ensure connection pool and users table
             users_db = await get_users_db()
@@ -202,7 +202,92 @@ async def setup_database():
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
                     """)
-            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes)")
+                    # RBAC core tables
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS roles (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(64) UNIQUE NOT NULL,
+                            description TEXT,
+                            is_system BOOLEAN DEFAULT FALSE
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS permissions (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(128) UNIQUE NOT NULL,
+                            description TEXT,
+                            category VARCHAR(64)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS role_permissions (
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                            PRIMARY KEY (role_id, permission_id)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS user_roles (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            granted_by INTEGER,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, role_id)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS user_permissions (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                            granted BOOLEAN NOT NULL DEFAULT TRUE,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, permission_id)
+                        )
+                    """)
+                    # RBAC rate limits + usage
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
+                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                            resource VARCHAR(128) NOT NULL,
+                            limit_per_min INTEGER,
+                            burst INTEGER,
+                            PRIMARY KEY (role_id, resource)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            resource VARCHAR(128) NOT NULL,
+                            limit_per_min INTEGER,
+                            burst INTEGER,
+                            PRIMARY KEY (user_id, resource)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            bytes BIGINT,
+                            meta JSONB
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_daily (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            day DATE NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            bytes_total BIGINT DEFAULT 0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (user_id, day)
+                        )
+                    """)
+            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC)")
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")

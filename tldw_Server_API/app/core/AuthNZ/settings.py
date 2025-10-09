@@ -230,6 +230,12 @@ class Settings(BaseSettings):
         description="Additional secret for API key hashing (recommended for production)"
     )
     
+    # Optional: log a lightweight 'used' entry when an API key validates
+    API_KEY_AUDIT_LOG_USAGE: bool = Field(
+        default=False,
+        description="If true, log a 'used' event in API key audit log on successful validation"
+    )
+    
     # ===== Monitoring =====
     ENABLE_HEALTH_CHECK: bool = Field(
         default=True,

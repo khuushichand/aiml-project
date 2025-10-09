@@ -936,9 +936,7 @@ class MediaDatabase:
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
-            raise NotImplementedError(
-                "PostgreSQL support for MediaDatabase operations is still under development."
-            )
+            return
 
     # --- Query Execution (Unchanged, catches IntegrityError from validation triggers) ---
     def execute_query(
@@ -1445,15 +1443,12 @@ class MediaDatabase:
             if not schema_exists:
                 self._apply_schema_v1_postgres(conn)
                 self._ensure_postgres_fts(conn)
+                self._sync_postgres_sequences(conn)
                 return
 
             result = backend.execute("SELECT version FROM schema_version LIMIT 1", connection=conn)
-            current_version = result.scalar if result else None
-
-            if current_version is None:
-                self._apply_schema_v1_postgres(conn)
-                self._ensure_postgres_fts(conn)
-                return
+            current_version_raw = result.scalar if result else None
+            current_version = int(current_version_raw or 0)
 
             if current_version > target_version:
                 raise SchemaError(
@@ -1461,11 +1456,123 @@ class MediaDatabase:
                 )
 
             if current_version < target_version:
-                raise NotImplementedError(
-                    "PostgreSQL schema migrations are not yet implemented."
-                )
+                self._run_postgres_migrations(conn, current_version, target_version)
 
             self._ensure_postgres_fts(conn)
+            self._sync_postgres_sequences(conn)
+
+    def _run_postgres_migrations(self, conn, current_version: int, target_version: int) -> None:
+        """Execute sequential PostgreSQL migrations until the target version is reached."""
+
+        migrations = self._get_postgres_migrations()
+        applied_version = current_version
+
+        for version in sorted(migrations.keys()):
+            if applied_version < version <= target_version:
+                migrations[version](conn)
+                self._update_schema_version_postgres(conn, version)
+                applied_version = version
+
+        if applied_version < target_version:
+            raise SchemaError(
+                f"PostgreSQL migration path incomplete for MediaDatabase: reached {applied_version}, expected {target_version}."
+            )
+
+    def _get_postgres_migrations(self):
+        """Return mapping of target version to migration callable."""
+
+        return {
+            5: self._postgres_migrate_to_v5,
+        }
+
+    def _postgres_migrate_to_v5(self, conn) -> None:
+        """Add safe_metadata column to DocumentVersions for PostgreSQL deployments."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+        backend.execute(
+            (
+                f"ALTER TABLE {ident('DocumentVersions')} "
+                f"ADD COLUMN IF NOT EXISTS {ident('safe_metadata')} TEXT"
+            ),
+            connection=conn,
+        )
+
+    def _update_schema_version_postgres(self, conn, version: int) -> None:
+        """Ensure schema_version table reflects the supplied version."""
+
+        backend = self.backend
+        backend.execute(
+            "INSERT INTO schema_version (version) VALUES (%s) ON CONFLICT DO NOTHING",
+            (version,),
+            connection=conn,
+        )
+        backend.execute(
+            "UPDATE schema_version SET version = %s",
+            (version,),
+            connection=conn,
+        )
+
+    def _sync_postgres_sequences(self, conn) -> None:
+        """Align PostgreSQL sequences with current table maxima."""
+
+        backend = self.backend
+        sequence_rows = backend.execute(
+            """
+            SELECT
+                sequence_ns.nspname AS sequence_schema,
+                seq.relname AS sequence_name,
+                tab.relname AS table_name,
+                col.attname AS column_name
+            FROM pg_class seq
+            JOIN pg_namespace sequence_ns ON sequence_ns.oid = seq.relnamespace
+            JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype = 'a'
+            JOIN pg_class tab ON tab.oid = dep.refobjid
+            JOIN pg_namespace tab_ns ON tab_ns.oid = tab.relnamespace
+            JOIN pg_attribute col ON col.attrelid = tab.oid AND col.attnum = dep.refobjsubid
+            WHERE seq.relkind = 'S' AND tab_ns.nspname = 'public';
+            """,
+            connection=conn,
+        )
+
+        for row in sequence_rows.rows:
+            table_name = row.get('table_name')
+            column_name = row.get('column_name')
+            sequence_schema = row.get('sequence_schema', 'public')
+            sequence_name = row.get('sequence_name')
+
+            if not table_name or not column_name or not sequence_name:
+                continue
+
+            qualified_sequence = f"{sequence_schema}.{sequence_name}"
+            ident = backend.escape_identifier
+
+            max_result = backend.execute(
+                (
+                    f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                    f"FROM {ident(table_name)}"
+                ),
+                connection=conn,
+            )
+
+            max_id_raw = max_result.scalar
+            try:
+                max_id = int(max_id_raw or 0)
+            except (TypeError, ValueError):
+                max_id = 0
+
+            if max_id <= 0:
+                backend.execute(
+                    "SELECT setval(%s, %s, false)",
+                    (qualified_sequence, 1),
+                    connection=conn,
+                )
+            else:
+                backend.execute(
+                    "SELECT setval(%s, %s)",
+                    (qualified_sequence, max_id),
+                    connection=conn,
+                )
 
     def _ensure_fts_structures(self, conn) -> None:
         if self.backend_type == BackendType.SQLITE:

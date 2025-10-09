@@ -381,6 +381,14 @@ class APIKeyManager:
             
             # Update usage statistics
             await self._update_usage(key_info['id'], ip_address)
+
+            # Optional lightweight audit of usage
+            try:
+                if self.settings.API_KEY_AUDIT_LOG_USAGE:
+                    await self._log_action(key_info['id'], "used", key_info.get('user_id'))
+            except Exception as _e:
+                # Do not fail request on audit write
+                logger.debug(f"API key usage audit skipped/failed: {_e}")
             
             return key_info
             
