@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
     RetrievalConfig,
 )
 
-from .conftest import DualBackendEnv
+from tldw_Server_API.tests.RAG.conftest import DualBackendEnv
 
 
 def _seed_media(env: DualBackendEnv) -> int:
@@ -47,7 +47,7 @@ def _seed_notes(env: DualBackendEnv) -> None:
 
     note_id = env.chacha_db.add_note(
         title="Dual Backend Note",
-        content="Notes retrieval must work the same on Postgres and SQLite backends.",
+        content="Notes retrieval must maintain backend parity across Postgres and SQLite deployments.",
     )
     assert note_id is not None
 

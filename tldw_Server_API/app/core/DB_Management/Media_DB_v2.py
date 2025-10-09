@@ -1203,7 +1203,10 @@ class MediaDatabase:
 
     @property
     def _SCHEMA_UPDATE_VERSION_SQL_V1(self):
-        return f"UPDATE schema_version SET version = {self._CURRENT_SCHEMA_VERSION} WHERE version = 0;"
+        return (
+            "DELETE FROM schema_version WHERE version <> 0;\n"
+            f"UPDATE schema_version SET version = {self._CURRENT_SCHEMA_VERSION} WHERE version = 0;"
+        )
 
     def _apply_schema_v1_sqlite(self, conn: sqlite3.Connection):
         """Applies the full Version 1 schema, ensuring version update is part of the main script."""
@@ -1353,10 +1356,15 @@ class MediaDatabase:
         for stmt in table_statements + index_statements:
             self.backend.execute(stmt, connection=conn)
 
-        # Ensure schema_version reflects the current code version
+        # Ensure schema_version reflects the current code version (single row)
         self.backend.execute(
-            "INSERT INTO schema_version (version) VALUES (%s) ON CONFLICT DO NOTHING",
-            (self._CURRENT_SCHEMA_VERSION,),
+            "DELETE FROM schema_version WHERE version <> %s",
+            (0,),
+            connection=conn,
+        )
+        self.backend.execute(
+            "INSERT INTO schema_version (version) VALUES (%s) ON CONFLICT (version) DO NOTHING",
+            (0,),
             connection=conn,
         )
         self.backend.execute(
@@ -1851,12 +1859,12 @@ class MediaDatabase:
                     sql = (
                         "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
                         "       bm25(claims_fts) AS relevance_score "
-                        "FROM claims_fts f JOIN Claims c ON f.rowid = c.id "
-                        "WHERE f MATCH ? AND c.deleted = 0 "
+                        "FROM claims_fts JOIN Claims c ON claims_fts.rowid = c.id "
+                        "WHERE claims_fts MATCH ? AND c.deleted = 0 "
                         "ORDER BY relevance_score ASC LIMIT ?"
                     )
                     rows = self._fetchall_with_connection(conn, sql, (cleaned_query, limit))
-                    results.extend(rows)
+                    results.extend(dict(row) for row in rows)
                 elif self.backend_type == BackendType.POSTGRESQL:
                     tsquery = FTSQueryTranslator.normalize_query(cleaned_query, 'postgresql')
                     if tsquery:
@@ -1869,7 +1877,7 @@ class MediaDatabase:
                             "ORDER BY relevance_score DESC LIMIT ?"
                         )
                         rows = self._fetchall_with_connection(conn, sql, (tsquery, tsquery, limit))
-                        results.extend(rows)
+                        results.extend(dict(row) for row in rows)
                 else:
                     raise NotImplementedError(
                         f"Claims search not implemented for backend {self.backend_type}"
@@ -1889,8 +1897,9 @@ class MediaDatabase:
                         )
                     fallback_rows = self._fetchall_with_connection(conn, like_sql, (like_pattern, limit))
                     for row in fallback_rows:
-                        row.setdefault('relevance_score', 0.0)
-                    results.extend(fallback_rows)
+                        row_dict = dict(row)
+                        row_dict.setdefault('relevance_score', 0.0)
+                        results.append(row_dict)
         except Exception as exc:
             logging.error("Failed to search claims: %s", exc, exc_info=True)
             return []
@@ -2285,7 +2294,7 @@ class MediaDatabase:
 
         offset = (page - 1) * results_per_page
         # Define base SELECT, FROM clauses
-        base_select_parts = ["m.id", "m.uuid", "m.url", "m.title", "m.type", "m.author", "m.ingestion_date",
+        base_select_parts = ["m.id", "m.uuid", "m.url", "m.title", "m.content", "m.type", "m.author", "m.ingestion_date",
                              "m.transcription_model", "m.is_trash", "m.trash_date", "m.chunking_status",
                              "m.vector_processing", "m.content_hash", "m.last_modified", "m.version",
                              "m.client_id", "m.deleted"]

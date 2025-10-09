@@ -279,6 +279,7 @@ class MediaDBRetriever(BaseRetriever):
             return []
         documents: List[Document] = []
         min_score = float(self.config.min_score or 0.0)
+        backend_type = getattr(self.media_db, 'backend_type', None)
         for row in results:
             raw_score = row.get('relevance_score')
             if raw_score is None:
@@ -287,6 +288,10 @@ class MediaDBRetriever(BaseRetriever):
                 score_val = float(raw_score) if raw_score is not None else 0.0
             except (TypeError, ValueError):
                 score_val = 0.0
+            if backend_type == BackendType.SQLITE and raw_score is not None and score_val < 0:
+                # SQLite FTS rank/bm25 implementations yield more negative scores for better matches;
+                # normalise to a positive value so min_score thresholds and ordering behave consistently.
+                score_val = -score_val
             if score_val < min_score:
                 continue
             metadata = {}
@@ -301,10 +306,16 @@ class MediaDBRetriever(BaseRetriever):
                     'source': 'media_db',
                 }
             doc_id = row.get('uuid') or row.get('id')
+            title_text = (row.get('title') or '').strip()
+            body_text = (row.get('content') or '').strip()
+            if title_text and (not body_text or title_text.lower() not in body_text.lower()):
+                content_text = f"{title_text}\n{body_text}" if body_text else title_text
+            else:
+                content_text = body_text or title_text
             documents.append(
                 Document(
                     id=str(doc_id),
-                    content=row.get('content') or '',
+                    content=content_text,
                     source=DataSource.MEDIA_DB,
                     metadata=metadata,
                     score=score_val,
@@ -1368,12 +1379,16 @@ class ClaimsRetriever(BaseRetriever):
             return []
         documents: List[Document] = []
         min_score = float(self.config.min_score or 0.0)
+        backend_type = getattr(self.media_db, 'backend_type', None)
         for row in results:
-            score = row.get('relevance_score') or 0.0
+            score = row.get('relevance_score') if isinstance(row, dict) else None
             try:
-                score_val = float(score)
+                score_val = float(score) if score is not None else 0.0
             except (TypeError, ValueError):
                 score_val = 0.0
+            if backend_type == BackendType.SQLITE:
+                # SQLite bm25 returns lower (often negative) values for better matches.
+                score_val = -score_val
             if score_val < min_score:
                 continue
             metadata = {
