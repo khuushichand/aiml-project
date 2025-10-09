@@ -580,7 +580,7 @@ class RetrieverSweepConfig(BaseModel):
 
 class RerankerSweepConfig(BaseModel):
     """Reranker parameters to sweep."""
-    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "none"]]]] = Field(default=None)
+    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"]]]] = Field(default=None)
     top_k: Optional[Union[int, List[int]]] = Field(default=None)
     model: Optional[Union[str, List[str]]] = Field(default=None, description="Optional reranker model")
 

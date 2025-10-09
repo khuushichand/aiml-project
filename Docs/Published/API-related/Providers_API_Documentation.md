@@ -2,10 +2,13 @@
 
 ## Overview
 - Purpose: Discover configured LLM providers, their models and capabilities, and the health of the LLM inference subsystem. These endpoints are useful for client UIs and for operational monitoring.
+- OpenAPI tag: `llm`
 
 ## Authentication
-- Single-user: `X-API-KEY: <key>`
-- Multi-user: `Authorization: Bearer <JWT>`
+- By default these endpoints are accessible without authentication. Deployments may enforce AuthNZ globally.
+- If required by your deployment:
+  - Single-user: `X-API-KEY: <key>`
+  - Multi-user: `Authorization: Bearer <JWT>`
 
 ## Endpoints
 
@@ -36,10 +39,13 @@
     },
     "queue": {
       "initialized": true,
-      "size": 0,
-      "max_size": 100,
-      "in_progress": 0,
-      "workers": 4
+      "queue_size": 0,
+      "processing_count": 0,
+      "max_queue_size": 100,
+      "max_concurrent": 10,
+      "total_processed": 0,
+      "total_rejected": 0,
+      "is_running": true
     },
     "rate_limiter": {
       "initialized": true,
@@ -136,5 +142,6 @@
 ## Notes
 - The presence and values for models depend on your `tldw_Server_API/Config_Files/config.txt` and environment variables. Some providers may be listed as not configured if API keys or endpoints are missing.
 - By default, deprecated models are filtered from responses; set `include_deprecated=true` to include them.
-- Health information reflects in-process runtime state, including circuit-breaker status and queue depth.
-
+- Health information reflects in-process runtime state, including circuit-breaker status and queue statistics.
+- Provider objects may include additional fields when present in config, such as `endpoint`, `default_temperature`, `max_tokens`, and `supports_streaming`.
+- Note: `total_configured` reflects the number of providers returned in the response; individual providers indicate configuration with the `is_configured` flag.

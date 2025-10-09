@@ -115,7 +115,7 @@ from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards
 #
 # LLM Providers Endpoint
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
-from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router
+from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router, public_router as llamacpp_public_router
 from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 # Web Scraping Management Endpoints
 from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
@@ -471,7 +471,14 @@ async def lifespan(app: FastAPI):
             logger.info("Use this API key in the X-API-KEY header for requests")
         else:
             logger.info(f"🔐 Authentication Mode: MULTI USER")
-            logger.info("JWT Bearer tokens required for authentication")
+            try:
+                _s = get_settings()
+                if isinstance(_s.DATABASE_URL, str) and _s.DATABASE_URL.startswith("sqlite"):
+                    logger.info("JWT Bearer tokens or X-API-KEY (per-user) supported for SQLite setups")
+                else:
+                    logger.info("JWT Bearer tokens required for authentication")
+            except Exception:
+                logger.info("JWT Bearer tokens required for authentication")
             logger.info("=" * 60)
         
         logger.info(f"📍 API Documentation: http://127.0.0.1:8000/docs")
@@ -661,18 +668,18 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Streaming STT", "url": _ext_url("/docs-static/NEMO_STREAMING_DOCUMENTATION.md")}},
     {"name": "chat", "description": "Chat completions and conversation management (OpenAI-compatible).",
      "externalDocs": {"description": "Chat API", "url": _ext_url("/docs-static/API-related/Chat_API_Documentation.md")}},
-    {"name": "character, persona", "description": "Character cards/personas and related operations.",
+    {"name": "characters", "description": "Character cards/personas and related operations.",
      "externalDocs": {"description": "Character Chat API", "url": _ext_url("/docs-static/CHARACTER_CHAT_API_DOCUMENTATION.md")}},
-    {"name": "character chat sessions", "description": "Character chat sessions lifecycle management.",
+    {"name": "character-chat-sessions", "description": "Character chat sessions lifecycle management.",
      "externalDocs": {"description": "Character Chat API", "url": _ext_url("/docs-static/CHARACTER_CHAT_API_DOCUMENTATION.md")}},
-    {"name": "character messages", "description": "Character message creation, retrieval, and search.",
+    {"name": "character-messages", "description": "Character message creation, retrieval, and search.",
      "externalDocs": {"description": "Character Chat API", "url": _ext_url("/docs-static/CHARACTER_CHAT_API_DOCUMENTATION.md")}},
     {"name": "metrics", "description": "Metrics and monitoring endpoints.",
      "externalDocs": {"description": "Metrics design", "url": _ext_url("/docs-static/Design/Metrics.md")}},
     {"name": "monitoring", "description": "OpenTelemetry/metrics reporting in JSON."},
     {"name": "chunking", "description": "Content chunking operations and utilities.",
      "externalDocs": {"description": "Chunking design", "url": _ext_url("/docs-static/Design/Chunking.md")}},
-    {"name": "chunking templates", "description": "Chunking template management (create, list, update).",
+    {"name": "chunking-templates", "description": "Chunking template management (create, list, update).",
      "externalDocs": {"description": "Templates", "url": _ext_url("/docs-static/Chunking_Templates.md")}},
     {"name": "embeddings", "description": "OpenAI-compatible embeddings generation.",
      "externalDocs": {"description": "Embeddings API Guide", "url": _ext_url("/docs-static/Embeddings/Embeddings-API-Guide.md")}},
@@ -685,13 +692,13 @@ OPENAPI_TAGS = [
     {"name": "notes", "description": "Notes and knowledge management."},
     {"name": "prompts", "description": "Prompt library management (import/export).",
      "externalDocs": {"description": "Prompts design", "url": _ext_url("/docs-static/Design/Prompts.md")}},
-    {"name": "Prompt Studio (Experimental)", "description": "Projects, prompts, tests, optimization, and background jobs (experimental).",
+    {"name": "prompt-studio", "description": "Projects, prompts, tests, optimization, and background jobs (experimental).",
      "externalDocs": {"description": "Prompt Studio API", "url": _ext_url("/docs-static/API-related/Prompt_Studio_API.md")}},
-    {"name": "RAG - Health", "description": "RAG health, caching, and metrics.",
+    {"name": "rag-health", "description": "RAG health, caching, and metrics.",
      "externalDocs": {"description": "RAG notes", "url": _ext_url("/docs-static/RAG_Notes.md")}},
-    {"name": "RAG - Unified", "description": "Unified RAG: FTS5 + embeddings + re-ranking.",
+    {"name": "rag-unified", "description": "Unified RAG: FTS5 + embeddings + re-ranking.",
      "externalDocs": {"description": "RAG notes", "url": _ext_url("/docs-static/RAG_Notes.md")}},
-    {"name": "Workflows (Experimental)", "description": "Workflow definitions and execution (scaffolding, experimental).",
+    {"name": "workflows", "description": "Workflow definitions and execution (scaffolding, experimental).",
      "externalDocs": {"description": "Workflows", "url": _ext_url("/docs-static/Design/Workflows.md")}},
     {"name": "research", "description": "Research providers and web data collection.",
      "externalDocs": {"description": "Researcher", "url": _ext_url("/docs-static/Design/Researcher.md")}},
@@ -704,9 +711,9 @@ OPENAPI_TAGS = [
     {"name": "config", "description": "Server configuration and capability info."},
     {"name": "sync", "description": "Synchronization operations and helpers."},
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
-    {"name": "MCP Unified (Experimental)", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
+    {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
      "externalDocs": {"description": "MCP v2 Developer Guide", "url": _ext_url("/docs-static/MCP_Docs/MCP_v2_Developer_Guide.md")}},
-    {"name": "flashcards (Experimental)", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
+    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": _ext_url("/docs-static/API-related/Chatbook_Features_API_Documentation.md")}},
     {"name": "llm", "description": "LLM provider configuration and discovery.",
@@ -715,9 +722,9 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Inference engines", "url": _ext_url("/docs-static/Design/Inference_Engines.md")}},
     {"name": "web-scraping", "description": "Web scraping management and job control.",
      "externalDocs": {"description": "Web scraping design", "url": _ext_url("/docs-static/Design/WebScraping.md")}},
-    {"name": "Chat Dictionaries", "description": "Per-user/domain dictionaries for chat preprocessing and postprocessing.",
+    {"name": "chat-dictionaries", "description": "Per-user/domain dictionaries for chat preprocessing and postprocessing.",
      "externalDocs": {"description": "Character Chat API", "url": _ext_url("/docs-static/CHARACTER_CHAT_API_DOCUMENTATION.md")}},
-    {"name": "Document Generator", "description": "Generate documents from conversations and templates."},
+    {"name": "chat-documents", "description": "Generate documents from conversations and templates."},
 ]
 
 import os as _env_os
@@ -857,17 +864,17 @@ def custom_openapi():
             "name": "Chat & TTS",
             "tags": [
                 "chat",
-                "Chat Dictionaries",
-                "Document Generator",
+                "chat-dictionaries",
+                "chat-documents",
                 "audio-websocket",
-                "character, persona",
-                "character chat sessions",
-                "character messages",
+                "characters",
+                "character-chat-sessions",
+                "character-messages",
             ],
         },
         {
             "name": "RAG & Evals",
-            "tags": ["RAG - Health", "RAG - Unified", "evaluations", "benchmarks"],
+            "tags": ["rag-health", "rag-unified", "evaluations", "benchmarks"],
         },
         {
             "name": "Embeddings & Vectors",
@@ -875,11 +882,11 @@ def custom_openapi():
         },
         {
             "name": "Studio & Knowledge",
-            "tags": ["Prompt Studio", "prompts", "notes", "chatbooks", "tools"],
+            "tags": ["prompt-studio", "prompts", "notes", "chatbooks", "tools"],
         },
         {
             "name": "Infra",
-            "tags": ["metrics", "monitoring", "config", "sync", "llm", "llamacpp", "MCP Unified", "Workflows"],
+            "tags": ["metrics", "monitoring", "config", "sync", "llm", "llamacpp", "mcp-unified", "workflows"],
         },
     ]
 
@@ -1046,6 +1053,20 @@ if WEBUI_DIR.exists():
         else:
             config["mode"] = "multi-user"
             config["_comment"] = "Multi-user mode - manual authentication required"
+            try:
+                _settings = get_settings()
+                dbu = _settings.DATABASE_URL or ""
+                if isinstance(dbu, str) and dbu.startswith("sqlite"):
+                    # Expose hint so the WebUI can prefer X-API-KEY in multi-user SQLite setups
+                    config.setdefault("auth", {})
+                    config["auth"]["multiUserSupportsApiKey"] = True
+                    config["auth"]["preferApiKeyInMultiUser"] = True
+                else:
+                    config.setdefault("auth", {})
+                    config["auth"]["multiUserSupportsApiKey"] = False
+                    config["auth"]["preferApiKeyInMultiUser"] = False
+            except Exception:
+                pass
         
         # Add LLM providers information
         try:
@@ -1184,13 +1205,13 @@ app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
 
 
 # Router for character endpoints
-app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character, persona"])
+app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
 
 # Router for character chat sessions
-app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character chat sessions"])
+app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
 
 # Router for character messages (Note: uses multiple prefixes for different endpoints)
-app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character messages"])
+app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
 
 
 # Router for metrics endpoints
@@ -1201,7 +1222,7 @@ app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
 app.include_router(chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
 
 # Router for Chunking Templates
-app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking templates"])
+app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
 
 
 # Router for Embedding Endpoint (OpenAI-compatible path)
@@ -1222,23 +1243,23 @@ app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prom
 
 
 # Router for Prompt Studio endpoints
-app.include_router(prompt_studio_projects_router, tags=["Prompt Studio (Experimental)"])
-app.include_router(prompt_studio_prompts_router, tags=["Prompt Studio (Experimental)"])
-app.include_router(prompt_studio_test_cases_router, tags=["Prompt Studio (Experimental)"])
-app.include_router(prompt_studio_optimization_router, tags=["Prompt Studio (Experimental)"])
-app.include_router(prompt_studio_evaluations_router, tags=["Prompt Studio (Experimental)"])
-app.include_router(prompt_studio_websocket_router, tags=["Prompt Studio (Experimental)"])
+app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
+app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
+app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
+app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
+app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
+app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
 
 
 # Router for RAG endpoints
 # Register health router first to serve /api/v1/rag/health* shape expected by tests
-app.include_router(rag_health_router, tags=["RAG - Health"])
+app.include_router(rag_health_router, tags=["rag-health"])
 # RAG API - Production API using unified pipeline
-app.include_router(rag_unified_router, tags=["RAG - Unified"])
+app.include_router(rag_unified_router, tags=["rag-unified"])
 
 
 # Workflows API (v0.1 scaffolding)
-app.include_router(workflows_router, tags=["Workflows (Experimental)"])
+app.include_router(workflows_router, tags=["workflows"])
 
 
 # Router for Research endpoint
@@ -1270,11 +1291,11 @@ app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
 app.include_router(tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
 
 # Router for Flashcards
-app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards (Experimental)"])
+app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
 
 
 # Router for MCP Unified (Secure, production-ready implementation)
-app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["MCP Unified (Experimental)"])
+app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
 # Note: Old MCP routers have been archived due to security vulnerabilities
 
 # Router for Chatbooks - import/export functionality
@@ -1283,7 +1304,9 @@ app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks
 app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
 
 # Router for Llama.cpp (LLM inference helper)
+# Llama.cpp endpoints under /api/v1 and public aliases (/reranking, /v1/rerank, etc.)
 app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
+app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
 
 # Web Scraping management endpoints
 # Include both root-level (back-compat) and versioned paths (used by WebUI)

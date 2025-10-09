@@ -20,7 +20,7 @@ from ....core.RAG.rag_service.resilience import get_coordinator, HealthStatus
 from ....core.RAG.rag_service.batch_processing import BatchProcessor
 
 
-router = APIRouter(prefix="/api/v1/rag", tags=["RAG - Health"])
+router = APIRouter(prefix="/api/v1/rag", tags=["rag-health"])
 
 
 # Global instances

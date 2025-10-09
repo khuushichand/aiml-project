@@ -43,7 +43,7 @@ export TLDW_API_KEY="default-secret-key-for-single-user"  # or your API key
 
 3. **Test with a simple evaluation:**
 ```bash
-curl -X POST http://localhost:8000/v1/evals \
+curl -X POST http://localhost:8000/api/v1/evaluations \
   -H "Authorization: Bearer $TLDW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -213,7 +213,7 @@ evaluation = {
 }
 
 response = requests.post(
-    "http://localhost:8000/v1/evals",
+    "http://localhost:8000/api/v1/evaluations",
     json=evaluation,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -302,7 +302,7 @@ run_request = {
 }
 
 response = requests.post(
-    f"http://localhost:8000/v1/evals/{eval_id}/runs",
+    f"http://localhost:8000/api/v1/evaluations/{eval_id}/runs",
     json=run_request,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -315,7 +315,7 @@ import time
 
 while True:
     response = requests.get(
-        f"http://localhost:8000/v1/runs/{run_id}",
+        f"http://localhost:8000/api/v1/evaluations/runs/{run_id}",
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
     status = response.json()["status"]
@@ -335,7 +335,8 @@ while True:
 import sseclient
 
 response = requests.get(
-    f"http://localhost:8000/v1/runs/{run_id}/stream",
+    # Streaming is not available on the unified router; poll the run status instead.
+    # f"http://localhost:8000/api/v1/evaluations/runs/{run_id}/stream",
     headers={"Authorization": f"Bearer {API_KEY}"},
     stream=True
 )
@@ -355,7 +356,8 @@ for event in client.events():
 ```python
 # Get results
 response = requests.get(
-    f"http://localhost:8000/v1/runs/{run_id}/results",
+    # Results are included in the run object when completed.
+    # f"http://localhost:8000/api/v1/evaluations/runs/{run_id}/results",
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
 results = response.json()
@@ -465,7 +467,7 @@ eval_config = {
     ]
 }
 
-response = requests.post(f"{BASE_URL}/v1/evals", json=eval_config, headers=headers)
+response = requests.post(f"{BASE_URL}/api/v1/evaluations", json=eval_config, headers=headers)
 eval_id = response.json()["id"]
 print(f"Created evaluation: {eval_id}")
 
@@ -480,7 +482,7 @@ run_config = {
 }
 
 response = requests.post(
-    f"{BASE_URL}/v1/evals/{eval_id}/runs", 
+    f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs", 
     json=run_config, 
     headers=headers
 )
@@ -490,7 +492,7 @@ print(f"Started run: {run_id}")
 # 3. Wait for completion
 import time
 while True:
-    response = requests.get(f"{BASE_URL}/v1/runs/{run_id}", headers=headers)
+    response = requests.get(f"{BASE_URL}/api/v1/evaluations/runs/{run_id}", headers=headers)
     status = response.json()["status"]
     if status in ["completed", "failed"]:
         break
@@ -498,7 +500,8 @@ while True:
 
 # 4. Get results
 if status == "completed":
-    response = requests.get(f"{BASE_URL}/v1/runs/{run_id}/results", headers=headers)
+    # Results are included in the run when status becomes 'completed'.
+    # response = requests.get(f"{BASE_URL}/api/v1/evaluations/runs/{run_id}/results", headers=headers)
     results = response.json()
     
     print("\n=== Evaluation Results ===")
@@ -519,7 +522,7 @@ for model in models_to_test:
     # Run evaluation for each model
     run_config = {"target_model": model, "config": {"temperature": 0.0}}
     response = requests.post(
-        f"{BASE_URL}/v1/evals/{eval_id}/runs",
+        f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
         json=run_config,
         headers=headers
     )

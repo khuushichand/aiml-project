@@ -620,6 +620,70 @@ def load_settings():
             )
         ))(os.getenv('RAG_LLM_RERANKER_MODEL'), load_comprehensive_config()),
 
+        # RAG llama.cpp (GGUF) reranker configuration
+        "RAG_LLAMA_RERANKER_BIN": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_binary', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_BIN'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_MODEL'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_NGL": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_ngl', fallback='0')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 0
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_NGL'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_SEP": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_separator', fallback='<#sep#>') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else '<#sep#>'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_SEP'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_OUTPUT": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_output', fallback='json+') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'json+'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_OUTPUT'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_POOLING": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_pooling', fallback='last') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'last'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_POOLING'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_NORMALIZE": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_normalize', fallback='-1')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else -1
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_NORMALIZE'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_MAX_DOC_CHARS": (lambda _env, _cp: (
+            int(_env) if _env is not None else (
+                int(_cp.get('RAG', 'llama_reranker_max_doc_chars', fallback='2000')) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 2000
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_MAX_DOC_CHARS'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_TEMPLATE_MODE": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_template_mode', fallback='auto') if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'auto'
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_TEMPLATE_MODE'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_QUERY_PREFIX": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_query_prefix', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_QUERY_PREFIX'), load_comprehensive_config()),
+        "RAG_LLAMA_RERANKER_DOC_PREFIX": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'llama_reranker_doc_prefix', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_LLAMA_RERANKER_DOC_PREFIX'), load_comprehensive_config()),
+
+        # Transformers cross-encoder reranker defaults
+        "RAG_TRANSFORMERS_RERANKER_MODEL": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'transformers_reranker_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_TRANSFORMERS_RERANKER_MODEL'), load_comprehensive_config()),
+
         # RAG HyDE configuration (provider/model)
         "RAG_HYDE_PROVIDER": (lambda _env, _cp: (
             _env if _env is not None else (

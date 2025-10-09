@@ -28,14 +28,15 @@ The Chunking module turns raw text (or structured content) into smaller, semanti
     - Hierarchical helpers and streaming utilities
     - `create_chunker()` factory
   - `strategies/` – Strategy implementations
-    - `words.py`, `sentences.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, `paragraphs.py`, …
+    - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, …
+  - `templates.py` – Template system (processor/manager/learner)
   - `template_initialization.py` – Built‑in chunking template seeding and updates (DB‑backed)
   - `Chunk_Lib.py` – Legacy v1 implementation (kept for tests/back‑compat)
   - `__init__.py` – Public API surface, defaults, and legacy bridges
 
 ## Key Types
 
-- `ChunkingMethod` – Canonical method names (e.g., `words`, `sentences`, `tokens`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `semantic`).
+– `ChunkingMethod` – Canonical method names (e.g., `words`, `sentences`, `paragraphs`, `tokens`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `semantic`).
 - `ChunkMetadata` – Per‑chunk metadata (character offsets, word counts, language, method, overlap, etc.).
 - `ChunkResult` – Struct holding the `text` and its `ChunkMetadata`.
 - `ChunkerConfig` – Defaults for method, max size, overlap, language, caching, max text size, and metrics toggle.
@@ -47,6 +48,7 @@ Strategies are discovered and instantiated through the `Chunker`’s internal re
 - Registration: `Chunker._register_strategy_factories()` populates a dict mapping method name → factory lambda.
 - Lazy creation: `get_strategy(method)` creates the strategy on first use and caches the instance.
 - Extensible: Add a new strategy by implementing `BaseChunkingStrategy` and registering it in `_register_strategy_factories()` with a unique method key (usually the `ChunkingMethod` enum value).
+  Note: some strategies use string keys (e.g., `structure_aware`) that are not members of `ChunkingMethod`.
 
 Example (excerpt):
 
@@ -62,7 +64,7 @@ Example (excerpt):
   - `chunk_text(text, method=..., max_size=..., overlap=..., language=..., **options) -> List[str]`
   - `chunk_text_with_metadata(...) -> List[ChunkResult]`
   - `chunk_text_generator(...) -> Generator[str, None, None]` (memory‑efficient)
-  - `stream_file(file_path, ...) -> Generator[str, None, None]` (very large files)
+  - `chunk_file_stream(file_path, ...) -> Generator[str, None, None]` (very large files)
   - `process_text(text, options, tokenizer_name_or_path=None, llm_call_func=None, llm_config=None) -> List[Dict]` – end‑to‑end pipeline that: parses optional front‑matter, handles basic header stripping, resolves defaults (incl. language heuristics), applies hierarchical or multi‑level paragraph chunking when requested, and normalizes outputs to dicts.
   - Hierarchical helpers:
     - `chunk_text_hierarchical_tree(...) -> Dict[str, Any]` – build sections/blocks tree with chunk leaves
@@ -157,7 +159,7 @@ When writing a new strategy:
 - End‑to‑end normalization:
   - `rows = chunker.process_text(text, options={...})` – returns a list of dicts with consistent metadata fields
 - Streaming a large file:
-  - `for ch in chunker.stream_file(path, method="sentences", max_size=2048): ...`
+  - `for ch in chunker.chunk_file_stream(path, method="sentences", max_size=2048): ...`
 
 ## Maintenance Notes
 
@@ -169,4 +171,3 @@ When writing a new strategy:
 ---
 
 For questions or proposals, open a PR with a short design note under `Docs/Design/` and link to relevant strategies/tests.
-

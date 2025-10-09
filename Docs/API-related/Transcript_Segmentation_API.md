@@ -10,7 +10,10 @@ embeddings of context-expanded blocks.
 
 ## Authentication
 
-- Requires standard API auth (Bearer token or configured single-user key).
+- Single‑user mode: send `X-API-KEY: <your_key>`
+- Multi‑user mode (JWT): send `Authorization: Bearer <JWT>`
+
+Rate limiting: 30 requests/minute per IP (SlowAPI).
 
 ## Request Body
 
@@ -36,7 +39,7 @@ Fields:
 - `min_segment_size`: Minimum utterances per segment.
 - `lambda_balance`: Balance penalty to discourage degenerate splits.
 - `utterance_expansion_width`: Number of previous utterances concatenated to each block.
-- `min_improvement_ratio`: Stop splitting when relative improvement (per split) drops below this threshold.
+- `min_improvement_ratio`: Stop splitting when relative improvement (per split) drops below this threshold (0–1).
 - `embeddings_provider`/`embeddings_model`: Optional overrides when using the built-in embedding service.
 
 ## Response Body
@@ -70,6 +73,13 @@ Fields:
 - Tweak `min_segment_size`, `lambda_balance`, and `utterance_expansion_width` to adjust segment granularity and balance.
   - Larger `min_segment_size` = fewer segments; higher `lambda_balance` = more balanced sizes.
 - This API is intended to propose edit boundaries; always allow human oversight.
+
+## Errors
+
+- 401 Unauthorized: Missing/invalid `X-API-KEY` or Bearer token
+- 400 Bad Request: `entries` missing or empty
+- 429 Too Many Requests: Rate limit exceeded
+- 500 Internal Server Error: Segmentation failed
 
 ## Example (curl)
 

@@ -232,8 +232,9 @@ async def unified_rag_pipeline(
     
     # ========== RERANKING ==========
     enable_reranking: bool = True,
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] = "flashrank",
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"] = "flashrank",
     rerank_top_k: Optional[int] = None,  # Defaults to top_k if not specified
+    reranking_model: Optional[str] = None,  # Optional model id/path for rerankers (GGUF path or HF model id)
     
     # ========== CITATIONS ==========
     enable_citations: bool = False,
@@ -648,11 +649,13 @@ async def unified_rag_pipeline(
                         db_paths["character_cards_db"] = character_db_path
                     
                     # Initialize retriever; pass media_db if supported (tests patch constructor)
-                    try:
-                        retriever = MultiDatabaseRetriever(db_paths, user_id=user_id or "0", media_db=media_db)
-                    except TypeError:
-                        retriever = MultiDatabaseRetriever(db_paths, user_id=user_id or "0")
-                    
+                    retriever = MultiDatabaseRetriever(
+                        db_paths,
+                        user_id=user_id or "0",
+                        media_db=media_db,
+                        chacha_db=chacha_db
+                    )
+
                     # Configure retrieval
                     config = RetrievalConfig(
                         max_results=top_k,
@@ -915,6 +918,7 @@ async def unified_rag_pipeline(
                         "flashrank": RerankingStrategy.FLASHRANK,
                         "cross_encoder": RerankingStrategy.CROSS_ENCODER,
                         "hybrid": RerankingStrategy.HYBRID,
+                        "llama_cpp": RerankingStrategy.LLAMA_CPP,
                         "diversity": RerankingStrategy.DIVERSITY,
                         "llm_scoring": RerankingStrategy.LLM_SCORING,
                     }
@@ -952,10 +956,28 @@ async def unified_rag_pipeline(
                         except Exception:
                             selected_strategy = RerankingStrategy.FLASHRANK
 
+                    # Determine model for reranker when applicable
+                    model_name_for_reranker = None
+                    if selected_strategy == RerankingStrategy.LLAMA_CPP:
+                        try:
+                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                            cfg = load_and_log_configs() or {}
+                        except Exception:
+                            cfg = {}
+                        # Precedence: explicit param -> env/config
+                        model_name_for_reranker = reranking_model or cfg.get("RAG_LLAMA_RERANKER_MODEL")
+                    elif selected_strategy == RerankingStrategy.CROSS_ENCODER:
+                        try:
+                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                            cfg = load_and_log_configs() or {}
+                        except Exception:
+                            cfg = {}
+                        model_name_for_reranker = reranking_model or cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
+
                     rerank_config = RerankingConfig(
                         strategy=selected_strategy,
                         top_k=rerank_top_k or top_k,
-                        model_name=None
+                        model_name=model_name_for_reranker,
                     )
                     reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                     reranked = await reranker.rerank(query, result.documents)
@@ -1118,10 +1140,12 @@ async def unified_rag_pipeline(
                                 if character_db_path:
                                     db_paths["character_cards_db"] = character_db_path
                                 # Initialize multi retriever
-                                try:
-                                    mdr = MultiDatabaseRetriever(db_paths, user_id=user_id or "0", media_db=media_db)
-                                except TypeError:
-                                    mdr = MultiDatabaseRetriever(db_paths, user_id=user_id or "0")
+                                mdr = MultiDatabaseRetriever(
+                                    db_paths,
+                                    user_id=user_id or "0",
+                                    media_db=media_db,
+                                    chacha_db=chacha_db
+                                )
 
                                 # Determine sources same as earlier
                                 claim_sources = sources or ["media_db"]

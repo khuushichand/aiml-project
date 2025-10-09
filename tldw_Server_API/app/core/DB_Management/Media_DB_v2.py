@@ -44,6 +44,7 @@ from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
 from math import ceil
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional, Union
+from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 #
 # Third-Party Libraries (Ensure these are installed if used)
 # import gradio as gr # Removed if Gradio interfaces moved out
@@ -680,6 +681,28 @@ class MediaDatabase:
         converted_query = self._convert_sqlite_placeholders_to_postgres(query)
         prepared_params = [self._normalise_params(params) for params in params_list]
         return converted_query, prepared_params
+
+    def _keyword_order_expression(self, column: str) -> str:
+        """Return keyword ORDER BY expression appropriate for the active backend."""
+
+        if self.backend_type == BackendType.SQLITE:
+            return f"{column} COLLATE NOCASE"
+        return f"LOWER({column}), {column}"
+
+    def _append_case_insensitive_like(
+        self,
+        clauses: List[str],
+        params: List[Any],
+        column: str,
+        pattern: str,
+    ) -> None:
+        """Append backend-aware case-insensitive LIKE predicate and parameter."""
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            clauses.append(f"{column} ILIKE ?")
+        else:
+            clauses.append(f"{column} LIKE ? COLLATE NOCASE")
+        params.append(pattern)
 
     def _normalise_params(
         self,
@@ -1587,24 +1610,121 @@ class MediaDatabase:
 
     def rebuild_claims_fts(self) -> int:
         """
-        Rebuild the claims_fts index from Claims.
+        Rebuild the claims full-text search index using the active backend.
 
         Returns:
             int: Number of rows indexed.
         """
-        conn = self.get_connection()
         try:
-            # Clear and repopulate
-            conn.execute("DELETE FROM claims_fts")
-            conn.execute(
-                "INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0"
-            )
-            conn.commit()
-            cur = conn.execute("SELECT count(*) FROM claims_fts")
-            return int(cur.fetchone()[0])
-        except sqlite3.Error as e:
-            logging.error(f"Failed to rebuild claims_fts: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to rebuild claims_fts: {e}") from e
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.SQLITE:
+                    self._execute_with_connection(conn, "DELETE FROM claims_fts")
+                    self._execute_with_connection(
+                        conn,
+                        "INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0",
+                    )
+                    count_row = self._fetchone_with_connection(
+                        conn,
+                        "SELECT COUNT(*) AS total FROM claims_fts",
+                    )
+                    return int(count_row.get("total", 0)) if count_row else 0
+                elif self.backend_type == BackendType.POSTGRESQL:
+                    backend = self.backend
+                    backend.create_fts_table(
+                        table_name="claims_fts",
+                        source_table="claims",
+                        columns=["claim_text"],
+                        connection=conn,
+                    )
+                    rebuild_query = (
+                        "UPDATE claims "
+                        "SET claims_fts_tsv = CASE "
+                        "WHEN deleted = 0 THEN to_tsvector('english', coalesce(claim_text, '')) "
+                        "ELSE NULL END"
+                    )
+                    self._execute_with_connection(conn, rebuild_query)
+                    count_row = self._fetchone_with_connection(
+                        conn,
+                        "SELECT COUNT(*) AS total FROM claims WHERE deleted = 0",
+                    )
+                    return int(count_row.get("total", 0)) if count_row else 0
+                else:
+                    raise NotImplementedError(
+                        f"Claims FTS rebuild not implemented for backend {self.backend_type}"
+                    )
+        except sqlite3.Error as exc:
+            logging.error(f"Failed to rebuild claims_fts: {exc}", exc_info=True)
+            raise DatabaseError(f"Failed to rebuild claims_fts: {exc}") from exc
+        except BackendDatabaseError as exc:
+            logging.error(f"Failed to rebuild claims_fts (backend): {exc}", exc_info=True)
+            raise DatabaseError(f"Failed to rebuild claims_fts: {exc}") from exc
+
+    def search_claims(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        fallback_to_like: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Search claims using the configured backend."""
+        cleaned_query = (query or "").strip()
+        if not cleaned_query:
+            return []
+        try:
+            limit = max(1, int(limit))
+        except (TypeError, ValueError):
+            limit = 20
+        results: List[Dict[str, Any]] = []
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.SQLITE:
+                    sql = (
+                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
+                        "       bm25(claims_fts) AS relevance_score "
+                        "FROM claims_fts f JOIN Claims c ON f.rowid = c.id "
+                        "WHERE f MATCH ? AND c.deleted = 0 "
+                        "ORDER BY relevance_score ASC LIMIT ?"
+                    )
+                    rows = self._fetchall_with_connection(conn, sql, (cleaned_query, limit))
+                    results.extend(rows)
+                elif self.backend_type == BackendType.POSTGRESQL:
+                    tsquery = FTSQueryTranslator.normalize_query(cleaned_query, 'postgresql')
+                    if tsquery:
+                        sql = (
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
+                            "       ts_rank(c.claims_fts_tsv, to_tsquery('english', ?)) AS relevance_score "
+                            "FROM claims c "
+                            "WHERE c.deleted IS FALSE "
+                            "  AND c.claims_fts_tsv @@ to_tsquery('english', ?) "
+                            "ORDER BY relevance_score DESC LIMIT ?"
+                        )
+                        rows = self._fetchall_with_connection(conn, sql, (tsquery, tsquery, limit))
+                        results.extend(rows)
+                else:
+                    raise NotImplementedError(
+                        f"Claims search not implemented for backend {self.backend_type}"
+                    )
+
+                if fallback_to_like and not results:
+                    like_pattern = f"%{cleaned_query}%"
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        like_sql = (
+                            "SELECT id, media_id, chunk_index, claim_text "
+                            "FROM claims WHERE deleted IS FALSE AND claim_text ILIKE ? LIMIT ?"
+                        )
+                    else:
+                        like_sql = (
+                            "SELECT id, media_id, chunk_index, claim_text "
+                            "FROM Claims WHERE deleted = 0 AND claim_text LIKE ? LIMIT ?"
+                        )
+                    fallback_rows = self._fetchall_with_connection(conn, like_sql, (like_pattern, limit))
+                    for row in fallback_rows:
+                        row.setdefault('relevance_score', 0.0)
+                    results.extend(fallback_rows)
+        except Exception as exc:
+            logging.error("Failed to search claims: %s", exc, exc_info=True)
+            return []
+        return results
 
     # --- Backwards Compatibility Helpers ---
     def initialize_db(self):
@@ -2068,24 +2188,33 @@ class MediaDatabase:
                 params.append(combined_fts_query)
 
                 # Add LIKE search for 'title' and 'content' to ensure partial matches work
-                title_content_like_parts = []
+                title_content_like_parts: List[str] = []
                 for field in ["title", "content"]:
                     if field in sanitized_text_search_fields:
+                        column = f"m.{field}"
                         # Contains matching (standard)
-                        title_content_like_parts.append(f"m.{field} LIKE ? COLLATE NOCASE")
-                        like_params.append(f"%{like_search_query}%")
+                        self._append_case_insensitive_like(
+                            title_content_like_parts,
+                            like_params,
+                            column,
+                            f"%{like_search_query}%",
+                        )
 
                         # For short search terms, also add "ends with" matching to catch cases like "ToDo" when searching for "Do"
                         if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
-                            title_content_like_parts.append(f"m.{field} LIKE ? COLLATE NOCASE")
-                            like_params.append(f"%{like_search_query}")
+                            self._append_case_insensitive_like(
+                                title_content_like_parts,
+                                like_params,
+                                column,
+                                f"%{like_search_query}",
+                            )
                 if title_content_like_parts:
                     like_conditions.append(f"({' OR '.join(title_content_like_parts)})")
 
             # LIKE search for 'author', 'type'
             like_fields_to_search = [f for f in sanitized_text_search_fields if f in ["author", "type"]]
             if like_fields_to_search:
-                like_parts = []
+                like_parts: List[str] = []
                 for field in like_fields_to_search:
                     # Avoid LIKE on 'type' if 'media_types' filter is already active for 'type'
                     if field == "type" and media_types:
@@ -2093,13 +2222,21 @@ class MediaDatabase:
                         continue
 
                     # Contains matching (standard)
-                    like_parts.append(f"m.{field} LIKE ? COLLATE NOCASE")
-                    like_params.append(f"%{like_search_query}%") # search_query here should be the raw query, not the FTS one
+                    self._append_case_insensitive_like(
+                        like_parts,
+                        like_params,
+                        f"m.{field}",
+                        f"%{like_search_query}%",
+                    )  # search_query here should be the raw query, not the FTS one
 
                     # For short search terms, also add "ends with" matching to catch cases like "ToDo" when searching for "Do"
                     if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
-                        like_parts.append(f"m.{field} LIKE ? COLLATE NOCASE")
-                        like_params.append(f"%{like_search_query}")
+                        self._append_case_insensitive_like(
+                            like_parts,
+                            like_params,
+                            f"m.{field}",
+                            f"%{like_search_query}",
+                        )
                 if like_parts:
                     like_conditions.append(f"({' OR '.join(like_parts)})")
 
@@ -2131,10 +2268,15 @@ class MediaDatabase:
             elif sort_by == "date_asc":
                 order_by_clause_str = "ORDER BY m.ingestion_date ASC, m.last_modified ASC, m.id ASC"
             elif sort_by == "title_asc":
-                # Using LOWER(m.title) for case-insensitive sort if COLLATE NOCASE is not behaving as expected with an index
-                order_by_clause_str = "ORDER BY m.title ASC COLLATE NOCASE, m.id ASC"
+                if self.backend_type == BackendType.POSTGRESQL:
+                    order_by_clause_str = "ORDER BY LOWER(m.title) ASC, m.title ASC, m.id ASC"
+                else:
+                    order_by_clause_str = "ORDER BY m.title ASC COLLATE NOCASE, m.id ASC"
             elif sort_by == "title_desc":
-                order_by_clause_str = "ORDER BY m.title DESC COLLATE NOCASE, m.id DESC"
+                if self.backend_type == BackendType.POSTGRESQL:
+                    order_by_clause_str = "ORDER BY LOWER(m.title) DESC, m.title DESC, m.id DESC"
+                else:
+                    order_by_clause_str = "ORDER BY m.title DESC COLLATE NOCASE, m.id DESC"
             elif sort_by == "last_modified_asc":
                 order_by_clause_str = "ORDER BY m.last_modified ASC, m.id ASC"
             elif sort_by == "last_modified_desc": # Also default
@@ -2317,10 +2459,19 @@ class MediaDatabase:
                 base_from += " LEFT JOIN DocumentVersionIdentifiers dvi ON dvi.dv_id = dv.id"
 
             # Count
-            count_sql = f"SELECT COUNT(DISTINCT m.id) {base_from} WHERE {' AND '.join(clauses)}{where_filters}" if group_by_media else \
-                        f"SELECT COUNT(*) {base_from} WHERE {' AND '.join(clauses)}{where_filters}"
+            if group_by_media:
+                count_sql = (
+                    f"SELECT COUNT(DISTINCT m.id) AS total_count {base_from} "
+                    f"WHERE {' AND '.join(clauses)}{where_filters}"
+                )
+            else:
+                count_sql = (
+                    f"SELECT COUNT(*) AS total_count {base_from} "
+                    f"WHERE {' AND '.join(clauses)}{where_filters}"
+                )
             count_cursor = self.execute_query(count_sql, tuple(params))
-            total = count_cursor.fetchone()[0]
+            count_row = count_cursor.fetchone()
+            total = count_row['total_count'] if count_row else 0
 
             if total == 0:
                 return [], 0
@@ -2512,9 +2663,11 @@ class MediaDatabase:
 
         placeholders = ','.join('?' * len(unique_clean_keywords))
 
-        media_conditions = ["m.deleted = 0"]  # Always exclude soft-deleted media
+        media_conditions = ["m.deleted = ?"]
+        media_params: List[Any] = [False]
         if not include_trash:
-            media_conditions.append("m.is_trash = 0")
+            media_conditions.append("m.is_trash = ?")
+            media_params.append(False)
         media_where_clause = " AND ".join(media_conditions)
 
         # Select desired fields from Media table
@@ -2523,6 +2676,7 @@ class MediaDatabase:
                        "m.last_modified AS media_last_modified, m.ingestion_date AS media_ingestion_date, " \
                        "m.author AS media_author"
 
+        order_expr = self._keyword_order_expression("k.keyword")
         query = f"""
             SELECT
                 k.keyword AS keyword_text,
@@ -2530,13 +2684,13 @@ class MediaDatabase:
             FROM Keywords k
             JOIN MediaKeywords mk ON k.id = mk.keyword_id
             JOIN Media m ON mk.media_id = m.id
-            WHERE k.keyword IN ({placeholders})
-              AND k.deleted = 0               -- Only active keywords
-              AND {media_where_clause}        -- Media status filters
-            ORDER BY k.keyword, m.last_modified DESC, m.id DESC
+            WHERE {media_where_clause}
+              AND k.keyword IN ({placeholders})
+              AND k.deleted = ?
+            ORDER BY {order_expr}, m.last_modified DESC, m.id DESC
         """
 
-        params = tuple(unique_clean_keywords)
+        params = tuple(media_params + [False] + unique_clean_keywords)
 
         logger.debug(
             f"Executing fetch_media_for_keywords query for keywords: {unique_clean_keywords}, include_trash: {include_trash}")
@@ -3571,8 +3725,12 @@ class MediaDatabase:
                 version_id, media_id, current_sync_version, media_uuid = version_info['id'], version_info['media_id'], version_info['version'], version_info['media_uuid']
                 new_sync_version = current_sync_version + 1
 
-                cursor.execute("SELECT COUNT(*) FROM DocumentVersions WHERE media_id = ? AND deleted = 0", (media_id,))
-                active_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) AS active_count FROM DocumentVersions WHERE media_id = ? AND deleted = 0",
+                    (media_id,),
+                )
+                active_row = cursor.fetchone()
+                active_count = active_row['active_count'] if active_row else 0
                 if active_count <= 1:
                     logger.warning(f"Cannot delete DocVersion UUID {version_uuid} - last active.")
                     return False
@@ -3767,10 +3925,12 @@ class MediaDatabase:
         logger.debug(f"Rolling back media {media_id} to doc version {target_version_number}.")
         try:
             with self.transaction() as conn:
-                cursor = conn.cursor()
                 # Get current media info
-                cursor.execute("SELECT uuid, version, title FROM Media WHERE id = ? AND deleted = 0", (media_id,))
-                media_info = cursor.fetchone()
+                media_info = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, title FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
                 if not media_info:
                     return {'error': f'Media {media_id} not found or deleted.'}
                 media_uuid, current_media_version, current_title = media_info['uuid'], media_info['version'], media_info['title']
@@ -3782,9 +3942,13 @@ class MediaDatabase:
                     return {'error': f'Rollback target version {target_version_number} not found or inactive.'}
 
                 # Prevent rolling back to the absolute latest version number
-                cursor.execute("SELECT MAX(version_number) FROM DocumentVersions WHERE media_id=? AND deleted=0", (media_id,))
-                latest_vn_res = cursor.fetchone()
-                if latest_vn_res and target_version_number == latest_vn_res[0]:
+                latest_vn_row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT MAX(version_number) AS latest_vn FROM DocumentVersions WHERE media_id=? AND deleted=0",
+                    (media_id,),
+                )
+                latest_vn = latest_vn_row['latest_vn'] if latest_vn_row else None
+                if latest_vn is not None and target_version_number == latest_vn:
                     return {'error': 'Cannot rollback to the current latest version number.'}
 
                 target_content = target_version_data.get('content')
@@ -3801,16 +3965,21 @@ class MediaDatabase:
                 # 2. Update the Media table with the rolled-back content and new hash/timestamp
                 new_content_hash = hashlib.sha256(target_content.encode()).hexdigest()
                 # Pass current_time for last_modified
-                cursor.execute(
+                update_cursor = self._execute_with_connection(
+                    conn,
                     """UPDATE Media SET content=?, content_hash=?, last_modified=?, version=?, client_id=?,
-                       chunking_status="pending", vector_processing=0 WHERE id=? AND version=?""",
-                    (target_content, new_content_hash, current_time, new_media_version, client_id, media_id, current_media_version))
-                if cursor.rowcount == 0:
+                       chunking_status='pending', vector_processing=0 WHERE id=? AND version=?""",
+                    (target_content, new_content_hash, current_time, new_media_version, client_id, media_id, current_media_version),
+                )
+                if update_cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)
 
                 # 3. Log the Media update sync event
-                cursor.execute("SELECT * FROM Media WHERE id = ?", (media_id,))  # Fetch updated state for payload
-                updated_media_data = dict(cursor.fetchone())
+                updated_media_data = self._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
                 # Add context about the rollback to the payload (optional but helpful)
                 updated_media_data['rolled_back_to_doc_ver_uuid'] = new_doc_version_uuid
                 updated_media_data['rolled_back_to_doc_ver_num'] = new_doc_version_number
@@ -4074,7 +4243,9 @@ class MediaDatabase:
             DatabaseError: If the database query fails.
         """
         try:
-            cursor = self.execute_query('SELECT keyword FROM Keywords WHERE deleted = 0 ORDER BY keyword COLLATE NOCASE')
+            order_expr = self._keyword_order_expression("keyword")
+            query = f"SELECT keyword FROM Keywords WHERE deleted = ? ORDER BY {order_expr}"
+            cursor = self.execute_query(query, (False,))
             return [row['keyword'] for row in cursor.fetchall()]
         except DatabaseError as e:
             logger.error(f"Error fetching keywords: {e}")
@@ -4116,34 +4287,35 @@ class MediaDatabase:
         offset = (page - 1) * results_per_page
 
         try:
-            with self.transaction() as conn:  # Use a transaction for consistency if doing multiple queries
-                cursor = conn.cursor()
-                # Query 1: Get total count
-                cursor.execute("SELECT COUNT(*) FROM Media WHERE deleted = 0 AND is_trash = 0")
-                count_row = cursor.fetchone()
-                total_items = count_row[0] if count_row else 0
+            count_cursor = self.execute_query(
+                "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 0"
+            )
+            count_row = count_cursor.fetchone()
+            total_items = count_row['total_items'] if count_row else 0
 
-                results_data = []
-                if total_items > 0:
-                    # Query 2: Get paginated items
-                    query = """
-                            SELECT id, title, type, uuid
-                            FROM Media
-                            WHERE deleted = 0 \
-                              AND is_trash = 0
-                            ORDER BY last_modified DESC, id DESC LIMIT ? \
-                            OFFSET ? \
-                            """
-                    cursor.execute(query, (results_per_page, offset))
-                    results_data = [dict(row) for row in cursor.fetchall()]
+            results_data: List[Dict[str, Any]] = []
+            if total_items > 0:
+                items_cursor = self.execute_query(
+                    """
+                    SELECT id, title, type, uuid
+                    FROM Media
+                    WHERE deleted = 0
+                      AND is_trash = 0
+                    ORDER BY last_modified DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (results_per_page, offset),
+                )
+                results_data = [dict(row) for row in items_cursor.fetchall()]
 
-            total_pages = ceil(total_items / results_per_page) if results_per_page > 0 and total_items > 0 else 0
-            # Ensure page is not out of bounds for returned results if total_items becomes 0 after count
+            total_pages = ceil(total_items / results_per_page) if total_items > 0 else 0
             if page > total_pages and total_pages == 0:
-                results_data = []  # No items if page is invalid for 0 total pages
+                results_data = []
 
             return results_data, total_pages, page, total_items
 
+        except DatabaseError:
+            raise
         except sqlite3.Error as e:
             logging.error(f"SQLite error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Failed DB pagination query: {e}") from e
@@ -4404,11 +4576,11 @@ class MediaDatabase:
 
         try:
             # Query 1: Get total count of active items
-            count_query = "SELECT COUNT(*) FROM Media WHERE deleted = 0 AND is_trash = 0"
+            count_query = "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 0"
             # Use self.execute_query
             count_cursor = self.execute_query(count_query)
             count_result = count_cursor.fetchone()
-            total_items = count_result[0] if count_result else 0
+            total_items = count_result['total_items'] if count_result else 0
 
             # Query 2: Get paginated items if count > 0
             if total_items > 0:
@@ -5076,52 +5248,72 @@ class MediaDatabase:
         
         template_uuid = str(uuid_module.uuid4())
         tags_json = json.dumps(tags) if tags else None
-        
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Check if name already exists
-            cursor.execute("""
-                SELECT COUNT(*) FROM ChunkingTemplates 
-                WHERE name = ? AND deleted = 0
-            """, (name,))
-            
-            if cursor.fetchone()[0] > 0:
+
+        try:
+            json.loads(template_json)
+        except json.JSONDecodeError as e:
+            raise InputError(f"Invalid template JSON: {e}")
+
+        current_time = self._get_current_utc_timestamp_str()
+
+        with self.transaction() as conn:
+            existing = self._fetchone_with_connection(
+                conn,
+                "SELECT 1 FROM ChunkingTemplates WHERE name = ? AND deleted = ? LIMIT 1",
+                (name, False),
+            )
+            if existing:
                 raise InputError(f"Template with name '{name}' already exists")
-            
-            # Validate JSON
-            try:
-                json.loads(template_json)
-            except json.JSONDecodeError as e:
-                raise InputError(f"Invalid template JSON: {e}")
-            
-            # Insert template
-            cursor.execute("""
+
+            insert_sql = """
                 INSERT INTO ChunkingTemplates (
                     uuid, name, description, template_json, is_builtin, tags,
-                    created_at, updated_at, last_modified, version, client_id, 
+                    created_at, updated_at, last_modified, version, client_id,
                     user_id, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 
-                         datetime('now'), 1, ?, ?, 0)
-            """, (template_uuid, name, description, template_json, is_builtin, 
-                  tags_json, self.client_id, user_id))
-            
-            template_id = cursor.lastrowid
-            conn.commit()
-            
-            logger.info(f"Created chunking template '{name}' with UUID {template_uuid}")
-            
-            return {
-                'id': template_id,
-                'uuid': template_uuid,
-                'name': name,
-                'description': description,
-                'template_json': template_json,
-                'is_builtin': is_builtin,
-                'tags': tags,
-                'user_id': user_id,
-                'version': 1
-            }
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (
+                template_uuid,
+                name,
+                description,
+                template_json,
+                is_builtin,
+                tags_json,
+                current_time,
+                current_time,
+                current_time,
+                1,
+                self.client_id,
+                user_id,
+                False,
+            )
+
+            if self.backend_type == BackendType.POSTGRESQL:
+                insert_sql += " RETURNING id"
+
+            insert_cursor = self._execute_with_connection(conn, insert_sql, params)
+            if self.backend_type == BackendType.POSTGRESQL:
+                inserted_row = insert_cursor.fetchone()
+                template_id = inserted_row['id'] if inserted_row else None
+            else:
+                template_id = insert_cursor.lastrowid
+
+            if not template_id:
+                raise DatabaseError("Failed to create chunking template.")
+
+        logger.info(f"Created chunking template '{name}' with UUID {template_uuid}")
+
+        return {
+            'id': template_id,
+            'uuid': template_uuid,
+            'name': name,
+            'description': description,
+            'template_json': template_json,
+            'is_builtin': is_builtin,
+            'tags': tags,
+            'user_id': user_id,
+            'version': 1,
+        }
     
     def get_chunking_template(self, 
                              template_id: Optional[int] = None,
@@ -5142,49 +5334,44 @@ class MediaDatabase:
         """
         if not any([template_id, name, uuid]):
             raise InputError("Must provide template_id, name, or uuid")
-        
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            query = "SELECT * FROM ChunkingTemplates WHERE "
-            params = []
-            conditions = []
-            
-            if template_id:
-                conditions.append("id = ?")
-                params.append(template_id)
-            if name:
-                conditions.append("name = ?")
-                params.append(name)
-            if uuid:
-                conditions.append("uuid = ?")
-                params.append(uuid)
-                
-            query += " OR ".join(conditions)
-            
-            if not include_deleted:
-                query += " AND deleted = 0"
-            
-            cursor.execute(query, params)
-            row = cursor.fetchone()
-            
-            if row:
-                return {
-                    'id': row['id'],
-                    'uuid': row['uuid'],
-                    'name': row['name'],
-                    'description': row['description'],
-                    'template_json': row['template_json'],
-                    'is_builtin': bool(row['is_builtin']),
-                    'tags': json.loads(row['tags']) if row['tags'] else [],
-                    'created_at': row['created_at'],
-                    'updated_at': row['updated_at'],
-                    'version': row['version'],
-                    'user_id': row['user_id'],
-                    'deleted': bool(row['deleted'])
-                }
-            
+        params: List[Any] = []
+        conditions: List[str] = []
+
+        if template_id is not None:
+            conditions.append("id = ?")
+            params.append(template_id)
+        if name:
+            conditions.append("name = ?")
+            params.append(name)
+        if uuid:
+            conditions.append("uuid = ?")
+            params.append(uuid)
+
+        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False)
+
+        cursor = self.execute_query(query, tuple(params))
+        row = cursor.fetchone()
+
+        if not row:
             return None
+
+        return {
+            'id': row['id'],
+            'uuid': row['uuid'],
+            'name': row['name'],
+            'description': row['description'],
+            'template_json': row['template_json'],
+            'is_builtin': bool(row['is_builtin']),
+            'tags': json.loads(row['tags']) if row['tags'] else [],
+            'created_at': row['created_at'],
+            'updated_at': row['updated_at'],
+            'version': row['version'],
+            'user_id': row['user_id'],
+            'deleted': bool(row['deleted']),
+        }
     
     def list_chunking_templates(self,
                                include_builtin: bool = True,
@@ -5205,64 +5392,54 @@ class MediaDatabase:
         Returns:
             List of template dictionaries
         """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            conditions = []
-            params = []
-            
-            if not include_deleted:
-                conditions.append("deleted = 0")
-            
-            # Filter by builtin status
-            builtin_conditions = []
-            if include_builtin:
-                builtin_conditions.append("is_builtin = 1")
-            if include_custom:
-                builtin_conditions.append("is_builtin = 0")
-            
-            if builtin_conditions:
-                conditions.append(f"({' OR '.join(builtin_conditions)})")
-            
-            # Filter by user
-            if user_id:
-                conditions.append("user_id = ?")
-                params.append(user_id)
-            
-            # Build query
-            query = "SELECT * FROM ChunkingTemplates"
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY is_builtin DESC, name ASC"
-            
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
-            templates = []
-            for row in rows:
-                template = {
-                    'id': row['id'],
-                    'uuid': row['uuid'],
-                    'name': row['name'],
-                    'description': row['description'],
-                    'template_json': row['template_json'],
-                    'is_builtin': bool(row['is_builtin']),
-                    'tags': json.loads(row['tags']) if row['tags'] else [],
-                    'created_at': row['created_at'],
-                    'updated_at': row['updated_at'],
-                    'version': row['version'],
-                    'user_id': row['user_id']
-                }
-                
-                # Filter by tags if specified
-                if tags:
-                    template_tags = template['tags']
-                    if not any(tag in template_tags for tag in tags):
-                        continue
-                
-                templates.append(template)
-            
-            return templates
+        if not include_builtin and not include_custom:
+            return []
+
+        conditions: List[str] = []
+        params: List[Any] = []
+
+        if not include_deleted:
+            conditions.append("deleted = ?")
+            params.append(False)
+
+        if include_builtin != include_custom:
+            conditions.append("is_builtin = ?")
+            params.append(include_builtin)
+
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+
+        query = "SELECT * FROM ChunkingTemplates"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY is_builtin DESC, name ASC"
+
+        cursor = self.execute_query(query, tuple(params))
+        rows = cursor.fetchall()
+
+        templates = []
+        for row in rows:
+            template = {
+                'id': row['id'],
+                'uuid': row['uuid'],
+                'name': row['name'],
+                'description': row['description'],
+                'template_json': row['template_json'],
+                'is_builtin': bool(row['is_builtin']),
+                'tags': json.loads(row['tags']) if row['tags'] else [],
+                'created_at': row['created_at'],
+                'updated_at': row['updated_at'],
+                'version': row['version'],
+                'user_id': row['user_id'],
+            }
+
+            if tags and not any(tag in template['tags'] for tag in tags):
+                continue
+
+            templates.append(template)
+
+        return templates
     
     def update_chunking_template(self,
                                 template_id: Optional[int] = None,
@@ -5309,48 +5486,46 @@ class MediaDatabase:
             except json.JSONDecodeError as e:
                 raise InputError(f"Invalid template JSON: {e}")
         
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Build update query
-            updates = []
-            params = []
-            
-            if template_json is not None:
-                updates.append("template_json = ?")
-                params.append(template_json)
-            
-            if description is not None:
-                updates.append("description = ?")
-                params.append(description)
-            
-            if tags is not None:
-                updates.append("tags = ?")
-                params.append(json.dumps(tags))
-            
-            if updates:
-                updates.extend([
-                    "updated_at = datetime('now')",
-                    "last_modified = datetime('now')",
-                    "version = version + 1",
-                    "client_id = ?"
-                ])
-                params.append(self.client_id)
-                params.append(template['id'])
-                
-                query = f"""
-                    UPDATE ChunkingTemplates 
-                    SET {', '.join(updates)}
-                    WHERE id = ? AND deleted = 0
-                """
-                
-                cursor.execute(query, params)
-                conn.commit()
-                
-                logger.info(f"Updated chunking template ID {template['id']}")
-                return True
-            
+        updates: List[str] = []
+        params: List[Any] = []
+
+        if template_json is not None:
+            updates.append("template_json = ?")
+            params.append(template_json)
+
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(json.dumps(tags))
+
+        if not updates:
             return False
+
+        current_time = self._get_current_utc_timestamp_str()
+        updates.extend([
+            "updated_at = ?",
+            "last_modified = ?",
+            "version = version + 1",
+            "client_id = ?",
+        ])
+        params.extend([current_time, current_time, self.client_id, template['id'], False])
+
+        update_sql = f"""
+            UPDATE ChunkingTemplates
+            SET {', '.join(updates)}
+            WHERE id = ? AND deleted = ?
+        """
+
+        with self.transaction() as conn:
+            cursor = self._execute_with_connection(conn, update_sql, tuple(params))
+            if cursor.rowcount == 0:
+                return False
+
+        logger.info(f"Updated chunking template ID {template['id']}")
+        return True
     
     def delete_chunking_template(self,
                                 template_id: Optional[int] = None,
@@ -5385,28 +5560,35 @@ class MediaDatabase:
         if template['is_builtin']:
             raise InputError("Cannot delete built-in templates")
         
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
+        deleted_rows = 0
+
+        with self.transaction() as conn:
             if hard_delete:
-                cursor.execute(
+                delete_cursor = self._execute_with_connection(
+                    conn,
                     "DELETE FROM ChunkingTemplates WHERE id = ?",
-                    (template['id'],)
+                    (template['id'],),
                 )
+                deleted_rows = delete_cursor.rowcount
                 logger.info(f"Hard deleted chunking template ID {template['id']}")
             else:
-                cursor.execute("""
-                    UPDATE ChunkingTemplates 
-                    SET deleted = 1, 
-                        updated_at = datetime('now'),
-                        last_modified = datetime('now'),
+                current_time = self._get_current_utc_timestamp_str()
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    """
+                    UPDATE ChunkingTemplates
+                    SET deleted = ?,
+                        updated_at = ?,
+                        last_modified = ?,
                         client_id = ?
                     WHERE id = ?
-                """, (self.client_id, template['id']))
+                    """,
+                    (True, current_time, current_time, self.client_id, template['id']),
+                )
+                deleted_rows = update_cursor.rowcount
                 logger.info(f"Soft deleted chunking template ID {template['id']}")
-            
-            conn.commit()
-            return True
+
+        return deleted_rows > 0
     
     def seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int:
         """
@@ -5442,29 +5624,36 @@ class MediaDatabase:
                     logger.error(f"Failed to seed template {template['name']}: {e}")
             elif existing['deleted']:
                 # Restore deleted built-in template
-                with self.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
+                current_time = self._get_current_utc_timestamp_str()
+                with self.transaction() as conn:
+                    self._execute_with_connection(
+                        conn,
+                        """
                         UPDATE ChunkingTemplates
-                        SET deleted = 0,
+                        SET deleted = ?,
                             template_json = ?,
                             description = ?,
                             tags = ?,
-                            updated_at = datetime('now'),
-                            last_modified = datetime('now'),
+                            updated_at = ?,
+                            last_modified = ?,
+                            version = version + 1,
                             client_id = ?
                         WHERE id = ?
-                    """, (
-                        json.dumps(template.get('template', template)),
-                        template.get('description', ''),
-                        json.dumps(template.get('tags', [])),
-                        self.client_id,
-                        existing['id']
-                    ))
-                    conn.commit()
-                    count += 1
-                    logger.info(f"Restored built-in template: {template['name']}")
-        
+                        """,
+                        (
+                            False,
+                            json.dumps(template.get('template', template)),
+                            template.get('description', ''),
+                            json.dumps(template.get('tags', [])),
+                            current_time,
+                            current_time,
+                            self.client_id,
+                            existing['id'],
+                        ),
+                    )
+                count += 1
+                logger.info(f"Restored built-in template: {template['name']}")
+
         return count
 
 
@@ -5714,8 +5903,11 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> Tuple[int, i
                     logger.error(f"DB error processing item ID {media_id} during trash emptying: {e}")
                 except Exception as e:
                     logger.error(f"Unexpected error processing item ID {media_id} during trash emptying: {e}", exc_info=True)
-        cursor_remain = db_instance.execute_query("SELECT COUNT(*) FROM Media WHERE is_trash = 1 AND deleted = 0")
-        remaining_count = cursor_remain.fetchone()[0]
+        cursor_remain = db_instance.execute_query(
+            "SELECT COUNT(*) AS trash_remaining FROM Media WHERE is_trash = 1 AND deleted = 0"
+        )
+        remain_row = cursor_remain.fetchone()
+        remaining_count = remain_row['trash_remaining'] if remain_row else 0
         logger.info(f"Trash emptying complete. Processed (sync deleted): {processed_count}. Remaining in UI trash: {remaining_count}.")
         return processed_count, remaining_count
     except (DatabaseError, sqlite3.Error) as e:
@@ -6431,8 +6623,15 @@ def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> List[
         raise TypeError("db_instance required.")
     logger.debug(f"Fetching keywords media_id={media_id} DB: {db_instance.db_path_str}")
     try:
-        query = "SELECT k.keyword FROM Keywords k JOIN MediaKeywords mk ON k.id = mk.keyword_id JOIN Media m ON mk.media_id = m.id WHERE mk.media_id = ? AND k.deleted = 0 AND m.deleted = 0 ORDER BY k.keyword COLLATE NOCASE"
-        cursor = db_instance.execute_query(query, (media_id,))
+        order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
+        query = (
+            f"SELECT k.keyword FROM Keywords k "
+            "JOIN MediaKeywords mk ON k.id = mk.keyword_id "
+            "JOIN Media m ON mk.media_id = m.id "
+            "WHERE mk.media_id = ? AND k.deleted = ? AND m.deleted = ? "
+            f"ORDER BY {order_expr}"
+        )
+        cursor = db_instance.execute_query(query, (media_id, False, False))
         return [row['keyword'] for row in cursor.fetchall()]
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error fetching keywords media_id {media_id} '{db_instance.db_path_str}': {e}", exc_info=True)
@@ -6474,9 +6673,17 @@ def fetch_keywords_for_media_batch(media_ids: List[int], db_instance: MediaDatab
         return {}
     keywords_map = {media_id: [] for media_id in safe_media_ids}
     placeholders = ','.join('?' * len(safe_media_ids))
-    query = f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk JOIN Keywords k ON mk.keyword_id = k.id JOIN Media m ON mk.media_id = m.id WHERE mk.media_id IN ({placeholders}) AND k.deleted = 0 AND m.deleted = 0 ORDER BY mk.media_id, k.keyword COLLATE NOCASE"
+    order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
+    query = (
+        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "
+        "JOIN Keywords k ON mk.keyword_id = k.id "
+        "JOIN Media m ON mk.media_id = m.id "
+        f"WHERE mk.media_id IN ({placeholders}) AND k.deleted = ? AND m.deleted = ? "
+        f"ORDER BY mk.media_id, {order_expr}"
+    )
+    params = tuple(safe_media_ids + [False, False])
     try:
-        cursor = db_instance.execute_query(query, tuple(safe_media_ids))
+        cursor = db_instance.execute_query(query, params)
         for row in cursor.fetchall():
             if row['media_id'] in keywords_map:
                 keywords_map[row['media_id']].append(row['keyword'])

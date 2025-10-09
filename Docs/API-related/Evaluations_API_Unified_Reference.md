@@ -211,29 +211,20 @@ Starts an asynchronous evaluation run.
 ```
 
 #### Get Run Status
-`GET /api/v1/runs/{run_id}`
+`GET /api/v1/evaluations/runs/{run_id}`
+
+Results are included in the run object when `status` becomes `completed`. There is no separate results endpoint.
 
 #### Stream Run Progress (SSE)
-`GET /api/v1/runs/{run_id}/stream`
-
-Server-sent events for real-time progress updates.
-
-**Event Types:**
-- `progress`: Sample completion updates
-- `completed`: Run finished successfully
-- `failed`: Run encountered error
-- `cancelled`: Run was cancelled
-
-#### Get Run Results
-`GET /api/v1/runs/{run_id}/results`
+Not available on the unified router. Poll `GET /api/v1/evaluations/runs/{run_id}` for status.
 
 #### Cancel Run
-`POST /api/v1/runs/{run_id}/cancel`
+`POST /api/v1/evaluations/runs/{run_id}/cancel`
 
 ### Dataset Management
 
 #### Create Dataset
-`POST /api/v1/datasets`
+`POST /api/v1/evaluations/datasets`
 
 **Request:**
 ```json
@@ -251,15 +242,64 @@ Server-sent events for real-time progress updates.
 ```
 
 #### List Datasets
-`GET /api/v1/datasets`
+`GET /api/v1/evaluations/datasets`
 
 #### Get Dataset
-`GET /api/v1/datasets/{dataset_id}`
+`GET /api/v1/evaluations/datasets/{dataset_id}`
 
 #### Delete Dataset
-`DELETE /api/v1/datasets/{dataset_id}`
+`DELETE /api/v1/evaluations/datasets/{dataset_id}`
 
 ## Specialized Evaluation Endpoints
+
+### RAG Pipeline Presets
+`POST /api/v1/evaluations/rag/pipeline/presets`  
+Create a named RAG pipeline preset.
+
+Request:
+```json
+{ "name": "baseline_hybrid", "config": { "chunking": {"method": "sentences", "size": 8, "overlap": 1}, "retriever": {"mode": "hybrid", "k": 8, "alpha": 0.5}, "reranker": {"provider": "cohere", "model": "rerank-3"}, "rag": {"max_context_tokens": 2000} } }
+```
+
+Responses:
+- `201` PipelinePresetResponse `{ "name": "...", "config": {..}, "created_at": 123, "updated_at": 123 }`
+
+`GET /api/v1/evaluations/rag/pipeline/presets`  
+List presets. Response `{ "items": [ {"name": "...", "config": {...}} ], "total": 1 }`
+
+`GET /api/v1/evaluations/rag/pipeline/presets/{name}`  
+Get a preset by name.
+
+`DELETE /api/v1/evaluations/rag/pipeline/presets/{name}`  
+Delete a preset. Response `204 No Content`.
+
+`POST /api/v1/evaluations/rag/pipeline/cleanup`  
+Cleanup ephemeral vector store collections. Response `{ "expired_count": 0, "deleted_count": 0, "errors": [] }`
+
+### Embeddings A/B Tests
+`POST /api/v1/evaluations/embeddings/abtest`  
+Create an embeddings A/B test. Request `{ "name": "string", "config": { "arms": [...], "media_ids": [], "chunking": {...}, "retrieval": {...}, "queries": [...] }, "run_immediately": false }`. Response `{ "test_id": "...", "status": "created" }`.
+
+`POST /api/v1/evaluations/embeddings/abtest/{test_id}/run`  
+Start execution. Response `{ "test_id": "...", "status": "running", "progress": { } }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}`  
+Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`  
+Paginated results. Response `{ "summary": {...}, "page": 1, "page_size": 50, "total": 120 }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`  
+Statistical significance for chosen metric.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/events`  
+SSE event stream of progress/updates.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/export?format=json|csv`  
+Export results (admin-only).
+
+`DELETE /api/v1/evaluations/embeddings/abtest/{test_id}`  
+Delete a test.
 
 ### G-Eval Summarization
 `POST /api/v1/evaluations/geval`
@@ -374,21 +414,25 @@ Process multiple evaluations in parallel.
 }
 ```
 
-### Custom Metrics
-`POST /api/v1/evaluations/custom-metric`
+### Propositions Evaluation
+`POST /api/v1/evaluations/propositions`
 
-Define and run custom evaluation metrics.
+Evaluates proposition extraction quality with precision/recall/F1, density, and length metrics.
 
-**Request:**
+Request (example):
 ```json
 {
-  "name": "technical_accuracy",
-  "description": "Evaluate technical content accuracy",
-  "evaluation_prompt": "Rate the technical accuracy of this response...",
-  "input_data": {...},
-  "scoring_criteria": {...}
+  "extracted": ["Claim A", "Claim B"],
+  "reference": ["Claim A", "Claim C"],
+  "method": "semantic",
+  "threshold": 0.7
 }
 ```
+
+### OCR Evaluation
+`POST /api/v1/evaluations/ocr` — Evaluate OCR text quality on provided content
+
+`POST /api/v1/evaluations/ocr-pdf` — Evaluate OCR text quality on uploaded PDF
 
 ## Webhook Management
 
@@ -402,6 +446,21 @@ Define and run custom evaluation metrics.
   "secret": "webhook_secret_key"
 }
 ```
+
+### List Webhooks
+`GET /api/v1/evaluations/webhooks`
+
+Returns all registered webhooks for the current user.
+
+### Unregister Webhook
+`DELETE /api/v1/evaluations/webhooks?url=...`
+
+Removes the specified webhook URL.
+
+### Test Webhook
+`POST /api/v1/evaluations/webhooks/test`
+
+Sends a test event to the provided URL and returns delivery stats.
 
 ### Webhook Events
 
@@ -453,6 +512,11 @@ Exports metrics in Prometheus format:
 - `evaluation_queue_depth`
 - `evaluation_cost_dollars`
 
+### Rate Limit Status
+`GET /api/v1/evaluations/rate-limits`
+
+Returns current tier, limits, usage, remaining allowance, and reset time.
+
 ## Error Handling
 
 All errors follow a consistent format:
@@ -498,7 +562,7 @@ All errors follow a consistent format:
 #### Old OpenAI endpoints → New unified endpoints
 - `/api/v1/evals` → `/api/v1/evaluations`
 - `/api/v1/evals/{id}/runs` → `/api/v1/evaluations/{id}/runs`
-- `/api/v1/runs/{id}` → `/api/v1/runs/{id}` (unchanged)
+- `/api/v1/runs/{id}` → `/api/v1/evaluations/runs/{id}`
 
 ### Breaking Changes
 1. Webhook event names standardized (see Webhook Events section)
@@ -510,52 +574,30 @@ All errors follow a consistent format:
 - **v1.0**: Old endpoints deprecated with warnings
 - **v2.0**: Old endpoints removed
 
-## SDK Examples
+## Examples
 
-### Python
+### Python (requests)
 ```python
-from tldw_server import EvaluationClient
+import requests
 
-client = EvaluationClient(api_key="your-key")
+API_KEY = "your-key"
+BASE = "http://localhost:8000/api/v1/evaluations"
+headers = {"X-API-KEY": API_KEY}
 
 # Create evaluation
-eval = client.evaluations.create(
-    name="my_eval",
-    eval_type="model_graded",
-    eval_spec={...}
-)
+payload = {
+  "name": "my_eval",
+  "eval_type": "model_graded",
+  "eval_spec": {"metrics": ["fluency"], "model": "gpt-4"},
+  "dataset": [{"input": {"text": "hi"}, "expected": {"text": "hi"}}]
+}
+e = requests.post(BASE, json=payload, headers=headers).json()
 
-# Run evaluation
-run = client.evaluations.run(
-    eval_id=eval.id,
-    target_model="gpt-3.5-turbo"
-)
+# Start a run
+r = requests.post(f"{BASE}/{e['id']}/runs", json={"target_model": "gpt-4"}, headers=headers).json()
 
-# Stream progress
-for event in client.runs.stream(run.id):
-    print(f"Progress: {event.data}")
-```
-
-### JavaScript/TypeScript
-```typescript
-import { EvaluationClient } from '@tldw/evaluations';
-
-const client = new EvaluationClient({ apiKey: 'your-key' });
-
-// Create and run evaluation
-const eval = await client.evaluations.create({
-  name: 'my_eval',
-  evalType: 'model_graded',
-  evalSpec: {...}
-});
-
-const run = await client.evaluations.run(eval.id, {
-  targetModel: 'gpt-3.5-turbo'
-});
-
-// Subscribe to progress
-const stream = client.runs.stream(run.id);
-stream.on('progress', (data) => console.log(data));
+# Poll run status
+status = requests.get(f"{BASE}/runs/{r['id']}", headers=headers).json()
 ```
 
 ## Best Practices
@@ -602,3 +644,21 @@ See CONTRIBUTING.md for guidelines on contributing to the evaluation module.
 *Last Updated: 2024*  
 *Version: 1.0.0*  
 *Status: Unified Implementation*
+## History
+
+### Evaluation History
+`POST /api/v1/evaluations/history`
+
+Retrieve evaluation history for a user with optional filters.
+
+Request:
+```json
+{
+  "user_id": "optional-user-id",
+  "evaluation_type": "rag|geval|response_quality|...",
+  "start_date": "2025-01-01T00:00:00Z",
+  "end_date": "2025-01-31T23:59:59Z",
+  "limit": 20,
+  "offset": 0
+}
+```

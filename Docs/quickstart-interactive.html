@@ -427,7 +427,7 @@
                     ]
                 };
                 
-                const response = await fetch(`${baseUrl}/api/v1/evals`, {
+                const response = await fetch(`${baseUrl}/api/v1/evaluations`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
@@ -448,8 +448,8 @@
                         <br>
                         Your API is working correctly! You can now:
                         <ul style="margin-left: 20px; margin-top: 10px;">
-                            <li>Run the evaluation with POST /api/v1/evals/${data.id}/runs</li>
-                            <li>Check results with GET /api/v1/runs/{run_id}/results</li>
+                            <li>Run the evaluation with POST /api/v1/evaluations/${data.id}/runs</li>
+                            <li>Poll status with GET /api/v1/evaluations/runs/{run_id}</li>
                         </ul>
                     `;
                     resultBox.style.display = 'block';

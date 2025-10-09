@@ -39,12 +39,14 @@ changes in the `sync_log` and in individual records.
 import sqlite3
 import json
 import uuid
+import re
+from contextlib import contextmanager
 from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import threading
 import logging
-from typing import List, Dict, Optional, Any, Union, Set
+from typing import List, Dict, Optional, Any, Union, Set, Tuple
 #
 # Third-Party Libraries
 from loguru import logger
@@ -56,7 +58,9 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseBackend,
     DatabaseConfig,
     DatabaseError as BackendDatabaseError,
+    QueryResult,
 )
+from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
 from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -109,6 +113,172 @@ class ConflictError(CharactersRAGDBError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+class BackendCursorAdapter:
+    """Adapter exposing QueryResult via a cursor-like interface."""
+
+    def __init__(self, result: QueryResult):
+        self._result = result
+        self._index = 0
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+
+    def fetchall(self):
+        return list(self._result.rows)
+
+    def fetchone(self):
+        if self._index >= len(self._result.rows):
+            return None
+        row = self._result.rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size: Optional[int] = None):
+        if size is None or size <= 0:
+            size = len(self._result.rows) - self._index
+        end = min(self._index + size, len(self._result.rows))
+        rows = self._result.rows[self._index:end]
+        self._index = end
+        return list(rows)
+
+    def __iter__(self):
+        return iter(self._result.rows)
+
+    def close(self):
+        self._result = QueryResult(rows=[], rowcount=0)
+        self.rowcount = 0
+        self.lastrowid = None
+        self.description = None
+
+
+class BackendCursorWrapper:
+    """Cursor wrapper that routes operations through the configured backend."""
+
+    def __init__(self, db: 'CharactersRAGDB', connection):
+        self._db = db
+        self._connection = connection
+        self._result: Optional[QueryResult] = None
+        self._adapter: Optional[BackendCursorAdapter] = None
+        self.rowcount: int = -1
+        self.lastrowid: Optional[int] = None
+        self.description = None
+
+    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+        prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
+        self._result = self._db.backend.execute(
+            prepared_query,
+            prepared_params,
+            connection=self._connection,
+        )
+        self._adapter = BackendCursorAdapter(self._result)
+        self.rowcount = self._result.rowcount
+        self.lastrowid = self._result.lastrowid
+        self.description = self._result.description
+        return self
+
+    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+        prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
+        self._result = self._db.backend.execute_many(
+            prepared_query,
+            prepared_params_list,
+            connection=self._connection,
+        )
+        self._adapter = BackendCursorAdapter(self._result)
+        self.rowcount = self._result.rowcount
+        self.lastrowid = self._result.lastrowid
+        self.description = self._result.description
+        return self
+
+    def fetchone(self) -> Optional[Dict[str, Any]]:
+        if not self._adapter:
+            return None
+        row = self._adapter.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self) -> List[Dict[str, Any]]:
+        if not self._adapter:
+            return []
+        return [dict(row) for row in self._adapter.fetchall()]
+
+    def fetchmany(self, size: Optional[int] = None) -> List[Dict[str, Any]]:
+        if not self._adapter:
+            return []
+        rows = self._adapter.fetchmany(size)
+        return [dict(row) for row in rows]
+
+    def close(self):
+        if self._adapter:
+            self._adapter.close()
+        self._result = None
+        self._adapter = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self.description = None
+
+
+class BackendConnectionWrapper:
+    """Connection wrapper that returns backend-aware cursors."""
+
+    def __init__(self, db: 'CharactersRAGDB', connection):
+        self._db = db
+        self._connection = connection
+
+    def cursor(self):
+        if self._db.backend_type == BackendType.SQLITE:
+            return self._connection.cursor()
+        return BackendCursorWrapper(self._db, self._connection)
+
+    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+        cursor = self.cursor()
+        return cursor.execute(query, params)
+
+    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+        cursor = self.cursor()
+        return cursor.executemany(query, params_list)
+
+    def executescript(self, script: str):
+        statements = [stmt.strip() for stmt in script.split(';') if stmt.strip()]
+        cursor = self.cursor()
+        for stmt in statements:
+            cursor.execute(stmt)
+        return cursor
+
+    def commit(self):
+        return self._connection.commit()
+
+    def rollback(self):
+        return self._connection.rollback()
+
+    @property
+    def in_transaction(self) -> bool:
+        if self._db.backend_type == BackendType.SQLITE:
+            return self._connection.in_transaction
+        return True
+
+    def __getattr__(self, item):
+        return getattr(self._connection, item)
+
+
+class BackendManagedTransaction:
+    """Context manager leveraging the backend's native transaction handling."""
+
+    def __init__(self, db: 'CharactersRAGDB'):
+        self._db = db
+        self._ctx = None
+        self._conn = None
+
+    def __enter__(self):
+        self._ctx = self._db.backend.transaction()
+        raw_conn = self._ctx.__enter__()
+        self._conn = BackendConnectionWrapper(self._db, raw_conn)
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._ctx is None:
+            return False
+        return self._ctx.__exit__(exc_type, exc_val, exc_tb)
+
+
 # --- Database Class ---
 class CharactersRAGDB:
     """
@@ -137,6 +307,44 @@ class CharactersRAGDB:
     """
     _CURRENT_SCHEMA_VERSION = 7 # Schema v7 adds flashcard reverse flag
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
+
+    _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
+        (
+            "character_cards_fts",
+            "character_cards",
+            ["name", "description", "personality", "scenario", "system_prompt"],
+        ),
+        (
+            "conversations_fts",
+            "conversations",
+            ["title"],
+        ),
+        (
+            "messages_fts",
+            "messages",
+            ["content"],
+        ),
+        (
+            "keywords_fts",
+            "keywords",
+            ["keyword"],
+        ),
+        (
+            "keyword_collections_fts",
+            "keyword_collections",
+            ["name"],
+        ),
+        (
+            "notes_fts",
+            "notes",
+            ["title", "content"],
+        ),
+        (
+            "flashcards_fts",
+            "flashcards",
+            ["front", "back", "notes"],
+        ),
+    ]
 
     _FULL_SCHEMA_SQL_V4 = """
 /*───────────────────────────────────────────────────────────────
@@ -1239,6 +1447,7 @@ UPDATE db_schema_version
         backend: DatabaseBackend | None,
         config: ConfigParser | None,
     ) -> DatabaseBackend:
+        """Select the database backend instance for this content store."""
         if backend is not None:
             return backend
 
@@ -1249,15 +1458,127 @@ UPDATE db_schema_version
             except Exception:
                 parser = None
 
-        resolved = get_content_backend(parser) if parser else None
-        if resolved is not None:
-            return resolved
+        if parser is not None:
+            candidate = get_content_backend(parser)
+            if candidate and candidate.backend_type == BackendType.POSTGRESQL:
+                return candidate
 
         fallback_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
             sqlite_path=self.db_path_str,
         )
         return DatabaseBackendFactory.create_backend(fallback_config)
+
+
+    def _prepare_backend_statement(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params
+        transformed_query = self._transform_query_for_backend(query)
+        converted_query = self._convert_sqlite_placeholders_to_postgres(transformed_query)
+        prepared_params = self._normalise_params(params)
+        return converted_query, prepared_params
+
+    def _prepare_backend_many_statement(
+        self,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict]],
+    ) -> Tuple[str, List[Union[Tuple, Dict]]]:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query, params_list
+        transformed_query = self._transform_query_for_backend(query)
+        converted_query = self._convert_sqlite_placeholders_to_postgres(transformed_query)
+        prepared_params = [self._normalise_params(params) for params in params_list]
+        return converted_query, prepared_params
+
+    def _normalise_params(
+        self,
+        params: Optional[Union[List, Tuple, Dict, Any]],
+    ) -> Optional[Union[Tuple, Dict]]:
+        if params is None:
+            return None
+        if isinstance(params, dict):
+            return params
+        if isinstance(params, tuple):
+            return params
+        if isinstance(params, list):
+            return tuple(params)
+        return (params,)
+
+    def _transform_query_for_backend(self, query: str) -> str:
+        if self.backend_type != BackendType.POSTGRESQL:
+            return query
+        transformed = self._replace_insert_or_ignore(query)
+        transformed = self._replace_collate_nocase(transformed)
+        return transformed
+
+    def _replace_insert_or_ignore(self, query: str) -> str:
+        if 'INSERT OR IGNORE' not in query.upper():
+            return query
+        pattern = re.compile(r'INSERT\s+OR\s+IGNORE\s+INTO', re.IGNORECASE)
+        replaced = pattern.sub('INSERT INTO', query)
+        stripped = replaced.rstrip()
+        suffix = ''
+        if stripped.endswith(';'):
+            stripped = stripped[:-1]
+            suffix = ';'
+        if 'ON CONFLICT' in stripped.upper():
+            return stripped + suffix
+        return f"{stripped} ON CONFLICT DO NOTHING{suffix}"
+
+    def _replace_collate_nocase(self, query: str) -> str:
+        return re.sub(r'COLLATE\s+NOCASE', '', query, flags=re.IGNORECASE)
+
+    def _convert_sqlite_placeholders_to_postgres(self, query: str) -> str:
+        if '?' not in query:
+            return query
+        result: List[str] = []
+        in_single = False
+        in_double = False
+        i = 0
+        length = len(query)
+        while i < length:
+            ch = query[i]
+            if ch == "'" and not in_double:
+                if in_single:
+                    if i + 1 < length and query[i + 1] == "'":
+                        result.append("''")
+                        i += 2
+                        continue
+                    in_single = False
+                    result.append(ch)
+                    i += 1
+                    continue
+                else:
+                    in_single = True
+                    result.append(ch)
+                    i += 1
+                    continue
+            if ch == '"' and not in_single:
+                if in_double:
+                    if i + 1 < length and query[i + 1] == '"':
+                        result.append('""')
+                        i += 2
+                        continue
+                    in_double = False
+                    result.append(ch)
+                    i += 1
+                    continue
+                else:
+                    in_double = True
+                    result.append(ch)
+                    i += 1
+                    continue
+            if ch == '?' and not in_single and not in_double:
+                result.append('%s')
+                i += 1
+                continue
+            result.append(ch)
+            i += 1
+        return ''.join(result)
 
     def _open_new_connection(self):
         try:
@@ -1288,71 +1609,83 @@ UPDATE db_schema_version
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
-            raise NotImplementedError(
-                "PostgreSQL support for CharactersRAGDB operations is still under development."
-            )
+            return
 
     # --- Connection Management ---
-    def _get_thread_connection(self) -> sqlite3.Connection:
+    def _get_thread_connection(self) -> Any:
         """
-        Retrieves or creates a thread-local SQLite connection.
+        Retrieve (or open) the thread-local connection for the configured backend.
 
-        Ensures that each thread has its own independent connection to the database.
-        If an existing connection is closed or unusable, it's reopened.
-        Enables WAL mode for file-based databases and sets PRAGMA foreign_keys=ON.
-        Sets a timeout for database operations.
+        For SQLite we maintain a single `sqlite3.Connection` per thread and ensure it
+        stays usable (re-opening on failure). For PostgreSQL we borrow a pooled
+        connection and cache it per thread until explicitly released.
 
         Returns:
-            A thread-local sqlite3.Connection object.
+            Backend-specific connection handle suitable for use with
+            :class:`BackendConnectionWrapper`.
 
         Raises:
-            CharactersRAGDBError: If connecting to the database fails.
+            CharactersRAGDBError: If acquiring a connection from the backend fails.
         """
-        self._ensure_sqlite_backend()
         conn = getattr(self._local, 'conn', None)
-        pool = self.backend.get_pool()
-        if conn is not None:
-            try:
-                conn.execute("SELECT 1")
-                return conn
-            except (sqlite3.ProgrammingError, sqlite3.OperationalError):
-                logger.warning(
-                    f"Thread-local connection for {self.db_path_str} was closed or became unusable. Reopening."
+
+        if self.backend_type == BackendType.SQLITE:
+            pool = self.backend.get_pool()
+            if conn is not None:
+                try:
+                    conn.execute("SELECT 1")
+                    return conn
+                except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+                    logger.warning(
+                        "Thread-local connection for %s was closed or became unusable. Reopening.",
+                        self.db_path_str,
+                    )
+                    try:
+                        conn.close()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Failed to close database connection: %s", exc)
+                    thread_id = threading.get_ident()
+                    try:
+                        pool._connections[thread_id] = None  # type: ignore[attr-defined]
+                        if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
+                            pool._local.connection = None  # type: ignore[attr-defined]
+                    except AttributeError:
+                        pass
+                    conn = None
+                    self._local.conn = None
+
+            if conn is None:
+                conn = self._open_new_connection()
+                self._local.conn = conn
+                logger.debug(
+                    "Opened/Reopened SQLite connection to %s for thread %s",
+                    self.db_path_str,
+                    threading.get_ident(),
                 )
-                try:
-                    conn.close()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"Failed to close database connection: {exc}")
-                thread_id = threading.get_ident()
-                try:
-                    pool._connections[thread_id] = None  # type: ignore[attr-defined]
-                    if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
-                        pool._local.connection = None  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
-                conn = None
-                self._local.conn = None
+            return conn
+
+        # Non-SQLite backend: reuse connection if still open, otherwise borrow anew.
+        if conn is not None and getattr(conn, "closed", False):
+            self._release_connection(conn)
+            conn = None
+            self._local.conn = None
 
         if conn is None:
             conn = self._open_new_connection()
             self._local.conn = conn
             logger.debug(
-                "Opened/Reopened SQLite connection to %s for thread %s",
-                self.db_path_str,
+                "Acquired backend connection (%s) for thread %s",
+                self.backend_type.value,
                 threading.get_ident(),
             )
         return conn
 
-    def get_connection(self) -> sqlite3.Connection:
-        """
-        Public method to get the current thread's database connection.
-
-        This is a convenience wrapper around `_get_thread_connection`.
-
-        Returns:
-            The active sqlite3.Connection for the current thread.
-        """
-        return self._get_thread_connection()
+    def get_connection(self) -> Any:
+        """Return the active connection wrapper for the current thread."""
+        raw_conn = self._get_thread_connection()
+        if self.backend_type == BackendType.SQLITE:
+            return raw_conn
+        return BackendConnectionWrapper(self, raw_conn)
 
     def close_connection(self):
         """
@@ -1364,45 +1697,65 @@ UPDATE db_schema_version
         If a transaction is active and uncommitted on this connection, it attempts a rollback.
         Clears the connection reference from `threading.local` for the current thread.
         """
-        self._ensure_sqlite_backend()
         conn = getattr(self._local, 'conn', None)
-        if conn is not None:
-            try:
+        if conn is None:
+            return
+
+        try:
+            if self.backend_type == BackendType.SQLITE:
                 if not self.is_memory_db:
-                    # Resolve any pending transaction before checkpointing
                     if conn.in_transaction:
                         try:
                             logger.warning(
-                                f"Connection to {self.db_path_str} is in an uncommitted transaction during close. Attempting rollback.")
-                            conn.rollback()  # Attempt rollback if transaction is open
+                                "Connection to %s is in an uncommitted transaction during close. Attempting rollback.",
+                                self.db_path_str,
+                            )
+                            conn.rollback()
                         except sqlite3.Error as rb_err:
-                            logger.error(f"Rollback attempt during close for {self.db_path_str} failed: {rb_err}")
-                            # Don't proceed to checkpoint if rollback fails and we're still in transaction potentially
-                            # However, conn.close() below should still be attempted.
+                            logger.error(
+                                "Rollback attempt during close for %s failed: %s",
+                                self.db_path_str,
+                                rb_err,
+                            )
 
-                    # Checkpoint WAL only if not in a failed transaction state that prevents it
-                    # and WAL mode is active.
-                    # We assume if conn.in_transaction is false now, any transaction was committed/rolled back.
-                    if not conn.in_transaction:  # Re-check after potential rollback
+                    if not conn.in_transaction:
                         mode_row = conn.execute("PRAGMA journal_mode;").fetchone()
                         if mode_row and mode_row[0].lower() == 'wal':
                             try:
                                 logger.debug(
-                                    f"Attempting WAL checkpoint (TRUNCATE) before closing {self.db_path_str} on thread {threading.get_ident()}.")
+                                    "Attempting WAL checkpoint (TRUNCATE) before closing %s on thread %s.",
+                                    self.db_path_str,
+                                    threading.get_ident(),
+                                )
                                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                                logger.debug(f"WAL checkpoint TRUNCATE executed for {self.db_path_str}.")
+                                logger.debug("WAL checkpoint TRUNCATE executed for %s.", self.db_path_str)
                             except sqlite3.Error as cp_err:
-                                logger.warning(f"WAL checkpoint failed for {self.db_path_str}: {cp_err}")
+                                logger.warning("WAL checkpoint failed for %s: %s", self.db_path_str, cp_err)
+
                 conn.close()
-                logger.debug(f"Closed connection for thread {threading.get_ident()} to {self.db_path_str}.")
-            except sqlite3.Error as e:  # Catches errors from execute, checkpoint, or close
-                logger.warning(
-                    f"Error during SQLite connection close/checkpoint for {self.db_path_str} on thread {threading.get_ident()}: {e}")
-            finally:
-                # This ensures that the reference is cleared from threading.local
-                # even if conn.close() itself raised an exception.
-                if hasattr(self._local, 'conn'):
-                    self._local.conn = None
+                logger.debug(
+                    "Closed SQLite connection for thread %s to %s.",
+                    threading.get_ident(),
+                    self.db_path_str,
+                )
+            else:
+                self.backend.get_pool().return_connection(conn)
+                logger.debug(
+                    "Returned backend connection (%s) for thread %s.",
+                    self.backend_type.value,
+                    threading.get_ident(),
+                )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Error during SQLite connection close/checkpoint for %s on thread %s: %s",
+                self.db_path_str,
+                threading.get_ident(),
+                exc,
+            )
+        finally:
+            if hasattr(self._local, 'conn'):
+                self._local.conn = None
+            if self.backend_type == BackendType.SQLITE:
                 thread_id = threading.get_ident()
                 try:
                     pool = self.backend.get_pool()
@@ -1468,8 +1821,14 @@ UPDATE db_schema_version
             # and should not be closed here to allow continued use of the DB instance.
 
     # --- Query Execution ---
-    def execute_query(self, query: str, params: Optional[Union[tuple, Dict[str, Any]]] = None, *, commit: bool = False,
-                      script: bool = False) -> sqlite3.Cursor:
+    def execute_query(
+        self,
+        query: str,
+        params: Optional[Union[tuple, Dict[str, Any]]] = None,
+        *,
+        commit: bool = False,
+        script: bool = False,
+    ) -> Any:
         """
         Executes a single SQL query or an entire SQL script.
 
@@ -1490,19 +1849,24 @@ UPDATE db_schema_version
             ConflictError: If an SQLite IntegrityError due to a "unique constraint failed" occurs.
             CharactersRAGDBError: For other SQLite errors or general query execution failures.
         """
-        self._ensure_sqlite_backend()
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            #if logger.isEnabledFor(logging.DEBUG):  # Avoid formatting query/params if not debugging
-            logger.debug(f"Executing SQL (script={script}): {query[:300]}... Params: {str(params)[:200]}...")
+            logger.debug(
+                "Executing SQL (script=%s, backend=%s): %s... Params: %s...",
+                script,
+                self.backend_type.value,
+                query[:300],
+                str(params)[:200],
+            )
 
             if script:
-                cursor.executescript(query)
+                cursor = conn.executescript(query)
             else:
-                cursor.execute(query, params or ())
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                cursor = conn.cursor()
+                cursor.execute(prepared_query, prepared_params or ())
 
-            if commit and not conn.in_transaction:  # Only commit if not already in a transaction handled by the context manager
+            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
                 conn.commit()
                 logger.debug("Committed directly by execute_query.")
             return cursor
@@ -1516,8 +1880,25 @@ UPDATE db_schema_version
         except sqlite3.Error as e:
             logger.error(f"Query execution failed: {query[:300]}... Error: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Query execution failed: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(message=f"Database constraint violation: {exc}") from exc
+            logger.error(
+                "Backend query execution failed (%s): %s",
+                self.backend_type.value,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Query execution failed: {exc}") from exc
 
-    def execute_many(self, query: str, params_list: List[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
+    def execute_many(
+        self,
+        query: str,
+        params_list: List[tuple],
+        *,
+        commit: bool = False,
+    ) -> Optional[Any]:
         """
         Executes a parameterized SQL query multiple times with a list of parameter sets.
 
@@ -1535,16 +1916,21 @@ UPDATE db_schema_version
             ConflictError: If an SQLite IntegrityError due to a "unique constraint failed" occurs during batch.
             CharactersRAGDBError: For other SQLite errors or general batch execution failures.
         """
-        self._ensure_sqlite_backend()
         conn = self.get_connection()
         if not isinstance(params_list, list) or not params_list:
             logger.debug("execute_many called with empty or invalid params_list.")
             return None
         try:
+            logger.debug(
+                "Executing Many on backend %s: %s... with %d sets.",
+                self.backend_type.value,
+                query[:150],
+                len(params_list),
+            )
+            prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
             cursor = conn.cursor()
-            logger.debug(f"Executing Many: {query[:150]}... with {len(params_list)} sets.")
-            cursor.executemany(query, params_list)
-            if commit and not conn.in_transaction:  # Only commit if not already in a transaction
+            cursor.executemany(prepared_query, prepared_params_list)
+            if self.backend_type == BackendType.SQLITE and commit and not conn.in_transaction:
                 conn.commit()
                 logger.debug("Committed Many directly by execute_many.")
             return cursor
@@ -1556,23 +1942,24 @@ UPDATE db_schema_version
         except sqlite3.Error as e:
             logger.error(f"Execute Many failed: {query[:150]}... Error: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Execute Many failed: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(message=f"Database constraint violation during batch: {exc}") from exc
+            logger.error(
+                "Backend execute_many failed (%s): %s",
+                self.backend_type.value,
+                exc,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Execute Many failed: {exc}") from exc
 
     # --- Transaction Context ---
-    def transaction(self) -> 'TransactionContextManager':
-        """
-        Returns a context manager for database transactions.
-
-        Usage:
-            with db.transaction() as conn:
-                # Database operations using conn.execute(...)
-                # Commit is handled automatically on successful exit,
-                # rollback on exception.
-
-        Returns:
-            TransactionContextManager: An object to be used in a `with` statement.
-        """
-        self._ensure_sqlite_backend()
-        return TransactionContextManager(self)
+    def transaction(self) -> Union['TransactionContextManager', BackendManagedTransaction]:
+        """Return a context manager for database transactions."""
+        if self.backend_type == BackendType.SQLITE:
+            return TransactionContextManager(self)
+        return BackendManagedTransaction(self)
 
     # --- Schema Initialization and Migration ---
     def _get_db_version(self, conn: sqlite3.Connection) -> int:
@@ -1588,7 +1975,7 @@ UPDATE db_schema_version
             for `self._SCHEMA_NAME` does not exist (indicating a fresh database).
 
         Raises:
-            SchemaError: If there's an unexpected SQL error while querying the version,
+            SchemaError: If there is an unexpected SQL error while querying the version,
                          other than "no such table".
         """
         try:
@@ -1601,6 +1988,19 @@ UPDATE db_schema_version
                 return 0
             logger.error(f"Could not determine database schema version for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise SchemaError(f"Could not determine schema version for '{self._SCHEMA_NAME}': {e}") from e
+        except BackendDatabaseError as e:
+            if "does not exist" in str(e).lower():
+                return 0
+            logger.error(
+                "Could not determine database schema version for '%s' (backend %s): %s",
+                self._SCHEMA_NAME,
+                self.backend_type.value,
+                e,
+                exc_info=True,
+            )
+            raise SchemaError(
+                f"Could not determine schema version for '{self._SCHEMA_NAME}': {e}"
+            ) from e
 
     def _apply_schema_v4(self, conn: sqlite3.Connection):
         """
@@ -1629,7 +2029,39 @@ UPDATE db_schema_version
                 raise SchemaError(
                     f"[{self._SCHEMA_NAME} V4] Schema version update check failed. Expected 4, got: {final_version}")
             logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied and version confirmed for DB: {self.db_path_str}.")
-        except sqlite3.Error as e:
+        except sqlite3.OperationalError as e:
+            # Compatibility repair path: if an older pre-versioned DB already has a
+            # sync_log table without the 'entity_id' column, CREATE INDEX on
+            # (entity, entity_id) will fail. Attempt to add the column, then rerun.
+            if "no such column: entity_id" in str(e).lower():
+                try:
+                    # Detect existing sync_log definition
+                    try:
+                        rows = conn.execute("PRAGMA table_info(sync_log)").fetchall()
+                    except sqlite3.Error:
+                        rows = []
+                    col_names = {r[1] if not isinstance(r, dict) else r.get('name') for r in rows} if rows else set()
+                    if rows and ('entity_id' not in col_names):
+                        logger.warning(
+                            f"[{self._SCHEMA_NAME} V4] Detected legacy sync_log without 'entity_id'. Adding column for compatibility.")
+                        # Add column without NOT NULL to avoid rewrite; acceptable for legacy fix
+                        conn.execute("ALTER TABLE sync_log ADD COLUMN entity_id TEXT")
+                    # Re-run the full schema to finish indexes/triggers idempotently
+                    conn.executescript(self._FULL_SCHEMA_SQL_V4)
+                    final_version = self._get_db_version(conn)
+                    if final_version != 4:
+                        raise SchemaError(
+                            f"[{self._SCHEMA_NAME} V4] Post-repair version check failed. Expected 4, got: {final_version}")
+                    logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied after legacy sync_log repair for DB: {self.db_path_str}.")
+                    return
+                except Exception as repair_err:  # noqa: BLE001
+                    logger.error(
+                        f"[{self._SCHEMA_NAME} V4] Repair attempt after 'entity_id' error failed: {repair_err}",
+                        exc_info=True,
+                    )
+                    raise SchemaError(
+                        f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
+            # Any other sqlite operational error: re-raise as SchemaError
             logger.error(f"[{self._SCHEMA_NAME} V4] Schema application failed: {e}", exc_info=True)
             raise SchemaError(f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
@@ -1805,7 +2237,239 @@ UPDATE db_schema_version
             raise CharactersRAGDBError(f"Unexpected error applying schema for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema_postgres(self):
-        raise NotImplementedError("PostgreSQL schema initialization is not yet implemented.")
+        """Bootstrap or migrate the ChaCha schema on PostgreSQL."""
+
+        backend = self.backend
+        target_version = self._CURRENT_SCHEMA_VERSION
+
+        with backend.transaction() as conn:
+            schema_exists = backend.table_exists('db_schema_version', connection=conn)
+
+            if not schema_exists:
+                self._apply_schema_v4_postgres(conn)
+                current_version = 4
+            else:
+                current_version = self._get_schema_version_postgres(conn)
+
+            if current_version < 5:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V4_TO_V5, conn, expected_version=5)
+                current_version = 5
+
+            if current_version < 6:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V5_TO_V6, conn, expected_version=6)
+                current_version = 6
+
+            if current_version < 7:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V6_TO_V7, conn, expected_version=7)
+                current_version = 7
+
+            if current_version > target_version:
+                raise SchemaError(
+                    f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
+                )
+
+            if current_version < target_version:
+                logger.warning(
+                    "ChaChaNotes PostgreSQL schema is at version %s but code expects %s. Pending migrations will "
+                    "be addressed in a future update.",
+                    current_version,
+                    target_version,
+                )
+
+            try:
+                self._ensure_postgres_fts(conn)
+            except BackendDatabaseError as exc:
+                raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
+
+    def _ensure_postgres_fts(self, conn) -> None:
+        """Ensure PostgreSQL full-text search structures exist for ChaCha entities."""
+
+        backend = self.backend
+        for fts_table, source_table, columns in self._FTS_CONFIG:
+            backend.create_fts_table(
+                table_name=fts_table,
+                source_table=source_table,
+                columns=columns,
+                connection=conn,
+            )
+
+    def rebuild_full_text_indexes(self) -> None:
+        """Rebuild FTS indexes for the active backend."""
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            try:
+                for fts_table, source_table, columns in self._FTS_CONFIG:
+                    self.backend.create_fts_table(
+                        table_name=fts_table,
+                        source_table=source_table,
+                        columns=columns,
+                        connection=None,
+                    )
+            except BackendDatabaseError as exc:
+                raise CharactersRAGDBError(f"Failed to rebuild PostgreSQL FTS structures: {exc}") from exc
+            return
+
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                with self.transaction() as conn:
+                    for fts_table, _, _ in self._FTS_CONFIG:
+                        conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
+            except sqlite3.Error as exc:
+                raise CharactersRAGDBError(f"Failed to rebuild SQLite FTS structures: {exc}") from exc
+            return
+
+        raise NotImplementedError(f"FTS rebuild not supported for backend {self.backend_type.value}")
+
+    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
+        """Convert SQLite schema SQL into individual Postgres-compatible statements."""
+
+        statements: List[str] = []
+        buffer: List[str] = []
+        in_block_comment = False
+        skip_until_semicolon = False
+        skip_trigger_block = False
+
+        for raw_line in sql.splitlines():
+            stripped = raw_line.strip()
+
+            if not stripped:
+                continue
+
+            if in_block_comment:
+                if '*/' in stripped:
+                    in_block_comment = False
+                continue
+
+            if stripped.startswith('/*'):
+                if '*/' not in stripped:
+                    in_block_comment = True
+                continue
+
+            if stripped.startswith('--'):
+                continue
+
+            upper = stripped.upper()
+
+            if upper.startswith('PRAGMA'):
+                continue
+
+            if skip_until_semicolon:
+                if stripped.endswith(';'):
+                    skip_until_semicolon = False
+                continue
+
+            if skip_trigger_block:
+                if upper.endswith('END;'):
+                    skip_trigger_block = False
+                continue
+
+            if 'CREATE VIRTUAL TABLE' in upper:
+                if not stripped.endswith(';'):
+                    skip_until_semicolon = True
+                continue
+
+            if upper.startswith('DROP TRIGGER'):
+                if not stripped.endswith(';'):
+                    skip_until_semicolon = True
+                continue
+
+            if upper.startswith('CREATE TRIGGER'):
+                skip_trigger_block = True
+                continue
+
+            buffer.append(raw_line)
+
+            if stripped.endswith(';'):
+                statement = '\n'.join(buffer).strip()
+                buffer = []
+                transformed = self._transform_sqlite_schema_statement_for_postgres(statement)
+                if transformed:
+                    statements.append(transformed)
+
+        return statements
+
+    def _transform_sqlite_schema_statement_for_postgres(self, statement: str) -> Optional[str]:
+        """Apply token-level rewrites so the statement can run on Postgres."""
+
+        stmt = statement.strip()
+        if not stmt:
+            return None
+
+        stmt = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'BIGSERIAL PRIMARY KEY', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'INTEGER\s+PRIMARY\s+KEY', 'BIGINT PRIMARY KEY', stmt, flags=re.IGNORECASE)
+
+        def _replace_integer_references(match: re.Match[str]) -> str:
+            suffix = match.group(1) or ''
+            return f"BIGINT{suffix} REFERENCES"
+
+        stmt = re.sub(
+            r'INTEGER(\s+NOT\s+NULL)?\s+REFERENCES',
+            _replace_integer_references,
+            stmt,
+            flags=re.IGNORECASE,
+        )
+
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+0', 'BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+1', 'BOOLEAN NOT NULL DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+0', 'BOOLEAN DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+1', 'BOOLEAN DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+
+        stmt = re.sub(r'DATETIME', 'TIMESTAMPTZ', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BLOB', 'BYTEA', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'COLLATE\s+NOCASE', '', stmt, flags=re.IGNORECASE)
+
+        stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*0', r'WHERE \1 = FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*1', r'WHERE \1 = TRUE', stmt, flags=re.IGNORECASE)
+
+        stmt = self._replace_insert_or_ignore(stmt)
+
+        if not stmt.endswith(';'):
+            stmt = f"{stmt};"
+        return stmt
+
+    def _apply_schema_v4_postgres(self, conn) -> None:
+        statements = self._convert_sqlite_schema_to_postgres_statements(self._FULL_SCHEMA_SQL_V4)
+        for stmt in statements:
+            self.backend.execute(stmt, connection=conn)
+        self._set_schema_version_postgres(conn, 4)
+        self._sync_postgres_sequences(conn)
+
+    def _apply_postgres_migration_script(self, script: str, conn, *, expected_version: int) -> None:
+        statements = self._convert_sqlite_schema_to_postgres_statements(script)
+        for stmt in statements:
+            self.backend.execute(stmt, connection=conn)
+        self._set_schema_version_postgres(conn, expected_version)
+
+    def _get_schema_version_postgres(self, conn) -> int:
+        result = self.backend.execute(
+            "SELECT version FROM db_schema_version WHERE schema_name = %s LIMIT 1",
+            (self._SCHEMA_NAME,),
+            connection=conn,
+        )
+        value = result.scalar if result else None
+        return int(value) if value is not None else 0
+
+    def _set_schema_version_postgres(self, conn, version: int) -> None:
+        self.backend.execute(
+            """
+            INSERT INTO db_schema_version(schema_name, version)
+            VALUES (%s, %s)
+            ON CONFLICT (schema_name) DO UPDATE SET version = EXCLUDED.version
+            """,
+            (self._SCHEMA_NAME, version),
+            connection=conn,
+        )
+
+    def _sync_postgres_sequences(self, conn) -> None:
+        """Ensure PostgreSQL sequences are aligned after seeding default rows."""
+
+        try:
+            self.backend.execute(
+                "SELECT setval(pg_get_serial_sequence('character_cards', 'id'), COALESCE(MAX(id), 0), true) FROM character_cards",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:  # noqa: BLE001
+            logger.warning("Failed to synchronize character_cards sequence: %s", exc)
 
     # --- Internal Helpers ---
     def _get_current_utc_timestamp_iso(self) -> str:
@@ -1879,12 +2543,17 @@ UPDATE db_schema_version
             data = list(data)  # Convert set to list before dumping
         return json.dumps(data)
 
+    def _is_unique_violation(self, error: Exception) -> bool:
+        """Return True if the provided backend error represents a unique constraint violation."""
+        message = str(error).lower()
+        return "unique constraint" in message or "duplicate key" in message
+
     def _deserialize_row_fields(self, row: sqlite3.Row, json_fields: List[str]) -> Optional[Dict[str, Any]]:
         """
         Converts a sqlite3.Row object to a dictionary, deserializing specified JSON fields.
 
         If a field listed in `json_fields` contains a string, it attempts to
-        parse it as JSON. If parsing fails, the field's value is set to None
+        parse it as JSON. If parsing fails, the field value is set to None
         and a warning is logged.
 
         Args:
@@ -1919,18 +2588,18 @@ UPDATE db_schema_version
         Serializes Python list, dict, or set to a JSON string, or passes through an existing string.
 
         - If data is None, returns None.
-        - If data is a list, dict, or set (converted to list), it's serialized to JSON.
+        - If data is a list, dict, or set (converted to list), it is serialized to JSON.
         - If data is already a string, it attempts to validate it as JSON.
           - If valid JSON, the string is returned as is.
           - If not valid JSON, the string is returned as is (logged with DEBUG level).
-          This behavior assumes that if a string is passed, it's either pre-formatted JSON
+          This behavior assumes that if a string is passed, it is either pre-formatted JSON
           or a plain string intended for a text field that happens to be JSON-serializable.
 
         Args:
             data: The Python object (list, dict, set, str) to process, or None.
 
         Returns:
-            A JSON string representation of the data, the original string if it's
+            A JSON string representation of the data, the original string if it is
             valid JSON or a plain string, or None if input `data` was None.
         """
         if data is None:
@@ -1960,7 +2629,7 @@ UPDATE db_schema_version
         are handled automatically by SQL triggers.
 
         Args:
-            card_data: A dictionary containing the character card's data.
+            card_data: A dictionary containing the character card data.
                        Required fields: 'name'.
                        Optional fields include: 'description', 'personality', 'scenario', 'image',
                        'post_history_instructions', 'first_message', 'message_example',
@@ -1994,13 +2663,15 @@ UPDATE db_schema_version
         tags_json = get_json_field_as_string(card_data.get('tags'))
         extensions_json = get_json_field_as_string(card_data.get('extensions'))
 
-        query = """
-                INSERT INTO character_cards (name, description, personality, scenario, image, post_history_instructions, \
-                                             first_message, message_example, creator_notes, system_prompt, \
-                                             alternate_greetings, tags, creator, character_version, extensions, \
-                                             created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0) \
-                """ # created_at added
+        base_query = """
+            INSERT INTO character_cards (
+                name, description, personality, scenario, image, post_history_instructions,
+                first_message, message_example, creator_notes, system_prompt,
+                alternate_greetings, tags, creator, character_version, extensions,
+                created_at, last_modified, client_id, version, deleted
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+        """
         params = (
             card_data['name'], card_data.get('description'), card_data.get('personality'),
             card_data.get('scenario'), card_data.get('image'), card_data.get('post_history_instructions'),
@@ -2011,8 +2682,16 @@ UPDATE db_schema_version
         )
         try:
             with self.transaction() as conn:
-                cursor = conn.execute(query, params)  # execute_query not needed due to conn from context
-                char_id = cursor.lastrowid
+                cursor = conn.cursor()
+                if self.backend_type == BackendType.POSTGRESQL:
+                    query = base_query + " RETURNING id"
+                    prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                    cursor.execute(prepared_query, prepared_params)
+                    row = cursor.fetchone()
+                    char_id = row['id'] if row else None
+                else:
+                    cursor.execute(base_query, params)
+                    char_id = cursor.lastrowid
                 logger.info(f"Added character card '{card_data['name']}' with ID: {char_id}.")
                 return char_id
         except sqlite3.IntegrityError as e:
@@ -2021,6 +2700,19 @@ UPDATE db_schema_version
                 raise ConflictError(f"Character card with name '{card_data['name']}' already exists.",
                                     entity="character_cards", entity_id=card_data['name']) from e
             raise CharactersRAGDBError(f"Database integrity error adding character card: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                logger.warning(
+                    "Character card with name '%s' already exists (backend %s).",
+                    card_data['name'],
+                    self.backend_type.value,
+                )
+                raise ConflictError(
+                    f"Character card with name '{card_data['name']}' already exists.",
+                    entity="character_cards",
+                    entity_id=card_data['name'],
+                ) from e
+            raise CharactersRAGDBError(f"Database integrity error adding character card: {e}") from e
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding character card '{card_data.get('name')}': {e}")
             raise
@@ -2028,17 +2720,17 @@ UPDATE db_schema_version
 
     def get_character_card_by_id(self, character_id: int) -> Optional[Dict[str, Any]]:
         """
-        Retrieves a specific character card by its ID.
+        Retrieve a specific character card by its ID.
 
-        Only non-deleted cards are returned. JSON fields (`alternate_greetings`,
-        `tags`, `extensions` as defined in `_CHARACTER_CARD_JSON_FIELDS`)
+        Only non-deleted cards are returned. JSON fields (alternate_greetings,
+        tags, extensions as defined in _CHARACTER_CARD_JSON_FIELDS)
         are deserialized from strings to Python objects.
 
         Args:
             character_id: The integer ID of the character card.
 
         Returns:
-            A dictionary containing the character card's data if found and not deleted,
+            A dictionary containing the character card data if found and not deleted,
             otherwise None.
 
         Raises:
@@ -2055,17 +2747,17 @@ UPDATE db_schema_version
 
     def get_character_card_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieves a specific character card by its unique name.
+        Retrieve a specific character card by its unique name.
 
         Only non-deleted cards are returned. JSON fields (see `_CHARACTER_CARD_JSON_FIELDS`)
         are deserialized. Name comparison is case-sensitive as per default SQLite behavior
-        (schema's `name` column does not specify `COLLATE NOCASE`).
+        because the schema column "name" does not specify `COLLATE NOCASE`.
 
         Args:
             name: The unique name of the character card.
 
         Returns:
-            A dictionary containing the character card's data if found and not deleted,
+            A dictionary containing character card data if found and not deleted,
             otherwise None.
 
         Raises:
@@ -2108,42 +2800,7 @@ UPDATE db_schema_version
             raise
 
     def update_character_card(self, character_id: int, card_data: Dict[str, Any], expected_version: int) -> bool | None:
-        """
-        Updates an existing character card using optimistic locking.
-
-        The update will only succeed if `expected_version` matches the card's current
-        version in the database. Upon successful update, the card's `version`
-        is incremented, `last_modified` is updated to the current UTC time, and
-        `client_id` is set to the DB instance's `client_id`.
-
-        If `card_data` is empty, the method logs this and returns True immediately
-        without performing any database operations or version checks.
-
-        Updatable fields: "name", "description", "personality", "scenario", "image",
-        "post_history_instructions", "first_message", "message_example",
-        "creator_notes", "system_prompt", "creator", "character_version",
-        and JSON fields: "alternate_greetings", "tags", "extensions".
-        Other fields in `card_data` (like 'id', 'created_at') are ignored.
-
-        FTS updates (`character_cards_fts`) and `sync_log` entries for updates
-        are handled automatically by SQL triggers.
-
-        Args:
-            character_id: The ID of the character card to update.
-            card_data: A dictionary containing the fields to update.
-                       If empty, the method returns True without making changes.
-            expected_version: The version number the client expects the record to have.
-
-        Returns:
-            True if the update was successful.
-
-        Raises:
-            ConflictError: If the character card is not found, is soft-deleted,
-                           or if `expected_version` does not match the current database version
-                           (indicating a concurrent modification). Also raised if an update to
-                           'name' violates its unique constraint.
-            CharactersRAGDBError: For other database-related errors.
-        """
+        """Update character card with optimistic locking."""
         logger.debug(
             f"Starting update_character_card for ID {character_id}, expected_version {expected_version} (SINGLE UPDATE STRATEGY)")
 
@@ -2260,6 +2917,27 @@ UPDATE db_schema_version
         except sqlite3.DatabaseError as e:
             logger.critical(f"DATABASE ERROR during update_character_card (SINGLE UPDATE STRATEGY) for ID {character_id}: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Database error during single update: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                updated_name = card_data.get("name", "[name not in update_data]")
+                logger.warning(
+                    "Update for character card ID %s failed on backend %s: name '%s' already exists.",
+                    character_id,
+                    self.backend_type.value,
+                    updated_name,
+                )
+                raise ConflictError(
+                    f"Cannot update character card ID {character_id}: name '{updated_name}' already exists.",
+                    entity="character_cards",
+                    entity_id=updated_name,
+                ) from e
+            logger.critical(
+                "Backend error during update_character_card (SINGLE UPDATE STRATEGY) for ID %s: %s",
+                character_id,
+                e,
+                exc_info=True,
+            )
+            raise CharactersRAGDBError(f"Database error during single update: {e}") from e
         except ConflictError:  # Re-raise ConflictErrors from _get_current_db_version or manual checks
             logger.warning(f"ConflictError during update_character_card for ID {character_id}.",
                            exc_info=False)  # exc_info=True if needed
@@ -2355,6 +3033,14 @@ UPDATE db_schema_version
                 return True
         except ConflictError:
             raise
+        except BackendDatabaseError as e:
+            logger.error(
+                "Backend error soft-deleting character card ID %s (expected v%s): %s",
+                character_id,
+                expected_version,
+                e,
+            )
+            raise CharactersRAGDBError(f"Backend error during soft delete: {e}") from e
         except CharactersRAGDBError as e:  # Catches sqlite3.Error from conn.execute
             logger.error(
                 f"Database error soft-deleting character card ID {character_id} (expected v{expected_version}): {e}",
@@ -2381,6 +3067,36 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors during the search.
         """
+        if not search_term.strip():
+            logger.warning("Empty character card search term provided; returning no results.")
+            return []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("FTS normalization produced empty tsquery for input '%s'", search_term)
+                return []
+
+            query = """
+                SELECT cc.*, ts_rank(cc.character_cards_fts_tsv, to_tsquery('english', ?)) AS rank
+                FROM character_cards cc
+                WHERE cc.deleted = FALSE
+                  AND cc.character_cards_fts_tsv @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, cc.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                rows = cursor.fetchall()
+                return [
+                    self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
+                    for row in rows
+                    if row
+                ]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for character cards term '%s': %s", search_term, exc)
+                raise
+
         safe_search_term = f'"{search_term}"'
         query = """
                 SELECT cc.*
@@ -2405,6 +3121,9 @@ UPDATE db_schema_version
         Returns:
             True if JSON functions are available, False otherwise.
         """
+        if self.backend_type != BackendType.SQLITE:
+            return False
+
         try:
             cursor = self.execute_query("SELECT json('{}') as test")
             cursor.fetchone()
@@ -2933,6 +3652,36 @@ UPDATE db_schema_version
         if not title_query.strip():
             logger.warning("Empty title_query provided for conversation search. Returning empty list.")
             return []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
+            if not tsquery:
+                logger.debug("Conversation title query normalized to empty tsquery for input '%s'", title_query)
+                return []
+
+            base_query = [
+                "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS rank",
+                "FROM conversations c",
+                "WHERE c.deleted = FALSE",
+                "AND c.conversations_fts_tsv @@ to_tsquery('english', ?)",
+            ]
+            params_list: List[Any] = [tsquery, tsquery]
+
+            if character_id is not None:
+                base_query.append("AND c.character_id = ?")
+                params_list.append(character_id)
+
+            base_query.append("ORDER BY rank DESC, c.last_modified DESC")
+            base_query.append("LIMIT ?")
+            params_list.append(limit)
+
+            try:
+                cursor = self.execute_query("\n".join(base_query), tuple(params_list))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for conversations term '%s': %s", title_query, exc)
+                raise
+
         safe_search_term = f'"{title_query}"'
         base_query = """
                      SELECT c.*
@@ -2941,7 +3690,7 @@ UPDATE db_schema_version
                      WHERE fts.conversations_fts MATCH ? \
                        AND c.deleted = 0 \
                      """
-        params_list: List[Any] = [title_query]
+        params_list = [title_query]
         if character_id is not None:
             base_query += " AND c.character_id = ?"
             params_list.append(character_id)
@@ -3303,6 +4052,35 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database search errors.
         """
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(content_query, 'postgresql')
+            if not tsquery:
+                logger.debug("Message content query normalized to empty tsquery for input '%s'", content_query)
+                return []
+
+            base_query = [
+                "SELECT m.*, ts_rank(m.messages_fts_tsv, to_tsquery('english', ?)) AS rank",
+                "FROM messages m",
+                "WHERE m.deleted = FALSE",
+                "AND m.messages_fts_tsv @@ to_tsquery('english', ?)",
+            ]
+            params_list: List[Any] = [tsquery, tsquery]
+
+            if conversation_id:
+                base_query.append("AND m.conversation_id = ?")
+                params_list.append(conversation_id)
+
+            base_query.append("ORDER BY rank DESC, m.last_modified DESC")
+            base_query.append("LIMIT ?")
+            params_list.append(limit)
+
+            try:
+                cursor = self.execute_query("\n".join(base_query), tuple(params_list))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for messages term '%s': %s", content_query, exc)
+                raise
+
         safe_search_term = f'"{content_query}"'
         base_query = """
                      SELECT m.*
@@ -3311,7 +4089,7 @@ UPDATE db_schema_version
                      WHERE fts.messages_fts MATCH ? \
                        AND m.deleted = 0 \
                      """
-        params_list: List[Any] = [content_query]
+        params_list = [content_query]
         if conversation_id:
             base_query += " AND m.conversation_id = ?"
             params_list.append(conversation_id)
@@ -3772,6 +4550,32 @@ UPDATE db_schema_version
         # or FTS is configured with content_rowid='id'.
         # For tables like 'notes' where 'id' is TEXT UUID and FTS uses 'rowid', the join is different.
         # This helper as written is best for keywords and keyword_collections.
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug(
+                    "Generic FTS query normalized to empty tsquery for table '%s' with input '%s'",
+                    main_table_name,
+                    search_term,
+                )
+                return []
+
+            fts_column = f"{fts_table_name}_tsv"
+            query = f"""
+                SELECT main.*, ts_rank(main.{fts_column}, to_tsquery('english', ?)) AS rank
+                FROM {main_table_name} main
+                WHERE main.deleted = FALSE
+                  AND main.{fts_column} @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, main.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for table '%s': %s", main_table_name, exc)
+                raise
+
         query = f"""
             SELECT main.*
             FROM {fts_table_name} fts
@@ -4180,6 +4984,27 @@ UPDATE db_schema_version
         """Searches notes_fts (title and content). Corrected JOIN condition."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
+                return []
+
+            query = """
+                SELECT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
+                FROM notes n
+                WHERE n.deleted = FALSE
+                  AND n.notes_fts_tsv @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, n.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for notes term '%s': %s", search_term, exc)
+                raise
+
         safe_search_term = f'"{search_term}"'
 
         query = """
@@ -4191,7 +5016,6 @@ UPDATE db_schema_version
                 ORDER BY rank LIMIT ?
                 """
         try:
-            # Pass the quoted string as the parameter
             cursor = self.execute_query(query, (safe_search_term, limit))
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
@@ -4482,7 +5306,10 @@ UPDATE db_schema_version
         where_clauses = ["1=1"]
         params: List[Any] = []
         if not include_deleted:
-            where_clauses.append("f.deleted = 0")
+            if self.backend_type == BackendType.POSTGRESQL:
+                where_clauses.append("f.deleted = FALSE")
+            else:
+                where_clauses.append("f.deleted = 0")
         if deck_id is not None:
             where_clauses.append("f.deck_id = ?")
             params.append(deck_id)
@@ -4506,8 +5333,16 @@ UPDATE db_schema_version
         # FTS filter
         fts_filter = ""
         if q:
-            fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
-            params.append(q)
+            if self.backend_type == BackendType.POSTGRESQL:
+                tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
+                if not tsquery:
+                    logger.debug("Flashcard query normalized to empty tsquery for input '%s'", q)
+                    return []
+                fts_filter = "AND f.flashcards_fts_tsv @@ to_tsquery('english', ?)"
+                params.append(tsquery)
+            else:
+                fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
+                params.append(q)
 
         # order by
         order_sql = "ORDER BY f.due_at, f.created_at DESC" if order_by == 'due_at' else "ORDER BY f.created_at DESC"

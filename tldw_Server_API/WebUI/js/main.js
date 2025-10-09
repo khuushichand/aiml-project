@@ -334,6 +334,20 @@ class WebUI {
             });
         }
 
+        // Multi-user API key preference toggle
+        const preferToggle = document.getElementById('preferApiKeyInMultiUser');
+        if (preferToggle) {
+            try {
+                preferToggle.checked = !!apiClient.preferApiKeyInMultiUser;
+                preferToggle.addEventListener('change', (e) => {
+                    apiClient.setPreferApiKeyInMultiUser(e.target.checked);
+                    if (typeof Toast !== 'undefined' && Toast) {
+                        Toast.success('Auth preference updated');
+                    }
+                });
+            } catch (e) { /* ignore */ }
+        }
+
         // Add theme toggle handler
         const themeToggle = document.getElementById('theme-toggle');
         if (themeToggle) {

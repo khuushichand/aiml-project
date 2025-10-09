@@ -10,6 +10,8 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
+import gzip
+import bz2
 from typing import List, Dict, Any, Iterator, Optional, Union
 from datetime import datetime, timezone  # Added for default ingestion_date
 from urllib.parse import quote
@@ -271,12 +273,31 @@ def get_safe_checkpoint_path(wiki_name: str, checkpoint_dir: Optional[Path] = No
     return checkpoint_path
 
 
+def _open_dump_file_text(safe_path: Path):
+    """Open a MediaWiki dump file as text, supporting .xml, .xml.bz2, .xml.gz.
+
+    Returns a file-like object opened in text mode with utf-8 encoding.
+    """
+    lower = str(safe_path).lower()
+    if lower.endswith('.xml.bz2') or lower.endswith('.bz2'):
+        return bz2.open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
+    if lower.endswith('.xml.gz') or lower.endswith('.gz'):
+        return gzip.open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
+    # Default to plain XML
+    return open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
+
+
 def parse_mediawiki_dump(file_path: str, namespaces: List[int] = None, skip_redirects: bool = False) -> Iterator[
     Dict[str, Any]]:
     # Validate file path
-    safe_path = validate_file_path(file_path)
+    # Restrict access to the directory containing the file (e.g., API temp dir)
+    try:
+        allowed_dir = Path(file_path).resolve().parent
+    except Exception:
+        allowed_dir = None
+    safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
     # Use context manager for file operations to prevent resource leaks
-    with open(safe_path, encoding='utf-8') as f:
+    with _open_dump_file_text(safe_path) as f:
         dump = mwxml.Dump.from_file(f)
     for page in dump.pages:
         if skip_redirects and page.redirect:
@@ -287,14 +308,25 @@ def parse_mediawiki_dump(file_path: str, namespaces: List[int] = None, skip_redi
         for revision in page:  # mwxml revisions are an iterator
             wikicode = mwparserfromhell.parse(revision.text or "")  # Ensure text is not None
             plain_text = wikicode.strip_code()
-            # Ensure timestamp is timezone-aware or consistently formatted if naive
-            timestamp_obj = revision.timestamp
-            if timestamp_obj:
-                # If naive, assume UTC or make it configurable
-                # For simplicity, if naive, we'll assume it's UTC. Best practice is for mwxml to provide tz-aware.
-                if timestamp_obj.tzinfo is None:
-                    timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
-            else:  # Fallback timestamp if revision has none
+            # Normalize timestamp to a timezone-aware datetime when possible
+            _ts = getattr(revision, "timestamp", None)
+            if isinstance(_ts, datetime):
+                if _ts.tzinfo is None:
+                    timestamp_obj = _ts.replace(tzinfo=timezone.utc)
+                else:
+                    timestamp_obj = _ts
+            elif _ts is not None:
+                # Attempt to parse from string representation (e.g., 'YYYY-MM-DDTHH:MM:SSZ')
+                try:
+                    ts_str = str(_ts)
+                    ts_str = ts_str.replace('Z', '+00:00')
+                    timestamp_obj = datetime.fromisoformat(ts_str)
+                    if timestamp_obj.tzinfo is None:
+                        timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
+                except Exception:
+                    timestamp_obj = datetime.now(timezone.utc)
+            else:
+                # Fallback timestamp if revision has none
                 timestamp_obj = datetime.now(timezone.utc)
 
             yield {
@@ -590,7 +622,12 @@ def import_mediawiki_dump(
     try:
         # Sanitize wiki_name and validate file_path
         safe_wiki_name = sanitize_wiki_name(wiki_name)
-        safe_file_path = validate_file_path(file_path)
+        # Restrict validation to the directory containing the uploaded file
+        try:
+            _allowed_dir = Path(file_path).resolve().parent
+        except Exception:
+            _allowed_dir = None
+        safe_file_path = validate_file_path(file_path, allowed_dir=_allowed_dir)
         
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
@@ -685,9 +722,13 @@ def count_pages(file_path: str, namespaces: List[int] = None, skip_redirects: bo
     count = 0
     try:
         # Validate file path
-        safe_path = validate_file_path(file_path)
+        try:
+            allowed_dir = Path(file_path).resolve().parent
+        except Exception:
+            allowed_dir = None
+        safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
         # Use context manager for file operations to prevent resource leaks
-        with open(safe_path, encoding='utf-8') as f:
+        with _open_dump_file_text(safe_path) as f:
             dump = mwxml.Dump.from_file(f)
         for page in dump.pages:
             if skip_redirects and page.redirect:

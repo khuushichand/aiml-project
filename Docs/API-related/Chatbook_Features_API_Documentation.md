@@ -1,7 +1,13 @@
 # Chatbook Features API Documentation
 
 ## Overview
-This document provides comprehensive API documentation for the Chatbook features migrated from the single-user TUI application to the multi-user API architecture. These features include Chat Dictionary, World Book Manager, Document Generator, and Chatbook Import/Export functionality.
+This document describes the current, implemented API surface for Chatbook‑adjacent features in the multi‑user API: Chat Dictionaries, World Books (lorebooks), Document Generator, and Chatbooks (import/export). It reflects the code as of v0.1.0 in `tldw_Server_API` and corrects any previously published mismatches.
+
+Notes on conventions used here:
+- Base API prefix is `/api/v1`.
+- Authentication uses either `X-API-KEY` (single-user) or `Authorization: Bearer <JWT>` (multi-user).
+- Pagination uses `limit` and `offset` where applicable and responses include a `total` field in the body (no page/per_page headers).
+- Rate limits are applied per-endpoint via SlowAPI decorators and may differ by route.
 
 ## Table of Contents
 1. [Chat Dictionary API](#chat-dictionary-api)
@@ -13,54 +19,49 @@ This document provides comprehensive API documentation for the Chatbook features
 
 ## Chat Dictionary API
 
-The Chat Dictionary API provides pattern-based text replacement functionality for conversations, supporting both literal and regex patterns with probability-based application.
+Pattern-based text replacement for conversations. Supports literal and regex patterns with probability and optional grouping.
 
 ### Base URL
 `/api/v1/chat/dictionaries`
 
-### Authentication
-Use the same authentication as the Chat API:
-- Single-user: `X-API-KEY: <key>`
-- Multi-user: `Authorization: Bearer <JWT>`
-
 ### Endpoints
 
 #### 1. Create Dictionary
-**POST** `/api/v1/chat/dictionaries`
+POST `/api/v1/chat/dictionaries`
 
 Creates a new chat dictionary for the authenticated user.
 
-**Request Body:**
+Request body:
 ```json
 {
   "name": "Fantasy Terms",
-  "description": "Convert modern terms to fantasy equivalents",
-  "is_active": true
+  "description": "Convert modern terms to fantasy equivalents"
 }
 ```
 
-**Response:**
+Response body (ChatDictionaryResponse):
 ```json
 {
   "id": 1,
   "name": "Fantasy Terms",
   "description": "Convert modern terms to fantasy equivalents",
   "is_active": true,
+  "version": 1,
   "entry_count": 0,
-  "created_at": "2025-01-01T00:00:00Z",
-  "updated_at": "2025-01-01T00:00:00Z"
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-01T00:00:00Z"
 }
 ```
 
 #### 2. List Dictionaries
-**GET** `/api/v1/chat/dictionaries`
+GET `/api/v1/chat/dictionaries`
 
 Lists all dictionaries for the authenticated user.
 
-**Query Parameters:**
+Query parameters:
 - `include_inactive` (boolean): Include inactive dictionaries (default: false)
 
-**Response:**
+Response body:
 ```json
 {
   "dictionaries": [
@@ -69,9 +70,10 @@ Lists all dictionaries for the authenticated user.
       "name": "Fantasy Terms",
       "description": "Convert modern terms to fantasy equivalents",
       "is_active": true,
+      "version": 1,
       "entry_count": 25,
-      "created_at": "2025-01-01T00:00:00Z",
-      "updated_at": "2025-01-01T00:00:00Z"
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-01T00:00:00Z"
     }
   ],
   "total": 1,
@@ -81,11 +83,9 @@ Lists all dictionaries for the authenticated user.
 ```
 
 #### 3. Get Dictionary (with entries)
-**GET** `/api/v1/chat/dictionaries/{dictionary_id}`
+GET `/api/v1/chat/dictionaries/{dictionary_id}`
 
-Retrieves a specific dictionary with all its entries.
-
-**Response:**
+Response body:
 ```json
 {
   "id": 1,
@@ -111,16 +111,14 @@ Retrieves a specific dictionary with all its entries.
 ```
 
 #### 4. Add Entry
-**POST** `/api/v1/chat/dictionaries/{dictionary_id}/entries`
-
-Adds a new entry to a dictionary.
+POST `/api/v1/chat/dictionaries/{dictionary_id}/entries`
 
 Notes:
-- `probability` is expressed as a float between 0.0 and 1.0 (e.g., 0.5 for 50%).
-- `type` is either `literal` or `regex` (regex also supports `/pattern/flags` style via `pattern`).
+- `probability` is a float in [0.0, 1.0].
+- `type` is `literal` or `regex`.
 - `max_replacements` of 0 means “unlimited”.
 
-**Request Body:**
+Request body:
 ```json
 {
   "pattern": "phone",
@@ -133,7 +131,7 @@ Notes:
 }
 ```
 
-**Response:**
+Response body:
 ```json
 {
   "id": 2,
@@ -153,11 +151,9 @@ Notes:
 ```
 
 #### 5. Update Entry
-**PUT** `/api/v1/chat/dictionaries/entries/{entry_id}`
+PUT `/api/v1/chat/dictionaries/entries/{entry_id}`
 
-Updates an existing dictionary entry (all fields optional):
-
-**Request Body:**
+Request body (all fields optional):
 ```json
 {
   "pattern": "telephone",
@@ -172,16 +168,12 @@ Updates an existing dictionary entry (all fields optional):
 ```
 
 #### 6. Delete Entry
-**DELETE** `/api/v1/chat/dictionaries/entries/{entry_id}`
-
-Deletes a dictionary entry.
+DELETE `/api/v1/chat/dictionaries/entries/{entry_id}`
 
 #### 7. Process Text
-**POST** `/api/v1/chat/dictionaries/process`
+POST `/api/v1/chat/dictionaries/process`
 
-Processes text through active dictionaries.
-
-**Request Body:**
+Request body:
 ```json
 {
   "text": "I'll call you on my phone from the car",
@@ -191,7 +183,7 @@ Processes text through active dictionaries.
 }
 ```
 
-**Response:**
+Response body:
 ```json
 {
   "original_text": "I'll call you on my phone from the car",
@@ -205,14 +197,12 @@ Processes text through active dictionaries.
 ```
 
 #### 8. List Entries
-**GET** `/api/v1/chat/dictionaries/{dictionary_id}/entries`
+GET `/api/v1/chat/dictionaries/{dictionary_id}/entries`
 
-List entries for a dictionary (optionally filter by `group`).
-
-**Query Parameters:**
+Query parameters:
 - `group` (string, optional)
 
-**Response:**
+Response body:
 ```json
 {
   "entries": [
@@ -238,12 +228,10 @@ List entries for a dictionary (optionally filter by `group`).
 }
 ```
 
-#### 9. Import Dictionary
-**POST** `/api/v1/chat/dictionaries/import`
+#### 9. Import Dictionary (Markdown)
+POST `/api/v1/chat/dictionaries/import`
 
-Imports a dictionary from markdown format.
-
-**Request Body (JSON):**
+Request body:
 ```json
 {
   "name": "Fantasy Terms",
@@ -252,12 +240,26 @@ Imports a dictionary from markdown format.
 }
 ```
 
-#### 10. Export Dictionary
-**GET** `/api/v1/chat/dictionaries/{dictionary_id}/export`
+#### 10. Import Dictionary (JSON)
+POST `/api/v1/chat/dictionaries/import/json`
 
-Exports a dictionary to markdown format. Response contains markdown in `content`.
+Request body:
+```json
+{
+  "data": {
+    "name": "Fantasy Terms",
+    "entries": [
+      {"pattern": "car", "replacement": "carriage", "type": "literal"}
+    ]
+  },
+  "activate": true
+}
+```
 
-**Response:**
+#### 11. Export Dictionary (Markdown)
+GET `/api/v1/chat/dictionaries/{dictionary_id}/export`
+
+Response body:
 ```json
 {
   "name": "Fantasy Terms",
@@ -267,37 +269,52 @@ Exports a dictionary to markdown format. Response contains markdown in `content`
 }
 ```
 
-#### 11. Update Dictionary
-**PUT** `/api/v1/chat/dictionaries/{dictionary_id}`
+#### 12. Export Dictionary (JSON)
+GET `/api/v1/chat/dictionaries/{dictionary_id}/export/json`
+
+Response body:
+```json
+{
+  "name": "Fantasy Terms",
+  "description": "Convert modern terms to fantasy equivalents",
+  "entries": [
+    {"pattern": "car", "replacement": "carriage", "type": "literal", "probability": 1.0}
+  ]
+}
+```
+
+#### 13. Update Dictionary
+PUT `/api/v1/chat/dictionaries/{dictionary_id}`
 
 Update dictionary metadata (`name`, `description`, `is_active`).
 
-#### 12. Delete Dictionary
-**DELETE** `/api/v1/chat/dictionaries/{dictionary_id}`
+#### 14. Delete Dictionary
+DELETE `/api/v1/chat/dictionaries/{dictionary_id}`
 
-Deletes a dictionary and all its entries.
+#### 15. Dictionary Statistics
+GET `/api/v1/chat/dictionaries/{dictionary_id}/statistics`
+
+Aggregate statistics for a dictionary (counts by type, groups, average probability, usage if available).
 
 ---
 
-Planned additions (not yet implemented): Clone dictionary, toggle active status shortcut, bulk add/update entries, search entries across dictionaries, usage statistics.
+Planned additions (not yet implemented): Clone dictionary, toggle active status, bulk add/update entries, search entries across dictionaries.
 
 ---
 
 ## World Book Manager API
 
-The World Book Manager API provides contextual lore injection for character conversations, supporting keyword-based entry matching and character-specific attachments.
+Contextual lore injection for character conversations. Supports keyword-based entry matching and character-specific attachments.
 
 ### Base URL
-`/api/v1/worldbooks`
+`/api/v1/characters/world-books`
 
 ### Endpoints
 
 #### 1. Create World Book
-**POST** `/api/v1/worldbooks/create`
+POST `/api/v1/characters/world-books`
 
-Creates a new world book.
-
-**Request Body:**
+Request body:
 ```json
 {
   "name": "Fantasy Campaign",
@@ -309,24 +326,30 @@ Creates a new world book.
 }
 ```
 
-**Response:**
+Response body:
 ```json
 {
-  "success": true,
-  "world_book_id": 1,
-  "message": "World book created successfully"
+  "id": 1,
+  "name": "Fantasy Campaign",
+  "description": "D&D campaign setting",
+  "scan_depth": 3,
+  "token_budget": 1000,
+  "recursive_scanning": true,
+  "enabled": true,
+  "version": 1,
+  "entry_count": 0,
+  "created_at": "2024-01-01T00:00:00Z",
+  "last_modified": "2024-01-01T00:00:00Z"
 }
 ```
 
 #### 2. List World Books
-**GET** `/api/v1/worldbooks/list`
+GET `/api/v1/characters/world-books`
 
-Lists all world books for the user.
-
-**Query Parameters:**
+Query parameters:
 - `include_disabled` (boolean): Include disabled world books
 
-**Response:**
+Response body:
 ```json
 {
   "world_books": [
@@ -338,16 +361,17 @@ Lists all world books for the user.
       "enabled": true,
       "created_at": "2024-01-01T00:00:00Z"
     }
-  ]
+  ],
+  "total": 1,
+  "enabled_count": 1,
+  "disabled_count": 0
 }
 ```
 
 #### 3. Get World Book
-**GET** `/api/v1/worldbooks/{world_book_id}`
+GET `/api/v1/characters/world-books/{world_book_id}`
 
-Retrieves a world book with all entries.
-
-**Response:**
+Response body:
 ```json
 {
   "id": 1,
@@ -355,7 +379,7 @@ Retrieves a world book with all entries.
   "entries": [
     {
       "id": 1,
-      "keywords": "dragon,wyrm",
+      "keywords": ["dragon", "wyrm"],
       "content": "Dragons are ancient magical beings",
       "priority": 100,
       "enabled": true
@@ -365,11 +389,9 @@ Retrieves a world book with all entries.
 ```
 
 #### 4. Add Entry
-**POST** `/api/v1/worldbooks/{world_book_id}/entries`
+POST `/api/v1/characters/world-books/{world_book_id}/entries`
 
-Adds an entry to a world book.
-
-**Request Body:**
+Request body:
 ```json
 {
   "keywords": ["magic", "wizard", "spell"],
@@ -380,44 +402,33 @@ Adds an entry to a world book.
 ```
 
 #### 5. Update Entry
-**PUT** `/api/v1/worldbooks/entries/{entry_id}`
-
-Updates a world book entry.
+PUT `/api/v1/characters/world-books/entries/{entry_id}`
 
 #### 6. Delete Entry
-**DELETE** `/api/v1/worldbooks/entries/{entry_id}`
-
-Deletes a world book entry.
+DELETE `/api/v1/characters/world-books/entries/{entry_id}`
 
 #### 7. Attach to Character
-**POST** `/api/v1/worldbooks/{world_book_id}/attach`
+POST `/api/v1/characters/{character_id}/world-books`
 
-Attaches a world book to a character.
-
-**Request Body:**
+Request body:
 ```json
 {
-  "character_id": 1,
-  "is_primary": true
+  "world_book_id": 1,
+  "enabled": true,
+  "priority": 0
 }
 ```
 
 #### 8. Detach from Character
-**DELETE** `/api/v1/worldbooks/{world_book_id}/detach/{character_id}`
-
-Detaches a world book from a character.
+DELETE `/api/v1/characters/{character_id}/world-books/{world_book_id}`
 
 #### 9. Get Character World Books
-**GET** `/api/v1/characters/{character_id}/worldbooks`
-
-Gets all world books attached to a character.
+GET `/api/v1/characters/{character_id}/world-books`
 
 #### 10. Process Context
-**POST** `/api/v1/worldbooks/process`
+POST `/api/v1/characters/world-books/process`
 
-Processes text to inject relevant world book entries.
-
-**Request Body:**
+Request body:
 ```json
 {
   "text": "Tell me about dragons and magic",
@@ -426,228 +437,198 @@ Processes text to inject relevant world book entries.
 }
 ```
 
-**Response:**
+Response body:
 ```json
 {
-  "processed_context": "Tell me about dragons and magic\n\n[World Info: Dragons are ancient magical beings...]\n[World Info: Magic in this world comes from ley lines...]",
-  "entries_applied": 2,
-  "token_budget_exceeded": false
+  "injected_content": "[World Info: Dragons are ancient magical beings...]\n[World Info: Magic in this world comes from ley lines...]",
+  "entries_matched": 2,
+  "tokens_used": 200,
+  "books_used": 1,
+  "entry_ids": [1, 2]
 }
 ```
 
 #### 11. Search Entries
-**GET** `/api/v1/worldbooks/entries/search`
-
-Searches for entries across world books.
-
-**Query Parameters:**
-- `query` (string): Search term
-- `world_book_id` (integer, optional): Limit to specific world book
+Not implemented. (Planned)
 
 #### 12. Import World Book
-**POST** `/api/v1/worldbooks/import`
+POST `/api/v1/characters/world-books/import`
 
-Imports a world book from JSON.
-
-**Request Body:**
+Request body:
 ```json
 {
-  "name": "Imported World",
-  "description": "Imported lore",
+  "world_book": {"name": "Imported World", "description": "Imported lore"},
   "entries": [
-    {"keywords": "test", "content": "Test content", "priority": 100}
-  ]
+    {"keywords": ["test"], "content": "Test content", "priority": 100}
+  ],
+  "merge_on_conflict": false
 }
 ```
 
 #### 13. Export World Book
-**GET** `/api/v1/worldbooks/{world_book_id}/export`
-
-Exports a world book to JSON.
+GET `/api/v1/characters/world-books/{world_book_id}/export`
 
 #### 14. Clone World Book
-**POST** `/api/v1/worldbooks/{world_book_id}/clone`
-
-Creates a copy of a world book.
+Not implemented. (Planned)
 
 #### 15. Delete World Book
-**DELETE** `/api/v1/worldbooks/{world_book_id}`
-
-Deletes a world book and all its entries.
+DELETE `/api/v1/characters/world-books/{world_book_id}`
 
 #### 16. Bulk Update Entries
-**PUT** `/api/v1/worldbooks/{world_book_id}/entries/bulk`
+POST `/api/v1/characters/world-books/entries/bulk`
 
-Updates multiple entries at once.
-
-**Request Body:**
+Request body:
 ```json
 {
   "entry_ids": [1, 2, 3],
-  "enabled": false
+  "operation": "disable"
 }
 ```
 
 #### 17. Get Statistics
-**GET** `/api/v1/worldbooks/statistics`
-
-Gets world book usage statistics.
+GET `/api/v1/characters/world-books/{world_book_id}/statistics`
 
 ---
 
 ## Document Generator API
 
-The Document Generator API creates structured documents from conversations, supporting multiple document types and async job management.
+Creates structured documents from conversations. Supports multiple document types and async job management.
 
 ### Base URL
-`/api/v1/documents`
+`/api/v1/chat/documents`
 
 ### Document Types
-- `timeline`: Chronological event summary
-- `study_guide`: Educational material with key concepts
-- `briefing`: Executive summary
-- `summary`: General conversation summary
-- `qa_pairs`: Question and answer pairs
-- `meeting_notes`: Structured meeting notes
+- `timeline`
+- `study_guide`
+- `briefing`
+- `summary`
+- `q_and_a`
+- `meeting_notes`
 
 ### Endpoints
 
 #### 1. Generate Document
-**POST** `/api/v1/documents/generate`
+POST `/api/v1/chat/documents/generate`
 
-Generates a document from a conversation.
-
-**Request Body:**
+Request body (GenerateDocumentRequest):
 ```json
 {
-  "conversation_id": "conv123",
+  "conversation_id": 123,
   "document_type": "timeline",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "api_key": "...",
+  "specific_message": null,
   "custom_prompt": "Focus on technical decisions",
-  "async": false
+  "stream": false,
+  "async_generation": false
 }
 ```
 
-**Response (Synchronous):**
+Response (synchronous):
 ```json
 {
-  "success": true,
-  "document_id": "doc123",
+  "document_id": 42,
+  "conversation_id": 123,
   "document_type": "timeline",
   "title": "Conversation Timeline",
-  "content": "Timeline:\n1. Initial discussion...\n2. Decision made...",
-  "metadata": {
-    "word_count": 250,
-    "generation_time": 2.5
-  }
+  "content": "Timeline...",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "generation_time_ms": 2500,
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
-**Response (Asynchronous):**
+Response (asynchronous):
 ```json
 {
-  "success": true,
-  "job_id": "job456",
+  "job_id": "job_456",
   "status": "pending",
-  "message": "Document generation job created"
+  "conversation_id": 123,
+  "document_type": "timeline",
+  "message": "Document generation job created",
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
 #### 2. Get Document
-**GET** `/api/v1/documents/{document_id}`
-
-Retrieves a generated document.
+GET `/api/v1/chat/documents/{document_id}`
 
 #### 3. List Documents
-**GET** `/api/v1/documents/list`
+GET `/api/v1/chat/documents`
 
-Lists documents for a conversation or user.
-
-**Query Parameters:**
-- `conversation_id` (string, optional): Filter by conversation
-- `document_type` (string, optional): Filter by type
-- `limit` (integer): Maximum results (default: 50)
+Query parameters:
+- `conversation_id` (integer, optional)
+- `document_type` (enum, optional)
+- `limit` (integer, default 50)
 
 #### 4. Delete Document
-**DELETE** `/api/v1/documents/{document_id}`
-
-Deletes a generated document.
+DELETE `/api/v1/chat/documents/{document_id}`
 
 #### 5. Bulk Generate
-**POST** `/api/v1/documents/bulk`
+POST `/api/v1/chat/documents/bulk`
 
-Generates multiple document types at once.
-
-**Request Body:**
+Request body (BulkGenerateRequest):
 ```json
 {
-  "conversation_id": "conv123",
-  "document_types": ["timeline", "summary", "qa_pairs"]
+  "conversation_ids": [123, 456],
+  "document_types": ["timeline", "summary", "q_and_a"],
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "api_key": "...",
+  "async_generation": true
 }
 ```
 
 #### 6. Get Job Status
-**GET** `/api/v1/documents/jobs/{job_id}`
+GET `/api/v1/chat/documents/jobs/{job_id}`
 
-Gets the status of an async generation job.
-
-**Response:**
+Response body (JobStatusResponse):
 ```json
 {
-  "job_id": "job456",
+  "job_id": "job_456",
   "status": "completed",
-  "document_id": "doc789",
+  "conversation_id": 123,
+  "document_type": "timeline",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "result_content": "...",
   "created_at": "2024-01-01T00:00:00Z",
-  "completed_at": "2024-01-01T00:00:05Z"
+  "started_at": "2024-01-01T00:00:01Z",
+  "completed_at": "2024-01-01T00:00:05Z",
+  "progress_percentage": 100
 }
 ```
 
 #### 7. Cancel Job
-**DELETE** `/api/v1/documents/jobs/{job_id}`
-
-Cancels a pending generation job.
+DELETE `/api/v1/chat/documents/jobs/{job_id}`
 
 #### 8. Save Prompt Config
-**POST** `/api/v1/documents/prompts/config`
+POST `/api/v1/chat/documents/prompts`
 
-Saves custom prompt configurations.
-
-**Request Body:**
+Request body:
 ```json
 {
-  "timeline": "Create a detailed timeline with timestamps",
-  "summary": "Provide a concise executive summary"
+  "document_type": "timeline",
+  "system_prompt": "You are a helpful document generator...",
+  "user_prompt": "Write a timeline...",
+  "temperature": 0.7,
+  "max_tokens": 2000
 }
 ```
 
 #### 9. Get Prompt Config
-**GET** `/api/v1/documents/prompts/config`
-
-Gets saved prompt configurations.
+GET `/api/v1/chat/documents/prompts/{document_type}`
 
 #### 10. Get Statistics
-**GET** `/api/v1/documents/statistics`
-
-Gets document generation statistics.
-
-**Response:**
-```json
-{
-  "total_documents": 150,
-  "documents_by_type": {
-    "timeline": 40,
-    "summary": 60,
-    "qa_pairs": 50
-  },
-  "total_jobs": 200,
-  "success_rate": 0.95
-}
-```
+GET `/api/v1/chat/documents/statistics`
 
 ---
 
 ## Chatbooks Import/Export API
 
-The Chatbooks API provides functionality to export and import collections of chat-related content, with conflict resolution and job management.
+Export/import collections of chat-related content with job management and secure downloads.
 
 ### Base URL
 `/api/v1/chatbooks`
@@ -655,105 +636,100 @@ The Chatbooks API provides functionality to export and import collections of cha
 ### Endpoints
 
 #### 1. Export Chatbook
-**POST** `/api/v1/chatbooks/export`
+POST `/api/v1/chatbooks/export`
 
-Exports selected content to a chatbook archive.
-
-**Request Body:**
+Request body (CreateChatbookRequest):
 ```json
 {
   "name": "My Chatbook Export",
   "description": "Backup of my conversations",
-  "content_types": ["conversations", "characters", "world_books", "dictionaries", "notes", "prompts"],
-  "filters": {
-    "date_from": "2024-01-01",
-    "date_to": "2024-12-31",
-    "tags": ["important"]
+  "content_selections": {
+    "conversation": ["conv123", "conv456"],
+    "note": ["note789"],
+    "character": ["char001"],
+    "world_book": [1],
+    "dictionary": [2],
+    "generated_document": [42]
   },
-  "async": true
+  "author": "Jane Doe",
+  "include_media": false,
+  "media_quality": "compressed",
+  "include_embeddings": false,
+  "include_generated_content": true,
+  "tags": ["backup"],
+  "categories": ["personal"],
+  "async_mode": true
 }
 ```
 
-**Response:**
+Response body (async mode):
 ```json
 {
   "success": true,
-  "job_id": "export_job_123",
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
   "status": "pending",
   "message": "Export job created successfully"
 }
 ```
 
-#### 2. Preview Export
-**POST** `/api/v1/chatbooks/preview`
+#### 2. Preview Chatbook (Upload)
+POST `/api/v1/chatbooks/preview`
 
-Previews what would be exported without creating the archive.
+Preview an uploaded chatbook file (no import).
 
-**Request Body:**
+Request (multipart/form-data):
+- `file`: ZIP archive
+
+Response body (manifest summary):
 ```json
 {
-  "content_types": ["conversations", "notes"]
-}
-```
-
-**Response:**
-```json
-{
-  "conversations": 25,
-  "notes": 10,
-  "estimated_size": "15.2 MB"
+  "manifest": {
+    "version": "1.0",
+    "name": "My Chatbook Export",
+    "total_conversations": 10,
+    "total_notes": 5,
+    "total_world_books": 2,
+    "total_dictionaries": 1,
+    "total_documents": 3,
+    "include_media": false
+  }
 }
 ```
 
 #### 3. Get Export Job Status
-**GET** `/api/v1/chatbooks/export/jobs/{job_id}`
+GET `/api/v1/chatbooks/export/jobs/{job_id}`
 
-Gets the status of an export job.
-
-**Response:**
+Response body (ExportJobResponse):
 ```json
 {
-  "job_id": "export_job_123",
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
   "status": "completed",
-  "file_path": "/exports/my_chatbook_20240101.chatbook",
-  "download_url": "/api/v1/chatbooks/download/export_job_123",
-  "content_summary": {
-    "conversations": 25,
-    "characters": 5,
-    "world_books": 2,
-    "dictionaries": 3,
-    "notes": 10,
-    "prompts": 15
-  },
-  "file_size": "15.2 MB",
+  "chatbook_name": "My Chatbook Export",
+  "download_url": "/api/v1/chatbooks/download/0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
+  "file_size_bytes": 15900000,
   "created_at": "2024-01-01T00:00:00Z",
   "completed_at": "2024-01-01T00:00:30Z"
 }
 ```
 
 #### 4. Download Export
-**GET** `/api/v1/chatbooks/download/{job_id}`
+GET `/api/v1/chatbooks/download/{job_id}`
 
-Downloads the exported chatbook file.
-
-**Response:**
-Binary file download with appropriate headers:
-```
-Content-Type: application/zip
-Content-Disposition: attachment; filename="my_chatbook_20240101.chatbook"
-```
+Returns a ZIP file with secure headers.
 
 #### 5. Import Chatbook
-**POST** `/api/v1/chatbooks/import`
+POST `/api/v1/chatbooks/import`
 
-Imports a chatbook archive.
+Request (multipart/form-data):
+- `file`: The chatbook archive file (ZIP)
+- Additional fields (ImportChatbookRequest via form fields):
+  - `conflict_resolution`: one of `skip`, `overwrite`, `rename`, `merge`
+  - `prefix_imported`: boolean
+  - `import_media`: boolean
+  - `import_embeddings`: boolean
+  - `async_mode`: boolean
 
-**Request Body (multipart/form-data):**
-- `file`: The chatbook archive file
-- `conflict_strategy`: How to handle conflicts ("skip", "replace", "rename")
-- `async`: Whether to process asynchronously (boolean)
-
-**Response:**
+Response body (async mode):
 ```json
 {
   "success": true,
@@ -764,168 +740,74 @@ Imports a chatbook archive.
 ```
 
 #### 6. Get Import Job Status
-**GET** `/api/v1/chatbooks/import/jobs/{job_id}`
+GET `/api/v1/chatbooks/import/jobs/{job_id}`
 
-Gets the status of an import job.
-
-**Response:**
+Response body (ImportJobResponse):
 ```json
 {
   "job_id": "import_job_456",
   "status": "completed",
   "items_imported": 55,
   "conflicts_found": 5,
-  "conflicts_resolved": {
-    "skipped": 2,
-    "replaced": 2,
-    "renamed": 1
-  },
+  "successful_items": 50,
+  "failed_items": 3,
+  "skipped_items": 2,
+  "conflicts": [],
   "created_at": "2024-01-01T00:00:00Z",
   "completed_at": "2024-01-01T00:01:00Z"
 }
 ```
 
 #### 7. Validate Chatbook
-**POST** `/api/v1/chatbooks/validate`
-
-Validates a chatbook file without importing.
-
-**Request Body (multipart/form-data):**
-- `file`: The chatbook archive file
-
-**Response:**
-```json
-{
-  "valid": true,
-  "version": "1.0.0",
-  "exported_at": "2024-01-01T00:00:00Z",
-  "user_id": "original_user",
-  "content_types": ["conversations", "notes"],
-  "content_summary": {
-    "conversations": 10,
-    "notes": 5
-  }
-}
-```
+No dedicated `/validate` endpoint. Use `/chatbooks/preview` (upload) to inspect a manifest without importing.
 
 #### 8. List Export Jobs
-**GET** `/api/v1/chatbooks/export/jobs`
+GET `/api/v1/chatbooks/export/jobs`
 
-Lists export jobs for the user.
-
-**Query Parameters:**
-- `status` (string): Filter by status ("pending", "processing", "completed", "failed", "cancelled")
-- `limit` (integer): Maximum results
+Query parameters:
+- `limit` (integer, default 100)
+- `offset` (integer, default 0)
 
 #### 9. List Import Jobs
-**GET** `/api/v1/chatbooks/import/jobs`
-
-Lists import jobs for the user.
+GET `/api/v1/chatbooks/import/jobs`
 
 #### 10. Cancel Export Job
-**DELETE** `/api/v1/chatbooks/export/jobs/{job_id}`
-
-Cancels a pending export job.
+DELETE `/api/v1/chatbooks/export/jobs/{job_id}`
 
 #### 11. Cancel Import Job
-**DELETE** `/api/v1/chatbooks/import/jobs/{job_id}`
-
-Cancels a pending import job.
+DELETE `/api/v1/chatbooks/import/jobs/{job_id}`
 
 #### 12. Clean Old Exports
-**POST** `/api/v1/chatbooks/cleanup`
+POST `/api/v1/chatbooks/cleanup`
 
-Removes expired export files.
+#### 13. Service Health
+GET `/api/v1/chatbooks/health`
 
-#### 13. Get Statistics
-> Statistics endpoint is planned but not implemented in the current version.
+Lightweight health indicator for the Chatbooks subsystem.
 
 ---
 
 ## Error Responses
 
-All APIs use consistent error response format:
-
-```json
-{
-  "success": false,
-  "error": "Detailed error message",
-  "error_code": "SPECIFIC_ERROR_CODE",
-  "details": {
-    // Additional error context
-  }
-}
-```
-
-### Common Error Codes
-- `AUTH_REQUIRED`: Authentication token missing
-- `AUTH_INVALID`: Invalid authentication token
-- `NOT_FOUND`: Resource not found
-- `VALIDATION_ERROR`: Request validation failed
-- `CONFLICT`: Resource conflict (e.g., duplicate)
-- `QUOTA_EXCEEDED`: User quota exceeded
-- `RATE_LIMITED`: Too many requests
-- `INTERNAL_ERROR`: Server error
+Endpoints return standard FastAPI error responses with meaningful HTTP status codes and a `detail` message. Some success responses include a `success` boolean for convenience (e.g., Chatbooks export/import). Domain‑specific errors may include additional fields (see response schemas).
 
 ## Rate Limiting
 
-All endpoints are subject to rate limiting:
-- **Default limit**: 100 requests per minute per user
-- **Bulk operations**: 10 requests per minute per user
-- **Export/Import**: 5 requests per minute per user
+Endpoint‑specific limits are enforced with SlowAPI where applied:
+- Chatbooks `POST /export`: 5/minute
+- Chatbooks `POST /import`: 5/minute
+- Chatbooks `POST /preview`: 10/minute
+- Chatbooks `GET /download/{job_id}`: 20/minute
 
-Rate limit headers are included in responses:
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1704067200
-```
+A global limiter may also be active depending on environment. When rate limits are hit, a 429 is returned.
 
 ## Pagination
 
-List endpoints support pagination:
-
-**Query Parameters:**
-- `page` (integer): Page number (default: 1)
-- `per_page` (integer): Items per page (default: 20, max: 100)
-
-**Response Headers:**
-```
-X-Total-Count: 250
-X-Page: 1
-X-Per-Page: 20
-Link: </api/v1/resource?page=2>; rel="next"
-```
+List endpoints use `limit` and `offset` query parameters and include a `total` count in the response body.
 
 ## Webhooks
 
-The system supports webhooks for async job completion:
-
-**Webhook Payload:**
-```json
-{
-  "event": "export.completed",
-  "job_id": "export_job_123",
-  "user_id": "user_456",
-  "timestamp": "2024-01-01T00:00:30Z",
-  "data": {
-    "file_path": "/exports/my_chatbook_20240101.chatbook",
-    "content_summary": {
-      "conversations": 25
-    }
-  }
-}
-```
-
-**Supported Events:**
-- `export.started`
-- `export.completed`
-- `export.failed`
-- `import.started`
-- `import.completed`
-- `import.failed`
-- `document.generated`
-- `document.generation_failed`
+Webhook notifications for Chatbooks are planned but not yet implemented. See the Chatbook Developer Guide for design notes.
 
 ## SDK Examples
 
@@ -940,16 +822,16 @@ class ChatbookAPI:
     
     def create_dictionary(self, name, description):
         response = requests.post(
-            f"{self.base_url}/api/v1/chat/dictionaries/create",
+            f"{self.base_url}/api/v1/chat/dictionaries",
             json={"name": name, "description": description},
             headers=self.headers
         )
         return response.json()
     
-    def process_text(self, text, token_budget=1000):
+    def process_text(self, text, token_budget=1000, dictionary_id=None):
         response = requests.post(
             f"{self.base_url}/api/v1/chat/dictionaries/process",
-            json={"text": text, "token_budget": token_budget},
+            json={"text": text, "token_budget": token_budget, "dictionary_id": dictionary_id},
             headers=self.headers
         )
         return response.json()
@@ -966,15 +848,11 @@ class ChatbookAPI {
     };
   }
   
-  async exportChatbook(name, contentTypes) {
+  async exportChatbook(req) {
     const response = await fetch(`${this.baseUrl}/api/v1/chatbooks/export`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify({
-        name: name,
-        content_types: contentTypes,
-        async: true
-      })
+      body: JSON.stringify(req)
     });
     return response.json();
   }
@@ -993,15 +871,8 @@ class ChatbookAPI {
 
 For users migrating from the TUI application:
 
-1. **Authentication**: All API calls now require authentication tokens
-2. **User Isolation**: Content is automatically isolated per user
-3. **Async Operations**: Large operations support async processing with job management
-4. **Conflict Resolution**: Import operations provide multiple strategies for handling conflicts
-5. **Rate Limiting**: API calls are subject to rate limits for stability
-
-## Support
-
-For API support and questions:
-- Documentation: [https://docs.tldw-server.com/api](https://docs.tldw-server.com/api)
-- Issues: [https://github.com/tldw-server/issues](https://github.com/tldw-server/issues)
-- Discord: [https://discord.gg/tldw-server](https://discord.gg/tldw-server)
+1. Authentication is required for all API calls.
+2. User content is isolated per‑user (per‑user DBs, per‑user export/import paths).
+3. Large operations support async jobs with status polling and secure download URLs.
+4. Import conflict resolution supports `skip`, `overwrite`, `rename`, and `merge`.
+5. Endpoint‑level rate limiting is enforced; plan for 429 handling.

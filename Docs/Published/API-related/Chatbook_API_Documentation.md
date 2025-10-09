@@ -40,13 +40,18 @@ A Chatbook is a portable archive format (`.chatbook` file) that contains:
 
 ## Authentication
 
-All endpoints require JWT authentication via Bearer token:
+Supported modes (server decides based on `AUTH_MODE`):
+- Single-user mode: `X-API-KEY: <key>`
+- Multi-user mode: `Authorization: Bearer <JWT>`
 
+Examples:
 ```http
+# Single-user
+X-API-KEY: <your-api-key>
+
+# Multi-user
 Authorization: Bearer <your-jwt-token>
 ```
-
-Note: Chatbooks use multi-user JWT auth even when the server supports single-user API key mode for other modules.
 
 ## API Endpoints
 
@@ -82,18 +87,21 @@ Note: Chatbooks use multi-user JWT auth even when the server supports single-use
 {
   "success": true,
   "message": "Chatbook created successfully",
-  "download_url": "/api/v1/chatbooks/download/<id-or-token>"
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
+  "download_url": "/api/v1/chatbooks/download/0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77"
 }
 ```
 
-Implementation note: In sync mode, the server returns a `download_url` without exposing internal file paths. For robust automation, prefer async mode and then poll job status to obtain the canonical download URL by `job_id`.
+Implementation notes:
+- Sync mode persists a completed export job and returns its `job_id` plus a `download_url` that uses this UUID.
+- For robust automation, prefer async mode and then poll job status to obtain the canonical `download_url` by `job_id`.
 
 **Response (Asynchronous)**:
 ```json
 {
   "success": true,
   "message": "Export job started",
-  "job_id": "cb_export_20240115_abc123"
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77"
 }
 ```
 
@@ -103,11 +111,11 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 
 **Description**: Import content from an uploaded chatbook file.
 
-**Request**: Multipart form data
-- `file`: The chatbook file (required)
-- `options`: JSON string with import options (optional)
+**Request**: Multipart form data + query parameters
+- `file` (form field): The chatbook file (required)
+- Additional import options are provided as query parameters (see Options JSON for fields). For example: `?conflict_resolution=skip&import_media=true`
 
-**Options JSON**:
+Supported options (as query parameters or structured by clients that map to query params):
 ```json
 {
   "content_selections": {
@@ -157,14 +165,7 @@ Implementation note: In sync mode, the server returns a `download_url` without e
     "total_notes": 25,
     "total_characters": 3,
     "total_size_bytes": 5242880,
-    "content_items": [
-      {
-        "id": "conv_123",
-        "type": "conversation",
-        "title": "AI Discussion",
-        "created_at": "2024-01-10T09:00:00Z"
-      }
-    ]
+    "content_items": []  // Preview omits detailed items for performance
   }
 }
 ```
@@ -184,14 +185,13 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 **Query Parameters**:
 - `limit`: Maximum results (1-1000, default: 100)
 - `offset`: Skip results (default: 0)
-- `status`: Filter by status (pending, in_progress, completed, failed, cancelled)
 
 **Response**:
 ```json
 {
   "jobs": [
     {
-      "job_id": "cb_export_20240115_abc123",
+      "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
       "status": "completed",
       "chatbook_name": "Weekly Backup",
       "created_at": "2024-01-15T10:00:00Z",
@@ -200,7 +200,7 @@ Implementation note: In sync mode, the server returns a `download_url` without e
       "total_items": 50,
       "processed_items": 50,
       "file_size_bytes": 10485760,
-      "download_url": "/api/v1/chatbooks/download/cb_export_20240115_abc123",
+  "download_url": "/api/v1/chatbooks/download/0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
       "expires_at": "2024-02-14T10:05:00Z"
     }
   ],
@@ -218,7 +218,9 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 
 **Endpoint**: `GET /api/v1/chatbooks/import/jobs`
 
-**Query Parameters**: Same as export jobs
+**Query Parameters**:
+- `limit`: Maximum results (1-1000, default: 100)
+- `offset`: Skip results (default: 0)
 
 **Response**:
 ```json
@@ -257,7 +259,7 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 **Response**:
 ```json
 {
-  "message": "Export job cancelled successfully"
+  "message": "Export job 0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77 cancelled"
 }
 ```
 
@@ -268,7 +270,7 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 **Response**:
 ```json
 {
-  "message": "Import job cancelled successfully"
+  "message": "Import job cb_import_20240115_def456 cancelled"
 }
 ```
 
@@ -282,7 +284,7 @@ Implementation note: In sync mode, the server returns a `download_url` without e
 ```json
 {
   "deleted_count": 5,
-  "message": "Cleaned up 5 expired exports"
+  "message": "Deleted 5 expired export files"
 }
 ```
 
@@ -355,7 +357,7 @@ Lightweight liveness check for the Chatbooks subsystem.
 {
   "detail": "Detailed error message",
   "error_type": "ValidationError",
-  "job_id": "cb_export_20240115_abc123",
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77",
   "suggestions": [
     "Check file format",
     "Ensure file size is under 100MB"
@@ -393,7 +395,7 @@ Per-user limits enforced at the endpoint level:
 - Preview: 10/minute
 - Download: 20/minute
 
-List/status endpoints may be subject to global API rate limits but have no dedicated per-route limiter.
+List/status endpoints may be subject to global API rate limits but have no dedicated per-route limiter. Exceeded limits return HTTP 429.
 Exceeded limits return HTTP 429.
 
 ## Code Examples
@@ -407,9 +409,9 @@ import json
 # Configuration
 API_BASE = "http://localhost:8000/api/v1"
 TOKEN = "your-jwt-token"
-headers = {"Authorization": f"Bearer {TOKEN}"}
+headers = {"Authorization": f"Bearer {TOKEN}"}  # In single-user mode use: {"X-API-KEY": API_KEY}
 
-# Create a chatbook export
+# Create a chatbook export (async)
 response = requests.post(
     f"{API_BASE}/chatbooks/export",
     headers=headers,
@@ -422,8 +424,9 @@ response = requests.post(
     }
 )
 
-if response.status_code == 202:
-    job_id = response.json()["job_id"]
+data = response.json()
+job_id = data.get("job_id")
+if job_id:
     print(f"Export started: {job_id}")
     
     # Monitor export job
@@ -457,21 +460,13 @@ if response.status_code == 202:
         
         time.sleep(5)  # Check every 5 seconds
 
-# Import a chatbook
+# Import a chatbook (options as query parameters)
 with open("my_backup.chatbook", "rb") as f:
     files = {"file": f}
-    data = {
-        "options": json.dumps({
-            "conflict_resolution": "skip",
-            "prefix_imported": False
-        })
-    }
-    
     import_response = requests.post(
-        f"{API_BASE}/chatbooks/import",
+        f"{API_BASE}/chatbooks/import?conflict_resolution=skip&prefix_imported=false",
         headers=headers,
-        files=files,
-        data=data
+        files=files
     )
     
     if import_response.status_code == 200:
@@ -532,16 +527,12 @@ async function monitorJob(jobId) {
   }
 }
 
-// Import chatbook
+// Import chatbook (options as query parameters)
 async function importChatbook(file) {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('options', JSON.stringify({
-    conflict_resolution: 'skip',
-    prefix_imported: false
-  }));
   
-  const response = await fetch(`${API_BASE}/chatbooks/import`, {
+  const response = await fetch(`${API_BASE}/chatbooks/import?conflict_resolution=skip&prefix_imported=false`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${TOKEN}`
@@ -573,6 +564,7 @@ When upgrading from the single-user version to multi-user with authentication:
    ```bash
    curl -X POST "http://localhost:8000/api/v1/chatbooks/export" \
      -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <your-jwt-token>" \
      -d '{"name": "Pre-migration backup", "description": "Complete backup before auth migration", "content_selections": {}, "include_media": true}'
    ```
 
@@ -614,5 +606,5 @@ When upgrading from the single-user version to multi-user with authentication:
 
 ---
 
-*Last updated: January 2024*
+*Last updated: 2025-10-08*
 *API Version: 1.0.0*

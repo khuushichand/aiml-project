@@ -61,7 +61,6 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_l
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 # Import additional services
-from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
@@ -1027,8 +1026,8 @@ async def register_webhook(
 ):
     """Register a webhook for evaluation notifications"""
     try:
-        # Import WebhookEvent enum for proper conversion
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
+        # Import webhook manager lazily to avoid heavy imports during OpenAPI generation
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, webhook_manager
         
         # Convert string event types to WebhookEvent enums
         events = []
@@ -1070,6 +1069,7 @@ async def list_webhooks(
 ):
     """List all registered webhooks for the authenticated user"""
     try:
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
         webhooks = await webhook_manager.get_webhook_status(user_id)
         return [WebhookStatusResponse(**w) for w in webhooks]
         
@@ -1091,6 +1091,7 @@ async def unregister_webhook(
         # Validate URL safety to avoid internal host targeting
         from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
         from tldw_Server_API.app.core.Metrics import get_metrics_registry
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
         try:
             assert_url_safe(url)
         except HTTPException as he:
@@ -1123,6 +1124,7 @@ async def test_webhook(
 ):
     """Send a test webhook to verify endpoint configuration"""
     try:
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
         result = await webhook_manager.test_webhook(user_id, str(request.url))
         return WebhookTestResponse(**result)
         
@@ -1333,6 +1335,7 @@ async def evaluate_geval(
         import os as _os
         import asyncio as _asyncio
         import time as _time
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
         start_event_id = f"geval_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await webhook_manager.send_webhook(
@@ -1468,6 +1471,7 @@ async def evaluate_rag(
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
         import time as _time
         start_event_id = f"rag_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
@@ -1576,6 +1580,7 @@ async def evaluate_response_quality(
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
         import time as _time
         start_event_id = f"response_quality_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):

@@ -7,6 +7,8 @@ Designed to be simple and easy to use.
 Generative endpoints follow openai API spec where possible.
 See [API Design](API_Design.md) for more details.
 
+See also: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
+
 ### URLs
 - **URLs**
     - Main page: http://127.0.0.1:8000

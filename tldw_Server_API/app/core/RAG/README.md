@@ -916,3 +916,54 @@ When extending the RAG module:
 ## License
 
 Same as tldw_server (GPLv2)
+## Reranking Backends (Details)
+
+You can rerank retrieved documents using either Transformers cross-encoders or llama.cpp GGUF embedding models.
+
+- Strategies (pipeline param `reranking_strategy`)
+  - `flashrank`: Fast heuristic neural reranker
+  - `cross_encoder`: Transformers (sentence-transformers CrossEncoder or raw Transformers)
+  - `llama_cpp`: Embedding-based cosine using `llama-embedding`
+  - `hybrid`: Combine multiple strategies
+
+- Transformers Cross-Encoder
+  - Use HF models like `BAAI/bge-reranker-v2-m3` or Jina rerankers
+  - Set per-request via `reranking_model` or globally via `RAG_TRANSFORMERS_RERANKER_MODEL`
+  - GPU recommended for performance; falls back gracefully
+
+- llama.cpp (GGUF)
+  - Use local GGUF embedding models (Qwen3, BGE, Jina)
+  - Auto-formatting: if model name contains `bge`, the reranker prefixes the query/documents with `query: ` / `passage: `
+  - Pooling defaults by family: BGE/Jina → `mean`; Qwen → `last` (overrideable)
+  - Global defaults via `[RAG]` in `Config_Files/config.txt` (`llama_reranker_*` keys)
+
+- Public HTTP reranking
+  - `POST /v1/reranking` accepts `{ backend, model, query, documents, top_n }`
+  - `backend: auto|llamacpp|transformers`. Auto rules: `.gguf`→llama.cpp; `model` containing `/`→transformers.
+
+### Config Keys Snapshot
+
+- Transformers: `transformers_reranker_model` (config) / `RAG_TRANSFORMERS_RERANKER_MODEL` (env)
+- llama.cpp: `llama_reranker_model`, `llama_reranker_binary`, `llama_reranker_ngl`, `llama_reranker_separator`, `llama_reranker_output`, `llama_reranker_pooling`, `llama_reranker_normalize`, `llama_reranker_max_doc_chars`, `llama_reranker_template_mode`, `llama_reranker_query_prefix`, `llama_reranker_doc_prefix`
+
+### Examples
+
+Transformers (BGE):
+```python
+res = await unified_rag_pipeline(
+    query="What is panda?",
+    enable_reranking=True,
+    reranking_strategy="cross_encoder",
+    reranking_model="BAAI/bge-reranker-v2-m3",
+)
+```
+
+llama.cpp (Qwen3 GGUF):
+```python
+res = await unified_rag_pipeline(
+    query="What is panda?",
+    enable_reranking=True,
+    reranking_strategy="llama_cpp",
+    reranking_model="/models/Qwen3-Embedding-0.6B_f16.gguf",
+)
+```

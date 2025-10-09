@@ -399,7 +399,13 @@ async def _save_message_turn_to_db(
 
 @router.post(
     "/completions",
-    summary="Creates a model response and manages conversation state.",
+    summary="Create chat completion (OpenAI-compatible)",
+    description=(
+        "Generates an assistant response using the configured LLM provider. "
+        "Supports OpenAI-compatible request schema, optional SSE streaming via `stream=true`, "
+        "character/world book context, and chat dictionaries. Non-stream responses include "
+        "`tldw_conversation_id` for client state."
+    ),
     tags=["chat"],
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "Invalid request (e.g., empty messages, text too long, bad parameters)."},
@@ -1469,8 +1475,14 @@ import time
 import warnings
 
 
-@router.post("/dictionaries", response_model=ChatDictionaryResponse, status_code=status.HTTP_201_CREATED,
-             summary="Create a new chat dictionary", tags=["Chat Dictionaries"]) 
+@router.post(
+    "/dictionaries",
+    response_model=ChatDictionaryResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new chat dictionary",
+    description="Create a dictionary used for pattern-based text replacements in chat messages.",
+    tags=["chat-dictionaries"],
+)
 async def create_chat_dictionary(
     dictionary: ChatDictionaryCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1506,8 +1518,13 @@ async def create_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries", response_model=DictionaryListResponse,
-            summary="List all chat dictionaries", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries",
+    response_model=DictionaryListResponse,
+    summary="List all chat dictionaries",
+    description="List dictionaries for the current user. Use include_inactive to show inactive ones.",
+    tags=["chat-dictionaries"],
+)
 async def list_chat_dictionaries(
     include_inactive: bool = Query(False, description="Include inactive dictionaries"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1539,8 +1556,13 @@ async def list_chat_dictionaries(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries/{dictionary_id}", response_model=ChatDictionaryWithEntries,
-            summary="Get dictionary with entries", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries/{dictionary_id}",
+    response_model=ChatDictionaryWithEntries,
+    summary="Get dictionary with entries",
+    description="Retrieve a dictionary and all its entries by ID.",
+    tags=["chat-dictionaries"],
+)
 async def get_chat_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1582,8 +1604,13 @@ async def get_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put("/dictionaries/{dictionary_id}", response_model=ChatDictionaryResponse,
-            summary="Update a dictionary", tags=["Chat Dictionaries"]) 
+@router.put(
+    "/dictionaries/{dictionary_id}",
+    response_model=ChatDictionaryResponse,
+    summary="Update a dictionary",
+    description="Update dictionary metadata such as name, description, and active status.",
+    tags=["chat-dictionaries"],
+)
 async def update_chat_dictionary(
     dictionary_id: int,
     update: ChatDictionaryUpdate,
@@ -1618,8 +1645,13 @@ async def update_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete("/dictionaries/{dictionary_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete a dictionary", tags=["Chat Dictionaries"]) 
+@router.delete(
+    "/dictionaries/{dictionary_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a dictionary",
+    description="Delete a dictionary and its entries.",
+    tags=["chat-dictionaries"],
+)
 async def delete_chat_dictionary(
     dictionary_id: int,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
@@ -1642,8 +1674,14 @@ async def delete_chat_dictionary(
 
 # --- Dictionary Entry Endpoints ---
 
-@router.post("/dictionaries/{dictionary_id}/entries", response_model=DictionaryEntryResponse,
-             status_code=status.HTTP_201_CREATED, summary="Add entry to dictionary", tags=["Chat Dictionaries"]) 
+@router.post(
+    "/dictionaries/{dictionary_id}/entries",
+    response_model=DictionaryEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add entry to dictionary",
+    description="Add a pattern/replacement entry to a dictionary.",
+    tags=["chat-dictionaries"],
+)
 async def add_dictionary_entry(
     dictionary_id: int,
     entry: DictionaryEntryCreate,
@@ -1705,8 +1743,13 @@ async def add_dictionary_entry(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries/{dictionary_id}/entries", response_model=EntryListResponse,
-            summary="List dictionary entries", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries/{dictionary_id}/entries",
+    response_model=EntryListResponse,
+    summary="List dictionary entries",
+    description="List entries for a dictionary. Supports pagination/filters in body if present.",
+    tags=["chat-dictionaries"],
+)
 async def list_dictionary_entries(
     dictionary_id: int,
     group: Optional[str] = Query(None, description="Filter by group"),
@@ -1764,8 +1807,13 @@ async def list_dictionary_entries(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put("/dictionaries/entries/{entry_id}", response_model=DictionaryEntryResponse,
-            summary="Update dictionary entry", tags=["Chat Dictionaries"]) 
+@router.put(
+    "/dictionaries/entries/{entry_id}",
+    response_model=DictionaryEntryResponse,
+    summary="Update dictionary entry",
+    description="Update entry fields such as replacement, enabled, group, case sensitivity, and probability.",
+    tags=["chat-dictionaries"],
+)
 async def update_dictionary_entry(
     entry_id: int,
     update: DictionaryEntryUpdate,
@@ -1820,8 +1868,13 @@ async def update_dictionary_entry(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete("/dictionaries/entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete dictionary entry", tags=["Chat Dictionaries"]) 
+@router.delete(
+    "/dictionaries/entries/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete dictionary entry",
+    description="Delete a single dictionary entry by ID.",
+    tags=["chat-dictionaries"],
+)
 async def delete_dictionary_entry(
     entry_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1843,8 +1896,13 @@ async def delete_dictionary_entry(
 
 # --- Text Processing Endpoint ---
 
-@router.post("/dictionaries/process", response_model=ProcessTextResponse,
-             summary="Process text through dictionaries", tags=["Chat Dictionaries"]) 
+@router.post(
+    "/dictionaries/process",
+    response_model=ProcessTextResponse,
+    summary="Process text through dictionaries",
+    description="Apply active dictionaries to the provided text and return transformed text and statistics.",
+    tags=["chat-dictionaries"],
+)
 async def process_text_with_dictionaries(
     request: ProcessTextRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1898,9 +1956,14 @@ async def process_text_with_dictionaries(
 
 # --- Import/Export Endpoints ---
 
-@router.post("/dictionaries/import", response_model=ImportDictionaryResponse,
-             status_code=status.HTTP_201_CREATED, summary="Import dictionary from markdown", 
-             tags=["Chat Dictionaries"]) 
+@router.post(
+    "/dictionaries/import",
+    response_model=ImportDictionaryResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Import dictionary from markdown",
+    description="Create a dictionary and entries from a markdown representation.",
+    tags=["chat-dictionaries"],
+)
 async def import_dictionary(
     import_request: ImportDictionaryRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1947,8 +2010,13 @@ async def import_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries/{dictionary_id}/export", response_model=ExportDictionaryResponse,
-            summary="Export dictionary to markdown", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries/{dictionary_id}/export",
+    response_model=ExportDictionaryResponse,
+    summary="Export dictionary to markdown",
+    description="Export a dictionary and entries to a markdown representation.",
+    tags=["chat-dictionaries"],
+)
 async def export_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1984,8 +2052,13 @@ async def export_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries/{dictionary_id}/export/json", response_model=ExportDictionaryJSONResponse,
-            summary="Export dictionary to JSON", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries/{dictionary_id}/export/json",
+    response_model=ExportDictionaryJSONResponse,
+    summary="Export dictionary to JSON",
+    description="Export a dictionary and entries to a JSON representation.",
+    tags=["chat-dictionaries"],
+)
 async def export_dictionary_json(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2003,9 +2076,14 @@ async def export_dictionary_json(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/dictionaries/import/json", response_model=ImportDictionaryResponse,
-             status_code=status.HTTP_201_CREATED, summary="Import dictionary from JSON",
-             tags=["Chat Dictionaries"]) 
+@router.post(
+    "/dictionaries/import/json",
+    response_model=ImportDictionaryResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Import dictionary from JSON",
+    description="Create a dictionary and entries from a JSON payload.",
+    tags=["chat-dictionaries"],
+)
 async def import_dictionary_json(
     import_request: ImportDictionaryJSONRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2032,8 +2110,13 @@ async def import_dictionary_json(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/dictionaries/{dictionary_id}/statistics", response_model=DictionaryStatistics,
-            summary="Get dictionary statistics", tags=["Chat Dictionaries"]) 
+@router.get(
+    "/dictionaries/{dictionary_id}/statistics",
+    response_model=DictionaryStatistics,
+    summary="Get dictionary statistics",
+    description="Return counts, groups, usage metrics, and averages for the specified dictionary.",
+    tags=["chat-dictionaries"],
+)
 async def get_dictionary_statistics(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2100,8 +2183,13 @@ from tldw_Server_API.app.core.Chat.document_generator import (
 )
 
 
-@router.post("/documents/generate", response_model=Union[GenerateDocumentResponse, AsyncGenerationResponse],
-             summary="Generate a document from conversation", tags=["Document Generator"])
+@router.post(
+    "/documents/generate",
+    response_model=Union[GenerateDocumentResponse, AsyncGenerationResponse],
+    summary="Generate a document from conversation",
+    description="Generate a document using conversation content and a template. May return async job metadata.",
+    tags=["chat-documents"],
+)
 async def generate_document(
     request: GenerateDocumentRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2188,8 +2276,13 @@ async def generate_document(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/documents/jobs/{job_id}", response_model=JobStatusResponse,
-            summary="Get generation job status", tags=["Document Generator"])
+@router.get(
+    "/documents/jobs/{job_id}",
+    response_model=JobStatusResponse,
+    summary="Get generation job status",
+    description="Check the current status and progress of a document generation job.",
+    tags=["chat-documents"],
+)
 async def get_job_status(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2236,7 +2329,12 @@ async def get_job_status(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete("/documents/jobs/{job_id}", summary="Cancel generation job", tags=["Document Generator"])
+@router.delete(
+    "/documents/jobs/{job_id}",
+    summary="Cancel generation job",
+    description="Cancel a pending or running document generation job.",
+    tags=["chat-documents"],
+)
 async def cancel_job(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2275,8 +2373,13 @@ async def cancel_job(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/documents", response_model=DocumentListResponse,
-            summary="List generated documents", tags=["Document Generator"])
+@router.get(
+    "/documents",
+    response_model=DocumentListResponse,
+    summary="List generated documents",
+    description="List previously generated documents for the current user.",
+    tags=["chat-documents"],
+)
 async def list_generated_documents(
     conversation_id: Optional[int] = Query(None, description="Filter by conversation ID"),
     document_type: Optional[DocType] = Query(None, description="Filter by document type"),
@@ -2311,8 +2414,13 @@ async def list_generated_documents(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/documents/{document_id}", response_model=GeneratedDocument,
-            summary="Get generated document", tags=["Document Generator"])
+@router.get(
+    "/documents/{document_id}",
+    response_model=GeneratedDocument,
+    summary="Get generated document",
+    description="Retrieve a generated document by its identifier.",
+    tags=["chat-documents"],
+)
 async def get_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2341,7 +2449,12 @@ async def get_generated_document(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete("/documents/{document_id}", summary="Delete generated document", tags=["Document Generator"])
+@router.delete(
+    "/documents/{document_id}",
+    summary="Delete generated document",
+    description="Delete a generated document by its identifier.",
+    tags=["chat-documents"],
+)
 async def delete_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2367,8 +2480,13 @@ async def delete_generated_document(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/documents/prompts", response_model=PromptConfigResponse,
-             summary="Save custom prompt configuration", tags=["Document Generator"])
+@router.post(
+    "/documents/prompts",
+    response_model=PromptConfigResponse,
+    summary="Save custom prompt configuration",
+    description="Save a custom prompt configuration for a given document type.",
+    tags=["chat-documents"],
+)
 async def save_prompt_config(
     config: SavePromptConfigRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2412,8 +2530,13 @@ async def save_prompt_config(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/documents/prompts/{document_type}", response_model=PromptConfigResponse,
-            summary="Get prompt configuration", tags=["Document Generator"])
+@router.get(
+    "/documents/prompts/{document_type}",
+    response_model=PromptConfigResponse,
+    summary="Get prompt configuration",
+    description="Retrieve the saved prompt configuration for a document type.",
+    tags=["chat-documents"],
+)
 async def get_prompt_config(
     document_type: DocType,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2462,8 +2585,13 @@ async def get_prompt_config(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/documents/bulk", response_model=BulkGenerateResponse,
-             summary="Bulk generate documents", tags=["Document Generator"])
+@router.post(
+    "/documents/bulk",
+    response_model=BulkGenerateResponse,
+    summary="Bulk generate documents",
+    description="Submit multiple document generations in one request. May return async job IDs.",
+    tags=["chat-documents"],
+)
 async def bulk_generate_documents(
     request: BulkGenerateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2505,8 +2633,13 @@ async def bulk_generate_documents(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/documents/statistics", response_model=GenerationStatistics,
-            summary="Get generation statistics", tags=["Document Generator"])
+@router.get(
+    "/documents/statistics",
+    response_model=GenerationStatistics,
+    summary="Get generation statistics",
+    description="Aggregate statistics across generated documents (counts, durations, errors).",
+    tags=["chat-documents"],
+)
 async def get_generation_statistics(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ) -> GenerationStatistics:

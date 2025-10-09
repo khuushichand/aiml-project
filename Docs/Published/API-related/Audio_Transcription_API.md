@@ -27,7 +27,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ### Advanced Features
 - **Voice Activity Detection (VAD)**: Intelligent speech segmentation
 - **Streaming Support**: Process long audio files efficiently
-- **Language Detection**: Whisper can auto-detect language when none is provided; the detected language is returned in the JSON response
+- **Language Detection**: Automatic language identification (Whisper). When no `language` is provided, the API returns the detected language in JSON.
 - **Partial Transcriptions**: Get interim results during live transcription
 - **Model Caching**: Efficient model management for repeated use
 
@@ -85,7 +85,7 @@ Transcribe audio into text.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
-| timestamp_granularities | string | No | Comma-separated values or JSON array. Supported: `segment`, `word` (word-level for Whisper only) |
+| timestamp_granularities | string | No | Comma-separated values or JSON array. Supported tokens: `segment`, `word` |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
 | seg_min_segment_size | integer | No | Min items per segment (default 5) |
@@ -115,6 +115,30 @@ When `timestamp_granularities` includes `word` (Whisper only), each segment incl
       "start": 0.0,
       "end": 10.5,
       "text": "Transcribed text here"
+    }
+  ]
+}
+```
+
+### Word-level Timestamps Example (Whisper only)
+
+When `timestamp_granularities` includes `word`, each segment contains `words` with start/end per tokenized word:
+
+```json
+{
+  "text": "hello world",
+  "language": "en",
+  "duration": 2.1,
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 2.1,
+      "text": "hello world",
+      "words": [
+        { "start": 0.12, "end": 0.42, "word": "hello" },
+        { "start": 0.55, "end": 0.92, "word": "world" }
+      ]
     }
   ]
 }
@@ -358,7 +382,7 @@ with open("audio.wav", "rb") as f:
     print(result["text"])
 ```
 
-### Live Transcription Example (Local Python)
+### Live Transcription Example
 
 ```python
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -419,10 +443,10 @@ except KeyboardInterrupt:
 ## Notes & Limitations
 
 - Endpoint paths include `/api/v1` (examples reflect this; headings updated accordingly).
-- `timestamp_granularities` currently only supports `segment`; word-level timestamps are not implemented yet.
-- Language detection: Whisper can auto-detect when `language` is omitted, but the API JSON only includes `language` if provided in the request.
+- `timestamp_granularities` supports `segment` and `word`; send as CSV or JSON array. Word-level timestamps are available for Whisper only.
+- Language detection: When `language` is omitted and Whisper is used, the API returns the detected language in the JSON response.
 - Authentication: Single-user mode uses `X-API-KEY`. The OpenAI Python client defaults to Bearer; pass `default_headers={"X-API-KEY": "..."}`.
-- SRT/VTT outputs are simplistic placeholders without precise per-segment timings.
+- SRT/VTT outputs are basic placeholders without precise per-segment timings.
 
 ## Troubleshooting
 
@@ -481,8 +505,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Related Documentation
 
-- [API Design](./API_Design.md)
-- [User Guides](../User_Guides/index.md)
+- [API Overview](./API_Overview.md)
+- [Configuration Guide](../User_Guides/Configuration.md)
+- [Live Transcription Guide](../User_Guides/Live_Transcription.md)
+- [Model Selection Guide](../User_Guides/Model_Selection.md)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.

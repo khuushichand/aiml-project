@@ -1,0 +1,296 @@
+
+"""Utilities for migrating SQLite content databases to PostgreSQL."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sqlite3
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TableMeta:
+    """Metadata describing a table within the source SQLite database."""
+
+    name: str
+    source_name: str
+    columns: List[str]
+    pg_columns: List[str]
+    pk_columns: List[str]
+    sequence_columns: List[str]
+    dependencies: Set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        self.name = self.name.lower()
+        self.dependencies = {dep.lower() for dep in self.dependencies}
+        self.pg_columns = [col.lower() for col in self.pg_columns]
+        self.pk_columns = [col.lower() for col in self.pk_columns]
+        self.sequence_columns = [col.lower() for col in self.sequence_columns]
+
+
+_DEFAULT_SKIP_SUFFIXES = (
+    '_fts',
+    '_fts_data',
+    '_fts_idx',
+    '_fts_docsize',
+    '_fts_config',
+)
+
+
+def migrate_sqlite_to_postgres(
+    sqlite_path: Path | str,
+    postgres_config: DatabaseConfig,
+    *,
+    batch_size: int = 500,
+    skip_tables: Optional[Iterable[str]] = None,
+    label: str = 'content',
+) -> None:
+    """Copy rows from a SQLite database into a PostgreSQL database."""
+
+    sqlite_path = Path(sqlite_path)
+    if not sqlite_path.exists():
+        raise FileNotFoundError(f'SQLite database not found: {sqlite_path}')
+
+    logger.info('Starting migration of %s database from %s', label, sqlite_path)
+    sqlite_conn = sqlite3.connect(str(sqlite_path))
+    sqlite_conn.row_factory = sqlite3.Row
+    try:
+        tables = _introspect_sqlite_schema(sqlite_conn, skip_tables)
+        if not tables:
+            logger.warning('No tables discovered in %s; skipping migration', sqlite_path)
+            return
+
+        insertion_order = _topological_sort(tables)
+        logger.debug('Insertion order for %s: %s', label, insertion_order)
+
+        backend = DatabaseBackendFactory.create_backend(postgres_config)
+        try:
+            with backend.transaction() as pg_conn:
+                _truncate_tables(backend, pg_conn, insertion_order)
+                for table_name in insertion_order:
+                    meta = tables[table_name]
+                    _copy_table(sqlite_conn, backend, pg_conn, meta, batch_size)
+                _sync_sequences(backend, pg_conn, tables)
+        finally:
+            try:
+                backend.get_pool().close_all()
+            except Exception:  # pragma: no cover - defensive close
+                pass
+    finally:
+        sqlite_conn.close()
+    logger.info('Completed migration of %s database from %s', label, sqlite_path)
+
+
+def _introspect_sqlite_schema(
+    conn: sqlite3.Connection,
+    skip_tables: Optional[Iterable[str]] = None,
+) -> Dict[str, TableMeta]:
+    configured_skips = {name.lower() for name in (skip_tables or [])}
+    tables: Dict[str, TableMeta] = {}
+
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    table_names = [row[0] for row in cursor.fetchall()]
+
+    for raw_name in table_names:
+        normalized = raw_name.lower()
+        if normalized.startswith('sqlite_'):
+            continue
+        if any(normalized.endswith(suffix) for suffix in _DEFAULT_SKIP_SUFFIXES):
+            continue
+        if normalized in configured_skips:
+            continue
+
+        columns_info = conn.execute(f'PRAGMA table_info("{raw_name}")').fetchall()
+        if not columns_info:
+            continue
+        columns = [row['name'] for row in columns_info]
+        pk_columns = [row['name'] for row in columns_info if row['pk']]
+        sequence_columns = [
+            row['name']
+            for row in columns_info
+            if row['pk'] and (row['type'] or '').upper().find('INT') != -1
+        ]
+
+        dependencies = set()
+        fk_rows = conn.execute(f'PRAGMA foreign_key_list("{raw_name}")').fetchall()
+        for fk in fk_rows:
+            ref_table = fk['table'].lower()
+            if ref_table and ref_table not in configured_skips:
+                dependencies.add(ref_table)
+
+        meta = TableMeta(
+            name=normalized,
+            source_name=raw_name,
+            columns=columns,
+            pg_columns=columns.copy(),
+            pk_columns=pk_columns,
+            sequence_columns=sequence_columns,
+            dependencies=dependencies,
+        )
+        tables[meta.name] = meta
+    return tables
+
+
+def _topological_sort(tables: Dict[str, TableMeta]) -> List[str]:
+    indegree: Dict[str, int] = {name: 0 for name in tables}
+    adjacency: Dict[str, Set[str]] = {name: set() for name in tables}
+
+    for table in tables.values():
+        for dep in table.dependencies:
+            if dep not in tables:
+                continue
+            indegree[table.name] += 1
+            adjacency.setdefault(dep, set()).add(table.name)
+
+    queue: List[str] = [name for name, degree in indegree.items() if degree == 0]
+    order: List[str] = []
+
+    while queue:
+        current = queue.pop(0)
+        order.append(current)
+        for neighbour in adjacency.get(current, set()):
+            indegree[neighbour] -= 1
+            if indegree[neighbour] == 0:
+                queue.append(neighbour)
+
+    if len(order) != len(tables):
+        unresolved = {name for name, degree in indegree.items() if degree > 0}
+        raise RuntimeError(f'Cycle detected in table dependencies: {unresolved}')
+
+    return order
+
+
+def _truncate_tables(
+    backend: DatabaseBackend,
+    pg_conn,
+    insertion_order: Sequence[str],
+) -> None:
+    for table_name in reversed(list(insertion_order)):
+        sql = f'DELETE FROM {table_name}'
+        try:
+            backend.execute(sql, connection=pg_conn)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning('Unable to clear table %s: %s', table_name, exc)
+
+
+def _copy_table(
+    sqlite_conn: sqlite3.Connection,
+    backend: DatabaseBackend,
+    pg_conn,
+    meta: TableMeta,
+    batch_size: int,
+) -> None:
+    column_list = ', '.join([f'"{col}"' for col in meta.columns])
+    select_sql = f'SELECT {column_list} FROM "{meta.source_name}"'
+    insert_columns = ', '.join(meta.pg_columns)
+    placeholders = ', '.join(['%s'] * len(meta.pg_columns))
+    insert_sql = (
+        f'INSERT INTO {meta.name} ({insert_columns}) '
+        f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
+    )
+
+    cursor = sqlite_conn.execute(select_sql)
+    total = 0
+    while True:
+        rows = cursor.fetchmany(batch_size)
+        if not rows:
+            break
+        params = [
+            tuple(row[col] for col in meta.columns)
+            for row in rows
+        ]
+        backend.execute_many(insert_sql, params, connection=pg_conn)
+        total += len(params)
+    logger.info('Copied %s rows into %s', total, meta.name)
+
+
+def _sync_sequences(
+    backend: DatabaseBackend,
+    pg_conn,
+    tables: Dict[str, TableMeta],
+) -> None:
+    for meta in tables.values():
+        for column in meta.sequence_columns:
+            sql = (
+                f"SELECT setval("
+                f"pg_get_serial_sequence('{meta.name}', '{column}'), "
+                f"COALESCE((SELECT MAX({column}) FROM {meta.name}), 0) + 1, false)"
+            )
+            try:
+                backend.execute(sql, connection=pg_conn)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning('Sequence sync failed for %s.%s: %s', meta.name, column, exc)
+
+
+def _build_postgres_config_from_args(args: argparse.Namespace) -> DatabaseConfig:
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=args.pg_host,
+        pg_port=args.pg_port,
+        pg_database=args.pg_database,
+        pg_user=args.pg_user,
+        pg_password=args.pg_password,
+        pg_sslmode=args.pg_sslmode,
+        pool_size=args.pg_pool_size,
+        max_overflow=args.pg_max_overflow,
+        connect_timeout=args.pg_timeout,
+    )
+
+
+def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Path]]:
+    if args.content_sqlite:
+        yield 'content', Path(args.content_sqlite)
+    if args.chacha_sqlite:
+        yield 'chacha', Path(args.chacha_sqlite)
+    if args.analytics_sqlite:
+        yield 'analytics', Path(args.analytics_sqlite)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description='Migrate SQLite databases to PostgreSQL.')
+    parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
+    parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')
+    parser.add_argument('--analytics-sqlite', help='Path to Analytics.db to migrate (optional)')
+    parser.add_argument('--pg-host', default='localhost')
+    parser.add_argument('--pg-port', default=5432, type=int)
+    parser.add_argument('--pg-database', default='tldw_content')
+    parser.add_argument('--pg-user', default='tldw_user')
+    parser.add_argument('--pg-password', default='')
+    parser.add_argument('--pg-sslmode', default='prefer')
+    parser.add_argument('--pg-pool-size', default=10, type=int)
+    parser.add_argument('--pg-max-overflow', default=20, type=int)
+    parser.add_argument('--pg-timeout', default=10, type=int)
+    parser.add_argument('--batch-size', default=500, type=int)
+    parser.add_argument('--skip-table', action='append', help='Additional tables to skip')
+    parser.add_argument('--log-level', default='INFO')
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+
+    targets = list(_iter_migration_targets(args))
+    if not targets:
+        parser.error('At least one SQLite database path must be provided')
+
+    config = _build_postgres_config_from_args(args)
+    for label, path in targets:
+        migrate_sqlite_to_postgres(
+            path,
+            config,
+            batch_size=args.batch_size,
+            skip_tables=args.skip_table,
+            label=label,
+        )
+    return 0
+
+
+if __name__ == '__main__':  # pragma: no cover - CLI entry
+    raise SystemExit(main())

@@ -29,7 +29,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Create router
-router = APIRouter(prefix="/mcp", tags=["MCP Unified (Experimental)"])
+router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 
 # Security
 security = HTTPBearer(auto_error=False)

@@ -120,6 +120,30 @@ When `timestamp_granularities` includes `word` (Whisper only), each segment incl
 }
 ```
 
+### Word-level Timestamps Example (Whisper only)
+
+When `timestamp_granularities` includes `word`, each segment contains `words` with start/end per tokenized word:
+
+```json
+{
+  "text": "hello world",
+  "language": "en",
+  "duration": 2.1,
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 2.1,
+      "text": "hello world",
+      "words": [
+        { "start": 0.12, "end": 0.42, "word": "hello" },
+        { "start": 0.55, "end": 0.92, "word": "world" }
+      ]
+    }
+  ]
+}
+```
+
 ### POST /api/v1/audio/translations
 
 Translate audio into English.

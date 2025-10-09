@@ -227,7 +227,7 @@ curl https://evaluations.yourdomain.com/api/v1/evaluations/health/config
 
 # Test authentication
 curl -H "Authorization: Bearer YOUR_API_KEY" \
-    https://evaluations.yourdomain.com/api/v1/evals
+    https://evaluations.yourdomain.com/api/v1/evaluations
 ```
 
 ### 2. Monitor Metrics

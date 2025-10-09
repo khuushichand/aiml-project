@@ -25,13 +25,10 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 
 # Import evaluation engines
-from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
 # Import support services
-from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
@@ -87,7 +84,8 @@ class UnifiedEvaluationService:
         # Initialize database
         self.db = EvaluationsDatabase(db_path)
         
-        # Initialize evaluation runner for async processing
+        # Initialize evaluation runner for async processing (lazy import)
+        from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
         self.runner = EvaluationRunner(db_path)
         
         # Initialize evaluation engines (lazy loading)
@@ -367,6 +365,7 @@ class UnifiedEvaluationService:
             
             # Send webhook for run started
             if webhook_url and self.enable_webhooks:
+                from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                 await webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_STARTED,
@@ -544,6 +543,9 @@ class UnifiedEvaluationService:
             start_time = time.time()
             
             # Track metrics
+            # Lazy import to avoid heavy chat stack at module import time
+            from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
+
             if advanced_metrics.enabled:
                 with advanced_metrics.track_sli_request("/evaluations/geval"):
                     result = await asyncio.to_thread(
@@ -586,6 +588,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     # Normalize single-user id to fixed numeric id when appropriate
                     effective_user_id = user_id
                     if user_id == "single_user":
@@ -690,6 +693,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:
@@ -789,6 +793,7 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
+                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:

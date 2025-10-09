@@ -49,6 +49,9 @@
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || r.statusText);
         setOutput('reg_result', data, 'ok');
+        if (data && data.api_key) {
+          alert('Registration successful. An API key was generated; copy it from the result and store it securely.');
+        }
       } catch (e) {
         setOutput('reg_result', String(e), 'err');
       }
@@ -147,4 +150,3 @@
     </p>
   </body>
   </html>
-

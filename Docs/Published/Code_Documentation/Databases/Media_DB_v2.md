@@ -1,32 +1,32 @@
-# Media_DB_v2 Library Documentation
-
-# LLM Generated - Needs to be reviewed.
+# MediaDatabase (Media_DB_v2)
 
 ## Overview
 
-The `Media_DB_v2` library provides a robust system for managing SQLite databases tailored for media content and its associated metadata. It is designed with a focus on multi-instance database management, where each `Database` object corresponds to a distinct SQLite database file. A key feature is its internal handling of synchronization metadata and Full-Text Search (FTS) updates, simplifying client-side logic.
+The `Media_DB_v2` module provides a robust content database tailored for media content and related metadata. It is designed with a focus on multi‑instance database management, where each `MediaDatabase` object corresponds to a distinct database (SQLite by default; PostgreSQL is supported via a backend abstraction). A key feature is its internal handling of synchronization metadata and Full‑Text Search (FTS) updates, simplifying client‑side logic.
 
-Each `Database` instance requires a `client_id` upon initialization, which is used to attribute all changes made through that instance. The library automatically logs create, update, delete, link, and unlink operations to an internal `sync_log` table. This log is intended for consumption by external synchronization mechanisms to keep multiple database instances consistent.
+Each `MediaDatabase` instance requires a `client_id` upon initialization, which is used to attribute all changes made through that instance. The library automatically logs create, update, delete, link, and unlink operations to an internal `sync_log` table. This log is intended for consumption by external synchronization mechanisms to keep multiple database instances consistent.
 
 ## Key Features
 
-*   **Instance-Based:** Each `Database` object encapsulates a connection and operations for a specific SQLite database file (or an in-memory database).
+*   **Instance-Based:** Each `MediaDatabase` object encapsulates a connection and operations for a specific database file (or in‑memory SQLite).
 *   **Client ID Tracking:** All data modifications are attributed to a `client_id` provided during `Database` initialization.
 *   **Internal Sync Logging:** Automatically records changes to a `sync_log` table, facilitating external synchronization processes. This includes changes to main entities and relationships (e.g., `MediaKeywords` links).
-*   **Internal FTS Management:** The library transparently manages updates to associated FTS5 tables (`media_fts`, `keyword_fts`) within Python code during relevant operations (e.g., adding/updating media or keywords).
-*   **Schema Versioning:** The library checks the database schema version upon initialization and can apply schema migrations (currently supports initialization from version 0 to 1).
+*   **Internal FTS Management:** Transparently manages updates to associated FTS5 tables (`media_fts`, `keyword_fts`) and maintains a `claims_fts` index via triggers.
+*   **Schema Versioning:** The database bootstraps and migrates to the current schema version automatically (current version: 5).
+*   **Backend Abstraction:** Uses a backend factory to support SQLite (default) and PostgreSQL. Selection is driven by `[Database]` settings in `Config_Files/config.txt` or `TLDW_CONTENT_*` environment variables (see Backend Selection Examples).
 *   **Thread-Safety:** Utilizes `threading.local` to provide thread-local database connections, ensuring safe concurrent access from multiple threads.
 *   **Soft Deletes:** Implements a soft-delete pattern (`deleted=1`) for most entities, allowing for data recovery and synchronization of deletions.
 *   **Optimistic Concurrency Control:** Employs a `version` column in key tables. Update operations typically require the current version of the record, and increment it, failing if a concurrent modification has occurred (`ConflictError`).
 *   **Transaction Management:** Provides a `transaction()` context manager for atomic database operations.
-*   **Comprehensive CRUD Operations:** Offers methods for creating, reading, updating, and deleting media, keywords, transcripts, document versions, and media chunks.
-*   **Standalone Utility Functions:** Includes functions that operate on a `Database` instance for tasks like searching, fetching related data, and database maintenance.
+*   **Comprehensive CRUD Operations:** Offers methods for creating, reading, updating, and deleting media, keywords, transcripts, document versions (with `safe_metadata`), claims, chunking templates, and media chunks.
+*   **Standalone Utility Functions:** Includes functions that operate on a `MediaDatabase` instance for tasks like searching, fetching related data, and database maintenance.
 
 ## Dependencies
 
 *   Python Standard Library: `sqlite3`, `threading`, `uuid`, `datetime`, `pathlib`, `json`, `hashlib`, `logging`, `math`, `contextlib`, `typing`.
 *   Third-Party:
     *   `PyYAML` (optional, used by `import_obsidian_note_to_db` for parsing frontmatter). Ensure it's installed if this functionality is used.
+    *   PostgreSQL backend (optional): if enabled, requires the corresponding driver per backend implementation.
 
 ## Custom Exceptions
 
@@ -39,30 +39,106 @@ The library defines several custom exceptions to provide more specific error inf
     *   `entity` (Optional[str]): The name of the entity/table where the conflict occurred.
     *   `identifier` (Optional[Any]): The ID or UUID of the record that caused the conflict.
 
-## `Database` Class
+## `MediaDatabase` Class
 
-The core of the library, managing all interactions with a specific SQLite database file.
-# FIXME
+The core of the library, managing all interactions with a specific content database (SQLite by default; PostgreSQL supported via backend).
 ```python
-class Database:
-    _CURRENT_SCHEMA_VERSION = 1
-    # ... (Schema SQL definitions: _TABLES_SQL_V1, _INDICES_SQL_V1, _TRIGGERS_SQL_V1, _FTS_TABLES_SQL)
+class MediaDatabase:
+    _CURRENT_SCHEMA_VERSION = 5
+    # ... schema SQL definitions and FTS/trigger setup
 ```
 
 ### Initialization
 
 ```python
-def __init__(self, db_path: Union[str, Path], client_id: str)
+def __init__(self, db_path: Union[str, Path], client_id: str, *, backend: Optional[DatabaseBackend] = None, config: Optional[ConfigParser] = None)
 ```
 
-*   **Purpose**: Initializes a `Database` instance, connecting to the specified SQLite database file (or creating it if it doesn't exist). It sets up thread-local connection management and ensures the database schema is correctly initialized or migrated to the `_CURRENT_SCHEMA_VERSION`.
+*   **Purpose**: Initializes a `MediaDatabase` instance, connecting to the specified database (SQLite file path or `':memory:'`). It sets up thread‑local connection management and ensures the database schema is initialized/migrated to the current version. If a backend is not provided, a backend is resolved from configuration (defaults to SQLite; can select PostgreSQL when enabled).
 *   **Args**:
-    *   `db_path (Union[str, Path])`: Path to the SQLite database file. Can be a string or a `pathlib.Path` object. Use `':memory:'` for an in-memory database.
+    *   `db_path (Union[str, Path])`: Path to the database (SQLite file path or `':memory:'`).
     *   `client_id (str)`: A unique identifier for the client application or process instance making changes to this database. This ID is recorded in the `sync_log` and on modified records.
+    *   `backend (Optional[DatabaseBackend])`: Explicit backend instance (primarily for tests/DI).
+    *   `config (Optional[ConfigParser])`: Optional configuration to help resolve backend when not provided.
 *   **Raises**:
     *   `ValueError`: If `client_id` is empty or `None`.
     *   `DatabaseError`: If the database directory cannot be created, connection fails, or schema initialization/migration fails.
     *   `SchemaError`: If the existing database schema version is newer than what the code supports, or if migration fails.
+
+Backend selection:
+- Default is SQLite.
+- To select a backend via environment for content DBs, prefer the `TLDW_CONTENT_*` variables (handled by `content_backend.py`). Examples below.
+
+Backend selection examples:
+
+1) Configure PostgreSQL via DSN
+```bash
+export TLDW_CONTENT_DB_BACKEND=postgresql
+export TLDW_CONTENT_PG_DSN="postgresql://tldw_user:secret@localhost:5432/tldw_content?sslmode=prefer"
+```
+
+2) Configure PostgreSQL via discrete parameters
+```bash
+export TLDW_CONTENT_DB_BACKEND=postgresql
+export TLDW_CONTENT_PG_HOST=localhost
+export TLDW_CONTENT_PG_PORT=5432
+export TLDW_CONTENT_PG_DATABASE=tldw_content
+export TLDW_CONTENT_PG_USER=tldw_user
+export TLDW_CONTENT_PG_PASSWORD=secret
+export TLDW_CONTENT_PG_SSLMODE=prefer
+```
+
+Then instantiate normally (backend is auto‑resolved):
+```python
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="pg_client")
+```
+
+3) Programmatic backend (explicit override)
+```python
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+cfg = DatabaseConfig(
+    backend_type=BackendType.POSTGRESQL,
+    pg_host="localhost", pg_port=5432,
+    pg_database="tldw_content", pg_user="tldw_user",
+    pg_password="secret", pg_sslmode="prefer",
+)
+backend = DatabaseBackendFactory.create_backend(cfg)
+db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="pg_client", backend=backend)
+```
+
+4) Configure via config.txt ([Database] section)
+```ini
+[Database]
+# Select backend: sqlite or postgresql
+type = postgresql
+
+# Option A: Single DSN
+pg_connection_string = postgresql://tldw_user:secret@localhost:5432/tldw_content?sslmode=prefer
+
+# Option B: Discrete parameters (used when no pg_connection_string is provided)
+pg_host = localhost
+pg_port = 5432
+pg_database = tldw_content
+pg_user = tldw_user
+pg_password = secret
+pg_sslmode = prefer
+
+# Pooling
+pg_pool_size = 20
+pg_max_overflow = 40
+pg_pool_timeout = 30.0
+
+# If using SQLite instead
+# type = sqlite
+# sqlite_path = Databases/Media_DB_v2.db
+# sqlite_wal_mode = true
+# sqlite_foreign_keys = true
+# backup_path = ./tldw_DB_Backups/
+```
 
 ### Connection Management
 
@@ -133,18 +209,19 @@ These methods modify the database content. They typically operate within a trans
     *   **Returns**: `(keyword_id, keyword_uuid)`.
     *   **Raises**: `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`add_media_with_keywords(self, *, url: Optional[str] = None, title: Optional[str], media_type: Optional[str], content: Optional[str], keywords: Optional[List[str]] = None, prompt: Optional[str] = None, analysis_content: Optional[str] = None, transcription_model: Optional[str] = None, author: Optional[str] = None, ingestion_date: Optional[str] = None, overwrite: bool = False, chunk_options: Optional[Dict] = None, chunks: Optional[List[Dict[str, Any]]] = None) -> Tuple[Optional[int], Optional[str], str]`**:
+*   **`add_media_with_keywords(self, *, url: Optional[str] = None, title: Optional[str] = None, media_type: Optional[str] = None, content: Optional[str] = None, keywords: Optional[List[str]] = None, prompt: Optional[str] = None, analysis_content: Optional[str] = None, safe_metadata: Optional[str] = None, transcription_model: Optional[str] = None, author: Optional[str] = None, ingestion_date: Optional[str] = None, overwrite: bool = False, chunk_options: Optional[Dict] = None, chunks: Optional[List[Dict[str, Any]]] = None) -> Tuple[Optional[int], Optional[str], str]`**:
     Adds a new media item or updates an existing one (if `overwrite=True`, based on URL or content hash).
     *   Generates a content hash.
     *   Associates keywords (via `update_keywords_for_media`).
     *   Creates an initial `DocumentVersion` (via `create_document_version`).
+    *   Accepts optional `safe_metadata` JSON for version‑scoped metadata.
     *   If `chunks` are provided, they are saved as `UnvectorizedMediaChunks` (old ones deleted on overwrite).
     *   Updates `media_fts`. Logs 'create'/'update' for Media, and relies on called methods for other sync events.
     *   `ingestion_date`: Defaults to current time if `None`.
     *   **Returns**: `(media_id, media_uuid, status_message)`.
     *   **Raises**: `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`create_document_version(self, media_id: int, content: str, prompt: Optional[str] = None, analysis_content: Optional[str] = None) -> Dict[str, Any]`**:
+*   **`create_document_version(self, media_id: int, content: str, prompt: Optional[str] = None, analysis_content: Optional[str] = None, safe_metadata: Optional[str] = None) -> Dict[str, Any]`**:
     Creates a new entry in `DocumentVersions`. Assigns the next `version_number` for the `media_id`. Logs 'create' to `sync_log`.
     *   **Returns**: Dict with new version's `id`, `uuid`, `media_id`, `version_number`.
     *   **Raises**: `InputError`, `DatabaseError`.
@@ -249,6 +326,11 @@ These methods fetch data. They generally filter for active records (`deleted=0`)
     Similar to `get_paginated_media_list` but returns `sqlite3.Row` objects for `id`, `title`, `type`.
     *   **Returns**: `(results_list_of_rows, total_pages, current_page, total_items)`.
 
+### Metadata Search
+
+*   **`search_by_safe_metadata(self, filters: Dict[str, Any], *, logical_op: str = 'AND', case_sensitive: bool = False, limit: Optional[int] = None, offset: int = 0) -> List[Dict[str, Any]]`**:
+    Searches `DocumentVersions.safe_metadata` (JSON) and related identifiers using simple equality/prefix filters with optional case sensitivity. Returns matching rows with basic fields.
+
 ### Sync Log Management
 
 *   **`get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None) -> List[Dict]`**:
@@ -258,11 +340,106 @@ These methods fetch data. They generally filter for active records (`deleted=0`)
 *   **`delete_sync_log_entries_before(self, change_id_threshold: int) -> int`**:
     Deletes `sync_log` entries with `change_id <= change_id_threshold`. Returns count.
 
+### Claims API
+
+The `Claims` subsystem stores ingestion-time factual statements associated with media chunks and maintains an FTS index (`claims_fts`) via triggers.
+
+- `upsert_claims(self, claims: List[Dict[str, Any]]) -> int`:
+  - Inserts claims in batch. Each item should include: `media_id`, `chunk_index`, `span_start`, `span_end`, `claim_text`, `confidence`, `extractor`, `extractor_version`, `chunk_hash`.
+  - Returns number of claims written. Triggers keep `claims_fts` in sync.
+
+- `get_claims_by_media(self, media_id: int, *, limit: int = 100) -> List[Dict[str, Any]]`:
+  - Fetches non-deleted claims for a media item (limited count).
+
+- `soft_delete_claims_for_media(self, media_id: int) -> int`:
+  - Soft-deletes all claims for a media item. Returns number affected.
+
+- `rebuild_claims_fts(self) -> int`:
+  - Rebuilds `claims_fts` from `Claims` table; returns row count in the rebuilt FTS.
+
+Example (Claims):
+```python
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="example")
+
+# Upsert a single claim
+claims_written = db.upsert_claims([
+    {
+        "media_id": 123,
+        "chunk_index": 0,
+        "span_start": 0,
+        "span_end": 42,
+        "claim_text": "The video states the launch date is May 2025.",
+        "confidence": 0.85,
+        "extractor": "simple_rule",
+        "extractor_version": "1.0",
+        "chunk_hash": "abc123"
+    }
+])
+
+# Fetch recent claims for the media item
+claims = db.get_claims_by_media(123, limit=10)
+
+# Soft-delete all claims for a media item
+deleted_count = db.soft_delete_claims_for_media(123)
+
+# After bulk ingest or when triggers were disabled, rebuild FTS
+fts_rows = db.rebuild_claims_fts()
+print(f"claims_fts rows: {fts_rows}")
+```
+
+### Chunking Templates API
+
+Manage reusable chunking templates stored in the `ChunkingTemplates` table. Built-in templates cannot be modified or deleted.
+
+- `create_chunking_template(self, name: str, template_json: str, description: Optional[str] = None, is_builtin: bool = False, tags: Optional[List[str]] = None, user_id: Optional[str] = None) -> Dict[str, Any]`:
+  - Creates a template; `name` must be unique among non-deleted templates. Validates `template_json`.
+
+- `get_chunking_template(self, template_id: Optional[int] = None, name: Optional[str] = None, uuid: Optional[str] = None, include_deleted: bool = False) -> Optional[Dict[str, Any]]`:
+  - Fetches a template by ID, name, or UUID.
+
+- `list_chunking_templates(self, include_builtin: bool = True, include_custom: bool = True, tags: Optional[List[str]] = None, user_id: Optional[str] = None, include_deleted: bool = False) -> List[Dict[str, Any]]`:
+  - Lists templates with optional filters; sorts built-ins first then by name.
+
+- `update_chunking_template(self, template_id: Optional[int] = None, name: Optional[str] = None, uuid: Optional[str] = None, template_json: Optional[str] = None, description: Optional[str] = None, tags: Optional[List[str]] = None) -> bool`:
+  - Updates a custom template’s JSON/description/tags. Validates JSON. Returns `True` if updated.
+
+- `delete_chunking_template(self, template_id: Optional[int] = None, name: Optional[str] = None, uuid: Optional[str] = None, hard_delete: bool = False) -> bool`:
+  - Soft-deletes by default; `hard_delete=True` permanently removes. Not allowed for built-ins.
+
+- `seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int`:
+  - Seeds built-in templates or restores deleted ones. Returns number created/restored.
+
+Example (Chunking Templates):
+```python
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+db = MediaDatabase(db_path="./Databases/Media_DB_v2.db", client_id="example")
+
+# Create a custom template
+tmpl = db.create_chunking_template(
+    name="Sentences-512",
+    template_json='{"method":"sentences","max_tokens":512}',
+    description="Sentence chunking up to 512 tokens",
+    tags=["default"],
+)
+
+# List templates
+all_templates = db.list_chunking_templates()
+
+# Update template metadata
+db.update_chunking_template(uuid=tmpl["uuid"], description="Refined")
+
+# Soft-delete the template
+db.delete_chunking_template(uuid=tmpl["uuid"])  # soft delete
+```
+
 ## Standalone Functions
 
-These functions require a `Database` instance to be passed as the `db_instance` argument. They generally call instance methods or perform read operations.
+These functions require a `MediaDatabase` instance to be passed as the `db_instance` argument. They generally call instance methods or perform read operations.
 
-*   **`get_document_version(db_instance: Database, media_id: int, version_number: Optional[int] = None, include_content: bool = True) -> Optional[Dict[str, Any]]`**:
+*   **`get_document_version(db_instance: MediaDatabase, media_id: int, version_number: Optional[int] = None, include_content: bool = True) -> Optional[Dict[str, Any]]`**:
     Gets a specific active document version or the latest active one for an active media item.
     *   **Raises**: `TypeError`, `ValueError`, `DatabaseError`.
 
@@ -276,12 +453,12 @@ These functions require a `Database` instance to be passed as the `db_instance` 
 *   **`is_valid_date(date_string: str) -> bool`**:
     Checks if a string is a valid 'YYYY-MM-DD' date.
 
-*   **`check_media_exists(db_instance: Database, media_id: Optional[int] = None, url: Optional[str] = None, content_hash: Optional[str] = None) -> Optional[int]`**:
+*   **`check_media_exists(db_instance: MediaDatabase, media_id: Optional[int] = None, url: Optional[str] = None, content_hash: Optional[str] = None) -> Optional[int]`**:
     Checks if an *active* media item exists by ID, URL, or hash.
     *   **Returns**: Media ID if found, else `None`.
     *   **Raises**: `TypeError`, `ValueError`, `DatabaseError`.
 
-*   **`empty_trash(db_instance: Database, days_threshold: int) -> Tuple[int, int]`**:
+*   **`empty_trash(db_instance: MediaDatabase, days_threshold: int) -> Tuple[int, int]`**:
     Permanently removes items from trash older than `days_threshold` by calling `db_instance.soft_delete_media()` for each.
     *   **Returns**: `(processed_count, remaining_in_trash_count)`.
     *   **Raises**: `TypeError`, `ValueError`, `DatabaseError` (can be from `soft_delete_media`).
@@ -289,89 +466,89 @@ These functions require a `Database` instance to be passed as the `db_instance` 
 *   **`check_media_and_whisper_model(*args, **kwargs)`**:
     Deprecated function, logs a warning.
 
-*   **`get_unprocessed_media(db_instance: Database) -> List[Dict]`**:
+*   **`get_unprocessed_media(db_instance: MediaDatabase) -> List[Dict]`**:
     Retrieves active, non-trashed media items with `vector_processing = 0`.
     *   **Returns**: List of dicts (`id`, `uuid`, `content`, `type`, `title`).
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`mark_media_as_processed(db_instance: Database, media_id: int)`**:
+*   **`mark_media_as_processed(db_instance: MediaDatabase, media_id: int)`**:
     Sets `vector_processing = 1` for a media item. **Does not update `last_modified`, `version`, or log to `sync_log`**.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`ingest_article_to_db_new(db_instance: Database, *, url: str, title: str, content: str, author: Optional[str] = None, keywords: Optional[List[str]] = None, summary: Optional[str] = None, ingestion_date: Optional[str] = None, custom_prompt: Optional[str] = None, overwrite: bool = False) -> Tuple[Optional[int], Optional[str], str]`**:
+*   **`ingest_article_to_db_new(db_instance: MediaDatabase, *, url: str, title: str, content: str, author: Optional[str] = None, keywords: Optional[List[str]] = None, summary: Optional[str] = None, ingestion_date: Optional[str] = None, custom_prompt: Optional[str] = None, overwrite: bool = False) -> Tuple[Optional[int], Optional[str], str]`**:
     Wrapper to add/update an article using `db_instance.add_media_with_keywords`. Sets `media_type='article'`.
     *   **Raises**: `TypeError`, `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`import_obsidian_note_to_db(db_instance: Database, note_data: Dict[str, Any]) -> Tuple[Optional[int], Optional[str], str]`**:
+*   **`import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: Dict[str, Any]) -> Tuple[Optional[int], Optional[str], str]`**:
     Wrapper to add/update an Obsidian note using `db_instance.add_media_with_keywords`. Sets `media_type='obsidian_note'`. Uses `pyyaml` for frontmatter.
     *   `note_data`: Dict with `title`, `content`, optional `tags`, `frontmatter`, `file_created_date`, `overwrite`.
     *   **Raises**: `TypeError`, `InputError`, `ConflictError`, `DatabaseError`, `ImportError` (if `yaml` missing).
 
-*   **`get_media_transcripts(db_instance: Database, media_id: int) -> List[Dict]`**:
+*   **`get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> List[Dict]`**:
     Retrieves all active transcripts for an active media item.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`get_latest_transcription(db_instance: Database, media_id: int) -> Optional[str]`**:
+*   **`get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optional[str]`**:
     Retrieves text of the latest active transcript for an active media item.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`get_specific_transcript(db_instance: Database, transcript_uuid: str) -> Optional[Dict]`**:
+*   **`get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> Optional[Dict]`**:
     Retrieves a specific active transcript by UUID (ensuring parent media is active).
     *   **Raises**: `TypeError`, `InputError`, `DatabaseError`.
 
-*   **`get_specific_analysis(db_instance: Database, version_uuid: str) -> Optional[str]`**:
+*   **`get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> Optional[str]`**:
     Retrieves `analysis_content` from a specific active `DocumentVersion` (ensuring parent media is active).
     *   **Raises**: `TypeError`, `InputError`, `DatabaseError`.
 
-*   **`get_media_prompts(db_instance: Database, media_id: int) -> List[Dict]`**:
+*   **`get_media_prompts(db_instance: MediaDatabase, media_id: int) -> List[Dict]`**:
     Retrieves non-empty prompts from active `DocumentVersions` for an active media item.
     *   **Returns**: List of dicts (`id`, `uuid`, `content` (prompt), `created_at`, `version_number`).
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`get_specific_prompt(db_instance: Database, version_uuid: str) -> Optional[str]`**:
+*   **`get_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> Optional[str]`**:
     Retrieves `prompt` from a specific active `DocumentVersion` (ensuring parent media is active).
     *   **Raises**: `TypeError`, `InputError`, `DatabaseError`.
 
-*   **`soft_delete_transcript(db_instance: Database, transcript_uuid: str) -> bool`**:
+*   **`soft_delete_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> bool`**:
     Soft-deletes a specific transcript. Calls instance methods for logging.
     *   **Returns**: `True` on success.
     *   **Raises**: `TypeError`, `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`clear_specific_analysis(db_instance: Database, version_uuid: str) -> bool`**:
+*   **`clear_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> bool`**:
     Clears `analysis_content` (sets to NULL) for an active `DocumentVersion`. Calls instance methods for logging.
     *   **Returns**: `True` on success.
     *   **Raises**: `TypeError`, `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`clear_specific_prompt(db_instance: Database, version_uuid: str) -> bool`**:
+*   **`clear_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> bool`**:
     Clears `prompt` (sets to NULL) for an active `DocumentVersion`. Calls instance methods for logging.
     *   **Returns**: `True` on success.
     *   **Raises**: `TypeError`, `InputError`, `ConflictError`, `DatabaseError`.
 
-*   **`get_chunk_text(db_instance: Database, chunk_uuid: str) -> Optional[str]`**:
+*   **`get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> Optional[str]`**:
     Retrieves `chunk_text` from an active `UnvectorizedMediaChunks` (ensuring parent media is active).
     *   **Raises**: `TypeError`, `InputError`, `DatabaseError`.
 
-*   **`get_all_content_from_database(db_instance: Database) -> List[Dict[str, Any]]`**:
+*   **`get_all_content_from_database(db_instance: MediaDatabase) -> List[Dict[str, Any]]`**:
     Retrieves various fields for all active, non-trashed media items.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`permanently_delete_item(db_instance: Database, media_id: int) -> bool`**:
+*   **`permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool`**:
     **DANGER**: Hard deletes a media item and its related data via DB cascades. Bypasses soft delete and sync log. Deletes FTS entry.
     *   **Returns**: `True` if deleted.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`fetch_keywords_for_media(media_id: int, db_instance: Database) -> List[str]`**:
+*   **`fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> List[str]`**:
     Fetches active keywords for a specific active media item.
     *   **Raises**: `TypeError`, `DatabaseError`.
 
-*   **`fetch_keywords_for_media_batch(media_ids: List[int], db_instance: Database) -> Dict[int, List[str]]`**:
+*   **`fetch_keywords_for_media_batch(media_ids: List[int], db_instance: MediaDatabase) -> Dict[int, List[str]]`**:
     Fetches active keywords for multiple active media items.
     *   **Returns**: Dict mapping `media_id` to list of keywords.
     *   **Raises**: `TypeError`, `InputError`, `DatabaseError`.
 
-## Schema Overview (V1)
+## Schema Overview (v5)
 
-The database schema (version 1) consists of the following main tables:
+The current database schema consists of the following main tables:
 
 *   **`schema_version`**: Stores the current schema version of the database.
 *   **`Media`**: Core table for media items (articles, videos, notes, etc.). Includes metadata like URL, title, content, author, timestamps, content hash, UUID, and flags for `is_trash`, `deleted`. Also tracks `chunking_status` and `vector_processing` states.
@@ -380,11 +557,13 @@ The database schema (version 1) consists of the following main tables:
 *   **`Transcripts`**: Stores transcriptions for media items, potentially from different models. Includes UUID and sync metadata.
 *   **`MediaChunks`**: Stores processed, smaller segments (chunks) of media content, often used for vectorization or focused analysis. Includes UUID and sync metadata.
 *   **`UnvectorizedMediaChunks`**: Stores raw chunks of media content before vectorization or further processing. Includes UUID and sync metadata, `chunk_index`, character offsets, and processing status.
-*   **`DocumentVersions`**: Stores historical versions of a media item's content, possibly with associated prompts or analysis. Includes UUID and sync metadata.
+*   **`DocumentVersions`**: Stores historical versions of a media item's content, with associated `prompt`, `analysis_content`, and `safe_metadata` (JSON). Includes UUID and sync metadata.
+*   **`Claims`**: Stores factual claims extracted at ingestion time, attached to a media chunk (with indices/spans, extractor metadata, confidence). Maintained with FTS via triggers.
 *   **`sync_log`**: Records all CUD (Create, Update, Delete) operations, as well as link/unlink operations on entities, along with `client_id`, `timestamp`, `version`, and an optional `payload` (JSON of changed data).
 *   **FTS Tables**:
     *   **`media_fts`**: FTS5 virtual table for full-text searching `Media.title` and `Media.content`.
     *   **`keyword_fts`**: FTS5 virtual table for full-text searching `Keywords.keyword`.
+    *   **`claims_fts`**: FTS5 virtual table for full‑text search over `Claims.claim_text` with triggers to maintain sync.
 
 All primary entities (`Media`, `Keywords`, `Transcripts`, `MediaChunks`, `UnvectorizedMediaChunks`, `DocumentVersions`) include standard columns for synchronization and optimistic locking:
 *   `uuid`: A universally unique identifier for the record.
@@ -395,22 +574,22 @@ All primary entities (`Media`, `Keywords`, `Transcripts`, `MediaChunks`, `Unvect
 *   `prev_version`: Placeholder for previous version tracking (usage may vary).
 *   `merge_parent_uuid`: Placeholder for tracking merge history (usage may vary).
 
-Database triggers are defined on these tables to validate updates (e.g., `version` must increment by 1, `client_id` must be non-empty, `uuid` cannot change).
+Database triggers validate updates on major tables (`version` must increment by 1, `client_id` must be non‑empty, `uuid` cannot change). Additional triggers maintain the `claims_fts` index.
 
 ## Example Usage (Conceptual)
 
 ```python
 from pathlib import Path
-from Media_DB_v2 import Database, InputError, ConflictError
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError, ConflictError
 
-# Initialize a Database instance for a specific user/DB file
-db_file = Path("./user_data/my_media.sqlite")
+# Initialize a MediaDatabase instance for a specific user/DB file
+db_file = Path("./Databases/Media_DB_v2.db")
 client_1 = "my_desktop_app_instance_123"
 try:
-    db = Database(db_path=db_file, client_id=client_1)
+    db = MediaDatabase(db_path=db_file, client_id=client_1)
 except Exception as e:
     print(f"Failed to initialize database: {e}")
-    exit()
+    raise
 
 # Add a new article
 try:
@@ -420,6 +599,7 @@ try:
         media_type="article",
         content="This is the full content of the article...",
         keywords=["tech", "python", "database"],
+        safe_metadata='{"source": "web", "lang": "en"}',
         author="John Doe",
         overwrite=False # Don't overwrite if it exists
     )
@@ -441,7 +621,7 @@ finally:
 
 # Another client instance (e.g., on a different device or process)
 # client_2 = "my_mobile_app_instance_456"
-# db_sync_client = Database(db_path=db_file, client_id=client_2)
+# db_sync_client = MediaDatabase(db_path=db_file, client_id=client_2)
 #
 # # Fetch sync log entries to process changes made by client_1
 # changes = db_sync_client.get_sync_log_entries(since_change_id=0) # Get all changes
@@ -451,3 +631,58 @@ finally:
 #
 # db_sync_client.close_connection()
 ```
+
+## Troubleshooting
+
+- Missing FTS tables (e.g., `media_fts`, `keyword_fts`, `claims_fts`)
+  - Symptom: `DatabaseError` mentioning "no such table" or failed search.
+  - Fix: Ensure schema initialization completed. Instantiate `MediaDatabase` once with valid config to bootstrap schema. For claims, you can run `rebuild_claims_fts()` after enabling the table.
+
+- Permissions when creating DB directories
+  - Symptom: Initialization fails creating the database directory.
+  - Fix: Verify the `db_path` parent exists and has write permission, or choose a writable path. In containerized deployments, mount a writable volume.
+
+- Chunking template JSON errors
+  - Symptom: `InputError: Invalid template JSON` when creating/updating templates.
+  - Fix: Provide valid JSON; prefer double quotes and escape inner quotes.
+
+- Sync validation/optimistic concurrency errors
+  - Symptom: `sqlite3.IntegrityError` with trigger messages (e.g., "Version must increment by exactly 1", "UUID cannot be changed").
+  - Fix: Use the documented mutators that manage version increments and `last_modified`. Avoid direct SQL updates on versioned tables.
+
+- PostgreSQL connection/config issues
+  - Symptom: Connection refused/timeout or invalid DSN.
+  - Fix: Use the `TLDW_CONTENT_*` env vars or `[Database]` config as shown in examples. Verify credentials, host reachability, and `pg_sslmode`.
+
+- Upgrades and `safe_metadata`
+  - Symptom: Older DBs may lack `safe_metadata` column; insert paths catch and adapt, but queries may fail.
+  - Fix: Initialize via current code path to let migrations add new columns, or recreate the DB and re‑ingest.
+
+### Common Migration Tasks
+
+- Verify schema version and bootstrap
+  - Back up the DB file first.
+  - Instantiate `MediaDatabase` once to run schema checks/migrations. Verify with:
+    - SQLite: `sqlite3 Databases/Media_DB_v2.db "SELECT version FROM schema_version;"` → should be `5`.
+
+- Add `safe_metadata` to older databases (manual)
+  - If you cannot run the app to migrate, add the column manually:
+    - SQLite: `sqlite3 <db> "ALTER TABLE DocumentVersions ADD COLUMN safe_metadata TEXT;"`
+
+- Enable Claims and rebuild FTS (SQLite)
+  - Initialization creates `Claims` and triggers; if claims_fts is empty or missing, rebuild:
+    - Python: `db.rebuild_claims_fts()`
+    - Or SQLite: `INSERT INTO claims_fts(rowid, claim_text) SELECT id, claim_text FROM Claims WHERE deleted = 0;`
+
+- Rebuild FTS indices after bulk changes (SQLite)
+  - `media_fts`: delete and reinsert rows from `Media`.
+  - `keyword_fts`: delete and reinsert rows from `Keywords`.
+  - The library updates FTS on mutators; for manual maintenance, script the rebuilds.
+
+- Move to per-user layout
+  - Move file to `Databases/user_databases/<user_id>/Media_DB_v2.db` and update config (`USER_DB_BASE_DIR` or content DB settings).
+
+- Migrate SQLite → PostgreSQL
+  - Recommended: re‑ingest via the library (mutators handle sync/versioning/metadata) into a Postgres‑backed `MediaDatabase`.
+  - Programmatic: read from SQLite and call `add_media_with_keywords`, `create_document_version`, `process_unvectorized_chunks`, `upsert_claims` on the PG instance.
+  - Note: FTS virtual tables are SQLite‑specific; Postgres backend uses LIKE/ILIKE fallbacks in search.

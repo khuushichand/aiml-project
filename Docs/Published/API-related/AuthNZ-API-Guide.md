@@ -755,6 +755,6 @@ Import this collection for testing:
 
 ## Support
 
-- **Documentation**: See [Authentication Setup Guide](../User_Guides/Authentication_Setup.md)
+- **Documentation**: See [AuthNZ Developer Guide](../Development/AuthNZ-Developer-Guide.md)
 - **Issues**: Report at [GitHub Issues](https://github.com/rmusser01/tldw_server/issues)
 - **Security**: Report security issues privately to the maintainers

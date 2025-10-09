@@ -63,6 +63,17 @@ print(doc_res["status"], doc_res["source_format"])
 
 - `POST /api/v1/media/process-documents` (media.py) invokes this pipeline per uploaded/URL-provided document.
 
+Notes:
+- URL downloads are restricted to document extensions: `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml`.
+- URLs without these suffixes may still be accepted if the final redirected response provides an appropriate `Content-Disposition` filename, or a supported `Content-Type` that maps to an allowed extension, for example:
+  - `text/plain` → `.txt`
+  - `text/markdown` or `text/x-markdown` → `.md`
+  - `text/html` or `application/xhtml+xml` → `.html`
+  - `application/xml` or `text/xml` → `.xml`
+  - `application/rtf` or `text/rtf` → `.rtf`
+  - `application/vnd.openxmlformats-officedocument.wordprocessingml.document` → `.docx`
+- `application/msword` (`.doc`) is not accepted by this endpoint.
+
 ## Dependencies & Config
 
 - `docx2txt` for DOCX, `pypandoc` for RTF, `BeautifulSoup`/`html2text` for HTML.
@@ -72,4 +83,3 @@ print(doc_res["status"], doc_res["source_format"])
 
 - Graceful decoding fallback from UTF‑8 to latin‑1; errors recorded.
 - Unsupported file types raise `ValueError` with details.
-

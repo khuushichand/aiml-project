@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
@@ -172,3 +173,50 @@ async def reset_setup_flags(_admin: Dict[str, Any] = Depends(require_admin)) -> 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to reset setup flags")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    
+    "/self-verify",
+    summary="Mark current user as verified (initial setup)",
+    description=(
+        "Local-only helper to mark the authenticated user as verified during initial setup. "
+        "Requires that the setup wizard is still enabled and not completed. Accepts either "
+        "Bearer JWT (Authorization header) or X-API-KEY for multi-user SQLite setups."
+    ),
+)
+async def setup_self_verify(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db=Depends(get_db_transaction),
+    _guard: None = Depends(require_local_setup_access),
+) -> Dict[str, Any]:
+    """Mark the authenticated account as verified when setup is in progress."""
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["needs_setup"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Self-verify is only available while initial setup is in progress.",
+        )
+
+    user_id = int(current_user.get("id"))
+    if not user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
+
+    try:
+        if hasattr(db, 'execute'):
+            # PostgreSQL
+            await db.execute(
+                "UPDATE users SET is_verified = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                True, user_id
+            )
+        else:
+            # SQLite
+            await db.execute(
+                "UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?",
+                (1, user_id)
+            )
+            await db.commit()
+        return {"success": True, "user_id": user_id, "message": "Account marked as verified."}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to self-verify during setup")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))

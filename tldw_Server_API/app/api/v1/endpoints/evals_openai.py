@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 
 # Create router
 router = APIRouter(tags=["evaluations"])
@@ -148,12 +149,20 @@ async def verify_api_key(
             return token
             
     elif settings.AUTH_MODE == "multi_user":
-        # Multi-user mode: Verify JWT token
+        # Multi-user mode: Verify JWT token, or accept X-API-KEY mapped to a user
         try:
-            jwt_service = JWTService(settings)
-            payload = jwt_service.decode_access_token(token)
-            # Return user ID as the authenticated identifier
-            return f"user_{payload['sub']}"
+            if token:
+                jwt_service = JWTService(settings)
+                payload = jwt_service.decode_access_token(token)
+                return f"user_{payload['sub']}"
+            elif x_api_key:
+                api_mgr = await get_api_key_manager()
+                key_info = await api_mgr.validate_api_key(x_api_key)
+                if not key_info:
+                    raise InvalidTokenError("Invalid API key")
+                return f"user_{key_info['user_id']}"
+            else:
+                raise InvalidTokenError("Missing credentials")
         except TokenExpiredError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

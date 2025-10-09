@@ -23,6 +23,12 @@ Options (request-level):
 - `proposition_min_proposition_length`: minimum chars for a proposition before merging small ones
 - `proposition_prompt_profile`: `generic|claimify|gemma_aps` (used for LLM engine)
 
+Chunk sizing semantics:
+- For `method="propositions"`, `max_size` and `overlap` are counts of propositions per chunk (not characters/tokens). The stride is `max(1, max_size - overlap)`.
+
+LLM usage:
+- Only the `llm` engine variant requires an LLM. `heuristic` and `spacy` do not. Some capability listings may show `propositions` as “LLM-required” because it optionally supports an LLM engine.
+
 Example (API chunking):
 ```json
 {
@@ -90,6 +96,9 @@ Matching methods:
 - `semantic`: TF‑IDF cosine similarity (falls back to Jaccard if scikit-learn unavailable)
 - `jaccard`: token-based Jaccard similarity
 
+Notes:
+- When `semantic` is selected but scikit‑learn is unavailable, matching falls back to Jaccard with a default threshold of 0.6.
+
 The service stores results in the evaluations database with type `proposition_extraction`.
 
 ### Run‑Managed Evaluations
@@ -109,4 +118,3 @@ You can define an evaluation with `eval_type="proposition_extraction"` and provi
 Create a run via `POST /api/v1/evaluations/{eval_id}/runs`, then poll `GET /api/v1/evaluations/runs/{run_id}` until status is `completed`.
 
 Outputs include per-sample metrics (precision, recall, F1) and counts, with pass/fail determined by F1 threshold.
-

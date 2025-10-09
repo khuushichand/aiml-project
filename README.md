@@ -76,6 +76,100 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **Flexible Configuration** [Stable]: Tune FTS/vector weights, thresholds, and reranking
 - **RAG Docs**: `tldw_Server_API/app/core/RAG/README.md`, `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`, `tldw_Server_API/app/core/RAG/UNIFIED_PIPELINE_EXAMPLES.md`, `tldw_Server_API/app/core/RAG/CAPABILITIES.md`
 
+### Reranking (llama.cpp, GGUF: Qwen3, BGE, Jina-AI)
+- **HTTP Reranker Endpoints** [Stable]:
+  - `POST /v1/reranking` and `POST /v1/rerank` (versioned public aliases; auth required)
+  - `POST /api/v1/llamacpp/reranking` (namespaced; fine‑grained controls)
+- **Models**: Use GGUF embedding models via llama.cpp `llama-embedding`, including:
+  - Qwen3 (e.g., `Qwen3-Embedding-0.6B_f16.gguf`)
+  - BGE (e.g., `bge-small-en-v1.5.gguf`)
+  - Jina-AI (e.g., `jina-embeddings-v2-base-en.gguf`)
+- **Scoring**: Cosine(query, passage) similarity normalized to [0,1]
+- **Config**: `.env`/`tldw_Server_API/Config_Files/config.txt` `[RAG]` keys like `llama_reranker_model`, `llama_reranker_binary`, `llama_reranker_ngl`, etc.
+- **Model formatting**: Auto-instruct formatting for BGE (adds `query: ` and `passage: ` prefixes). You can override with `llama_reranker_template_mode`, `llama_reranker_query_prefix`, `llama_reranker_doc_prefix`. Default pooling automatically selected per model family (BGE/Jina → `mean`, Qwen → `last`).
+
+Try it (cURL)
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "model": "/abs/path/Qwen3-Embedding-0.6B_f16.gguf",
+    "query": "What is panda?",
+    "top_n": 3,
+    "documents": [
+      "hi",
+      "it is a bear",
+      "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
+    ]
+  }'
+```
+
+Use Transformers backend (GPU):
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "backend": "transformers",
+    "model": "BAAI/bge-reranker-v2-m3",
+    "query": "What is panda?",
+    "top_n": 3,
+    "documents": [
+      "hi",
+      "it is a bear",
+      "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
+    ]
+  }'
+```
+
+Use Transformers with Qwen3 Reranker (official yes/no prompt):
+
+```bash
+curl http://127.0.0.1:8000/v1/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "backend": "transformers",
+    "model": "Qwen/Qwen3-Reranker-8B",
+    "query": "What is the capital of China?",
+    "top_n": 2,
+    "documents": [
+      "The capital of China is Beijing.",
+      "Shanghai is the largest city in China."
+    ]
+  }'
+```
+
+- To customize the Qwen3 reranker instruction used in the `<Instruct>:` block, edit:
+  - `tldw_Server_API/Config_Files/Prompts/rag.prompts.yaml: qwen3_reranker_instruction`
+  - If unset, the default is: `Given a web search query, retrieve relevant passages that answer the query`.
+  - You can also customize the ChatML system message via `qwen3_reranker_system`.
+
+Programmatic (namespaced)
+
+```bash
+curl http://127.0.0.1:8000/api/v1/llamacpp/reranking \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "query": "What do llamas eat?",
+    "passages": [
+      {"id": "a", "text": "Llamas eat bananas"},
+      {"id": "b", "text": "Llamas in pyjamas"}
+    ],
+    "top_k": 2,
+    "model": "/abs/path/Qwen3-Embedding-0.6B_f16.gguf",
+    "ngl": 99,
+    "separator": "<#sep#>",
+    "output_format": "json+",
+    "pooling": "last",
+    "normalize": -1
+  }'
+```
+
 ### API Capabilities
 - **OpenAI Compatible** [Stable]: `/chat/completions` endpoint for drop-in replacement
 - **RESTful Design** [Stable]: Consistent endpoint patterns following OpenAPI 3.0

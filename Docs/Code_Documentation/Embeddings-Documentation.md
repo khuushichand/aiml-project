@@ -13,15 +13,16 @@
 
 The tldw_server Embeddings System provides a comprehensive solution for generating text embeddings through multiple providers. The system offers two distinct paths to accommodate different use cases:
 
-1. **Synchronous API** (`embeddings_v5_production_enhanced.py`) - Direct request-response model with circuit breaker, ideal for single-user and small deployments
-2. **Worker Architecture** (WIP) - Distributed, queue-based processing for future enterprise/multi-tenant deployments
+1. **Synchronous API** (`embeddings_v5_production_enhanced.py`) — Direct request-response model with circuit breaker, ideal for single-user and small deployments
+2. **Worker Architecture (Orchestrated)** — Distributed, queue-based processing for enterprise/multi-tenant deployments via `core/Embeddings/worker_orchestrator.py` and `core/Embeddings/workers/*` (uses Redis streams)
 
 ### Key Features (Production Path)
-- 🌐 Providers: OpenAI and HuggingFace supported today; ONNX and Local API supported by the core engine; additional providers (Cohere, Google, Mistral, Voyage) are planned but not yet wired end-to-end.
+- 🌐 Providers: OpenAI and HuggingFace supported today; ONNX and Local API supported by the core engine. Additional providers (Cohere, Google, Mistral, Voyage) are present in configuration but not fully wired in the embedding call path yet.
 - ⚡ High-performance TTL cache (default 3600s, size 5000) with background cleanup and metrics.
 - 🛡️ Circuit breaker and resilient connection handling around provider calls.
 - 📊 Prometheus metrics for requests, durations, cache, and active requests.
 - 🔒 Authorization integrated with existing AuthNZ; admin-only management endpoints (warmup/download/cache/metrics/circuit breakers).
+- 🔁 Provider fallback chain with model mapping (configurable via `EMBEDDINGS_FALLBACK_CHAIN` and mapping), and dimension policy (`reduce`/`pad`/`ignore`) controlled by `EMBEDDINGS_DIMENSION_POLICY`.
 
 ## Architecture
 
@@ -70,7 +71,7 @@ graph TB
     subgraph "Storage"
         DB[(PostgreSQL/<br/>SQLite)]
         CHROMA[(ChromaDB)]
-        S3[Object Storage]
+        S3[Object Storage (optional)]
     end
     
     subgraph "Monitoring"
@@ -152,15 +153,16 @@ sequenceDiagram
         API-->>Client: 200 OK
 
     Note over API
-      - Input: strings or list[str] only
+      - Input: string | list[str] | token arrays (List[int] | List[List[int]])
       - Max 2048 inputs per request
       - Enforces per-model token limits
       - Optional base64 output; float output is L2-normalized
+      - Endpoint batches inputs in chunks of 100
     end note
     end
 ```
 
-### Worker Architecture (WIP)
+### Worker Architecture (Orchestrated)
 
 ```mermaid
 graph LR
@@ -169,7 +171,7 @@ graph LR
     end
     
     subgraph "API Layer"
-        API[Job API]
+    API[Job API (media embeddings endpoints)]
         WS[WebSocket]
     end
     
@@ -222,6 +224,8 @@ graph LR
     
     PUB -.->|Events| WS
     SW1 -.->|Complete| PUB
+
+Note: Embedding job endpoints are currently exposed under the media namespace (`/api/v1/media/...`) for document/media chunk embeddings (e.g., start job, list jobs). A generic embeddings jobs API may be introduced later.
 ```
 
 ## System Selection Guide
@@ -579,6 +583,9 @@ stateDiagram-v2
         - Redis disconnected (if job-based)
         - OOM conditions
     end note
+
+Implementation notes:
+- When the embeddings implementation is unavailable (e.g., optional deps missing), the `/api/v1/embeddings/health` endpoint responds with HTTP 503 and `status: "degraded"`.
 ```
 
 ## Security Model
@@ -681,13 +688,91 @@ graph LR
 
 ---
 
+## Vector Stores
+
+OpenAI-compatible vector store endpoints are available and backed by ChromaDB. Key routes:
+
+- Create store: `POST /api/v1/vector_stores`
+- List stores: `GET /api/v1/vector_stores`
+- Get store: `GET /api/v1/vector_stores/{store_id}`
+- Update store: `PATCH /api/v1/vector_stores/{store_id}`
+- Delete store: `DELETE /api/v1/vector_stores/{store_id}`
+- Upsert vectors: `POST /api/v1/vector_stores/{store_id}/vectors`
+- List vectors: `GET /api/v1/vector_stores/{store_id}/vectors`
+- Delete vector: `DELETE /api/v1/vector_stores/{store_id}/vectors/{vector_id}`
+- Query: `POST /api/v1/vector_stores/{store_id}/query`
+- Batches: `POST /api/v1/vector_stores/{store_id}/vectors/batches`, `GET /api/v1/vector_stores/{store_id}/vectors/batches/{batch_id}`
+- Create from media: `POST /api/v1/vector_stores/create_from_media`
+- Admin (users overview): `GET /api/v1/vector_stores/admin/users`
+
+Note: The OpenAPI tag is `vector-stores`, but the actual paths use underscores (`/vector_stores`).
+
+Implementation reference:
+- `tldw_Server_API/app/api/v1/endpoints/vector_stores_openai.py`
+- `tldw_Server_API/app/core/RAG/rag_service/vector_stores/chromadb_adapter.py`
+
+### Example Payloads
+
+Create store
+```json
+{
+  "name": "docs-index",
+  "dimensions": 1536,
+  "embedding_model": "text-embedding-3-small",
+  "metadata": { "project": "acme" }
+}
+```
+
+Upsert vectors (server-embeds content)
+```json
+{
+  "records": [
+    { "id": "doc-1#0", "content": "First paragraph...", "metadata": { "source": "doc-1", "chunk_index": 0 } },
+    { "id": "doc-1#1", "content": "Second paragraph...", "metadata": { "source": "doc-1", "chunk_index": 1 } }
+  ]
+}
+```
+
+Upsert vectors (raw values)
+```json
+{
+  "records": [
+    { "id": "vec-1", "values": [0.01, -0.02, 0.03, 0.04], "content": "optional text", "metadata": { "source": "manual" } }
+  ]
+}
+```
+
+Query (text)
+```json
+{
+  "query": "retrieval augmented generation",
+  "top_k": 5,
+  "filter": { "source": "doc-1" }
+}
+```
+
+Query (vector)
+```json
+{
+  "vector": [0.1, 0.2, -0.3, 0.4],
+  "top_k": 10
+}
+```
+
+Notes:
+- If the store is non-empty and has a specific dimension (not 1536), upserted vectors must match that length; server-embedded content uses the default embedding model, which must match the store’s dimension.
+- Batch upserts reuse the same payload at `POST /api/v1/vector_stores/{store_id}/vectors/batches` and expose status at `GET /api/v1/vector_stores/{store_id}/vectors/batches/{batch_id}`.
+
 ## Next Steps
 
 For detailed implementation guidance, see:
-- [Developer Guide](./Embeddings-Developer-Guide.md) — working with the codebase
-- [API Consumer Guide](./Embeddings-API-Guide.md) — using the HTTP API and media embeddings
+- Development guide: `Docs/Development/Embeddings-Developer-Guide.md`
+- API reference: `Docs/API-related/Embeddings_API_Documentation.md`
+
+Vector stores (OpenAI-compatible) are covered under:
+- API design overview: `Docs/API-related/API_Design.md` (see Embeddings & Vector Stores)
 
 For specific deployment scenarios, refer to:
-- [Single Server Setup](../Deployment/single-server.md)
-- [Docker Compose Setup](../Deployment/docker-compose.md)
-- [Kubernetes Deployment](../Deployment/kubernetes.md)
+- `Docs/Deployment/single-server.md`
+- `Docs/Deployment/docker-compose.md`
+- `Docs/Deployment/kubernetes.md`

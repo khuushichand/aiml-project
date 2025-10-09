@@ -500,7 +500,7 @@ A: Yes, S3/GCS/Azure integration is planned.
 
 - [API Documentation](../API-related/Chatbook_API_Documentation.md)
 - [Developer Guide](../Code_Documentation/Chatbook_Developer_Guide.md)
-- [Production Hardening Checklist](./Production_Hardening_Checklist.md)
+- [Security Best Practices](../Design/Security.md)
 
 ### Support Resources
 

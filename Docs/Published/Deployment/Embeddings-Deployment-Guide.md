@@ -1,36 +1,38 @@
 # Embeddings Service Deployment Guide
 
-**Version**: 1.0  
-**Last Updated**: 2025-08-16  
-**Service Version**: v5 Enhanced (with Circuit Breaker)
+Version: 1.0
+Last Updated: 2025-10-08
+Service Version: v5 Enhanced (with Circuit Breaker)
 
 ## Table of Contents
-1. [Architecture Overview](#architecture-overview)
-2. [Deployment Decision Tree](#deployment-decision-tree)
-3. [Single-User Deployment](#single-user-deployment)
-4. [Enterprise Deployment](#enterprise-deployment)
-5. [Configuration Reference](#configuration-reference)
-6. [Monitoring & Observability](#monitoring--observability)
-7. [Troubleshooting](#troubleshooting)
-8. [Migration Guide](#migration-guide)
+1. Architecture Overview
+2. Deployment Decision Tree
+3. Single-User Deployment
+4. Enterprise Deployment
+5. Configuration Reference
+6. Monitoring & Observability
+7. Troubleshooting
+8. Support
 
 ---
 
 ## Architecture Overview
 
-The embeddings service implements a **dual-architecture design** to support different deployment scales:
+The embeddings service is implemented as part of the FastAPI application and supports two deployment topologies:
 
 ### Single-User Architecture (<5 concurrent users)
-- **Implementation**: `embeddings_v5_production_enhanced.py`
-- **Processing**: Synchronous with async wrapper
-- **Infrastructure**: Minimal (no Redis/queues required)
-- **Best for**: Personal use, small teams, development
+- Implementation: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`
+- Processing: Inline HTTP handling; no external queue required
+- Infra: Minimal (no Redis/queues required)
+- Best for: Personal use, small teams, development
 
-### Enterprise Architecture (>5 concurrent users)
-- **Implementation**: Worker-based architecture (job_manager, workers)
-- **Processing**: Queue-based, distributed
-- **Infrastructure**: Redis, multiple workers, job tracking
-- **Best for**: Production, multi-tenant, high volume
+### Enterprise Architecture (≥5 concurrent users)
+- Implementation: Orchestrated workers (`core/Embeddings/worker_orchestrator.py` + `core/Embeddings/workers/*`)
+- Processing: Queue-based, distributed workers (chunking → embedding → storage)
+- Infra: Redis streams, orchestrator process, multiple worker tasks
+- Best for: Production, multi-tenant, high volume
+
+Note: The “mode” depends on which processes you run (API only vs API + orchestrator). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
 
 ---
 
@@ -53,20 +55,6 @@ The embeddings service implements a **dual-architecture design** to support diff
 └──────────┘  └──────────┘
 ```
 
-### Choose Single-User Mode if:
-- [ ] Less than 5 concurrent users
-- [ ] Simple deployment preferred
-- [ ] No Redis infrastructure available
-- [ ] Development/testing environment
-- [ ] Personal or small team use
-
-### Choose Enterprise Mode if:
-- [ ] 5+ concurrent users expected
-- [ ] Need job tracking and queuing
-- [ ] Multi-tenant requirements
-- [ ] High availability required
-- [ ] Need horizontal scaling
-
 ---
 
 ## Single-User Deployment
@@ -74,87 +62,81 @@ The embeddings service implements a **dual-architecture design** to support diff
 ### Prerequisites
 ```bash
 # Required packages
-pip install -r requirements.txt
+pip install -r tldw_Server_API/requirements.txt
 
-# Optional but recommended
-pip install torch  # For GPU acceleration
-pip install onnxruntime-gpu  # For ONNX models on GPU
+# Optional (choose what your environment supports)
+pip install torch              # GPU acceleration for HuggingFace models
+pip install onnxruntime-gpu    # GPU acceleration for ONNX models
 ```
 
 ### Environment Variables
 ```bash
-# Basic configuration
-export EMBEDDINGS_MODE="single_user"
-export API_KEY="your-secret-key"
-export JWT_SECRET_KEY="your-jwt-secret"
+# Auth mode (pick one)
+export AUTH_MODE=single_user
+export SINGLE_USER_API_KEY="your-single-user-api-key"   # Used via X-API-KEY header
+# OR
+# export AUTH_MODE=multi_user
+# export JWT_SECRET_KEY="your-32+char-jwt-secret"       # Multi-user JWT mode
 
-# Provider API keys (as needed)
+# Provider API keys (as needed by your configured providers)
 export OPENAI_API_KEY="sk-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
 export COHERE_API_KEY="..."
+export GOOGLE_API_KEY="..."
+export MISTRAL_API_KEY="..."
+export VOYAGE_API_KEY="..."
 
-# Optional: Performance tuning
-export MAX_BATCH_SIZE=100
-export CACHE_TTL_SECONDS=3600
-export CONNECTION_POOL_SIZE=20
+# Optional: user DB base directory (default: Databases/user_databases)
+export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"
+
+# Optional: enable endpoint rate limiting guard on embeddings
+export EMBEDDINGS_RATE_LIMIT=on   # Uses built-in limit in the API endpoint
 ```
 
-### Docker Deployment
+### Dockerfile (API)
 ```dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY tldw_Server_API/requirements.txt ./tldw_Server_API/requirements.txt
+RUN pip install --no-cache-dir -r tldw_Server_API/requirements.txt
 
 # Copy application
 COPY tldw_Server_API/ ./tldw_Server_API/
 
-# Configuration
-ENV EMBEDDINGS_MODE=single_user
-ENV PYTHONPATH=/app
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/api/v1/embeddings/health || exit 1
+  CMD curl -fsS http://localhost:8000/api/v1/embeddings/health || exit 1
 
-# Run service
+# Run API
+ENV PYTHONPATH=/app
 CMD ["uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-### Docker Compose
+### Docker Compose (API only)
 ```yaml
 version: '3.8'
 
 services:
-  embeddings:
+  api:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - EMBEDDINGS_MODE=single_user
-      - API_KEY=${API_KEY}
+      - AUTH_MODE=single_user
+      - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MAX_BATCH_SIZE=100
-      - CACHE_TTL_SECONDS=3600
     volumes:
-      - ./user_databases:/app/user_databases
-      - ./models/embedding_models_data:/app/embedding_models_data
+      - ./Databases/user_databases:/app/Databases/user_databases
+      - ./models/embedding_models_data:/app/models/embedding_models_data
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 2G
 ```
 
-### Systemd Service
+### systemd Service (API)
 ```ini
 [Unit]
-Description=TLDW Embeddings Service (Single-User)
+Description=TLDW Embeddings API (Single-User)
 After=network.target
 
 [Service]
@@ -162,7 +144,7 @@ Type=simple
 User=tldw
 Group=tldw
 WorkingDirectory=/opt/tldw_server
-Environment="EMBEDDINGS_MODE=single_user"
+Environment="AUTH_MODE=single_user"
 Environment="PYTHONPATH=/opt/tldw_server"
 ExecStart=/usr/bin/python3 -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
@@ -178,107 +160,53 @@ WantedBy=multi-user.target
 
 ### Prerequisites
 ```bash
-# Required packages
-pip install -r requirements-enterprise.txt
+# Required packages (same as single-user)
+pip install -r tldw_Server_API/requirements.txt
 
-# Redis server
-sudo apt-get install redis-server
+# Redis server (for queues)
+sudo apt-get install -y redis-server
 # OR
 docker run -d --name redis -p 6379:6379 redis:alpine
 
-# Optional: GPU support
+# Optional: GPU support for HF models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Environment Variables
+### Environment and Orchestrator
 ```bash
-# Mode selection
-export EMBEDDINGS_MODE="enterprise"
-
-# Redis configuration
 export REDIS_URL="redis://localhost:6379"
-export REDIS_QUEUE_PREFIX="embeddings"
-
-# Worker configuration
-export CHUNKING_WORKERS=2
-export EMBEDDING_WORKERS=4
-export STORAGE_WORKERS=2
-
-# Job limits
-export MAX_CONCURRENT_JOBS_FREE=2
-export MAX_CONCURRENT_JOBS_PREMIUM=5
-export MAX_CONCURRENT_JOBS_ENTERPRISE=20
-
-# Daily quotas (chunks)
-export DAILY_QUOTA_FREE=1000
-export DAILY_QUOTA_PREMIUM=10000
-export DAILY_QUOTA_ENTERPRISE=100000
+export PROMETHEUS_PORT=9090   # optional
 ```
 
-### Docker Compose (Enterprise)
+Use the orchestrator config at `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control worker pool sizes, GPU allocation, and queues. Start the orchestrator (it manages worker tasks in-process):
+
+```bash
+python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+```
+
+### Docker Compose (API + Orchestrator)
 ```yaml
 version: '3.8'
 
 services:
   redis:
     image: redis:alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
     command: redis-server --appendonly yes
-    
+
   api:
     build: .
-    ports:
-      - "8000:8000"
+    ports: ["8000:8000"]
     environment:
-      - EMBEDDINGS_MODE=enterprise
+      - AUTH_MODE=single_user
+      - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
+    depends_on: [redis]
     volumes:
-      - ./user_databases:/app/user_databases
-      
-  chunking-worker:
-    build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.workers.chunking_worker
-    environment:
-      - WORKER_TYPE=chunking
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-    deploy:
-      replicas: 2
-      
-  embedding-worker:
-    build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.workers.embedding_worker
-    environment:
-      - WORKER_TYPE=embedding
-      - REDIS_URL=redis://redis:6379
-      - CUDA_VISIBLE_DEVICES=0,1
-    depends_on:
-      - redis
-    deploy:
-      replicas: 4
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-              
-  storage-worker:
-    build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.workers.storage_worker
-    environment:
-      - WORKER_TYPE=storage
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-    deploy:
-      replicas: 2
+      - ./Databases/user_databases:/app/Databases/user_databases
+      - ./models/embedding_models_data:/app/models/embedding_models_data
 
   orchestrator:
     build: .
@@ -286,117 +214,54 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - PROMETHEUS_PORT=9090
-    depends_on:
-      - redis
-    ports:
-      - "9090:9090"
+    depends_on: [redis]
+    ports: ["9090:9090"]
 
 volumes:
   redis_data:
 ```
 
-### Kubernetes Deployment
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: embeddings-api
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: embeddings-api
-  template:
-    metadata:
-      labels:
-        app: embeddings-api
-    spec:
-      containers:
-      - name: api
-        image: tldw/embeddings:v5
-        ports:
-        - containerPort: 8000
-        env:
-        - name: EMBEDDINGS_MODE
-          value: "enterprise"
-        - name: REDIS_URL
-          value: "redis://redis-service:6379"
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1"
-          limits:
-            memory: "4Gi"
-            cpu: "2"
-        livenessProbe:
-          httpGet:
-            path: /api/v1/embeddings/health
-            port: 8000
-          initialDelaySeconds: 30
-          periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: embeddings-service
-spec:
-  selector:
-    app: embeddings-api
-  ports:
-  - port: 80
-    targetPort: 8000
-  type: LoadBalancer
-```
+### Kubernetes (example)
+Deploy API and orchestrator as separate Deployments, and a Redis Service. Health probes should use `GET /api/v1/embeddings/health` on the API.
 
 ---
 
 ## Configuration Reference
 
 ### Core Settings
+Most runtime behavior is configured via code defaults or YAML, not environment variables. Key toggles:
+- `AUTH_MODE` (`single_user` | `multi_user`)
+- `SINGLE_USER_API_KEY` (single-user mode)
+- `JWT_SECRET_KEY` (multi-user mode)
+- Provider keys: `OPENAI_API_KEY`, `COHERE_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `VOYAGE_API_KEY`
+- `USER_DB_BASE_DIR` (optional; default `Databases/user_databases`)
+- `EMBEDDINGS_RATE_LIMIT=on` enables the built-in rate limiter for the embeddings endpoint
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `EMBEDDINGS_MODE` | `single_user` | Deployment mode |
-| `MAX_BATCH_SIZE` | 100 | Max texts per batch |
-| `CACHE_TTL_SECONDS` | 3600 | Cache expiry time |
-| `CACHE_MAX_SIZE` | 5000 | Max cache entries |
-| `CONNECTION_POOL_SIZE` | 20 | HTTP connections per provider |
-| `REQUEST_TIMEOUT` | 30 | Request timeout (seconds) |
+Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 
-### Circuit Breaker Settings
+### Provider Configuration (model definitions)
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | 5 | Failures before opening |
-| `CIRCUIT_BREAKER_RECOVERY_TIMEOUT` | 60 | Seconds before half-open |
-| `CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | 2 | Successes to close |
-| `CIRCUIT_BREAKER_HALF_OPEN_CALLS` | 3 | Max calls in half-open |
-
-### Provider Configuration
+For local models and provider defaults used by the embeddings implementation, define an Embeddings config compatible with `EmbeddingConfigSchema` (used by `Embeddings_Create`):
 
 ```yaml
-# embeddings_config.yaml
-providers:
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    models:
-      - text-embedding-ada-002
-      - text-embedding-3-small
-      - text-embedding-3-large
-    rate_limit: 3000  # requests per minute
-    
-  huggingface:
-    models:
-      - sentence-transformers/all-MiniLM-L6-v2
-      - sentence-transformers/all-mpnet-base-v2
-    cache_dir: ./huggingface_cache
-    device: cuda  # or cpu
-    
-  local_api:
-    url: http://localhost:11434/api/embeddings
-    models:
-      - nomic-embed-text
-      - all-minilm
+default_model_id: hf_mpnet
+model_storage_base_dir: ./models/embedding_models_data/
+models:
+  openai_small:
+    provider: openai
+    model_name_or_path: text-embedding-3-small
+  hf_mpnet:
+    provider: huggingface
+    model_name_or_path: sentence-transformers/all-mpnet-base-v2
+    trust_remote_code: false
+  onnx_minilm:
+    provider: onnx
+    model_name_or_path: sentence-transformers/all-MiniLM-L6-v2
+    onnx_providers: ["CPUExecutionProvider"]
+  local_api_default:
+    provider: local_api
+    model_name_or_path: nomic-embed-text
+    api_url: http://localhost:11434/api/embeddings
 ```
 
 ---
@@ -404,254 +269,104 @@ providers:
 ## Monitoring & Observability
 
 ### Prometheus Metrics
-
-The service exposes metrics at `/metrics`:
+Prometheus metrics are exposed via the unified text endpoint:
 
 ```yaml
 # prometheus.yml
 scrape_configs:
-  - job_name: 'embeddings'
+  - job_name: 'tldw'
     static_configs:
       - targets: ['localhost:8000']
     metrics_path: '/metrics'
 ```
 
-Key metrics:
-- `embedding_requests_total` - Request counter
-- `embedding_request_duration_seconds` - Latency histogram
-- `embedding_cache_hits_total` - Cache hit rate
-- `circuit_breaker_state` - Circuit breaker status
-- `active_embedding_requests` - Current load
+Key embeddings metrics (subset):
+- `embedding_requests_total` – Request counter
+- `embedding_request_duration_seconds` – Latency histogram
+- `embedding_cache_hits_total` – Cache hit rate
+- `active_embedding_requests` – Current load
+- Circuit breaker status is available via admin endpoints
 
-### Grafana Dashboard
-
-Import the provided dashboard from `monitoring/grafana-dashboard.json`:
-
-1. Embeddings throughput
-2. Latency percentiles (p50, p95, p99)
-3. Cache hit rate
-4. Circuit breaker status per provider
-5. Error rate by provider
-6. Active requests
-
-### Health Checks
+### Health Checks and Admin Metrics
 
 ```bash
 # Basic health check
 curl http://localhost:8000/api/v1/embeddings/health
 
-# Detailed metrics (requires admin)
-curl -H "Authorization: Bearer $TOKEN" \
+# Detailed embeddings metrics (requires admin)
+curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   http://localhost:8000/api/v1/embeddings/metrics
 
 # Circuit breaker status (requires admin)
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   http://localhost:8000/api/v1/embeddings/circuit-breakers
 ```
 
 ### Logging
-
-Configure log level and format:
-
-```python
-# config.py
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        },
-        "json": {
-            "class": "pythonjsonlogger.jsonlogger.JsonFormatter"
-        }
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "default"
-        },
-        "file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": "embeddings.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
-            "formatter": "json"
-        }
-    },
-    "root": {
-        "level": "INFO",
-        "handlers": ["console", "file"]
-    }
-}
-```
+The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and scrape `/metrics` for Prometheus-formatted metrics.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-#### 1. Circuit Breaker Open
-**Symptom**: 503 Service Unavailable errors  
-**Solution**:
+### 1) Circuit Breaker Open
+Symptom: 503 Service Unavailable.  
+Check and reset (admin-only in single-user):
 ```bash
-# Check circuit breaker status
-curl http://localhost:8000/api/v1/embeddings/circuit-breakers
+curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://localhost:8000/api/v1/embeddings/circuit-breakers
 
-# Reset if needed (admin only)
-curl -X POST -H "Authorization: Bearer $TOKEN" \
+curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   http://localhost:8000/api/v1/embeddings/circuit-breakers/openai/reset
 ```
 
-#### 2. High Memory Usage
-**Symptom**: OOM errors, slow responses  
-**Solution**:
+### 2) High Memory Usage
+Symptom: OOM or slow responses.  
+Actions:
+- Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
+- Reduce concurrent load; scale out using orchestrator
+- For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
+
+### 3) Slow Embeddings
+Symptom: High latency.  
+Actions:
+- Verify GPU availability: `nvidia-smi`
+- Warm up models (admin-only):
 ```bash
-# Reduce cache size
-export CACHE_MAX_SIZE=1000
-
-# Reduce batch size
-export MAX_BATCH_SIZE=50
-
-# Enable model unloading (HuggingFace)
-export MODEL_UNLOAD_TIMEOUT=300
+curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://localhost:8000/api/v1/embeddings/models/warmup \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"huggingface","model_id":"sentence-transformers/all-mpnet-base-v2"}'
 ```
 
-#### 3. Slow Embeddings
-**Symptom**: High latency  
-**Solution**:
+### 4) Rate Limiting
+Symptom: 429 Too Many Requests.  
+To enable the built-in limiter for the embeddings endpoint:
 ```bash
-# Check GPU availability
-nvidia-smi
-
-# Set CUDA device
-export CUDA_VISIBLE_DEVICES=0
-
-# Use ONNX for CPU inference
-export EMBEDDING_PROVIDER=onnx
-```
-
-#### 4. Rate Limiting
-**Symptom**: 429 Too Many Requests  
-**Solution**:
-```python
-# Increase rate limit in code
-@limiter.limit("120/minute")  # Double the limit
+export EMBEDDINGS_RATE_LIMIT=on
 ```
 
 ### Debug Mode
-
-Enable detailed logging:
-
 ```bash
 export LOG_LEVEL=DEBUG
-export SHOW_SQL_QUERIES=true
-export TRACE_REQUESTS=true
 ```
 
 ### Performance Tuning
-
-#### GPU Optimization
+GPU:
 ```bash
-# Use mixed precision
-export CUDA_ALLOW_TF32=1
-
-# Optimize batch size for GPU
-export MAX_BATCH_SIZE=256  # For V100
-export MAX_BATCH_SIZE=128  # For T4
+export CUDA_ALLOW_TF32=1   # Mixed precision where applicable
 ```
-
-#### CPU Optimization
+CPU:
 ```bash
-# Use ONNX Runtime
-export EMBEDDING_PROVIDER=onnx
 export OMP_NUM_THREADS=8
-
-# Reduce model precision
-export USE_INT8_QUANTIZATION=true
-```
-
----
-
-## Migration Guide
-
-### From v4 to v5
-
-1. **Update imports**:
-```python
-# Old
-from embeddings_v4 import router
-
-# New
-from embeddings_v5_production_enhanced import router
-```
-
-2. **Update configuration**:
-```bash
-# Remove insecure settings
-unset ALLOW_FAKE_EMBEDDINGS
-unset SKIP_AUTH_CHECK
-
-# Add new settings
-export CIRCUIT_BREAKER_ENABLED=true
-export ENHANCED_ERROR_RECOVERY=true
-```
-
-3. **Database migration** (if using job tracking):
-```sql
--- Add circuit breaker state tracking
-ALTER TABLE embedding_jobs 
-ADD COLUMN circuit_breaker_state VARCHAR(20) DEFAULT 'closed';
-
--- Add retry tracking
-ALTER TABLE embedding_jobs 
-ADD COLUMN retry_count INT DEFAULT 0;
-```
-
-4. **Test the migration**:
-```bash
-# Run test suite
-pytest tests/embeddings/test_migration.py
-
-# Verify endpoints
-./scripts/verify_embeddings_api.sh
-```
-
-### Rollback Procedure
-
-If issues occur:
-
-1. **Immediate rollback**:
-```bash
-# Switch back to v4
-export USE_EMBEDDINGS_V4=true
-systemctl restart embeddings-service
-```
-
-2. **Data validation**:
-```python
-# Verify embeddings integrity
-python scripts/validate_embeddings.py --check-all
-```
-
-3. **Clear corrupted cache**:
-```bash
-curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8000/api/v1/embeddings/cache
 ```
 
 ---
 
 ## Support
 
-For issues or questions:
-- GitHub Issues: [tldw_server/issues](https://github.com/your-repo/issues)
-- Documentation: [Embeddings Module](../API-related/Embeddings_Module_Documentation.md)
-- Logs: Check `/var/log/tldw/embeddings.log`
-
----
-
-**Document Version**: 1.0  
-**Last Updated**: 2025-08-16  
-**Maintained By**: TLDW Development Team
+- GitHub Issues: https://github.com/rmusser01/tldw_server/issues
+- Documentation:
+  - API-related: Embeddings API Documentation
+  - Code: Embeddings Documentation
+- Metrics: `/metrics` (Prometheus) or `/api/v1/metrics/text`

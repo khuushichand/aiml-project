@@ -286,7 +286,7 @@ class UnifiedRAGRequest(BaseModel):
         example=True
     )
     
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] = Field(
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"] = Field(
         default="flashrank",
         description="Reranking strategy",
         example="hybrid"
@@ -298,6 +298,12 @@ class UnifiedRAGRequest(BaseModel):
         le=100,
         description="Number of documents to rerank (defaults to top_k)",
         example=20
+    )
+    # Optional reranker model identifier/path (e.g., GGUF path for llama.cpp)
+    reranking_model: Optional[str] = Field(
+        default=None,
+        description="Optional reranker model identifier (e.g., GGUF path for llama.cpp)",
+        example="./models/Qwen3-Embedding-0.6B_f16.gguf"
     )
     
     # ========== CITATIONS ==========

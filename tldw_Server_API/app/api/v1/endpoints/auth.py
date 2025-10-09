@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     get_unified_audit_service,
     AuditEventType,
@@ -550,12 +551,30 @@ async def register(
         
         logger.info(f"New user registered: {user_info['username']} (ID: {user_info['user_id']})")
         
+        # If using SQLite for AuthNZ, generate a per-user API key so UI can present it
+        api_key_value = None
+        try:
+            settings = get_settings()
+            if isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite"):
+                api_mgr = await get_api_key_manager()
+                key_result = await api_mgr.create_api_key(
+                    user_id=int(user_info['user_id']),
+                    name="Default API Key",
+                    description="Auto-generated on registration",
+                    scope="write",
+                    expires_in_days=365
+                )
+                api_key_value = key_result.get('key')
+        except Exception as _e:
+            logger.warning(f"Failed to auto-generate API key for new user {user_info['user_id']}: {_e}")
+
         return RegistrationResponse(
             message="Registration successful",
             user_id=user_info['user_id'],
             username=user_info['username'],
             email=user_info['email'],
-            requires_verification=not user_info['is_verified']
+            requires_verification=not user_info['is_verified'],
+            api_key=api_key_value
         )
         
     except DuplicateUserError as e:

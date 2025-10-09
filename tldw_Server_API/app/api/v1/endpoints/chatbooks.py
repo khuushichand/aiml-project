@@ -30,11 +30,11 @@ except ImportError:
 
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ....core.Chatbooks.chatbook_service import ChatbookService
-from ....core.Chatbooks.chatbook_models import ContentType, ConflictResolution, ExportStatus
+from ....core.Chatbooks.chatbook_models import ContentType, ConflictResolution, ExportStatus, ExportJob
 from ....core.Chatbooks.quota_manager import QuotaManager
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
 from ....core.AuthNZ.User_DB_Handling import User
-from ..API_Deps.auth_deps import get_current_user
+from ....core.AuthNZ.User_DB_Handling import get_request_user
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CreateChatbookRequest,
@@ -58,7 +58,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 def get_chatbook_service(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db)
 ) -> ChatbookService:
     """Get chatbook service for the current user."""
@@ -124,7 +124,7 @@ async def create_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Create a chatbook from selected content.
@@ -196,29 +196,48 @@ async def create_chatbook(
                     job_id=result
                 )
             else:
-                # Sync mode - return download URL based on job_id for security
-                # Extract job_id from the result path if it contains one
-                # Otherwise generate a secure download token
+                # Sync mode — create a completed export job with a UUID as job_id
                 import uuid
-                import urllib.parse
-                
-                # Generate a secure download token instead of using filename
-                download_token = str(uuid.uuid4())
-                # Store the mapping in service (would need to be implemented)
-                # For now, use a sanitized version of the filename
-                file_name = Path(result).name
-                # Sanitize filename to prevent path traversal
-                safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', file_name)
-                # URL encode for additional safety
-                encoded_filename = urllib.parse.quote(safe_filename, safe='')
-                
-                download_url = f"/api/v1/chatbooks/download/{encoded_filename}"
+                from datetime import datetime, timedelta
+
+                job_id = str(uuid.uuid4())
+                file_path = Path(result)
+                file_size = None
+                try:
+                    if file_path.exists() and file_path.is_file():
+                        file_size = file_path.stat().st_size
+                except Exception:
+                    pass
+
+                # Persist the completed job so the download endpoint can serve it
+                job = ExportJob(
+                    job_id=job_id,
+                    user_id=str(user.id),
+                    status=ExportStatus.COMPLETED,
+                    chatbook_name=request_data.name,
+                    output_path=str(file_path),
+                    created_at=datetime.utcnow(),
+                    started_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow(),
+                    error_message=None,
+                    progress_percentage=100,
+                    total_items=0,
+                    processed_items=0,
+                    file_size_bytes=file_size,
+                    download_url=f"/api/v1/chatbooks/download/{job_id}",
+                    expires_at=datetime.utcnow() + timedelta(days=30),
+                )
+                try:
+                    # Save job using the service helper
+                    service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
+                except Exception as _e:
+                    logger.warning(f"Failed to persist completed export job for sync path: {_e}")
+
                 return CreateChatbookResponse(
                     success=True,
                     message=message,
-                    # Don't expose the actual file path
-                    file_path=None,  # Remove internal path exposure
-                    download_url=download_url
+                    job_id=job_id,
+                    download_url=f"/api/v1/chatbooks/download/{job_id}"
                 )
         else:
             raise HTTPException(status_code=400, detail=message)
@@ -238,7 +257,7 @@ async def import_chatbook(
     file: UploadFile = File(...),
     import_request: ImportChatbookRequest = Depends(),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Import a chatbook file.
@@ -401,7 +420,7 @@ async def preview_chatbook(
     request: Request,
     file: UploadFile = File(...),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Preview a chatbook without importing it.
@@ -532,7 +551,7 @@ async def list_export_jobs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     List all export jobs for the current user.
@@ -589,7 +608,7 @@ async def list_export_jobs(
 async def get_export_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Get status of a specific export job.
@@ -640,7 +659,7 @@ async def list_import_jobs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     List all import jobs for the current user.
@@ -693,7 +712,7 @@ async def list_import_jobs(
 async def get_import_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Get status of a specific import job.
@@ -743,7 +762,7 @@ async def download_chatbook(
     job_id: str,
     request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Download an exported chatbook file by job ID.
@@ -842,7 +861,7 @@ async def download_chatbook(
 @router.post("/cleanup", response_model=CleanupExpiredExportsResponse)
 async def cleanup_expired_exports(
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Clean up expired export files.
@@ -873,7 +892,7 @@ async def cleanup_expired_exports(
 async def cancel_export_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Cancel an export job.
@@ -908,7 +927,7 @@ async def cancel_export_job(
 async def cancel_import_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     """
     Cancel an import job.

@@ -37,7 +37,7 @@ def _utcnow_iso() -> str:
     return _dt.datetime.utcnow().isoformat()
 
 
-router = APIRouter(prefix="/api/v1/workflows", tags=["Workflows (Experimental)"])
+router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
 
 
 def _get_db() -> WorkflowsDatabase:

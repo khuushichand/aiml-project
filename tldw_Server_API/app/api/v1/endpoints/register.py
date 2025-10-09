@@ -27,6 +27,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     RegistrationError,
     DuplicateUserError,
@@ -280,12 +281,31 @@ async def register_user(
         )
         
         logger.info(f"Successfully registered user: {user_data.username} (ID: {user_id})")
-        
+
+        # If using SQLite backend, generate an API key so the user can authenticate via X-API-KEY
+        api_key_value = None
+        try:
+            db_url = settings.DATABASE_URL or ""
+            if isinstance(db_url, str) and db_url.startswith("sqlite"):
+                api_mgr = await get_api_key_manager()
+                key_result = await api_mgr.create_api_key(
+                    user_id=user_id,
+                    name="Default API Key",
+                    description="Auto-generated on registration",
+                    scope="write",
+                    expires_in_days=365
+                )
+                api_key_value = key_result.get("key")
+        except Exception as _e:
+            logger.warning(f"Failed to auto-generate API key for new user {user_id}: {_e}")
+
         return RegistrationResponse(
-            success=True,
-            message="Registration successful. Please check your email to verify your account.",
+            message="Registration successful",
             user_id=user_id,
-            username=user_data.username
+            username=user_data.username,
+            email=user_data.email,
+            requires_verification=bool(settings.REQUIRE_REGISTRATION_CODE),
+            api_key=api_key_value
         )
         
     except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError) as e:

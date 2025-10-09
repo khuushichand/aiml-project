@@ -691,7 +691,8 @@ class ChatbookService:
                 job.completed_at = datetime.utcnow()
                 job.output_path = file_path
                 job.file_size_bytes = Path(file_path).stat().st_size if file_path else None
-                job.download_url = f"/api/v1/chatbooks/download/{Path(file_path).name}" if file_path else None
+                # Use job_id-based download URL for consistency with API endpoint
+                job.download_url = f"/api/v1/chatbooks/download/{job.job_id}"
                 job.expires_at = datetime.utcnow() + timedelta(hours=24)
             else:
                 # Update job with failure

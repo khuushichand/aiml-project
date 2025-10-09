@@ -126,7 +126,7 @@ dependencies = [
   "openai>=1.0.0",
   "optimum>=1.13.0",
   "torch>=2.0.0",
-  "transformers>=4.35.0",
+  "transformers>=4.51.0",
   "sentence-transformers>=2.2.0",
   
   # Research/Web
@@ -277,7 +277,7 @@ TTS_sovits = [
 TTS_higgs = [
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "transformers>=4.30.0",
+  "transformers>=4.51.0",
   "accelerate>=0.20.0",
   # Note: higgs-audio must be installed from source:
   # git clone https://github.com/boson-ai/higgs-audio.git && cd higgs-audio && pip install -e .
@@ -286,7 +286,7 @@ TTS_higgs = [
 TTS_vibevoice = [
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
-  "transformers>=4.30.0",
+  "transformers>=4.51.0",
   "accelerate>=0.20.0",
   "librosa>=0.10.0",
   # Note: VibeVoice must be installed from source:

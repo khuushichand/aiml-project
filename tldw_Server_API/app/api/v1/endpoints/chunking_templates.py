@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
-router = APIRouter(prefix="/chunking/templates", tags=["chunking templates"])
+router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
 
 
 @router.get("", response_model=ChunkingTemplateListResponse)

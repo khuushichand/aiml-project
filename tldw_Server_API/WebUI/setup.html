@@ -94,6 +94,70 @@
                 <div id="installStatusErrors" class="install-status-errors" role="alert" hidden></div>
             </div>
         </section>
+
+        <section class="setup-section">
+            <div class="section-heading">
+                <h2>Account Verification</h2>
+                <p>If you just created an account, you can verify it locally during setup. Provide an access token (JWT) or an API key.</p>
+            </div>
+            <div class="columns">
+                <div class="column">
+                    <label for="verifyToken">Access Token (JWT):</label>
+                    <input type="password" id="verifyToken" placeholder="Paste access token or leave blank if using API key" />
+                </div>
+                <div class="column">
+                    <label for="verifyApiKey">API Key (X-API-KEY):</label>
+                    <input type="password" id="verifyApiKey" placeholder="Paste API key if using SQLite multi-user" />
+                </div>
+            </div>
+            <div class="action-row">
+                <button id="selfVerifyBtn" class="btn primary" type="button">Verify My Account</button>
+                <span id="selfVerifyMsg" class="action-message" role="status"></span>
+            </div>
+            <script>
+                document.getElementById('selfVerifyBtn').addEventListener('click', async () => {
+                    const tokenInput = document.getElementById('verifyToken');
+                    const apiKeyInput = document.getElementById('verifyApiKey');
+                    const msg = document.getElementById('selfVerifyMsg');
+
+                    // Try to populate token from localStorage if empty
+                    if (tokenInput && !tokenInput.value) {
+                        try {
+                            const saved = localStorage.getItem('tldw_access_token');
+                            if (saved) tokenInput.value = saved;
+                        } catch {}
+                    }
+
+                    const headers = { 'Content-Type': 'application/json' };
+                    const token = (tokenInput && tokenInput.value) ? tokenInput.value.trim() : '';
+                    const apiKey = (apiKeyInput && apiKeyInput.value) ? apiKeyInput.value.trim() : '';
+
+                    if (token) {
+                        headers['Authorization'] = `Bearer ${token}`;
+                    } else if (apiKey) {
+                        headers['X-API-KEY'] = apiKey;
+                    } else {
+                        msg.textContent = 'Provide an access token or an API key.';
+                        msg.style.color = '#b00020';
+                        return;
+                    }
+
+                    try {
+                        const r = await fetch('/api/v1/setup/self-verify', {
+                            method: 'POST',
+                            headers
+                        });
+                        const data = await r.json();
+                        if (!r.ok) throw new Error(data.detail || r.statusText);
+                        msg.textContent = 'Account verified successfully. You may need to refresh the page.';
+                        msg.style.color = '#107c10';
+                    } catch (e) {
+                        msg.textContent = 'Verification failed: ' + (e && e.message ? e.message : e);
+                        msg.style.color = '#b00020';
+                    }
+                });
+            </script>
+        </section>
     </div>
 
     <div id="assistantRoot" class="assistant-root" aria-live="polite">

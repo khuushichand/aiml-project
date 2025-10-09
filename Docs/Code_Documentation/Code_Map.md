@@ -1,73 +1,132 @@
 # Code Map
 
-### Basic Transcription--->Summarization--->Ingestion Loop
+This code map gives a concise, current view of the tldw_server backend. It focuses on how requests flow through FastAPI endpoints into core modules and databases, and where key features live in the repository.
+
+## High-Level Architecture
+
 ```mermaid
-%%{ init : { "theme" : "forest", "flowchart" : { "curve" : "stepBefore" }}}%%
-graph TD
-    A1[Get YouTube URL with no options checked] --> B1[Attempt to download m4a audio stream]
-    A1[Get YouTube URL with summarize option checked] --> B2[Attempt to download m4a audio stream]
-    A2[Get YouTube URL with Audio download option checked] --> B3[Attempt to download m4a audio stream]]
-    A3[Get YouTube URL with Video download option checked] --> B4[Attempt to download m4a audio+video stream] ---> FIXME
-    A4[Get YouTube URL with both options for Audio and Video] --> B5[Attempt to download m4a audio+video stream] ---> FIXME
-    A5[Get YouTube URL with rolling summary and detail set options checked] --> B6[Attempt to download m4a audio stream]]
-
-    B1 -->|Success| C1[Attempt to download audio stream]
-    B2 -->|Success| C2[Attempt to download audio stream]
-    B3 -->|Success| C2[Attempt to download audio stream]
-    B4 -->|Success| C3[Attempt to download audio+video stream]
-	B5 -->|Success| C4[Attempt to download audio+video stream]
-    B6 -->|Success| C5[Attempt to download audiostream]
-
-    C1 -->|Success| D1[Process Audio stream file]
-    C1 -->|Fail| F[Abort process]
-    C2 -->|Success| D2[Process Audio stream file]
-    C2 -->|Fail| F[Abort process]
-    C3 -->|Success| D3[Process Audio stream file]
-    C3 -->|Fail| F[Abort process]
-    C4 -->|Success| D4[Process audio stream file and video file]
-    C4 -->|Fail| F[Abort process]
-    C5 -->|Success| D5[Process audio stream file and video file]
-    C5 -->|Fail| F[Abort process]
-    C6 -->|Success| D6[Process Audio stream file]
-    C6 -->|Fail| F[Abort process]
-
-    D1 --> E1[Convert audio file to `.wav` format using ffmpeg]
-    D2 --> E2[Convert audio file to `.wav` format using ffmpeg]
-    D5 --> E5[Convert audio file to `.wav` format using ffmpeg]
-    D3 --> E3[Convert audio file to `.wav` format using ffmpeg, and also combine the audio and video files into one]
-    D4 --> E4[Convert audio file to `.wav` format using ffmpeg, and also combine the audio and video files into one]
-    D6 --> E6[Convert audio file to `.wav` format using ffmpeg]
-
-    E1 --> F1[Use faster_whisper library to transcribe the spoken words from the `.wav` file]
-    E2 --> F2[Use faster_whisper library to transcribe the spoken words from the `.wav` file]
-    E2 --> F3[Use faster_whisper library to transcribe the spoken words from the `.wav` file]
-	E3 --> F4[Use faster_whisper library to transcribe the spoken words from the `.wav` file, and if in the GUI, present to the user the option to download a video file]
-	E4 --> F5[Use faster_whisper library to transcribe the spoken words from the `.wav` file, and if in the GUI, present to the user the option to download an audio & Video file]
-	E5 --> F6[Use faster_whisper library to transcribe the spoken words from the `.wav` file, and if in the GUI, present to the user the option to download an audio & Video file]
-
-
-    F1 --> G1[Save the generated transcript as a JSON object to a local file]
-    F2 --> G2[Save the generated transcript as a JSON object to a local file]
-    F3 --> G3[Save the generated transcript as a JSON object to a local file]
-    F4 --> G4[Save the generated transcript as a JSON object to a local file]
-    F5 --> G5[Save the generated transcript as a JSON object to a local file]
-    F6 --> G6[Save the generated transcript as a JSON object to a local file]
-
-
-    G1 --> END/LOOP[If in the CLI, do nothing at this point and end the script, or if there are more entries in the input list, continue looping.\n If in the GUI, then the transcript is displayed to the user]
-    G2 --> H2[Identify if any 'custom_prompt' value was passed during initial processing, and if so, combine that with the transcript and send it off to a chat API, if none was provided, it uses the default instead]
-    G3 --> END/LOOP[If in the CLI, do nothing at this point and end the script, or if there are more entries in the input list, continue looping.\n If in the GUI, then the transcript is displayed to the user]
-    G4 --> END/LOOP[If in the CLI, do nothing at this point and end the script, or if there are more entries in the input list, continue looping.\n If in the GUI, then the transcript is displayed to the user]
-    G5 --> END/LOOP[If in the CLI, do nothing at this point and end the script, or if there are more entries in the input list, continue looping.\n If in the GUI, then the transcript is displayed to the user]
-    G6 --> H5/H6[Split prompt into N chunks, each chunk being a Y amount of tokens, and where n is an amount determined by the detail slider. The chunking implementation used is determined by what is selected in the UI/passed in the CLI args]
-
-    H2 --> I2[Submit the transcript + custom_prompt variable contents to the selected LLM API Endpoint]
-    H5 --> I5[Submit each chunk + custom_prompt variable to the selected LLM API Endpoint, append each output to each other and process each chunk individually until all chunks are done]
-    H6 --> I6[If recursive summarization was selected, each chunk + custom_prompt variable is submitted to the selected LLM API Endpoint, with each output appended to the prior and processed until all chunks are done]
-
-    I2 --> K[Receive the generated summary, save it to a file, and then display it to the user, along with ingesting it into the database]
-	I5 --> K[Receive the generated summary, save it to a file, and then display it to the user, along with ingesting it into the database]
-	I6 --> K[Receive the generated summary, save it to a file, and then display it to the user, along with ingesting it into the database]
-
-    K --> L[END or LOOP if more URLs/files in the input list]
+%%{ init: { 'theme': 'forest', 'flowchart': { 'curve': 'stepBefore' } } }%%
+flowchart LR
+    Client[Web UI / API Client]
+    subgraph API[FastAPI App (tldw_Server_API/app/main.py)]
+      E1[api/v1 endpoints]
+    end
+    subgraph CORE[Core Modules]
+      C1[AuthNZ]
+      C2[Media Ingestion]
+      C3[Chunking]
+      C4[Embeddings]
+      C5[RAG]
+      C6[LLM Providers]
+      C7[Audio STT/TTS]
+      C8[MCP Unified]
+    end
+    subgraph DATA[Storage]
+      D1[SQLite/PostgreSQL]
+      D2[ChromaDB]
+      D3[User DB]
+    end
+    Client -->|HTTP/WebSocket| API --> CORE --> DATA
 ```
+
+## Top-Level Layout
+
+- Server entry: `tldw_Server_API/app/main.py`
+- API endpoints: `tldw_Server_API/app/api/v1/endpoints/`
+- Core logic: `tldw_Server_API/app/core/`
+- Web UI: `tldw_Server_API/WebUI/` (served at `/webui`)
+- Config files: `tldw_Server_API/Config_Files/`
+- Databases: `Databases/` (top-level) and `tldw_Server_API/Databases/` (runtime)
+- Tests: `tldw_Server_API/tests/`
+
+## API Surface (Selected)
+
+- Auth & Users: `auth.py`, `users.py`
+- Media: `media.py`, `media_embeddings.py`
+- Audio: `audio.py` (OpenAI-compatible STT + WebSocket streaming)
+- Chunking: `chunking.py`, `chunking_templates.py`
+- Embeddings: `embeddings_v5_production_enhanced.py`, `vector_stores_openai.py`
+- RAG: `rag_unified.py`, `rag_health.py`, `workflows.py`
+- Chat: `chat.py`, characters (`characters_endpoint.py`, `character_*`)
+- Evaluations: `evaluations_unified.py`
+- Research: `research.py`, `paper_search.py`, `web_scraping.py`
+- OCR: `ocr.py`
+- MCP Unified: `mcp_unified_endpoint.py`
+- Utilities: `metrics.py`, `setup.py`, `sync.py`, `tools.py`
+
+Routers are mounted in `main.py` with prefix `/api/v1`.
+
+## Core Modules (Selected)
+
+- AuthNZ: `core/AuthNZ/` (single-user API key and multi-user JWT)
+- Media Ingestion: `core/Ingestion_Media_Processing/`
+  - Audio: STT (faster_whisper, NeMo Parakeet/Canary), diarization, streaming
+  - Video: `Video_DL_Ingestion_Lib.py` (yt-dlp), merges, extraction
+  - Documents: `PDF/`, `Books/`, `Plaintext/`, `XML/`, `OCR/`, `MediaWiki/`
+- Chunking: `core/Chunking/`
+  - Entry: `chunker.py`, config/types in `base.py`
+  - Strategies: `strategies/` (words, sentences, paragraphs, tokens, json/xml, structure_aware, propositions, semantic, ebook_chapters, rolling_summarize)
+  - Templates: `templates.py`, `template_initialization.py`, `template_library/`
+- Embeddings: `core/Embeddings/` (batching, workers, vector store adapters)
+- RAG: `core/RAG/` (hybrid FTS5 + vector + rerank), `rag_service/`
+- LLM Calls: `core/LLM_Calls/` (providers, routing, streaming)
+- MCP Unified: `core/MCP_unified/` (production-ready server + tooling)
+- TTS: `core/TTS/` (OpenAI-compatible and local adapters)
+- DB Management: `core/DB_Management/` (Media_DB_v2, migrations)
+  - Media DB v2 docs: Docs/Code_Documentation/Databases/Media_DB_v2.md (Claims API, Chunking Templates API, Troubleshooting)
+- Metrics: `core/Metrics/` (Prometheus/OpenTelemetry)
+
+## Databases & Stores
+
+- Media DB (content):
+  - Default dev path via manager: `Databases/server_media_summary.db` (SQLite, FTS5)
+  - Optional per-user path available via utils: `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
+  - Backends layer wired for PostgreSQL but SQLite is default
+- AuthNZ (Users):
+  - `DATABASE_URL` (env) — default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - PostgreSQL recommended for multi-user mode
+- Evaluations DB: `Databases/evaluations.db` (unified schema + audit; DI can map per-user audit paths)
+- Per-user notes/chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
+- Per-user prompts/Prompt Studio: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Vector store (per user): ChromaDB at `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/` with meta/jobs SQLite under `vector_store/`
+
+Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` controls the per-user root (defaults to `Databases/user_databases`).
+
+## Key Flows
+
+1) Media Ingestion → Chunking → Embedding → RAG Index
+   - Endpoint: `POST /api/v1/media/process` → `core/Ingestion_Media_Processing/*`
+   - Chunking via `core/Chunking/chunker.py` (optionally hierarchical/templates)
+   - Embeddings via `core/Embeddings/` → ChromaDB and FTS5 entries in Media DB
+
+2) Audio Transcription (file or stream)
+   - Endpoints: `POST /api/v1/audio/transcriptions`, `WS /api/v1/audio/stream/transcribe`
+   - Uses `core/Ingestion_Media_Processing/Audio/*` (faster_whisper/NeMo)
+   - Outputs transcripts for storage/search; optional diarization
+
+3) Chat with Retrieval
+   - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
+   - Provider routing in `core/Chat/` and `core/LLM_Calls/`
+   - Retrieval via `core/RAG/` on embedded/chunked content
+
+4) Chunking Templates
+   - Endpoints: `/api/v1/chunking/templates/...`
+   - DB-backed templates via `core/Chunking/templates.py` and seeding in `template_initialization.py`
+
+5) Evaluations
+   - Unified endpoints under `/api/v1/evaluations/...`
+   - Managers and metrics under `core/Evaluations/`
+
+## Where to Add or Modify
+
+- New endpoint: `app/api/v1/endpoints/<feature>.py` + schema under `schemas/`
+- Core logic: `app/core/<Feature>/`
+- DB changes: migrate via `core/DB_Management/migrations/`
+- Chunking changes: `core/Chunking/` (see Chunking Module docs)
+- Tests: `tldw_Server_API/tests/<feature>/`
+
+## Notes
+
+- CORS configured in `main.py` (adjust for deployment)
+- Auth mode and keys set via env or `Config_Files/`
+- Web UI lives under `/webui` and interacts with the same API

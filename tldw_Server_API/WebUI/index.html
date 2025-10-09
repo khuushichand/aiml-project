@@ -702,6 +702,9 @@
                 <button class="sub-tab-button" data-content-id="tabLlamaCppInference" data-load-group="llamacpp" role="tab">
                     Inference
                 </button>
+                <button class="sub-tab-button" data-content-id="tabLlamaCppReranking" data-load-group="llamacpp" role="tab">
+                    Reranking
+                </button>
             </div>
         </div>
 
@@ -784,6 +787,18 @@
                                     aria-describedby="apiKey-help"
                                 >
                                 <small id="apiKey-help">Sent in the 'Token' header for authenticated requests. Contact your administrator for an API token.</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="columns">
+                        <div class="column">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="preferApiKeyInMultiUser" />
+                                    Prefer X-API-KEY header in multi-user mode (SQLite)
+                                </label>
+                                <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
                             </div>
                         </div>
                     </div>

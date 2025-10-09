@@ -4550,6 +4550,11 @@ async def process_ebooks_endpoint(
     ```
 
     Supports `.epub` files.
+    URL inputs must resolve to an EPUB. The server accepts URLs that either:
+    - end with `.epub`, or
+    - provide `Content-Disposition` with a filename ending in `.epub`, or
+    - set `Content-Type: application/epub+zip`.
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-ebooks (no persistence).")
     # Log form data safely (exclude sensitive fields)
@@ -4616,7 +4621,7 @@ async def process_ebooks_endpoint(
             if form_data.urls:
                 logger.info(f"Attempting to download {len(form_data.urls)} URLs asynchronously...")
                 download_tasks = [
-                    _download_url_async(client, url, temp_dir, allowed_extensions = {".epub", ".pdf", ".mobi"})
+                    _download_url_async(client, url, temp_dir, allowed_extensions={".epub"})
                     for url in form_data.urls
                 ]
                 # Associate tasks with original URLs for error reporting
@@ -4970,6 +4975,12 @@ async def process_documents_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
     process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
     ```
+    
+    URL inputs must resolve to a supported document format. The server accepts URLs that either:
+    - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, or
+    - provide `Content-Disposition` with a filename that ends with an allowed extension, or
+    - set a supported `Content-Type` (e.g., text/plain, text/markdown, text/html, application/xhtml+xml, application/xml, text/xml, application/rtf, text/rtf, application/vnd.openxmlformats-officedocument.wordprocessingml.document).
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-documents (no persistence).")
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
@@ -5507,6 +5518,12 @@ async def process_pdfs_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
     await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
     ```
+    
+    URL inputs must resolve to a PDF. The server accepts URLs that either:
+    - end with `.pdf`, or
+    - provide `Content-Disposition` with a filename ending in `.pdf`, or
+    - set `Content-Type: application/pdf`.
+    Other URLs are rejected with a clear error entry in the batch response.
     """
     logger.info("Request received for /process-pdfs (no persistence).")
     ALLOWED_PDF_EXTENSIONS = ['.pdf']
@@ -5568,73 +5585,55 @@ async def process_pdfs_endpoint(
                     batch_result["errors_count"] += 1
                     batch_result["errors"].append(f"{original_ref}: {error_detail}")
 
-        # Handle URLs (download bytes)
+        # Handle URLs (download bytes) with strict extension/content-type checking
         if form_data.urls:
-             async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-                 download_tasks = []
-                 for url in form_data.urls:
-                     download_tasks.append(client.get(url)) # Gather response futures
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+                download_tasks = [
+                    _download_url_async(
+                        client=client,
+                        url=url,
+                        target_dir=FilePath(temp_dir),
+                        allowed_extensions={".pdf"},
+                        check_extension=True,
+                    ) for url in form_data.urls
+                ]
+                download_results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
-                 download_responses = await asyncio.gather(*download_tasks, return_exceptions=True)
-
-                 for i, res in enumerate(download_responses):
-                     url = form_data.urls[i]
-                     if isinstance(res, httpx.Response):
-                         try:
-                             res.raise_for_status()
-                             content_type = res.headers.get('content-type', '').lower()
-                             # Basic check for PDF content type or .pdf extension in final URL
-                             final_url_path = FilePath(str(res.url)).name # Get filename from final redirected URL
-                             if 'application/pdf' in content_type or final_url_path.endswith('.pdf'):
-                                 file_bytes = res.content
-                                 pdf_inputs_to_process.append((url, file_bytes)) # Use original URL as ref
-                             else:
-                                 raise ValueError(f"Downloaded content from {url} is not a PDF (Content-Type: {content_type}, Final URL: {res.url})")
-                         except httpx.HTTPStatusError as status_err:
-                             logger.error(f"HTTP error downloading {url}: {status_err}")
-                             error_detail = f"Download failed (HTTP {status_err.response.status_code})"
-                             batch_result["results"].append({
-                                 "status": "Error", "input_ref": url,
-                                 "processing_source": url,
-                                 "error": error_detail,
-                                 "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                                 "metadata": {},  # <-- CHANGED
-                                 "content": None, "chunks": None,
-                                 "analysis": None, "keywords": None, "warnings": None,
-                                 "analysis_details": {}
-                             })
-                             batch_result["errors_count"] += 1
-                             batch_result["errors"].append(error_detail)
-                         except Exception as dl_err:
-                             logger.error(f"Error processing download for {url}: {dl_err}")
-                             error_detail = f"Download processing error: {dl_err}"
-                             batch_result["results"].append({
-                                 "status": "Error", "input_ref": url,
-                                 "processing_source": url,
-                                 "error": error_detail,
-                                 "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                                 "metadata": {},  # <-- CHANGED
-                                 "content": None, "chunks": None,
-                                 "analysis": None, "keywords": None, "warnings": None,
-                                 "analysis_details": {}
-                             })
-                             batch_result["errors_count"] += 1
-                             batch_result["errors"].append(error_detail)
-                     else:  # Handle exceptions during download (gather returned an exception)
-                         logger.error(f"Download failed for {url}: {res}", exc_info=isinstance(res, Exception))
-                         error_detail = f"Download failed: {res}"
-                         batch_result["results"].append({
-                             "status": "Error", "input_ref": url,
-                             "processing_source": url,
-                             "error": error_detail,
-                             "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
-                             "metadata": {}, # <-- CHANGED
-                             "content": None, "chunks": None,
-                             "analysis": None, "keywords": None, "warnings": None,
-                             "analysis_details": {}
-                         })
-                         batch_result["errors_count"] += 1
-                         batch_result["errors"].append(error_detail)
+            for url, result in zip(form_data.urls, download_results):
+                if isinstance(result, FilePath):
+                    try:
+                        file_bytes = FilePath(result).read_bytes()
+                        pdf_inputs_to_process.append((url, file_bytes))
+                    except Exception as read_err:
+                        logger.error(f"Failed to read downloaded PDF for {url} from {result}: {read_err}")
+                        error_detail = f"Failed to read downloaded PDF: {read_err}"
+                        batch_result["results"].append({
+                            "status": "Error", "input_ref": url,
+                            "processing_source": str(result),
+                            "error": error_detail,
+                            "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
+                            "metadata": {},
+                            "content": None, "chunks": None,
+                            "analysis": None, "keywords": None, "warnings": None,
+                            "analysis_details": {}
+                        })
+                        batch_result["errors_count"] += 1
+                        batch_result["errors"].append(error_detail)
+                else:
+                    logger.error(f"Download failed for {url}: {result}")
+                    error_detail = f"Download/preparation failed: {result}"
+                    batch_result["results"].append({
+                        "status": "Error", "input_ref": url,
+                        "processing_source": url,
+                        "error": error_detail,
+                        "media_type": "pdf", "db_id": None, "db_message": "Processing only endpoint.",
+                        "metadata": {},
+                        "content": None, "chunks": None,
+                        "analysis": None, "keywords": None, "warnings": None,
+                        "analysis_details": {}
+                    })
+                    batch_result["errors_count"] += 1
+                    batch_result["errors"].append(error_detail)
 
         if not pdf_inputs_to_process:
             # Determine status based on whether *any* errors occurred during input handling
@@ -5910,8 +5909,9 @@ async def ingest_mediawiki_dump_endpoint(
     if not dump_file.filename:
         raise HTTPException(status_code=400, detail="Dump file has no filename.")
 
-    # Using the existing TempDirManager
-    with TempDirManager(prefix="mediawiki_ingest_") as temp_dir:
+    # Use a temp directory that persists for the duration of streaming
+    # Cleanup is handled at the end of the streaming generator.
+    with TempDirManager(prefix="mediawiki_ingest_", cleanup=False) as temp_dir:
         temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
@@ -5926,20 +5926,28 @@ async def ingest_mediawiki_dump_endpoint(
         logger.info(f"MediaWiki dump for ingestion saved to temporary path: {temp_file_path}")
 
         async def stream_ingestion_results():
-            # store_to_db and store_to_vector_db are True for ingest
-            for result_event in core_import_mediawiki_dump(
-                    file_path=str(temp_file_path),
-                    wiki_name=form_data["wiki_name"],
-                    namespaces=form_data["namespaces"],
-                    skip_redirects=form_data["skip_redirects"],
-                    chunk_options_override=form_data["chunk_options_override"],
-                    store_to_db=True,
-                    store_to_vector_db=True,
-                    api_name_vector_db=form_data.get("api_name_vector_db"),
-                    api_key_vector_db=form_data.get("api_key_vector_db"),
-            ):
-                yield json.dumps(result_event) + "\n"
-                await asyncio.sleep(0.01)  # Allow other tasks to run, prevent tight loop blocking
+            try:
+                # store_to_db and store_to_vector_db are True for ingest
+                for result_event in core_import_mediawiki_dump(
+                        file_path=str(temp_file_path),
+                        wiki_name=form_data["wiki_name"],
+                        namespaces=form_data["namespaces"],
+                        skip_redirects=form_data["skip_redirects"],
+                        chunk_options_override=form_data["chunk_options_override"],
+                        store_to_db=True,
+                        store_to_vector_db=True,
+                        api_name_vector_db=form_data.get("api_name_vector_db"),
+                        api_key_vector_db=form_data.get("api_key_vector_db"),
+                ):
+                    yield json.dumps(result_event) + "\n"
+                    await asyncio.sleep(0.01)  # Allow other tasks to run, prevent tight loop blocking
+            finally:
+                # Ensure temp directory is cleaned up after streaming completes
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                except Exception:
+                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
 
         return StreamingResponse(stream_ingestion_results(), media_type="application/x-ndjson")
 
@@ -5971,7 +5979,7 @@ async def process_mediawiki_dump_ephemeral_endpoint(
     if not dump_file.filename:
         raise HTTPException(status_code=400, detail="Dump file has no filename.")
 
-    with TempDirManager(prefix="mediawiki_process_") as temp_dir:
+    with TempDirManager(prefix="mediawiki_process_", cleanup=False) as temp_dir:
         temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
         try:
             async with aiofiles.open(temp_file_path, 'wb') as f:
@@ -5986,46 +5994,54 @@ async def process_mediawiki_dump_ephemeral_endpoint(
         logger.info(f"MediaWiki dump for ephemeral processing saved to: {temp_file_path}")
 
         async def stream_processed_data():
-            # store_to_db and store_to_vector_db are False for ephemeral processing
-            for result_event in core_import_mediawiki_dump(
-                    file_path=str(temp_file_path),
-                    wiki_name=form_data["wiki_name"],  # Still useful for collection naming if vector DB was used
-                    namespaces=form_data["namespaces"],
-                    skip_redirects=form_data["skip_redirects"],
-                    chunk_options_override=form_data["chunk_options_override"],
-                    store_to_db=False,
-                    store_to_vector_db=False,  # No storage to ChromaDB either for this endpoint
-                    # api_name_vector_db and api_key_vector_db are not strictly needed if store_to_vector_db is False,
-                    # but pass them in case some underlying part of process_single_item still uses them for non-storage tasks.
-                    # However, the modified process_single_item only uses them if store_to_vector_db is True.
-                    api_name_vector_db=form_data.get("api_name_vector_db"),
-                    # Will be ignored by process_single_item if store_to_vector_db is False
-                    api_key_vector_db=form_data.get("api_key_vector_db")  # Same as above
-            ):
-                # We are interested in the "item_result" type which contains the processed page data
-                if result_event.get("type") == "item_result":
-                    page_data = result_event.get("data", {})
-                    # Validate with Pydantic model before yielding for this endpoint
-                    try:
-                        # The page_data from process_single_item should now match ProcessedMediaWikiPage
-                        processed_page_model = ProcessedMediaWikiPage(**page_data)
-                        yield json.dumps(processed_page_model.model_dump()) + "\n"  # Use .model_dump() for Pydantic v2+
-                    except ValidationError as ve:
-                        # Log validation error and yield a structured error for this item
-                        logger.error(
-                            f"Validation error for processed MediaWiki page '{page_data.get('title', 'Unknown')}': {ve.errors()}")
-                        error_output = {
-                            "type": "validation_error",
-                            "title": page_data.get("title", "Unknown"),
-                            "page_id": page_data.get("page_id"),
-                            "detail": ve.errors()
-                        }
-                        yield json.dumps(error_output) + "\n"
-                elif result_event.get("type") in ["error", "progress_total", "summary"]:
-                    # Stream other event types as well (errors, total count, final summary)
-                    yield json.dumps(result_event) + "\n"
+            try:
+                # store_to_db and store_to_vector_db are False for ephemeral processing
+                for result_event in core_import_mediawiki_dump(
+                        file_path=str(temp_file_path),
+                        wiki_name=form_data["wiki_name"],  # Still useful for collection naming if vector DB was used
+                        namespaces=form_data["namespaces"],
+                        skip_redirects=form_data["skip_redirects"],
+                        chunk_options_override=form_data["chunk_options_override"],
+                        store_to_db=False,
+                        store_to_vector_db=False,  # No storage to ChromaDB either for this endpoint
+                        # api_name_vector_db and api_key_vector_db are not strictly needed if store_to_vector_db is False,
+                        # but pass them in case some underlying part of process_single_item still uses them for non-storage tasks.
+                        # However, the modified process_single_item only uses them if store_to_vector_db is True.
+                        api_name_vector_db=form_data.get("api_name_vector_db"),
+                        # Will be ignored by process_single_item if store_to_vector_db is False
+                        api_key_vector_db=form_data.get("api_key_vector_db")  # Same as above
+                ):
+                    # We are interested in the "item_result" type which contains the processed page data
+                    if result_event.get("type") == "item_result":
+                        page_data = result_event.get("data", {})
+                        # Validate with Pydantic model before yielding for this endpoint
+                        try:
+                            # The page_data from process_single_item should now match ProcessedMediaWikiPage
+                            processed_page_model = ProcessedMediaWikiPage(**page_data)
+                            yield json.dumps(processed_page_model.model_dump()) + "\n"  # Use .model_dump() for Pydantic v2+
+                        except ValidationError as ve:
+                            # Log validation error and yield a structured error for this item
+                            logger.error(
+                                f"Validation error for processed MediaWiki page '{page_data.get('title', 'Unknown')}': {ve.errors()}")
+                            error_output = {
+                                "type": "validation_error",
+                                "title": page_data.get("title", "Unknown"),
+                                "page_id": page_data.get("page_id"),
+                                "detail": ve.errors()
+                            }
+                            yield json.dumps(error_output) + "\n"
+                    elif result_event.get("type") in ["error", "progress_total", "summary"]:
+                        # Stream other event types as well (errors, total count, final summary)
+                        yield json.dumps(result_event) + "\n"
 
-                await asyncio.sleep(0.01)  # Prevent tight loop blocking
+                    await asyncio.sleep(0.01)  # Prevent tight loop blocking
+            finally:
+                # Ensure temp directory is cleaned up after streaming completes
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                except Exception:
+                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
 
         return StreamingResponse(stream_processed_data(), media_type="application/x-ndjson")
 #
@@ -6476,48 +6492,91 @@ async def _download_url_async(
     if allowed_extensions is None:
         allowed_extensions = set()  # Default to empty set if None
 
-    # Generate a safe filename
+    # Generate a safe filename (defer final naming until after we see headers)
     try:
-        # Basic filename extraction - consider more robust libraries if needed
+        # Extract last path segment from original URL as a fallback seed
         try:
             url_path_segment = httpx.URL(url).path.split('/')[-1]
-            if url_path_segment:
-                # Basic sanitization (replace potentially invalid chars) - enhance if needed
-                safe_segment = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in url_path_segment)
-                filename = safe_segment
-            else:
-                # Fallback if no path segment
-                filename = f"downloaded_{hash(url)}.tmp"
+            seed_segment = url_path_segment or f"downloaded_{hash(url)}.tmp"
         except Exception:  # Broad catch for URL parsing issues
-            filename = f"downloaded_{hash(url)}.tmp"
-
-        target_path = target_dir / filename
-        # Simple collision avoidance (add number if exists) - improve if high concurrency expected
-        counter = 1
-        base_name = target_path.stem
-        suffix = target_path.suffix
-        while target_path.exists():
-            target_path = target_dir / f"{base_name}_{counter}{suffix}"
-            counter += 1
+            seed_segment = f"downloaded_{hash(url)}.tmp"
 
         async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as response:
             response.raise_for_status()  # Raise HTTPStatusError for 4xx/5xx
 
-            if check_extension and allowed_extensions:
-                # Get the actual suffix from the final target path
-                actual_suffix = target_path.suffix.lower()  # Use the generated path's suffix
-                if not actual_suffix:
-                    # Try getting from Content-Disposition header if available
-                    content_disposition = response.headers.get('content-disposition')
-                    if content_disposition:
-                        match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
-                        disp_filename = match.group(1) if match else None
-                        if disp_filename:
-                            actual_suffix = FilePath(disp_filename).suffix.lower()
+            # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
+            candidate_name = None
+            content_disposition = response.headers.get('content-disposition')
+            if content_disposition:
+                # Try RFC 5987 filename* then fallback to filename
+                match_star = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition)
+                if match_star:
+                    candidate_name = match_star.group(1).strip('"\' ')
+                if not candidate_name:
+                    match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
+                    candidate_name = (match.group(1) if match else None)
 
-                if not actual_suffix or actual_suffix not in allowed_extensions:
-                    raise ValueError(
-                        f"Downloaded file '{target_path.name}' from {url} does not have an allowed extension (allowed: {', '.join(allowed_extensions)})")
+            if not candidate_name:
+                try:
+                    final_path_seg = response.url.path.split('/')[-1]
+                    candidate_name = final_path_seg or seed_segment
+                except Exception:
+                    candidate_name = seed_segment
+
+            # Basic sanitization
+            candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
+
+            # Determine effective suffix with fallbacks
+            effective_suffix = FilePath(candidate_name).suffix.lower()
+            # If suffix missing or not allowed, try alternatives
+            if check_extension and allowed_extensions:
+                if not effective_suffix or effective_suffix not in allowed_extensions:
+                    # Attempt to derive from response URL path
+                    try:
+                        alt_seg = response.url.path.split('/')[-1]
+                        alt_suffix = FilePath(alt_seg).suffix.lower()
+                    except Exception:
+                        alt_suffix = ''
+                    if alt_suffix and alt_suffix in allowed_extensions:
+                        effective_suffix = alt_suffix
+                        # ensure filename has this suffix
+                        base = FilePath(candidate_name).stem
+                        candidate_name = f"{base}{effective_suffix}"
+                    else:
+                        # As a last resort, rely on Content-Type for known mappings
+                        content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
+                        content_type_map = {
+                            'application/epub+zip': '.epub',
+                            'application/pdf': '.pdf',
+                            'text/plain': '.txt',
+                            'text/markdown': '.md',
+                            'text/x-markdown': '.md',
+                            'text/html': '.html',
+                            'application/xhtml+xml': '.html',
+                            'application/xml': '.xml',
+                            'text/xml': '.xml',
+                            'application/rtf': '.rtf',
+                            'text/rtf': '.rtf',
+                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                        }
+                        mapped_ext = content_type_map.get(content_type)
+                        if mapped_ext and (mapped_ext in allowed_extensions):
+                            effective_suffix = mapped_ext
+                            base = FilePath(candidate_name).stem
+                            candidate_name = f"{base}{effective_suffix}"
+                        else:
+                            allowed_list = ', '.join(sorted(allowed_extensions))
+                            raise ValueError(
+                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+
+            # Finalize target path and ensure uniqueness
+            target_path = target_dir / (candidate_name or seed_segment)
+            counter = 1
+            base_name = target_path.stem
+            suffix = target_path.suffix
+            while target_path.exists():
+                target_path = target_dir / f"{base_name}_{counter}{suffix}"
+                counter += 1
 
             async with aiofiles.open(target_path, 'wb') as f:
                 async for chunk in response.aiter_bytes(chunk_size=8192):

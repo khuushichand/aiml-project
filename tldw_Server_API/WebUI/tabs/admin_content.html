@@ -54,6 +54,184 @@
         <pre id="adminUsersList_response">---</pre>
     </div>
 
+    <div class="endpoint-section" id="adminUserRegister">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/auth/register - Create User</span>
+        </h2>
+        <p>Create a new user account. In SQLite setups, an API key is generated and returned once.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminReg_username">Username <span class="required">*</span>:</label>
+                    <input type="text" id="adminReg_username" placeholder="newuser">
+                </div>
+                <div class="form-group">
+                    <label for="adminReg_email">Email <span class="required">*</span>:</label>
+                    <input type="email" id="adminReg_email" placeholder="user@example.com">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminReg_password">Password <span class="required">*</span>:</label>
+                    <input type="password" id="adminReg_password" placeholder="********">
+                </div>
+                <div class="form-group">
+                    <label for="adminReg_code">Registration Code (optional):</label>
+                    <input type="text" id="adminReg_code" placeholder="if required">
+                </div>
+            </div>
+        </div>
+
+        <button class="api-button" onclick="adminCreateUser()">Create User</button>
+
+        <h3>Response:</h3>
+        <pre id="adminUserRegister_response">---</pre>
+    </div>
+
+    <script>
+        async function adminCreateUser() {
+            const username = document.getElementById('adminReg_username').value.trim();
+            const email = document.getElementById('adminReg_email').value.trim();
+            const password = document.getElementById('adminReg_password').value;
+            const registration_code = document.getElementById('adminReg_code').value.trim() || null;
+            if (!username || !email || !password) {
+                Toast.error('Username, email, and password are required');
+                return;
+            }
+            try {
+                const res = await apiClient.post('/api/v1/auth/register', {
+                    username, email, password, registration_code
+                });
+                document.getElementById('adminUserRegister_response').textContent = JSON.stringify(res, null, 2);
+                if (res && res.api_key) {
+                    Toast.success('User created. API key returned below. Copy and store it securely.');
+                } else {
+                    Toast.success('User created.');
+                }
+            } catch (e) {
+                document.getElementById('adminUserRegister_response').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to create user');
+            }
+        }
+    </script>
+
+    <div class="endpoint-section" id="adminRegistrationCodes">
+        <h2>
+            <span class="endpoint-method get">GET/POST/DELETE</span>
+            <span class="endpoint-path">/api/v1/admin/registration-codes - Manage Registration Codes</span>
+        </h2>
+        <p>Create, list, and revoke registration codes for controlled signups.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="regCode_maxUses">Max Uses:</label>
+                    <input type="number" id="regCode_maxUses" value="1" min="1" />
+                </div>
+                <div class="form-group">
+                    <label for="regCode_expires">Expires in (days):</label>
+                    <input type="number" id="regCode_expires" value="30" min="1" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="regCode_role">Role:</label>
+                    <select id="regCode_role">
+                        <option value="user" selected>user</option>
+                        <option value="moderator">moderator</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="regCode_desc">Description:</label>
+                    <input type="text" id="regCode_desc" placeholder="Optional note" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="createRegCode()">Create Code</button>
+            <button class="api-button" onclick="listRegCodes()">List Codes</button>
+        </div>
+
+        <h3>Latest Result:</h3>
+        <pre id="adminRegCodes_result">---</pre>
+
+        <h3>Codes:</h3>
+        <div id="adminRegCodes_list"></div>
+    </div>
+
+    <script>
+        async function createRegCode() {
+            try {
+                const payload = {
+                    max_uses: parseInt(document.getElementById('regCode_maxUses').value || '1', 10),
+                    expires_in_days: parseInt(document.getElementById('regCode_expires').value || '30', 10),
+                    role_to_grant: document.getElementById('regCode_role').value || 'user',
+                    description: document.getElementById('regCode_desc').value || null
+                };
+                const res = await apiClient.post('/api/v1/admin/registration-codes', payload);
+                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Registration code created');
+                await listRegCodes();
+            } catch (e) {
+                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to create code');
+            }
+        }
+
+        async function listRegCodes() {
+            try {
+                const res = await apiClient.get('/api/v1/admin/registration-codes');
+                const codes = Array.isArray(res.codes) ? res.codes : [];
+                renderRegCodes(codes);
+                document.getElementById('adminRegCodes_result').textContent = 'Loaded';
+            } catch (e) {
+                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to list codes');
+            }
+        }
+
+        async function deleteRegCode(id) {
+            try {
+                if (!confirm('Delete this registration code?')) return;
+                const res = await apiClient.delete(`/api/v1/admin/registration-codes/${id}`);
+                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Registration code deleted');
+                await listRegCodes();
+            } catch (e) {
+                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to delete code');
+            }
+        }
+
+        function renderRegCodes(items) {
+            const container = document.getElementById('adminRegCodes_list');
+            if (!items.length) {
+                container.innerHTML = '<p>No registration codes found.</p>';
+                return;
+            }
+            let html = '<table class="simple-table"><thead><tr>\
+<th>ID</th><th>Code</th><th>Role</th><th>Uses</th><th>Max</th><th>Expires</th><th>Actions</th>\
+</tr></thead><tbody>';
+            for (const c of items) {
+                html += `<tr>
+                    <td>${c.id}</td>
+                    <td><code>${c.code}</code></td>
+                    <td>${c.role_to_grant || ''}</td>
+                    <td>${c.times_used ?? 0}</td>
+                    <td>${c.max_uses ?? ''}</td>
+                    <td>${c.expires_at || ''}</td>
+                    <td><button class="btn btn-danger" onclick="deleteRegCode(${c.id})">Delete</button></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+    </script>
+
     <div class="endpoint-section" id="adminUserGet">
         <h2>
             <span class="endpoint-method get">GET</span>

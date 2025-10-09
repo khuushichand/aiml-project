@@ -8,7 +8,7 @@ including media database, notes, prompts, and character cards.
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 import sqlite3
@@ -21,8 +21,14 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 import numpy as np
 
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+
 from .types import Document, DataSource
 from .vector_stores import VectorStoreFactory, VectorStoreConfig, VectorStoreType
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 
 @dataclass
@@ -40,84 +46,56 @@ class RetrievalConfig:
 
 class BaseRetriever(ABC):
     """Base class for database-specific retrievers."""
-    
+
     def __init__(
         self,
-        db_path: str,
-        config: Optional[RetrievalConfig] = None
-    ):
-        """
-        Initialize retriever.
-        
-        Args:
-            db_path: Path to database
-            config: Retrieval configuration
-        
-        Raises:
-            ValueError: If db_path is invalid or contains path traversal
-        """
-        # Validate and sanitize the database path
-        self.db_path = self._validate_path(db_path)
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        db_adapter: Optional[Any] = None
+    ) -> None:
+        """Initialise the retriever with optional backend adapters."""
         self.config = config or RetrievalConfig()
-    
-    def _validate_path(self, path: str) -> str:
-        """
-        Validate and sanitize a file path to prevent path traversal attacks.
-        
-        Args:
-            path: The path to validate
-            
-        Returns:
-            Sanitized absolute path
-            
-        Raises:
-            ValueError: If path is invalid or contains traversal attempts
-        """
+        self._db_adapter = db_adapter
+        self.db_path = self._validate_path(db_path) if db_path else None
+        if self._db_adapter is None and self.db_path is None:
+            raise ValueError("db_path is required when no database adapter is provided.")
+
+    def _validate_path(self, path: Optional[str]) -> Optional[str]:
+        """Validate and normalise database paths while guarding against traversal."""
+        if path is None:
+            return None
+        if '://' in path:
+            return path
         try:
-            # Convert to Path object for safe handling
             path_obj = Path(path)
-            
-            # Resolve to absolute path (follows symlinks and resolves ..)
             abs_path = path_obj.resolve()
-            
-            # Check if path contains suspicious patterns
             path_str = str(abs_path)
             suspicious_patterns = [
-                '../',  # Parent directory traversal
-                '..\\',  # Windows parent directory traversal
-                '/etc/',  # System configuration
-                '/proc/',  # Process information
-                '/sys/',  # System information
-                '\\System32\\',  # Windows system directory
-                '\\Windows\\',  # Windows directory
+                '../',
+                '..\',
+                '/etc/',
+                '/proc/',
+                '/sys/',
+                '\System32\',
+                '\Windows\',
             ]
-            
             for pattern in suspicious_patterns:
                 if pattern in path_str:
                     logger.warning(f"Suspicious path pattern detected: {pattern} in {path_str}")
                     raise ValueError(f"Invalid path: contains suspicious pattern '{pattern}'")
-            
-            # Ensure the path is within allowed directories (configurable)
-            # For now, just ensure it's not trying to access system directories
-            if abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
-                # Unix-like systems
+            if abs_path.parts and abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
                 restricted_dirs = ['etc', 'proc', 'sys', 'dev', 'boot', 'root']
                 if abs_path.parts[1] in restricted_dirs:
                     raise ValueError(f"Access to /{abs_path.parts[1]}/ directory is not allowed")
-            
-            # Check if parent directory exists (database might not exist yet)
             parent_dir = abs_path.parent
             if not parent_dir.exists():
                 logger.warning(f"Parent directory does not exist: {parent_dir}")
-                # Optionally create parent directory with restricted permissions
-                # parent_dir.mkdir(parents=True, mode=0o700)
-            
             return str(abs_path)
-            
-        except Exception as e:
-            logger.error(f"Path validation error for '{path}': {e}")
-            raise ValueError(f"Invalid database path: {e}")
-    
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Path validation error for '{path}': {exc}")
+            raise ValueError(f"Invalid database path: {exc}")
+
     @abstractmethod
     async def retrieve(
         self,
@@ -125,19 +103,32 @@ class BaseRetriever(ABC):
         **kwargs
     ) -> List[Document]:
         """Retrieve documents from database."""
-        pass
-    
+        raise NotImplementedError
+
     @abstractmethod
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get metadata for a document."""
-        pass
-    
+        raise NotImplementedError
+
     def _execute_query(
         self,
         query: str,
         params: Tuple = ()
-    ) -> List[Tuple]:
-        """Execute SQL query and return results."""
+    ) -> List[Dict[str, Any]]:
+        """Execute SQL query and return results as dictionaries."""
+        if self._db_adapter is not None:
+            try:
+                cursor = self._db_adapter.execute_query(query, params)  # type: ignore[attr-defined]
+                if cursor is None:
+                    return []
+                fetched = cursor.fetchall() or []
+                return [dict(row) if not isinstance(row, dict) else row for row in fetched]
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Backend query error: {exc}")
+                return []
+        if not self.db_path:
+            logger.error("No database path available for direct query execution.")
+            return []
         try:
             logger.debug(f"Executing query: {query[:100]}...")
             logger.debug(f"With params: {params}")
@@ -148,9 +139,9 @@ class BaseRetriever(ABC):
                 cursor.execute(query, params)
                 results = cursor.fetchall()
                 logger.debug(f"Query returned {len(results)} results")
-                return results
-        except Exception as e:
-            logger.error(f"Database query error: {e}")
+                return [dict(row) for row in results]
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Database query error: {exc}")
             logger.error(f"Query was: {query}")
             logger.error(f"Params were: {params}")
             logger.error(f"Database path: {self.db_path}")
@@ -160,9 +151,16 @@ class BaseRetriever(ABC):
 class MediaDBRetriever(BaseRetriever):
     """Retriever for Media_DB (main content database)."""
     
-    def __init__(self, db_path: str, config: Optional[RetrievalConfig] = None, user_id: str = "0"):
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        user_id: str = "0",
+        media_db: Optional['MediaDatabase'] = None
+    ) -> None:
         """Initialize MediaDBRetriever with optional vector store."""
-        super().__init__(db_path, config)
+        super().__init__(db_path, config, db_adapter=media_db)
+        self.media_db = media_db
         self.user_id = user_id
         self.vector_store = None
         self._initialize_vector_store()
@@ -188,18 +186,12 @@ class MediaDBRetriever(BaseRetriever):
         media_type: Optional[str] = None,
         **kwargs
     ) -> List[Document]:
-        """
-        Retrieve from media database using FTS5.
-        
-        Args:
-            query: Search query
-            media_type: Optional media type filter
-            
-        Returns:
-            List of retrieved documents
-        """
+        """Retrieve documents from the media database."""
+        if self.media_db is not None:
+            return self._retrieve_via_backend(query, media_type)
+
         documents = []
-        
+
         # Build FTS query
         fts_query = self._build_fts_query(query)
         
@@ -244,7 +236,7 @@ class MediaDBRetriever(BaseRetriever):
             doc = Document(
                 id=str(row["id"]),
                 content=row["content"],
-                source=DataSource.MEDIA_DB,  # Add required source parameter
+                source=DataSource.MEDIA_DB,
                 metadata={
                     "title": row["title"],
                     "media_type": row["type"],
@@ -259,6 +251,66 @@ class MediaDBRetriever(BaseRetriever):
         
         logger.debug(f"Retrieved {len(documents)} documents from Media_DB")
         
+        return documents
+
+    def _retrieve_via_backend(self, query: str, media_type: Optional[str]) -> List[Document]:
+        if self.media_db is None:
+            return []
+        date_range = None
+        if self.config.date_filter:
+            start, end = self.config.date_filter
+            date_range = {'start_date': start, 'end_date': end}
+        media_types = [media_type] if media_type else None
+        sort_by = 'relevance' if self.config.use_fts else 'last_modified_desc'
+        try:
+            results, _total = self.media_db.search_media_db(
+                search_query=query,
+                search_fields=['title', 'content'],
+                media_types=media_types,
+                date_range=date_range,
+                sort_by=sort_by,
+                results_per_page=self.config.max_results,
+                page=1,
+                include_trash=False,
+                include_deleted=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"MediaDatabase search failed: {exc}")
+            return []
+        documents: List[Document] = []
+        min_score = float(self.config.min_score or 0.0)
+        for row in results:
+            raw_score = row.get('relevance_score')
+            if raw_score is None:
+                raw_score = row.get('rank')
+            try:
+                score_val = float(raw_score) if raw_score is not None else 0.0
+            except (TypeError, ValueError):
+                score_val = 0.0
+            if score_val < min_score:
+                continue
+            metadata = {}
+            if self.config.include_metadata:
+                metadata = {
+                    'title': row.get('title'),
+                    'media_type': row.get('type'),
+                    'url': row.get('url'),
+                    'created_at': row.get('ingestion_date'),
+                    'transcription_model': row.get('transcription_model'),
+                    'last_modified': row.get('last_modified'),
+                    'source': 'media_db',
+                }
+            doc_id = row.get('uuid') or row.get('id')
+            documents.append(
+                Document(
+                    id=str(doc_id),
+                    content=row.get('content') or '',
+                    source=DataSource.MEDIA_DB,
+                    metadata=metadata,
+                    score=score_val,
+                )
+            )
+        documents.sort(key=lambda doc: getattr(doc, 'score', 0.0), reverse=True)
         return documents
     
     async def retrieve_with_keywords(
@@ -480,10 +532,14 @@ class MediaDBRetriever(BaseRetriever):
     
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get full metadata for a media item."""
-        sql = """
+        aggregator = "GROUP_CONCAT(t.name)"
+        media_adapter = getattr(self, 'media_db', None)
+        if media_adapter is not None and getattr(media_adapter, 'backend_type', None) == BackendType.POSTGRESQL:
+            aggregator = "STRING_AGG(t.name, ',')"
+        sql = f"""
             SELECT 
                 m.*,
-                GROUP_CONCAT(t.name) as tags,
+                {aggregator} as tags,
                 COUNT(DISTINCT ma.id) as analysis_count
             FROM media m
             LEFT JOIN media_tags mt ON m.id = mt.media_id
@@ -525,6 +581,16 @@ class MediaDBRetriever(BaseRetriever):
 
 class NotesDBRetriever(BaseRetriever):
     """Retriever for notes database."""
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        chacha_db: Optional['CharactersRAGDB'] = None
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=chacha_db)
+        self.chacha_db = chacha_db
     
     async def retrieve(
         self,
@@ -532,18 +598,12 @@ class NotesDBRetriever(BaseRetriever):
         notebook_id: Optional[int] = None,
         **kwargs
     ) -> List[Document]:
-        """
-        Retrieve from notes database.
-        
-        Args:
-            query: Search query
-            notebook_id: Optional notebook filter
-            
-        Returns:
-            List of retrieved documents
-        """
+        """Retrieve from notes database."""
+        if self.chacha_db is not None and not self.config.tags_filter:
+            return self._retrieve_via_chacha(query, notebook_id)
+
         documents = []
-        
+
         # Build SQL query
         sql = """
             SELECT 
@@ -615,16 +675,63 @@ class NotesDBRetriever(BaseRetriever):
         
         return documents
     
+    def _retrieve_via_chacha(self, query: str, notebook_id: Optional[int]) -> List[Document]:
+        if self.chacha_db is None:
+            return []
+        try:
+            results = self.chacha_db.search_notes(query, limit=int(self.config.max_results))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"ChaCha notes search failed: {exc}")
+            return []
+        documents: List[Document] = []
+        min_score = float(self.config.min_score or 0.0)
+        for row in results:
+            if notebook_id and row.get('notebook_id') != notebook_id:
+                continue
+            score = row.get('rank') or 0.0
+            try:
+                score_val = float(score)
+            except (TypeError, ValueError):
+                score_val = 0.0
+            if score_val < min_score:
+                continue
+            metadata = {}
+            if self.config.include_metadata:
+                metadata = {
+                    'title': row.get('title'),
+                    'notebook': row.get('notebook_name'),
+                    'notebook_id': row.get('notebook_id'),
+                    'created_at': row.get('created_at'),
+                    'updated_at': row.get('updated_at'),
+                    'source': 'notes_db',
+                }
+            documents.append(
+                Document(
+                    id=f"note_{row.get('id')}",
+                    content=f"# {row.get('title')}
+
+{row.get('content', '')}",
+                    source=DataSource.NOTES,
+                    metadata=metadata,
+                    score=score_val,
+                )
+            )
+        documents.sort(key=lambda x: getattr(x, 'score', 0.0), reverse=True)
+        return documents
+    
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get metadata for a note."""
         # Extract numeric ID
         note_id = doc_id.replace("note_", "")
         
-        sql = """
+        aggregator = "GROUP_CONCAT(t.name)"
+        if self.chacha_db is not None and getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
+            aggregator = "STRING_AGG(t.name, ',')"
+        sql = f"""
             SELECT 
                 n.*,
                 nb.name as notebook_name,
-                GROUP_CONCAT(t.name) as tags
+                {aggregator} as tags
             FROM notes n
             LEFT JOIN notebooks nb ON n.notebook_id = nb.id
             LEFT JOIN note_tags nt ON n.id = nt.note_id
@@ -651,6 +758,16 @@ class NotesDBRetriever(BaseRetriever):
 
 class PromptsDBRetriever(BaseRetriever):
     """Retriever for prompts database."""
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        chacha_db: Optional['CharactersRAGDB'] = None
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=chacha_db)
+        self.chacha_db = chacha_db
     
     async def retrieve(
         self,
@@ -750,6 +867,16 @@ class PromptsDBRetriever(BaseRetriever):
 
 class CharacterCardsRetriever(BaseRetriever):
     """Retriever for character cards and chats."""
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        chacha_db: Optional['CharactersRAGDB'] = None
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=chacha_db)
+        self.chacha_db = chacha_db
     
     async def retrieve(
         self,
@@ -1142,7 +1269,21 @@ class MultiDatabaseRetriever:
 
 class ClaimsRetriever(BaseRetriever):
     """Retriever for Claims table (ingestion-time factual statements)."""
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        media_db: Optional['MediaDatabase'] = None
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=media_db)
+        self.media_db = media_db
+
     async def retrieve(self, query: str, **kwargs) -> List[Document]:
+        if self.media_db is not None:
+            return self._retrieve_via_media_backend(query)
+
         documents: List[Document] = []
         try:
             # Try FTS on claims_fts first
@@ -1219,6 +1360,40 @@ class ClaimsRetriever(BaseRetriever):
                 )
         return documents
 
+    def _retrieve_via_media_backend(self, query: str) -> List[Document]:
+        if self.media_db is None:
+            return []
+        try:
+            results = self.media_db.search_claims(query, limit=int(self.config.max_results))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"MediaDatabase claims search failed: {exc}")
+            return []
+        documents: List[Document] = []
+        min_score = float(self.config.min_score or 0.0)
+        for row in results:
+            score = row.get('relevance_score') or 0.0
+            try:
+                score_val = float(score)
+            except (TypeError, ValueError):
+                score_val = 0.0
+            if score_val < min_score:
+                continue
+            metadata = {
+                "media_id": row.get("media_id"),
+                "chunk_index": row.get("chunk_index"),
+                "source": "claim",
+            }
+            documents.append(
+                Document(
+                    id=f"claim_{row.get('id')}",
+                    content=row.get('claim_text') or '',
+                    metadata=metadata,
+                    source=DataSource.CLAIMS,
+                    score=score_val if score_val else 0.4,
+                )
+            )
+        return documents
+
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         try:
             cid = doc_id.replace("claim_", "")
@@ -1227,9 +1402,9 @@ class ClaimsRetriever(BaseRetriever):
             return dict(rows[0]) if rows else {}
         except Exception:
             return {}
-    
+
     # (no second retrieve method inside ClaimsRetriever)
-    
+
 # ---------------------------------------------------------------------------
 # Backward compatibility aliases for test suites expecting older names
 try:

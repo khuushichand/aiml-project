@@ -2,5 +2,6 @@
 
 This section contains API guides and references for tldw_Server.
 
-Use the sidebar to browse available API docs.
+Use the sidebar to browse available API docs. For a quick map of OpenAPI tags to their docs, see the API Tag Index: API-related/API_Tags_Index.md.
 
+See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).

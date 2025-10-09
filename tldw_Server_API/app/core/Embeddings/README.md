@@ -24,6 +24,15 @@ The production path is an OpenAI-compatible REST API with caching, connection po
 - Input validation: strings or list[str] only; up to 2048 inputs; per-model token limits with clear error payload when exceeded; optional base64 encoding of vectors; L2-normalization for float outputs.
 - Rate limiting: Optional (off by default). Enable with `EMBEDDINGS_RATE_LIMIT=on`.
 
+### Qwen3 Embeddings (Transformers)
+- When the HuggingFace model id contains `Qwen3` and `Embedding` (e.g., `Qwen/Qwen3-Embedding-0.6B`), the engine:
+  - Applies an instruction-aware format per text using keys in `Config_Files/Prompts/embeddings.prompts.yaml`:
+    - `qwen3_embeddings_instruction` (default: “Given a web search query, retrieve relevant passages that answer the query”).
+    - `qwen3_embeddings_mode` (`auto` | `document` | `query`).
+      - `auto`: heuristically formats short question-like inputs as `<Query>:`; others as `<Document>:`.
+  - Uses last-token pooling instead of mean pooling for Qwen3.
+- No ChatML system/assistant blocks are used for embeddings.
+
 ### Public Endpoints
 - `POST /api/v1/embeddings` — Create embeddings (OpenAI-compatible schema). For non-OpenAI providers, the `model` field in the response includes a `provider:model` prefix.
 - `GET /api/v1/embeddings/models` — List known/allowed models and defaults.

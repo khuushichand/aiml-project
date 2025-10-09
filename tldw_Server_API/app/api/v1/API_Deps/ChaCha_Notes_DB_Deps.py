@@ -69,18 +69,21 @@ _chacha_db_lock = threading.Lock()
 
 # --- Helper Functions ---
 
-# FIXME
 def _get_chacha_db_path_for_user(user_id: int) -> Path:
     """
-    Determines the database file path for a given user ID for ChaChaNotes.
-    Ensures the user's specific directory exists.
-    The path will be USER_DB_BASE_DIR / <user_id> / chachanotes_user_dbs / user_chacha_notes_rag.sqlite
+    Resolve the per-user ChaChaNotes DB path under the configured base.
+
+    Policy: store each user's notes/chats DB at
+      USER_DB_BASE_DIR / <user_id> / "ChaChaNotes.db"
+
+    Notes:
+    - USER_DB_BASE_DIR is read from global settings and can be overridden by env.
+    - This per-user layout is intentional to isolate data and simplify backups.
+    - A fallback path is used only when USER_DB_BASE_DIR is misconfigured; logs at CRITICAL/ERROR.
     """
     user_dir_name = str(user_id)
-    # MAIN_USER_DATA_BASE_DIR is from settings (e.g. /project_root/user_databases)
-    # DEFAULT_CHACHA_DB_SUBDIR is "chachanotes_user_dbs"
-
-    # Path: /project_root/user_databases/<user_id>
+    # MAIN_USER_DATA_BASE_DIR comes from settings (e.g., /project_root/Databases/user_databases)
+    # Path: <USER_DB_BASE_DIR>/<user_id>
     user_specific_chacha_base_dir = MAIN_USER_DATA_BASE_DIR / user_dir_name
     db_file = user_specific_chacha_base_dir / "ChaChaNotes.db"
 

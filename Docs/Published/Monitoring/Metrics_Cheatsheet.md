@@ -1,11 +1,12 @@
 # Metrics Cheatsheet
 
-The server exports extensive metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio.
+The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Some categories require OpenTelemetry or module‑specific collectors to be enabled (noted below).
 
-- Text format: `GET /api/v1/metrics`
+- Text format: `GET /metrics` (or `GET /api/v1/metrics/text`)
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
-- Chat metrics: `GET /api/v1/metrics/chat` (includes `token_costs`)
+- Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin‑only; clears in‑memory counters)
 
 ## HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -19,6 +20,7 @@ Example PromQL:
 - `db_connections_active{database}`: Gauge of active DB connections.
 - `db_queries_total{database,operation}`: Counter of DB queries.
 - `db_query_duration_seconds{database,operation}`: Histogram of DB latency.
+Note: DB metrics are available when the corresponding operations use the instrumented DB wrappers; not all code paths emit these yet.
 
 ## LLM
 - `llm_requests_total{provider,model,status}`: Counter of LLM calls.
@@ -35,6 +37,7 @@ Example PromQL:
 - `rag_retrieval_latency_seconds{source,pipeline}`: Histogram of retrieval latency.
 - `rag_documents_retrieved{source,pipeline}`: Histogram of docs retrieved.
 - `rag_cache_hits_total{cache_type}` / `rag_cache_misses_total{cache_type}`: Counters of cache results.
+Note: The new RAG service also emits `rag_pipeline_duration_ms` and related metrics via OpenTelemetry. To see those in Prometheus/Grafana, configure your OTel → Prometheus exporter.
 
 Example PromQL:
 - P95 retrieval latency by source: `histogram_quantile(0.95, sum by (le,source) (rate(rag_retrieval_latency_seconds_bucket[5m])))`
@@ -66,6 +69,7 @@ Example PromQL:
 - `system_cpu_usage_percent`: Gauge of CPU usage percent.
 - `system_memory_usage_bytes`: Gauge of memory usage.
 - `system_disk_usage_bytes{mount_point}`: Gauge of disk usage by mount.
+Note: System gauges appear when a resource monitor/collector is running; they are not continuously sampled by default.
 
 ## Errors & Security
 - `errors_total{component,error_type}`: Counter of errors by component.
@@ -89,7 +93,9 @@ Example PromQL:
 - Chat error rate: `sum(increase(chat_errors_total[5m]))`
 - Streaming timeouts (rate): `rate(chat_streaming_timeouts_total[5m])`
 
-Note: Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
+Notes:
+- Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
+- The JSON endpoint `GET /api/v1/metrics/chat` always returns `active_operations` and `token_costs`; counter/histogram stats appear only if exported.
 
 ## Chunking Module
 - Requests: `chunking_requests_total{method,status}`.
@@ -107,6 +113,9 @@ Note: Chat metrics are produced via OpenTelemetry meters; Prometheus export depe
 - Rate limits: `mcp_rate_limit_hits_total{key_type}`.
 - Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
+Notes:
+- MCP exposes a JSON metrics view at `GET /api/v1/mcp/metrics` (admin‑only).
+- Prometheus‑style MCP metrics require the module’s Prometheus collector to be enabled; when enabled, include those metrics in your scraping setup.
 
 ## Prompt Studio
 - Executions: `prompt_studio.executions.total{provider,model,status}`, `prompt_studio.executions.duration_seconds{provider,model}`.
@@ -136,4 +145,3 @@ sudo dnf install ffmpeg portaudio-devel gcc gcc-c++ python3-devel
 # macOS
 brew install ffmpeg portaudio
 ```
-

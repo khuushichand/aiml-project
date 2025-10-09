@@ -1,6 +1,6 @@
 # Characters, Chat & Notes Database
 
-# LLM-generated documentation for the SQLite database used in the ChaChaNotes application. (Needs to be reviewed)
+# Developer documentation for the SQLite-based ChaChaNotes database (kept current with code).
 
 ## Table of Contents
 1.  [Overview](#1-overview)
@@ -36,7 +36,7 @@
 
 ## 1. Overview
 
-`ChaChaNotes_DB.py` provides a Python library for managing a SQLite database designed to store Character Cards, Chat Conversations, Messages, and associated Notes and Keywords. It's built with features like schema versioning, full-text search, optimistic locking for concurrent modifications, and a synchronization log to facilitate data syncing between different clients or devices.
+`tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py` provides a Python library for managing a SQLite database designed to store Character Cards, Chat Conversations, Messages, Notes, Keywords, Keyword Collections, and Flashcards (decks/SRS). It's built with schema versioning, FTS5, optimistic locking, and a synchronization log for reliable syncing.
 
 The library is intended for applications that require local, structured storage for rich text-based content, with capabilities for efficient searching and robust data management.
 
@@ -44,15 +44,15 @@ The library is intended for applications that require local, structured storage 
 
 ## 2. Key Features
 
-*   **SQLite Backend:** Uses SQLite for a lightweight, file-based database.
-*   **Schema Management:** Includes built-in schema definition (currently at version 3) and initialization.
+*   **SQLite Backend:** Uses SQLite for a lightweight, file-based database (backend abstraction present for future drivers).
+*   **Schema Management:** Built-in schema and migrations (current version: 7). V5 adds Flashcards/Decks/Reviews; V6 adds `model_type` and `extra` to flashcards; V7 adds `reverse` flag to flashcards.
 *   **Thread Safety:** Designed for use in multi-threaded applications using thread-local connections.
 *   **Optimistic Locking:** Implements a `version` field and `expected_version` checks for update and delete operations to prevent lost updates in concurrent environments.
 *   **Soft Deletes:** Records are marked as `deleted` rather than being physically removed, allowing for potential recovery or audit.
-*   **Full-Text Search (FTS5):** Provides FTS capabilities for `character_cards`, `conversations`, `messages`, `notes`, `keywords`, and `keyword_collections` via SQLite's FTS5 extension. FTS updates are primarily handled by SQL triggers.
+*   **Full-Text Search (FTS5):** FTS tables maintained by triggers for `character_cards`, `conversations`, `messages`, `notes`, `keywords`, `keyword_collections`, and `flashcards`.
 *   **Synchronization Log:** Automatically logs changes (creates, updates, deletes) to main entity tables into a `sync_log` table using SQL triggers. Link table changes are logged manually by Python methods. This log is essential for implementing data synchronization strategies.
 *   **Client ID Tracking:** Associates a `client_id` with data modifications, crucial for sync conflict resolution.
-*   **UUIDs for IDs:** Uses UUIDs for primary keys in `conversations`, `messages`, and `notes` for globally unique identification.
+*   **UUIDs for IDs:** Uses UUIDs for primary keys in `conversations`, `messages`, `notes`, and `flashcards` (via an internal integer rowid for FTS).
 *   **JSON Field Support:** Handles serialization and deserialization for specific fields (e.g., `tags`, `extensions` in character cards).
 *   **Transaction Management:** Provides a context manager for database transactions.
 
@@ -63,7 +63,9 @@ The library is intended for applications that require local, structured storage 
 To use the library, instantiate the `CharactersRAGDB` class, providing the path to the SQLite database file and a unique `client_id` for the application instance.
 
 ```python
-from ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, InputError, ConflictError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB, CharactersRAGDBError, InputError, ConflictError
+)
 import logging
 
 # Configure logging for the library (optional, but recommended)
@@ -75,7 +77,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 try:
     # Initialize the database. If the file doesn't exist, it will be created.
     # If it exists, schema version will be checked/initialized.
-    db = CharactersRAGDB(db_path="my_app_data.sqlite", client_id="my_unique_client_instance_001")
+    db = CharactersRAGDB(db_path="/path/to/ChaChaNotes.db", client_id="my_unique_client_instance_001")
 
     # Example: Add a character card
     card_data = {
@@ -106,20 +108,16 @@ finally:
 
 ## 4. Database Schema
 
-The database schema (currently version 3) consists of the following main tables:
-
-*   `db_schema_version`: Tracks the current schema version.
-*   `character_cards`: Stores character profiles (name, description, personality, image, etc.). Includes FTS.
-*   `conversations`: Represents chat conversations (title, character association, etc.). Includes FTS.
-*   `messages`: Stores individual messages within conversations (sender, content, timestamp, ranking). Includes FTS.
-*   `keywords`: Stores unique keywords. Includes FTS.
-*   `keyword_collections`: Groups keywords into named collections, possibly hierarchical. Includes FTS.
-*   `notes`: Stores general-purpose notes (title, content). Includes FTS.
-*   **Linking Tables:**
-    *   `conversation_keywords`: Many-to-many link between conversations and keywords.
-    *   `collection_keywords`: Many-to-many link between keyword collections and keywords.
-    *   `note_keywords`: Many-to-many link between notes and keywords.
-*   `sync_log`: Records all data modifications (create, update, delete) with client ID, timestamp, version, and payload for synchronization purposes.
+Core tables and views (selected):
+- `character_cards` (+ FTS) – character profiles (JSON: `alternate_greetings`, `tags`, `extensions`)
+- `conversations` (+ FTS) – chat sessions (UUID primary key)
+- `messages` (+ FTS) – chat messages (UUID primary key; optional image fields)
+- `keywords` (+ FTS) – tag registry (unique, case-insensitive)
+- `keyword_collections` (+ FTS) – groups of keywords (optional parent)
+- `notes` (+ FTS) – free-form notes (UUID primary key)
+- Linking tables – `conversation_keywords`, `collection_keywords`, `note_keywords`
+- Flashcards/SRS (since V5): `decks`, `flashcards` (+ FTS), `flashcard_keywords`, `flashcard_reviews`
+- `sync_log` – append-only change log (entity, entity_id, operation, timestamp, client_id, version, payload)
 
 Each main entity table (`character_cards`, `conversations`, `messages`, `notes`, `keywords`, `keyword_collections`) includes:
 *   `created_at`: Timestamp of creation.
@@ -135,14 +133,10 @@ Associated FTS5 virtual tables (e.g., `character_cards_fts`) are used for full-t
 ## 5. Core Concepts
 
 ### Schema Versioning and Initialization
-The library manages its database schema version via the `db_schema_version` table.
-*   `_CURRENT_SCHEMA_VERSION` (currently 3) defines the version the code expects.
-*   On `CharactersRAGDB` initialization:
-    *   It checks the existing database schema version.
-    *   If the DB is new (version 0), it applies the full schema for the `_CURRENT_SCHEMA_VERSION`.
-    *   If the DB version matches `_CURRENT_SCHEMA_VERSION`, it proceeds.
-    *   If the DB version is older and a migration path is not defined (e.g., code is V3, DB is V1 or V2 with no direct migration logic in `_initialize_schema`), a `SchemaError` is raised.
-    *   If the DB version is newer than `_CURRENT_SCHEMA_VERSION`, a `SchemaError` is raised, as the code is not equipped to handle a future schema.
+The database uses a schema version to manage evolution.
+*   Current schema version: **7**
+*   Initialization applies the base schema (V4) and then migrations to V5 (flashcards/decks/reviews), V6 (flashcard `model_type`/`extra`), and V7 (flashcard `reverse`).
+*   A legacy repair path adds missing `entity_id` to `sync_log` if detected before reapplying schema.
 
 ### Client ID
 The `client_id` provided during `CharactersRAGDB` initialization is crucial for the `sync_log`. Every modification (create, update, delete) logged in `sync_log` (and written to the entity tables) is stamped with this `client_id`. This allows synchronization systems to identify the origin of changes and helps in conflict resolution strategies.
@@ -165,8 +159,8 @@ Records are generally not physically deleted from the database. Instead, they ar
 *   Some `add_` methods (e.g., `_add_generic_item` for keywords) may "undelete" an existing soft-deleted item if a new item with the same unique key is added, effectively reactivating and updating it.
 
 ### Full-Text Search (FTS5)
-The library leverages SQLite's FTS5 extension for efficient searching of text content.
-*   For tables like `character_cards`, `conversations`, `messages`, `notes`, `keywords`, and `keyword_collections`, corresponding FTS5 virtual tables (e.g., `character_cards_fts`) are created.
+The library leverages SQLite's FTS5 for efficient searching of text content.
+*   FTS5 virtual tables exist for `character_cards`, `conversations`, `messages`, `notes`, `keywords`, `keyword_collections`, and `flashcards`.
 *   SQL triggers (e.g., `character_cards_ai`, `character_cards_au`, `character_cards_ad`) are defined in the schema. These triggers automatically synchronize the FTS tables when records in the main tables are inserted, updated, or deleted.
 *   This means the Python methods for CUD operations don't need to manually update FTS tables; the database handles it.
 *   `search_...` methods query these FTS tables using the `MATCH` operator.
@@ -174,7 +168,7 @@ The library leverages SQLite's FTS5 extension for efficient searching of text co
 ### Synchronization Log
 The `sync_log` table is central to enabling data synchronization.
 *   **Purpose:** To record every significant change (create, update, delete) made to the data.
-*   **Automatic Logging (Triggers):** For `character_cards`, `conversations`, `messages`, `notes`, `keywords`, and `keyword_collections`, SQL triggers automatically insert a new entry into `sync_log` whenever a record is inserted, updated (including soft delete/undelete), or (conceptually) hard deleted.
+*   **Automatic Logging (Triggers):** For `character_cards`, `conversations`, `messages`, `notes`, `keywords`, `keyword_collections`, as well as `decks` and `flashcards`, triggers insert changes into `sync_log` for create/update/delete.
 *   **Manual Logging (Python):** For linking tables (`conversation_keywords`, `collection_keywords`, `note_keywords`), changes (links/unlinks) are logged by the corresponding Python methods (`_manage_link` helper) because they don't have their own `version` or `client_id` columns suitable for complex triggers. These log entries use an operation type of 'create' for linking and 'delete' for unlinking.
 *   **Log Entry Content:** Each log entry includes:
     *   `change_id`: Auto-incrementing primary key for the log.
@@ -194,9 +188,10 @@ The library is designed to be used in multi-threaded environments:
 *   The `PRAGMA journal_mode=WAL;` (Write-Ahead Logging) is set for non-memory databases, which improves concurrency and performance.
 
 ### JSON Fields
-Certain table columns are designed to store structured data as JSON strings:
-*   `character_cards`: `alternate_greetings`, `tags`, `extensions`.
-*   The library provides helpers (`_ensure_json_string`, `_deserialize_row_fields`) to handle conversion between Python objects (lists/dicts) and JSON strings for these fields.
+Certain columns store structured data as JSON strings:
+*   `character_cards`: `alternate_greetings`, `tags`, `extensions`
+*   `flashcards`: `tags_json`, `notes`, `extra`
+*   Helpers convert lists/dicts to JSON on write and parse back on read.
 *   When adding or updating, Python lists/dicts for these fields are automatically converted to JSON strings.
 *   When retrieving data, these JSON strings are automatically parsed back into Python lists/dicts.
 
@@ -208,7 +203,7 @@ Certain table columns are designed to store structured data as JSON strings:
 
 ```python
 class CharactersRAGDB:
-    def __init__(self, db_path: Union[str, Path], client_id: str)
+    def __init__(self, db_path: Union[str, Path], client_id: str, *, backend=None, config=None)
 ```
 Initializes the database connection and schema.
 
@@ -225,7 +220,7 @@ Initializes the database connection and schema.
 ```python
     def get_connection(self) -> sqlite3.Connection
 ```
-Returns the thread-local SQLite connection. Manages opening or reopening if necessary.
+Returns the active connection (SQLite returns a raw `sqlite3.Connection`; non-SQLite backends use a lightweight wrapper).
 
 *   **Returns:** `sqlite3.Connection` - The active connection for the current thread.
 *   **Raises:** `CharactersRAGDBError` if connection fails.
@@ -271,7 +266,7 @@ Executes a SQL query multiple times with different parameter sets.
 ```python
     def transaction(self) -> 'TransactionContextManager'
 ```
-Returns a context manager for database transactions.
+Returns a context manager for database transactions (leverages native backend transactions when available).
 
 *   **Usage:**
     ```python
@@ -685,26 +680,28 @@ The library defines several custom exceptions:
 
 ## 8. Logging
 
-The library uses Python's standard `logging` module. A logger instance is created as:
-`logger = logging.getLogger(__name__)` (where `__name__` will be `ChaChaNotes_DB`).
-
-To see logs from this library, configure the logging system in your application.
-Example basic configuration:
-```python
-import logging
-logging.basicConfig(level=logging.INFO, # Or logging.DEBUG for more verbose output
-                    format='%(asctime)s - %(levelname)s - %(name)s - %(threadName)s - %(message)s')
-
-# To specifically control the library's log level:
-# logging.getLogger("ChaChaNotes_DB").setLevel(logging.DEBUG)
-```
-The library logs various events, including:
-*   Initialization status.
-*   SQL query execution (at DEBUG level).
-*   Transaction begin/commit/rollback (at DEBUG level).
-*   Successful operations (e.g., adding a card) at INFO level.
-*   Warnings for non-critical issues (e.g., unknown fields in update payload).
-*   Errors and critical failures.
+The library uses Loguru (`from loguru import logger`) for structured logging. Configure sinks and levels in the hosting app; the FastAPI app initializes Loguru in `main.py`. Logged events include initialization/migrations, query/transaction flow (debug), successful operations (info), and errors with context.
 
 ---
+
+## 9. Integration & Storage Path
+
+- FastAPI dependency: `get_chacha_db_for_user` (`app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py`) resolves a per-user DB instance based on `USER_DB_BASE_DIR` and caches instances in an LRU.
+- Per-user DB location: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (directories auto-created).
+- On first use per user, a default character card is ensured.
+
+---
+
+## 10. Flashcards & SRS (since V5)
+
+Key methods:
+- `add_deck(name, description?) -> int`, `list_decks(...) -> List[dict]`
+- `add_flashcard(card_data) -> str`, `add_flashcards_bulk(cards) -> List[str]`
+- `list_flashcards(deck_id?, tag?, q?, due_status?, include_deleted?, limit, offset) -> List[dict]`
+- `get_flashcard(uuid) -> Optional[dict]`, `update_flashcard(uuid, updates, expected_version?) -> bool`, `soft_delete_flashcard(uuid, expected_version) -> bool`
+- `review_flashcard(uuid, rating, answer_time_ms?) -> dict` (SRS review; writes `flashcard_reviews` and updates scheduling fields)
+- `get_keywords_for_flashcard(uuid) -> List[dict]`, `set_flashcard_tags(uuid, tags: List[str]) -> bool`
+
+Model notes:
+- Flashcard fields include `uuid`, `deck_id`, `front`, `back`, `notes`, `extra`, `tags_json`, `is_cloze`, `model_type` (`basic|basic_reverse|cloze`), `reverse` (bool in V7), and SRS fields (`ef`, `interval_days`, `repetitions`, `lapses`, `due_at`, `last_reviewed_at`).
 ```

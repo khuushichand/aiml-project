@@ -3,7 +3,7 @@
     <div class="endpoint-section" id="authLogin">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/login - User Login</span>
+            <span class="endpoint-path">/api/v1/auth/login - User Login</span>
         </h2>
         <p>Authenticate a user and receive a JWT token.</p>
         
@@ -36,7 +36,7 @@
     <div class="endpoint-section" id="authRegister">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/register - User Registration</span>
+            <span class="endpoint-path">/api/v1/auth/register - User Registration</span>
         </h2>
         <p>Register a new user account.</p>
         
@@ -79,7 +79,7 @@
     <div class="endpoint-section" id="authLogout">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/logout - User Logout</span>
+            <span class="endpoint-path">/api/v1/auth/logout - User Logout</span>
         </h2>
         <p>Logout the current user and invalidate their session.</p>
         
@@ -94,7 +94,7 @@
     <div class="endpoint-section" id="authRefresh">
         <h2>
             <span class="endpoint-method post">POST</span>
-            <span class="endpoint-path">/api/v1/refresh - Refresh Token</span>
+            <span class="endpoint-path">/api/v1/auth/refresh - Refresh Token</span>
         </h2>
         <p>Refresh an expired access token using a refresh token.</p>
         
@@ -114,7 +114,7 @@
     <div class="endpoint-section" id="authCurrentUser">
         <h2>
             <span class="endpoint-method get">GET</span>
-            <span class="endpoint-path">/api/v1/me - Current User Info</span>
+            <span class="endpoint-path">/api/v1/auth/me - Current User Info</span>
         </h2>
         <p>Get information about the currently authenticated user.</p>
         
@@ -140,7 +140,7 @@ async function performLogin() {
     }
     
     try {
-        const response = await apiClient.post('/api/v1/login', {
+        const response = await apiClient.post('/api/v1/auth/login', {
             username: username,
             password: password,
             remember_me: remember
@@ -183,15 +183,21 @@ async function performRegistration() {
     }
     
     try {
-        const response = await apiClient.post('/api/v1/register', {
+        const response = await apiClient.post('/api/v1/auth/register', {
             username: username,
             email: email,
             password: password,
             full_name: fullName
         });
         
-        document.getElementById('authRegister_response').textContent = JSON.stringify(response, null, 2);
-        Toast.success('Registration successful! Please login.');
+        // Show the API key if provided (SQLite multi-user setups)
+        const pre = document.getElementById('authRegister_response');
+        pre.textContent = JSON.stringify(response, null, 2);
+        if (response && response.api_key) {
+            Toast.success('Registration successful. API key created and shown below. Copy and store it securely.');
+        } else {
+            Toast.success('Registration successful! Please login.');
+        }
     } catch (error) {
         document.getElementById('authRegister_response').textContent = 
             JSON.stringify(error.response || error, null, 2);
@@ -201,7 +207,7 @@ async function performRegistration() {
 
 async function performLogout() {
     try {
-        const response = await apiClient.post('/api/v1/logout', {});
+        const response = await apiClient.post('/api/v1/auth/logout', {});
         document.getElementById('authLogout_response').textContent = JSON.stringify(response, null, 2);
         
         // Clear stored tokens
@@ -225,7 +231,7 @@ async function performTokenRefresh() {
     }
     
     try {
-        const response = await apiClient.post('/api/v1/refresh', {
+        const response = await apiClient.post('/api/v1/auth/refresh', {
             refresh_token: refreshToken
         });
         
@@ -248,7 +254,7 @@ async function performTokenRefresh() {
 
 async function getCurrentUser() {
     try {
-        const response = await apiClient.get('/api/v1/me');
+        const response = await apiClient.get('/api/v1/auth/me');
         document.getElementById('authCurrentUser_response').textContent = JSON.stringify(response, null, 2);
     } catch (error) {
         document.getElementById('authCurrentUser_response').textContent = 
@@ -274,4 +280,135 @@ document.addEventListener('DOMContentLoaded', () => {
         initializeAuthTab();
     }
 });
+</script>
+
+<!-- API Key Management (current user) -->
+<div class="endpoint-section" id="authApiKeys">
+    <h2>
+        <span class="endpoint-method get">GET</span>
+        <span class="endpoint-path">/api/v1/users/api-keys - My API Keys</span>
+    </h2>
+    <p>Manage your personal API keys (X-API-KEY). Keys are returned only at creation or rotation time.</p>
+
+    <div class="btn-group">
+        <button class="api-button" onclick="listMyApiKeys()">List My API Keys</button>
+    </div>
+
+    <div class="columns">
+        <div class="column">
+            <div class="form-group">
+                <label for="apiKey_name">Name:</label>
+                <input type="text" id="apiKey_name" placeholder="Workstation Key" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="apiKey_scope">Scope:</label>
+                <select id="apiKey_scope">
+                    <option value="read">read</option>
+                    <option value="write" selected>write</option>
+                    <option value="admin">admin</option>
+                </select>
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="apiKey_expiry">Expires (days):</label>
+                <input type="number" id="apiKey_expiry" value="365" min="1" />
+            </div>
+        </div>
+    </div>
+    <div class="btn-group">
+        <button class="api-button" onclick="createMyApiKey()">Create API Key</button>
+    </div>
+
+    <h3>Result:</h3>
+    <pre id="authApiKeys_response">---</pre>
+
+    <h3>Keys:</h3>
+    <div id="authApiKeys_list"></div>
+</div>
+
+<script>
+async function listMyApiKeys() {
+    try {
+        const items = await apiClient.get('/api/v1/users/api-keys');
+        renderKeys(items || []);
+        document.getElementById('authApiKeys_response').textContent = 'Loaded';
+    } catch (e) {
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to list API keys');
+    }
+}
+
+async function createMyApiKey() {
+    try {
+        const payload = {
+            name: document.getElementById('apiKey_name').value || null,
+            scope: document.getElementById('apiKey_scope').value || 'write',
+            expires_in_days: parseInt(document.getElementById('apiKey_expiry').value || '365', 10)
+        };
+        const res = await apiClient.post('/api/v1/users/api-keys', payload);
+        // res.key contains the new key; show prominently
+        const out = { ...res };
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(out, null, 2);
+        Toast.success('API key created. Copy it now; it is shown only once.');
+        await listMyApiKeys();
+    } catch (e) {
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to create API key');
+    }
+}
+
+async function rotateMyApiKey(id) {
+    try {
+        const res = await apiClient.post(`/api/v1/users/api-keys/${id}/rotate`, { expires_in_days: 365 });
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(res, null, 2);
+        Toast.success('API key rotated. Copy the new key now.');
+        await listMyApiKeys();
+    } catch (e) {
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to rotate API key');
+    }
+}
+
+async function revokeMyApiKey(id) {
+    try {
+        const res = await apiClient.delete(`/api/v1/users/api-keys/${id}`);
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(res, null, 2);
+        Toast.success('API key revoked');
+        await listMyApiKeys();
+    } catch (e) {
+        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to revoke API key');
+    }
+}
+
+function renderKeys(items) {
+    const container = document.getElementById('authApiKeys_list');
+    if (!items.length) {
+        container.innerHTML = '<p>No API keys found.</p>';
+        return;
+    }
+    let html = '<table class="simple-table"><thead><tr>\
+<th>ID</th><th>Name</th><th>Scope</th><th>Status</th><th>Created</th><th>Expires</th><th>Usage</th><th>Actions</th>\
+</tr></thead><tbody>';
+    for (const k of items) {
+        html += `<tr>
+            <td>${k.id}</td>
+            <td>${k.name || ''}</td>
+            <td>${k.scope || ''}</td>
+            <td>${k.status || ''}</td>
+            <td>${k.created_at || ''}</td>
+            <td>${k.expires_at || ''}</td>
+            <td>${k.usage_count || 0}</td>
+            <td>
+                <button class="btn" onclick="rotateMyApiKey(${k.id})">Rotate</button>
+                <button class="btn btn-danger" onclick="revokeMyApiKey(${k.id})">Revoke</button>
+            </td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
 </script>

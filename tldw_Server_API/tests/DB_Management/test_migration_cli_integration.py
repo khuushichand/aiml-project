@@ -1,0 +1,182 @@
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import uuid
+from pathlib import Path
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management import migration_tools
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+
+try:
+    import psycopg2
+except ImportError:  # pragma: no cover - psycopg2 may be missing locally
+    psycopg2 = None
+
+_required_env = [
+    "POSTGRES_TEST_HOST",
+    "POSTGRES_TEST_PORT",
+    "POSTGRES_TEST_DB",
+    "POSTGRES_TEST_USER",
+    "POSTGRES_TEST_PASSWORD",
+]
+
+pytestmark = pytest.mark.skipif(
+    psycopg2 is None or any(env not in os.environ for env in _required_env),
+    reason="PostgreSQL test environment not configured",
+)
+
+
+@pytest.fixture()
+def postgres_config() -> DatabaseConfig:
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=os.environ["POSTGRES_TEST_HOST"],
+        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
+        pg_database=os.environ["POSTGRES_TEST_DB"],
+        pg_user=os.environ["POSTGRES_TEST_USER"],
+        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
+    )
+
+
+@pytest.fixture()
+def sqlite_media_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "media_source.db"
+    media_db = MediaDatabase(str(db_path), client_id="migration-test")
+    now = media_db._get_current_utc_timestamp_str()
+    media_uuid = str(uuid.uuid4())
+    claim_uuid = str(uuid.uuid4())
+    with media_db.transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO Media (
+                title, type, content, url, ingestion_date, transcription_model,
+                chunking_status, vector_processing, content_hash, uuid,
+                last_modified, version, client_id, deleted, is_trash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+            """,
+            (
+                "Migration Source Document",
+                "text",
+                "Original content from SQLite",
+                None,
+                now,
+                None,
+                "complete",
+                0,
+                "hash-123",
+                media_uuid,
+                now,
+                1,
+                "migration-test",
+            ),
+        )
+        media_id = conn.execute(
+            "SELECT id FROM Media WHERE uuid = ?",
+            (media_uuid,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO Claims (
+                media_id, chunk_index, claim_text, chunk_hash, extractor,
+                extractor_version, created_at, uuid, last_modified, version,
+                client_id, deleted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                media_id,
+                0,
+                "Claim copied via migration",
+                "chunk-hash-1",
+                "migration",
+                "v1",
+                now,
+                claim_uuid,
+                now,
+                1,
+                "migration-test",
+            ),
+        )
+    media_db.close_connection()
+    return db_path
+
+
+def _reset_postgres_database(config: DatabaseConfig) -> None:
+    assert psycopg2 is not None
+    conn = psycopg2.connect(
+        host=config.pg_host,
+        port=config.pg_port,
+        database=config.pg_database,
+        user=config.pg_user,
+        password=config.pg_password,
+    )
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    finally:
+        conn.close()
+
+
+def _postgres_counts(config: DatabaseConfig) -> tuple[int, int]:
+    assert psycopg2 is not None
+    conn = psycopg2.connect(
+        host=config.pg_host,
+        port=config.pg_port,
+        database=config.pg_database,
+        user=config.pg_user,
+        password=config.pg_password,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM media")
+            media_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM claims")
+            claims_count = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return media_count, claims_count
+
+
+@pytest.mark.integration
+def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_config: DatabaseConfig) -> None:
+    _reset_postgres_database(postgres_config)
+
+    backend = DatabaseBackendFactory.create_backend(postgres_config)
+    pg_media_db = MediaDatabase(db_path=":memory:", client_id="migration-target", backend=backend)
+    pg_media_db.close_connection()
+
+    migration_tools.migrate_sqlite_to_postgres(sqlite_media_db, postgres_config, label="content", batch_size=16)
+
+    with sqlite3.connect(sqlite_media_db) as conn:
+        sqlite_media = conn.execute("SELECT COUNT(*) FROM Media").fetchone()[0]
+        sqlite_claims = conn.execute("SELECT COUNT(*) FROM Claims").fetchone()[0]
+
+    pg_media, pg_claims = _postgres_counts(postgres_config)
+
+    assert pg_media == sqlite_media
+    assert pg_claims == sqlite_claims
+
+    assert pg_media > 0
+    assert pg_claims > 0
+
+    conn = psycopg2.connect(
+        host=postgres_config.pg_host,
+        port=postgres_config.pg_port,
+        database=postgres_config.pg_database,
+        user=postgres_config.pg_user,
+        password=postgres_config.pg_password,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT claim_text FROM claims ORDER BY id LIMIT 1")
+            migrated_claim = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    assert migrated_claim == "Claim copied via migration"

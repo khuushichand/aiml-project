@@ -46,7 +46,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import Database
 
 router = APIRouter(
     prefix="/api/v1/prompt-studio/optimizations",
-    tags=["Prompt Studio (Experimental)"],
+    tags=["prompt-studio"],
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
@@ -584,45 +584,6 @@ async def get_optimization_strategies() -> StandardResponse:
         data=strategies
     )
 
-@router.post(
-    "/compare",
-    response_model=StandardResponse,
-    openapi_extra={
-        "requestBody": {
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "compare": {
-                            "summary": "Compare optimization strategies",
-                            "value": {
-                                "prompt_id": 12,
-                                "test_case_ids": [1, 2, 3],
-                                "strategies": ["iterative", "bayesian"],
-                                "model_configuration": {"model_name": "gpt-4o-mini", "temperature": 0.3}
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "responses": {
-            "200": {
-                "description": "Comparison jobs created",
-                "content": {
-                    "application/json": {
-                        "examples": {
-                            "created": {
-                                "summary": "Comparison started",
-                                "value": {"success": True, "data": {"jobs": [{"id": 9002}, {"id": 9003}]}}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-)
-
 @router.get("/history/{optimization_id}", response_model=StandardResponse,
             openapi_extra={
                 "responses": {
@@ -922,6 +883,34 @@ async def list_optimization_iterations(
     except Exception as e:
         logger.error(f"Error listing iterations: {e}")
         raise HTTPException(status_code=500, detail="Failed to list iterations")
+@router.post(
+    "/compare",
+    response_model=StandardResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "compare": {
+                            "summary": "Compare optimization strategies",
+                            "value": {
+                                "prompt_id": 12,
+                                "test_case_ids": [1, 2, 3],
+                                "strategies": ["iterative", "bayesian"],
+                                "model_configuration": {"model_name": "gpt-4o-mini", "temperature": 0.3}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Comparison jobs created"
+            }
+        }
+    }
+)
 async def compare_strategies(
     request: CompareStrategiesRequest,
     background_tasks: BackgroundTasks = None,
@@ -966,6 +955,7 @@ async def compare_strategies(
         # Create optimizations for each strategy
         pending_jobs: List[Dict[str, Any]] = []
         
+        strategies = request.strategies or []
         for strategy in strategies:
             combined_config = {
                 "optimizer_type": strategy,
@@ -1003,7 +993,7 @@ async def compare_strategies(
         
         # Create jobs for each optimization
         job_manager = JobManager(db)
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         
         for item in pending_jobs:
             job = job_manager.create_job(
@@ -1025,6 +1015,7 @@ async def compare_strategies(
         
         logger.info(f"User {user_context['user_id']} created strategy comparison")
         
+        optimization_ids = [item["id"] for item in pending_jobs]
         return StandardResponse(
             success=True,
             data={

@@ -12,8 +12,10 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 router = APIRouter(tags=["metrics"])
 
 
-@router.get("/metrics", 
-            summary="Get metrics in Prometheus format",
+# Note: Avoid path conflict with the JSON metrics in main.py (`/api/v1/metrics`).
+# Expose text format under `/api/v1/metrics/text`.
+@router.get("/metrics/text",
+            summary="Get metrics in Prometheus text format",
             response_class=Response)
 async def get_prometheus_metrics() -> Response:
     """

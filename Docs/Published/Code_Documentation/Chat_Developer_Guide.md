@@ -10,6 +10,17 @@ This guide explains the Chat module’s architecture, key components, and how to
 - Optional rate limiting, queuing/back‑pressure, and metrics/tracing
 - Character sessions, dictionaries, world books integration through adjacent subsystems
 
+## Authentication
+
+- Supports `Authorization: Bearer <token>`, legacy `Token: <token>`, and single‑user `X-API-KEY` headers.
+- Actual enforcement depends on deployment settings (`AUTH_MODE`, config flags). See `main.py` auth wiring and `core/Auth` utilities.
+
+## Persistence
+
+- Requests are ephemeral by default; set `save_to_db: true` to persist conversations/messages.
+- Config toggles for default persistence are read from `[Chat-Module]` and environment (e.g., `CHAT_SAVE_DEFAULT`).
+- Non‑stream responses include `tldw_conversation_id` in the JSON payload for client state.
+
 ## Directory Map
 
 - `tldw_Server_API/app/core/Chat/`
@@ -52,6 +63,10 @@ Related:
 - `Chat_Functions.py` retains a duplicate of these mappings for backward compatibility with the current endpoint. New work should reference `provider_config.py`.
 - At app startup, `main.py` uses `Chat_Functions.API_CALL_HANDLERS` to seed the `provider_manager` for health/fallback.
 
+Provider selection notes:
+- Requests may specify models with a provider prefix (e.g., `anthropic/claude-3-opus`). The endpoint extracts the provider and model automatically.
+- Provider fallback is available via `provider_manager`; controlled by `[Chat-Module].enable_provider_fallback` (disabled by default for stability).
+
 ### Adding a Provider (Checklist)
 
 1. Implement provider call(s) in `core/LLM_Calls/` (cloud or local). Prefer a single entrypoint that accepts keyword args from the mapping.
@@ -71,6 +86,7 @@ Related:
   - Tool definitions size limits
   - Request size limits (`MAX_REQUEST_SIZE`), see `chat_validators.py`
   - Model strings with provider prefixes like `anthropic/claude-3-opus` (provider extracted automatically)
+  - Image inputs on user messages via `image_url` content parts (expects data URI with base64; validated/sanitized)
 
 ## Error Handling
 
@@ -85,12 +101,17 @@ Related:
 - `streaming_utils.py` normalizes provider chunks and emits OpenAI‑style Server‑Sent Events (`text/event-stream`).
 - The endpoint wraps streams with heartbeats, idle timeouts, and finalization signals.
 - Errors in streams are emitted as SSE error frames and logged with context.
+- Event framing:
+  - Emits an initial `event: stream_start` with `{ conversation_id, model, timestamp }`.
+  - Emits `: heartbeat ...` comments at intervals.
+  - Emits `data: {"choices":[{"delta":{"content":"..."}}]}` for token deltas and a `[DONE]` equivalent on completion.
 
 ## Rate Limiting & Queuing
 
 - `rate_limiter.py` exposes a `RateLimitConfig` and `initialize_rate_limiter()` called on app startup (see `main.py`), and is enforced in the chat endpoint.
 - `request_queue.py` exists for back‑pressure and concurrency control; it is initialized in `main.py` but not yet wired into the chat endpoint (integration planned).
 - Apply limits to high‑cost routes (completions, tools) and consider per‑user/per‑IP strategies.
+- In `TEST_MODE=true`, the rate limiter’s key function bypasses client IP to avoid false positives in tests.
 
 ## Metrics & Tracing
 
@@ -105,6 +126,12 @@ Related:
   - Environment variables (override file settings)
 - `provider_config.py` defines handler/parameter mappings; `provider_manager.py` manages health/circuit‑breaker/fallback.
 - Common toggles: default provider/model, streaming timeouts, max tokens, safety filters, rate‑limit config, request queue sizes.
+
+## Images & Multimodal Input
+
+- User messages support mixed content: text parts and `image_url` parts with data URIs.
+- Image data (base64) is validated and can be persisted when `save_to_db` is enabled.
+- Large images are processed via the chunked image processor when available.
 
 ## Character, Dictionaries, and World Books
 

@@ -7,6 +7,8 @@ This document describes the Ingestion_Media_Processing module: responsibilities,
 - Purpose: Ingest media from various sources (audio, video, PDF, EPUB, document/HTML/XML/RTF/DOCX, MediaWiki dumps), extract text and metadata, optionally chunk and analyze content, and return structured results. Most functions here are DB‑agnostic; persistence is handled at the API layer.
 - Output shape: Processing functions return dicts aligned with the API’s response schema: keys commonly include `status`, `input_ref`, `processing_source`, `media_type`, `metadata`, `content`, `segments/chunks`, `analysis`, `analysis_details`, `keywords`, `error`, `warnings`.
 - Security: Upload validation, MIME checks, Yara scanning, size limits, and safe archive scanning are supported.
+  - MIME detection in the validator uses `puremagic.from_file(..., mime=True)`; the API layer can optionally
+    configure `python-magic` via `MAGIC_FILE_PATH`, but the upload validator itself does not depend on it.
 
 ## Directory Structure
 
@@ -30,7 +32,7 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 - Core types:
   - `ValidationResult`: result bag with `is_valid`, `issues`, `file_path`, `detected_mime_type`, `detected_extension`.
   - `FileValidator`: main validator with per‑type config and Yara integration.
-- MIME detection: Uses `puremagic.from_file(..., mime=True)`. If unavailable, MIME checks are skipped; extensions and size still enforced. The API layer may also preconfigure libmagic via `settings.MAGIC_FILE_PATH`.
+- MIME detection: Uses `puremagic.from_file(..., mime=True)`. If `puremagic` is unavailable, MIME checks are skipped; extensions and size are still enforced. The API layer may preconfigure `python-magic` via `MAGIC_FILE_PATH` (see `api/v1/API_Deps/validations_deps.py`), but `Upload_Sink.py` uses `puremagic` by default.
 - Yara scanning: Optional; if `YARA_RULES_PATH` provided and `yara` installed, rules are compiled and used by `_scan_file_with_yara`.
 - Per‑type policy: Defaults in `DEFAULT_MEDIA_TYPE_CONFIG` (audio, video, image, document, ebook, pdf, html, xml, archive). Limits (e.g., `max_pdf_file_size_mb`) read from `loaded_config_data['media_processing']`.
 - Extension → media key mapping is defined in `EXT_TO_MEDIA_TYPE_KEY`.
@@ -40,6 +42,31 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
   - `process_and_validate_file(path, validator, original_filename=None, media_type_key_override=None) -> ValidationResult`: dispatch by extension to proper media_type, archive scanning when configured.
 - Sanitization placeholders: `sanitize_html_content` and `sanitize_xml_content` currently log a warning and return content unchanged (no sanitization).
 
+Upload flow in endpoints
+- Endpoints use `file_validator_instance` (see `api/v1/API_Deps/validations_deps.py`) which optionally configures `python-magic` via `MAGIC_FILE_PATH` and enables Yara via `YARA_RULES_PATH`.
+- Uploaded files are saved to per‑request temp dirs, validated, then dispatched to the appropriate processing library.
+
+## FastAPI Endpoints (Media)
+Base prefix: `/api/v1/media`
+- `POST /add` — Ingest URLs/files, process via the core libraries, and persist to `Media_DB_v2` (with versioning, metadata, keywords).
+- Processing‑only (no DB writes):
+  - `POST /process-videos`
+  - `POST /process-audios`
+  - `POST /process-documents`
+  - `POST /process-pdfs`
+  - `POST /process-ebooks`
+- MediaWiki (streaming):
+  - `POST /mediawiki/ingest-dump` — Process and persist; streams item events.
+  - `POST /mediawiki/process-dump` — Process only; streams item events.
+- Web content ingestion:
+  - `POST /ingest-web-content` — Multi‑mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
+  - `POST /process-web-scraping` — Process scraping jobs without persistence.
+
+Notes
+- API does not accept provider API keys in requests; credentials are read from server configuration.
+- Audio/Video processing requires ffmpeg in PATH.
+- Chunking uses the v2 chunker via `improved_chunking_process` (structure‑aware/hierarchical templates supported).
+
 ## Audio Ingestion: `Audio/`
 
 - Primary orchestration: `Audio_Files.py`:
@@ -47,6 +74,9 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
   - Pipeline (per input): download (if URL) → optional conversion → STT → optional chunking → optional analysis (LLM via `analyze`). Returns structured batch results; no DB writes.
   - STT engines/related utilities live in `Audio_Transcription_Lib.py` (faster_whisper + model mgmt), `Audio_Transcription_Nemo.py`/`Parakeet_*.py`/`Qwen2Audio`, and diarization in `Diarization_Lib.py`.
 - Other notable modules: streaming/live transcription (`Audio_Streaming_Unified.py`, Parakeet/Nemo streaming), buffered capture.
+
+Chunking integration
+- All media processors call the unified chunker (`improved_chunking_process`). For structure‑aware/hierarchical chunking, templates live in `app/core/Chunking/templates.py`. See the Chunking Module docs for strategies and options.
 
 ## Video Ingestion: `Video/Video_DL_Ingestion_Lib.py`
 
@@ -114,8 +144,8 @@ From `app/api/v1/endpoints/media.py`:
   - `POST /api/v1/media/process-ebooks` → `Books.process_epub`
   - `POST /api/v1/media/process-documents` → `Plaintext.process_document_content`
 - MediaWiki:
-  - `POST /api/v1/mediawiki/ingest-dump` → `MediaWiki.import_mediawiki_dump` with `store_to_db=True`.
-  - `POST /api/v1/mediawiki/process-dump` → same iterator with `store_to_db=False` (ephemeral).
+  - `POST /api/v1/media/mediawiki/ingest-dump` → `MediaWiki.import_mediawiki_dump` with `store_to_db=True`.
+  - `POST /api/v1/media/mediawiki/process-dump` → same iterator with `store_to_db=False` (ephemeral).
 - Upload validation: endpoints use `file_validator_instance` from `api/v1/API_Deps/validations_deps.py`, which creates a `FileValidator` (optionally configuring libmagic via `MAGIC_FILE_PATH`, and Yara via `YARA_RULES_PATH`). Uploaded files are saved into temp dirs and validated before processing.
 
 ## Configuration & Dependencies
@@ -321,6 +351,7 @@ for ev in events:
 - MediaWiki vector store saving is scaffolded but not fully implemented in the current code.
 - `XML_Ingestion_Lib.py` follows an older pattern that writes to DB directly; newer endpoints prefer DB‑agnostic processors.
 - Some modules rely on optional dependencies; functions degrade gracefully with warnings when a dependency is absent.
+- Ingestion‑time claim extraction is available and wired in the embeddings pipeline (see `ChromaDB_Library.py`) behind `ENABLE_INGESTION_CLAIMS`; it is not run for every add‑media path by default.
 
 ---
 
@@ -334,3 +365,5 @@ Maintainers: keep this page aligned with the code. If you add new formats or alt
 - EPUB Pipeline: `./Ingestion_Pipeline_Ebooks.md`
 - Documents Pipeline: `./Ingestion_Pipeline_Documents.md`
 - MediaWiki Pipeline: `./Ingestion_Pipeline_MediaWiki.md`
+ - Chunking Module: `../Chunking-Module.md`
+ - Claims design: `../Design/ingestion_claims.md`

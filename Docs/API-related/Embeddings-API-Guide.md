@@ -18,13 +18,21 @@
 
 ```bash
 # Create embeddings using cURL
+# Auth (choose ONE matching your deployment):
+# - Single-user mode: use X-API-KEY header
+# - Multi-user mode: use Authorization: Bearer <JWT>
+
+# Single-user
 curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "input": "Transform this text into embeddings",
-    "model": "text-embedding-3-small"
-  }'
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{"input": "Transform this text into embeddings", "model": "text-embedding-3-small"}'
+
+# Multi-user
+curl -X POST "http://localhost:8000/api/v1/embeddings" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT" \
+  -d '{"input": "Transform this text into embeddings", "model": "text-embedding-3-small"}'
 ```
 
 ### Python Quick Start
@@ -34,17 +42,21 @@ import requests
 
 # Configuration
 API_URL = "http://localhost:8000/api/v1/embeddings"
-API_KEY = "your_api_key"
+API_KEY = "your_api_key_or_jwt"
 
 # Create embeddings
-response = requests.post(
-    API_URL,
-    headers={"Authorization": f"Bearer {API_KEY}"},
-    json={
-        "input": "Transform this text into embeddings",
-        "model": "text-embedding-3-small"
-    }
-)
+headers = {
+    # For single-user mode:
+    # "X-API-KEY": API_KEY,
+    # For multi-user mode:
+    # "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+response = requests.post(API_URL, headers=headers, json={
+    "input": "Transform this text into embeddings",
+    "model": "text-embedding-3-small"
+})
 
 embeddings = response.json()["data"][0]["embedding"]
 print(f"Embedding dimensions: {len(embeddings)}")
@@ -57,7 +69,8 @@ print(f"Embedding dimensions: {len(embeddings)}")
 const response = await fetch('http://localhost:8000/api/v1/embeddings', {
     method: 'POST',
     headers: {
-        'Authorization': 'Bearer YOUR_API_KEY',
+        // For single-user mode: 'X-API-KEY': YOUR_API_KEY
+        // For multi-user mode:  'Authorization': 'Bearer YOUR_JWT'
         'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -73,7 +86,7 @@ console.log(`Embedding dimensions: ${embedding.length}`);
 
 ## Authentication
 
-### API Key Authentication
+### Auth Modes
 
 ```mermaid
 sequenceDiagram
@@ -90,16 +103,8 @@ sequenceDiagram
     API-->>Client: Result
 ```
 
-### Setting Up Authentication
-
 #### Single-User Mode
-```bash
-# Set API key in environment
-export API_KEY="your-secret-key"
-
-# Or in config.txt
-API_KEY=your-secret-key
-```
+Use the `X-API-KEY` header on every request. The `Authorization` header alone is not sufficient in this mode.
 
 #### Multi-User Mode (JWT)
 ```python
@@ -117,7 +122,10 @@ def generate_token(user_id: str, secret_key: str):
 
 # Use token
 token = generate_token("user123", "secret")
-headers = {"Authorization": f"Bearer {token}"}
+headers = {
+    "Authorization": f"Bearer {token}",
+    # Optionally include X-API-KEY if your deployment requires it
+}
 ```
 
 ## API Endpoints
@@ -137,7 +145,7 @@ Create embedding vectors for input text.
     "input": "string or array of strings",
     "model": "text-embedding-3-small",
     "encoding_format": "float",  // optional: "float" or "base64"
-    "dimensions": 1536,  // optional: for models that support it
+    "dimensions": 1536,  // optional; OpenAI supports natively; server can apply post-process policy across providers
     "user": "user-123"  // optional: for tracking
 }
 ```
@@ -158,6 +166,33 @@ Create embedding vectors for input text.
         "prompt_tokens": 8,
         "total_tokens": 8
     }
+}
+```
+
+#### Batch Embeddings
+```http
+POST /api/v1/embeddings/batch
+```
+
+Create embeddings for a batch of texts (strings only; for token arrays use the standard endpoint).
+
+**Request Body:**
+```json
+{
+  "texts": ["First request text", "Second"],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "dimensions": 512
+}
+```
+
+**Response:**
+```json
+{
+  "embeddings": [[0.1, 0.2, ...], [0.05, -0.12, ...]],
+  "model": "text-embedding-3-small",
+  "provider": "openai",
+  "count": 2
 }
 ```
 
@@ -199,6 +234,7 @@ Check service health status.
   "circuit_breakers": { "openai": { "state": "closed", "failure_count": 0 } }
 }
 ```
+Note: When the embeddings implementation is unavailable (e.g., optional dependencies not installed), this endpoint responds with HTTP 503 and `status: "degraded"`.
 
 ### Media Embeddings API (Chunk and store document vectors)
 
@@ -254,7 +290,11 @@ GET /api/v1/media/embeddings/jobs?status=completed&limit=50&offset=0
 }
 ```
 
-Token‑array inputs are supported. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays.
+Notes:
+- Maximum 2048 items in the input array.
+- The input list cannot be empty.
+
+Token‑array inputs are supported on the standard create endpoint. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays. The batch endpoint accepts strings only.
 
 ### Output Formats
 
@@ -268,14 +308,15 @@ Token‑array inputs are supported. If `input` is a token array (`List[int]`) or
 }
 ```
 
+Note: For non‑OpenAI providers, the response `model` value is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
+
 #### Base64 Encoded Format
 ```json
 {
     "data": [{
         "embedding": "AAAAfD8AAIA/AAAAgD8=",
         "index": 0
-    }],
-    "encoding_format": "base64"
+    }]
 }
 ```
 
@@ -352,6 +393,7 @@ graph TB
 | Cohere | embed-english-v3.0 | 1024 | Fast | High | $$ |
 
 Note: Some commercial providers shown here may be planned or partially integrated; the OpenAI, HuggingFace, ONNX, and Local API paths are fully supported.
+Providers such as Cohere/Voyage/Google/Mistral appear in examples for illustration but may require additional wiring before use.
 
 ### Choosing a Provider
 
@@ -369,7 +411,8 @@ def select_provider(requirements):
         return "huggingface", "all-MiniLM-L6-v2"
     
     if requirements["multilingual"]:
-        return "cohere", "embed-multilingual-v3.0"
+        # If a commercial multilingual provider isn't wired, prefer open-source multilingual models
+        return "huggingface", "intfloat/multilingual-e5-large"
     
     # Default balanced option
     return "openai", "text-embedding-3-small"
@@ -381,11 +424,17 @@ def select_provider(requirements):
 
 ```json
 {
-    "error": {
-        "message": "Invalid input: text cannot be empty",
-        "type": "invalid_request_error",
-        "code": 400
-    }
+    "detail": "Invalid input: text cannot be empty"
+}
+```
+
+Note: Some errors use an OpenAI‑style envelope, but most validation errors are returned as `{ "detail": "..." }`. When inputs exceed the per‑model token limit, the API returns a dedicated top‑level error object:
+
+```json
+{
+  "error": "input_too_long",
+  "message": "One or more inputs exceed max tokens 8192 for model text-embedding-3-small",
+  "details": [{ "index": 0, "tokens": 9000 }]
 }
 ```
 
@@ -395,7 +444,7 @@ def select_provider(requirements):
 |------------|------------|-------------|--------|
 | 400 | Bad Request | Invalid input or parameters | Check request format |
 | 401 | Unauthorized | Invalid or missing API key | Verify authentication |
-| 403 | Forbidden | Insufficient permissions | Check user permissions |
+| 403 | Forbidden | Admin required or policy denied (provider/model) | Check admin access or allowed providers/models |
 | 429 | Rate Limited | Too many requests | Implement backoff |
 | 500 | Server Error | Internal error | Retry with backoff |
 | 503 | Service Unavailable | Service temporarily down | Retry later |
@@ -675,8 +724,9 @@ for await (const batch of client.streamBatchEmbeddings(texts)) {
 ```bash
 # Basic embedding
 curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_OR_API_KEY" \
+  -H "X-API-KEY: $API_KEY_IF_SINGLE_USER" \
   -d '{
     "input": "Hello world",
     "model": "text-embedding-3-small"
@@ -684,27 +734,30 @@ curl -X POST "http://localhost:8000/api/v1/embeddings" \
 
 # With specific provider
 curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_OR_API_KEY" \
+  -H "X-API-KEY: $API_KEY_IF_SINGLE_USER" \
   -H "x-provider: huggingface" \
   -d '{
     "input": "Hello world",
     "model": "sentence-transformers/all-MiniLM-L6-v2"
   }'
 
-# Batch processing
-curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer $API_KEY" \
+# Batch processing (strings only)
+curl -X POST "http://localhost:8000/api/v1/embeddings/batch" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_OR_API_KEY" \
+  -H "X-API-KEY: $API_KEY_IF_SINGLE_USER" \
   -d '{
-    "input": ["Text 1", "Text 2", "Text 3"],
+    "texts": ["Text 1", "Text 2", "Text 3"],
     "model": "text-embedding-3-small"
   }'
 
-# With dimensions (OpenAI only)
+# With dimensions (OpenAI supports natively; server applies policy across providers)
 curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_OR_API_KEY" \
+  -H "X-API-KEY: $API_KEY_IF_SINGLE_USER" \
   -d '{
     "input": "Hello world",
     "model": "text-embedding-3-large",
@@ -713,8 +766,9 @@ curl -X POST "http://localhost:8000/api/v1/embeddings" \
 
 # Base64 encoding
 curl -X POST "http://localhost:8000/api/v1/embeddings" \
-  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_OR_API_KEY" \
+  -H "X-API-KEY: $API_KEY_IF_SINGLE_USER" \
   -d '{
     "input": "Hello world",
     "model": "text-embedding-3-small",
@@ -935,6 +989,7 @@ embedding = response.data[0].embedding
 ### LangChain Integration
 
 ```python
+import requests
 from langchain.embeddings.base import Embeddings
 from typing import List
 
@@ -1063,10 +1118,9 @@ except:
 ---
 
 For more information:
-- [System Documentation](./Embeddings-Documentation.md)
-- [Developer Guide](./Embeddings-Developer-Guide.md)
+- [Developer Notes](../Code_Documentation/Embeddings-Documentation.md)
 - [API Reference](https://api.tldw.example.com/docs)
-> Note (Auth): In single-user mode you can use either `Authorization: Bearer <API_KEY>` or `X-API-KEY: <API_KEY>`. The examples above show Bearer; the header is interchangeable in single-user mode.
+> Note (Auth): In single-user mode you must use `X-API-KEY: <API_KEY>`. Including `Authorization: Bearer <...>` is optional, but the `X-API-KEY` header is required. In multi-user mode, use `Authorization: Bearer <JWT>`.
 
 Alt cURL (single-user X-API-KEY):
 ```bash

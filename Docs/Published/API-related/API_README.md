@@ -5,7 +5,9 @@
 API uses FastAPI framework.
 Designed to be simple and easy to use.
 Generative endpoints follow openai API spec where possible.
-See [API Design](API_Design.md) for more details.
+See [API Design](API_Design.md) for more details. For a quick map of OpenAPI tags to their docs, see the [API Tag Index](API_Tags_Index.md).
+
+See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
 
 ### URLs
 - **URLs**
@@ -68,4 +70,4 @@ The RAG module provides advanced search and question-answering capabilities acro
 
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
-- [RAG API Reference](RAG_API_Documentation.md) - Architecture and implementation details
+- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details

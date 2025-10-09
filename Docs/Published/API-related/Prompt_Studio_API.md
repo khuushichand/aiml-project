@@ -13,7 +13,7 @@ The Prompt Studio module provides a structured workflow to design, version, test
 
 Authentication follows the server's standard modes (single‑user API key or multi‑user JWT). Endpoints are project‑scoped: reads require access, writes require write access. Rate limits apply to generation/optimization endpoints.
 
-Tag in OpenAPI: `Prompt Studio`.
+ Tag in OpenAPI: `prompt-studio`.
 
 ## More Examples
 
@@ -262,18 +262,23 @@ curl -X POST "http://localhost:8000/api/v1/prompt-studio/optimizations/create" \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
+        "project_id": 1,
         "name": "Refine Summarizer",
         "initial_prompt_id": 12,
         "test_case_ids": [1,2,3],
-        "strategy": "iterative",
-        "model_config": {"model_name": "gpt-4o-mini", "temperature": 0.3}
+        "optimization_config": {
+          "optimizer_type": "iterative",
+          "max_iterations": 20,
+          "target_metric": "accuracy",
+          "early_stopping": true
+        }
       }'
 ```
 
 ### Subscribe to Real‑time Updates (WebSocket)
 ```js
 const ws = new WebSocket("ws://localhost:8000/api/v1/prompt-studio/ws");
-ws.onopen = () => ws.send(JSON.stringify({ type: "ping" }));
+ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", entity_type: "project", entity_id: 1 }));
 ws.onmessage = (evt) => console.log("event", evt.data);
 ```
 
@@ -287,4 +292,5 @@ ws.onmessage = (evt) => console.log("event", evt.data);
 
 - Prompt updates create new versions; reverting also creates a new version
 - Evaluations can run synchronously or as background tasks
+- Real‑time updates support both WebSocket and SSE fallback
 - Real‑time updates support both WebSocket and SSE fallback

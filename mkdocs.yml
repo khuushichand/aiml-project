@@ -71,6 +71,7 @@ nav:
       - API Design: API-related/API_Design.md
       - API Notes: API-related/API_Notes.md
       - API README: API-related/API_README.md
+      - API Tag Index: API-related/API_Tags_Index.md
       - Audio Transcription API: API-related/Audio_Transcription_API.md
       - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
       - Chat API Documentation: API-related/Chat_API_Documentation.md
@@ -113,6 +114,8 @@ nav:
       - Ingestion Pipeline - Video: Code_Documentation/Ingestion_Pipeline_Video.md
       - Pieces: Code_Documentation/Pieces.md
       - Proposition Chunking and Evals: Code_Documentation/Proposition_Chunking_and_Evals.md
+      - Claims API and Schema: Code_Documentation/Claims_API_and_Schema.md
+      - Answer-Time Claims Engine: Code_Documentation/Answer_Time_Claims_Engine.md
       - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
   - Deployment:
       - Overview: Deployment/index.md

@@ -44,7 +44,7 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
     UnifiedBatchResponse
 )
 
-router = APIRouter(prefix="/api/v1/rag", tags=["RAG - Unified"])
+router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
 # Basic rate limiting using SlowAPI (consistent with other endpoints)
 try:
@@ -205,10 +205,11 @@ async def get_capabilities(request: Request):
         },
         "reranking": {
             "supported": True,
-            "strategies": ["flashrank", "cross_encoder", "hybrid"],
+            "strategies": ["flashrank", "cross_encoder", "hybrid", "llama_cpp"],
             "models": [
                 "flashrank", 
-                "cross-encoder/ms-marco-MiniLM-L-12-v2"
+                "cross-encoder (e.g., BAAI/bge-reranker-v2-m3, Jina reranker)",
+                "GGUF via llama.cpp (e.g., Qwen3-Embedding-0.6B_f16.gguf, BGE/Jina GGUF)"
             ]
         },
         "table_processing": {
@@ -434,6 +435,7 @@ async def unified_search_endpoint(
             enable_reranking=request.enable_reranking,
             reranking_strategy=request.reranking_strategy,
             rerank_top_k=request.rerank_top_k,
+            reranking_model=request.reranking_model,
             
             # Citations
             enable_citations=request.enable_citations,

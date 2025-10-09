@@ -40,7 +40,7 @@ graph TB
     subgraph "Data Layer"
         DB[(SQLite DB)]
         FS[File System]
-        Vector[(ChromaDB)]
+        Vector[(ChromaDB) - optional]
     end
     
     API --> Service
@@ -69,7 +69,7 @@ tldw_Server_API/app/core/Chatbooks/
 ├── chatbook_models.py        # Data models and enums
 ├── chatbook_validators.py    # Input validation
 ├── quota_manager.py          # User quota management
-├── job_queue_shim.py        # Temporary job queue implementation
+├── job_queue_shim.py        # Temporary job queue implementation (global queue via get_job_queue)
 └── exceptions.py             # Custom exceptions
 
 tldw_Server_API/app/api/v1/
@@ -89,7 +89,7 @@ tldw_Server_API/app/api/v1/
 
 ## Database Schema
 
-### Export Jobs Table
+### Export Jobs Table (current schema)
 
 ```sql
 CREATE TABLE IF NOT EXISTS export_jobs (
@@ -107,8 +107,7 @@ CREATE TABLE IF NOT EXISTS export_jobs (
     processed_items INTEGER DEFAULT 0,
     file_size_bytes INTEGER,
     download_url TEXT,
-    expires_at TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    expires_at TIMESTAMP
 );
 
 CREATE INDEX idx_export_jobs_user_id ON export_jobs(user_id);
@@ -116,7 +115,7 @@ CREATE INDEX idx_export_jobs_status ON export_jobs(status);
 CREATE INDEX idx_export_jobs_created_at ON export_jobs(created_at);
 ```
 
-### Import Jobs Table
+### Import Jobs Table (current schema)
 
 ```sql
 CREATE TABLE IF NOT EXISTS import_jobs (
@@ -135,8 +134,7 @@ CREATE TABLE IF NOT EXISTS import_jobs (
     failed_items INTEGER DEFAULT 0,
     skipped_items INTEGER DEFAULT 0,
     conflicts TEXT,  -- JSON array
-    warnings TEXT,   -- JSON array
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    warnings TEXT    -- JSON array
 );
 
 CREATE INDEX idx_import_jobs_user_id ON import_jobs(user_id);
@@ -156,8 +154,17 @@ class ChatbookService:
         """Initialize service with user context and database."""
         self.user_id = user_id
         self.db = db
-        self.job_queue = JobQueueShim()
-        self._init_directories()
+        
+        # Global shim-backed queue; db is attached for handlers
+        self.job_queue = get_job_queue()
+        self.job_queue.db = db
+        
+        # Per-user secure directories under base data dir
+        # (see Directory Setup details below)
+        self.export_dir = ...
+        self.import_dir = ...
+        self.temp_dir = ...
+        
         self._init_job_tables()
         self._register_job_handlers()
 ```
@@ -366,7 +373,8 @@ Will use Celery or similar for proper async processing:
 @celery_app.task
 def export_chatbook_task(job_id: str, params: dict):
     """Async task for chatbook export."""
-    service = ChatbookService(params['user_id'])
+    db = ...  # Resolve CharactersRAGDB for the user
+    service = ChatbookService(params['user_id'], db)
     return service.process_export(job_id, params)
 ```
 
@@ -375,58 +383,36 @@ def export_chatbook_task(job_id: str, params: dict):
 ### Security Measures
 
 1. **Path Traversal Protection**:
-```python
-def _validate_zip_file(self, file_path: str) -> bool:
-    """Validate ZIP file for security."""
-    with zipfile.ZipFile(file_path, 'r') as zf:
-        for member in zf.namelist():
-            # Check for path traversal
-            if os.path.isabs(member) or ".." in member:
-                logger.warning(f"Unsafe path in archive: {member}")
-                return False
-            
-            # Check file size
-            info = zf.getinfo(member)
-            if info.file_size > MAX_FILE_SIZE:
-                logger.warning(f"File too large: {member}")
-                return False
-    
-    return True
-```
+Use the production validator `ChatbookValidator.validate_zip_file(path)` which performs:
+- ZIP magic check and integrity test
+- Total and per-file size limits; zip-bomb compression ratio checks
+- Path traversal, symlink, and dangerous extension checks
+- Required files presence (e.g., `manifest.json`)
 
 2. **Secure File Storage**:
 ```python
-def _init_directories(self):
-    """Initialize secure user directories."""
-    base_dir = Path(os.environ.get('TLDW_USER_DATA_PATH', './user_data'))
-    self.user_data_dir = base_dir / self.user_id
-    
-    # Create with restrictive permissions
-    self.export_dir = self.user_data_dir / 'exports'
-    self.export_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    
-    self.import_dir = self.user_data_dir / 'imports'
-    self.import_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+# Directory setup in ChatbookService.__init__
+import tempfile, os, re
+from pathlib import Path
+
+safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(user_id))[:255]
+if os.environ.get('TLDW_USER_DATA_PATH'):
+    base_data_dir = Path(os.environ['TLDW_USER_DATA_PATH'])
+elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
+    base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
+else:
+    base_data_dir = Path('/var/lib/tldw/user_data')
+
+user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
+for sub in ('exports','imports','temp'):
+    (user_data_dir / sub).mkdir(parents=True, exist_ok=True, mode=0o700)
 ```
 
 3. **Filename Sanitization**:
-```python
-@staticmethod
-def validate_filename(filename: str) -> Tuple[bool, Optional[str], str]:
-    """Validate and sanitize filename."""
-    # Remove path components
-    filename = os.path.basename(filename)
-    
-    # Check extension
-    if not filename.endswith('.chatbook'):
-        return False, "Invalid file extension", filename
-    
-    # Sanitize special characters
-    safe_filename = re.sub(r'[^\w\s.-]', '', filename)
-    safe_filename = safe_filename[:255]  # Max filename length
-    
-    return True, None, safe_filename
-```
+Supported extensions: `.zip`, `.chatbook`. Use `ChatbookValidator.validate_filename(name)` which:
+- Enforces max length and allowed characters
+- Accepts `.zip` or `.chatbook` (forces `.zip` on sanitize if missing)
+- Returns `(is_valid, error_message, safe_filename)`
 
 ### Archive Creation
 
@@ -517,7 +503,7 @@ class QuotaManager:
 
 ```python
 def get_chatbook_service(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db)
 ) -> ChatbookService:
     """Get service instance for authenticated user."""
@@ -529,11 +515,21 @@ def get_chatbook_service(
 async def create_chatbook(
     request: CreateChatbookRequest,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_request_user)
 ):
     # Service is already scoped to authenticated user
     # All operations will be isolated to this user
 ```
+
+### Job IDs and Downloads
+- Export/import job IDs are UUIDv4 (validated by `ChatbookValidator.validate_job_id`).
+- Downloads are served by `GET /api/v1/chatbooks/download/{job_id}` once an export is `completed`.
+- Prefer `GET /api/v1/chatbooks/export/jobs/{job_id}` to obtain the canonical `download_url`.
+
+### Rate Limiting
+- Export/Import endpoints: 5 requests per minute (per IP)
+- Download endpoint: 20 requests per minute (per IP)
+- Implemented via SlowAPI; disabled in tests by `TEST_MODE`/`TESTING` envs
 
 ## Testing
 
@@ -736,6 +732,7 @@ class SmartMergeResolver:
 ### Integrating with Other Modules
 
 #### RAG Integration
+Note: Example integration; ChatbookService does not directly depend on ChromaDB. Treat this as optional/future work.
 
 ```python
 # Export embeddings with content

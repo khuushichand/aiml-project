@@ -266,6 +266,44 @@ Process multiple queries concurrently.
 }
 ```
 
+## Reranking Backends
+
+The unified pipeline supports multiple reranking strategies. Choose via `reranking_strategy` (pipeline) or via HTTP endpoints under `/v1/reranking` (see README for public aliases).
+
+- Strategies
+  - `flashrank`: Lightweight neural reranker (fast, CPU-friendly)
+  - `cross_encoder`: Transformers-based cross-encoder (GPU recommended)
+  - `llama_cpp`: Embedding-based cosine reranker using llama.cpp GGUF models
+  - `hybrid`: Combines multiple strategies
+
+- Transformers Cross-Encoder
+  - Use `reranking_strategy: "cross_encoder"` and set `reranking_model` to an HF model id (e.g., `BAAI/bge-reranker-v2-m3`)
+  - Pipeline loads via sentence-transformers CrossEncoder if available, otherwise raw Transformers
+  - Set default via config: `RAG_TRANSFORMERS_RERANKER_MODEL`
+  - Typical models: BGE (BAAI/bge-reranker-*), Jina rerankers
+
+- llama.cpp (GGUF)
+  - Use `reranking_strategy: "llama_cpp"` and set `reranking_model` to a GGUF file path
+  - The pipeline shells out to `llama-embedding` with `--embd-output-format json+` and a separator to score `[query] + documents`
+  - Auto-instruct formatting for BGE GGUF (adds `query: ` / `passage: ` prefixes)
+  - Default pooling is model-smart (BGE/Jina → mean; Qwen → last). Override via config if needed
+  - Set defaults via config keys under `[RAG]` (see README): `llama_reranker_*`
+
+- Backends via HTTP (public aliases)
+  - `POST /v1/reranking` accepts `{ backend: "auto|llamacpp|transformers", model, query, documents, top_n }`
+  - Auto selection: `.gguf` → llama.cpp; `model` containing `/` (HF id) → transformers
+
+### Configuration Keys (summary)
+
+- Transformers cross-encoder
+  - `RAG_TRANSFORMERS_RERANKER_MODEL`: default HF model id
+
+- llama.cpp reranker
+  - `RAG_LLAMA_RERANKER_MODEL`, `RAG_LLAMA_RERANKER_BIN`, `RAG_LLAMA_RERANKER_NGL`
+  - `RAG_LLAMA_RERANKER_OUTPUT` (default `json+`), `RAG_LLAMA_RERANKER_SEP` (default `<#sep#>`)
+  - `RAG_LLAMA_RERANKER_POOLING`, `RAG_LLAMA_RERANKER_NORMALIZE`, `RAG_LLAMA_RERANKER_MAX_DOC_CHARS`
+  - `RAG_LLAMA_RERANKER_TEMPLATE_MODE` (auto|bge|jina|none), `RAG_LLAMA_RERANKER_QUERY_PREFIX`, `RAG_LLAMA_RERANKER_DOC_PREFIX`
+
 ### GET `/simple` - Simplified Search Interface
 
 Quick search with common parameters only.

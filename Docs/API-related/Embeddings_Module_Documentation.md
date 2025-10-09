@@ -24,7 +24,7 @@ The Embeddings Module provides a unified interface for generating text embedding
 - TTL‑based caching with background cleanup and Prometheus metrics
 - Provider fallback chain with model mapping and response headers (`X-Embeddings-Provider`, `X-Embeddings-Fallback-From`)
 - Dimension policy for non‑native sizes (`reduce`, `pad`, `ignore`) with `X-Embeddings-Dimensions-Policy`
-- Resource management and model caching (LRU eviction) in the engine
+- Resource management and model caching (LRU eviction) in the core engine
 - Security hardening with input validation and audit logging
 - Optional rate limiting (disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`)
 
@@ -135,8 +135,9 @@ Notes:
 - Inputs may be a string, list of strings, or token arrays (`List[int]` or `List[List[int]]`). Token arrays are decoded to text using the model’s tokenizer when available or `cl100k_base` fallback; usage accounting uses the supplied token counts.
 - Up to 2048 inputs per request; per‑model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
 - Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post‑processing step (policy: `reduce` slices to first‑N, `pad` zero‑pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
+- Encoding: Set `encoding_format` to `"base64"` to receive base64‑encoded vectors; otherwise vectors are returned as normalized float arrays.
 - Provider selection: set header `x-provider: openai|huggingface|onnx|local_api`, or prefix the model `provider:model` (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`). If omitted, the server auto‑detects from the model name or defaults to OpenAI.
-- Authentication: Bearer JWT in multi‑user mode; in single‑user mode you can use either `Authorization: Bearer <key>` or `X-API-KEY: <key>`.
+- Authentication: Multi‑user mode uses `Authorization: Bearer <JWT>`. In single‑user mode the `X-API-KEY: <key>` header is required (the `Authorization` header alone is not sufficient).
 
 **Error Responses:**
 - `400 Bad Request`: Invalid input or parameters
@@ -168,6 +169,9 @@ Notes:
 }
 ```
 
+Notes:
+- This endpoint accepts strings only (`texts: List[str]`). Token arrays are not supported here.
+
 ### Health Check
 
 **Endpoint:** `GET /api/v1/embeddings/health`
@@ -183,6 +187,9 @@ Notes:
   "circuit_breakers": { "openai": { "state": "closed", "failure_count": 0 } }
 }
 ```
+
+Notes:
+- When the embeddings implementation is unavailable (e.g., optional dependencies not installed), the endpoint responds with HTTP 503 and `status: "degraded"`.
 
 ### Configuration and Admin Endpoints
 
@@ -236,8 +243,8 @@ Edit `Config_Files/config.txt`:
 # Provider settings
 embedding_provider = openai
 embedding_model = text-embedding-3-small
-embedding_api_url = http://localhost:8080/v1/embeddings
-embedding_api_key = your_api_key_here
+embedding_api_url = http://localhost:8080/v1/embeddings    ; For provider "local_api" (overridable via LOCAL_API_URL)
+embedding_api_key = your_api_key_here                      ; For provider "local_api"
 
 # Chunking settings
 chunk_size = 400
@@ -303,6 +310,7 @@ export EMBEDDINGS_ENFORCE_POLICY=true            # Enforce provider/model allowl
 export EMBEDDINGS_ENFORCE_POLICY_STRICT=false    # If true, admin bypass disabled
 export EMBEDDINGS_DIMENSION_POLICY=reduce        # reduce|pad|ignore for non-native dimension requests
 export EMBEDDINGS_FALLBACK_CHAIN='{"openai":["huggingface","onnx","local_api"]}'
+export LOCAL_API_URL="http://localhost:8080/v1/embeddings"  # Overrides local_api provider URL
 ```
 
 ---
@@ -363,7 +371,9 @@ Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`),
 
 ### Adding a New Provider (engine path)
 
-The current engine implements OpenAI, HuggingFace, ONNX, and Local API. To add a new provider end‑to‑end:
+The current engine implements OpenAI, HuggingFace, ONNX, and Local API. Additional providers (Cohere, Google, Mistral, Voyage) are scaffolded in configuration but not yet wired end‑to‑end in the engine.
+
+To add a new provider end‑to‑end:
 
 1. Extend the model config types in `Embeddings_Create.py` (add a new `BaseModelCfg` subclass if needed).
 2. Add a provider branch in `create_embeddings_batch(...)` to call the new backend and return `List[List[float]]`.
@@ -399,7 +409,7 @@ Response headers for observability:
 
 ### Caching Strategy
 
-**TTL-based LRU Cache:**
+**TTL-based LRU Cache (responses):**
 - Default TTL: 1 hour
 - Max size: 5,000 entries
 - Cache key: SHA256 of `text|provider|model[|dimensions]`
@@ -411,7 +421,7 @@ Key: "a2f3b8c9..."
 Result: [0.123, -0.456, ...] (from cache)
 ```
 
-### Resource Management
+### Resource Management (models)
 
 **Model Memory Limits:**
 - Maximum models in memory: 3 (configurable)
@@ -419,7 +429,7 @@ Result: [0.123, -0.456, ...] (from cache)
 - LRU eviction when limits exceeded
 - Automatic cleanup after TTL (1 hour)
 
-**Model Loading Strategy:**
+**Model Loading Strategy (engine path):**
 ```python
 1. Check if model in memory → Use it
 2. Check if at capacity → Evict LRU model
@@ -433,9 +443,9 @@ Result: [0.123, -0.456, ...] (from cache)
 Optimize for throughput with batching:
 
 ```python
-# Automatic batching
+# Automatic batching (endpoint)
 texts = ["text1", "text2", ..., "text100"]
-# Processed in batches of ~100 (configurable)
+# Processed in batches of 100
 ```
 
 ### Connection Pooling
@@ -694,15 +704,17 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ## Appendix
 
-### Supported Models
+### Models and Status
 
-| Provider | Model | Dimensions | Max Tokens | Cost/1K tokens |
-|----------|-------|------------|------------|----------------|
-| OpenAI | text-embedding-3-small | 1536 | 8191 | $0.00002 |
-| OpenAI | text-embedding-3-large | 3072 | 8191 | $0.00013 |
-| HuggingFace | all-MiniLM-L6-v2 | 384 | 512 | Free |
-| HuggingFace | all-mpnet-base-v2 | 768 | 512 | Free |
-| Cohere | embed-english-v3.0 | 1024 | 512 | $0.00010 |
+| Provider | Model | Dimensions | Max Tokens | Status |
+|----------|-------|------------|------------|--------|
+| OpenAI | text-embedding-3-small | 1536 | 8192 | Integrated |
+| OpenAI | text-embedding-3-large | 3072 | 8192 | Integrated |
+| HuggingFace | sentence-transformers/all-MiniLM-L6-v2 | 384 | 512 | Integrated |
+| HuggingFace | sentence-transformers/all-mpnet-base-v2 | 768 | 512 | Integrated |
+| ONNX | mirrors of HF models | varies | 512 | Engine integrated |
+| Local API | custom | varies | varies | Engine integrated |
+| Cohere | embed-english-v3.0 | 1024 | 512 | Planned (scaffolded) |
 
 ### Performance Notes
 
@@ -726,5 +738,5 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ---
 
-*Last Updated: January 2025*
+*Last Updated: October 2025*
 *Version: 1.0.0*

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 #
 # 3rd-party imports
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 #
@@ -27,6 +27,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     AccountInactiveError,
     InsufficientPermissionsError
 )
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 
 #######################################################################################################################
 #
@@ -84,7 +86,8 @@ async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     session_manager: SessionManager = Depends(get_session_manager_dep),
-    db_pool: DatabasePool = Depends(get_db_pool)
+    db_pool: DatabasePool = Depends(get_db_pool),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
 ) -> Dict[str, Any]:
     """
     Get current authenticated user from JWT token
@@ -102,7 +105,49 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
-    # Check if credentials are provided
+    # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite multi-user or general).
+    if not credentials and x_api_key:
+        try:
+            api_mgr = await get_api_key_manager()
+            key_info = await api_mgr.validate_api_key(api_key=x_api_key)
+            if not key_info:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid API key"
+                )
+
+            user_id = key_info.get("user_id")
+            if not isinstance(user_id, int):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid API key"
+                )
+
+            users_db = await get_users_db()
+            user = await users_db.get_user_by_id(user_id)
+            if not user or not user.get("is_active", True):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is inactive"
+                )
+
+            # Attach user_id for downstream rate limiting where used
+            try:
+                request.state.user_id = user_id
+            except Exception:
+                pass
+
+            return user
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"API key authentication error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate API key"
+            )
+
+    # Otherwise, require Bearer token
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -168,7 +213,13 @@ async def get_current_user(
         # Convert to dict if needed
         if hasattr(user, 'dict'):
             user = dict(user)
-        
+
+        # Attach user_id for downstream rate limiting where used
+        try:
+            request.state.user_id = int(user_id)
+        except Exception:
+            pass
+
         return user
         
     except TokenExpiredError:

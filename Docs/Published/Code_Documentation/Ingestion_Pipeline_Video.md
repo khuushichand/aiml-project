@@ -2,7 +2,7 @@
 
 ## Overview
 
-Downloads videos (yt-dlp) or uses local files, then transcribes audio, optionally chunks text, and runs analysis/summarization. Batch-oriented and DB‑agnostic.
+Downloads videos (yt-dlp) or uses local files, extracts audio (audio-only by default), then transcribes, optionally chunks the transcript, and runs analysis/summarization. Batch-oriented and DB‑agnostic.
 
 ## Primary Functions
 
@@ -20,6 +20,12 @@ Module: `tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Inge
 - use_cookies/cookies: for authenticated downloads.
 - timestamp_option: include timestamps in transcript.
 - temp_dir: directory managed by caller for downloads/intermediates.
+
+Notes:
+- `temp_dir` is required by the library function; the API endpoint always supplies and manages it.
+- Chunking is performed only when `perform_analysis=True` (library behavior).
+- `start_time` is used as an offset; `end_time` is currently not applied in transcription.
+- Diarization is controlled by `diarize`; the `perform_diarization` flag is currently unused.
 
 ### Return Structure (batch)
 
@@ -65,6 +71,11 @@ print(out["processed_count"], out["errors"])  # batch summary
 
 - `POST /api/v1/media/process-videos` prepares uploads and URLs, calls `process_videos`, and normalizes results.
 
+Endpoint specifics:
+- Uses a managed temporary directory (`TempDirManager`) and passes its path to `process_videos`.
+- Provider API keys are read from server configuration; the library calls do not require an `api_key` argument.
+- Uploaded files are validated for allowed video types; remote URLs are downloaded via yt-dlp inside the library.
+
 ## Dependencies & Config
 
 - Requires `ffmpeg` and `yt-dlp`.
@@ -73,5 +84,7 @@ print(out["processed_count"], out["errors"])  # batch summary
 ## Error Handling & Notes
 
 - Download failures, missing ffmpeg, or unsupported formats produce per-item errors.
-- If `temp_dir` is not supplied by the caller, endpoint creates and manages a temp directory.
-
+- If `temp_dir` is not supplied by the caller, the endpoint creates and manages a temp directory (library requires it).
+- Audio is extracted by yt-dlp (audio-only by default); ffmpeg must be available in PATH for post-processing.
+- Chunking occurs only when analysis is requested; otherwise, no chunks are produced.
+- Per-item results include: `content` (transcript), `segments` (with timestamps if requested), `chunks` (when chunking/analysis enabled), and `analysis` (summary).

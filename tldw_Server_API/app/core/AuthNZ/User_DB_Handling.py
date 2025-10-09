@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode, is_multi_user_mode
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 # Utils
 from loguru import logger
@@ -230,21 +231,44 @@ async def get_request_user(
         logger.debug("Single-user API Key verified. Returning fixed user object.")
         return get_single_user_instance()  # Use the getter function
     else:
-        # Multi-User Mode: Bearer token is primary.
-        # 'api_key' might be present or None, but we ignore it in multi-user mode if 'token' is valid.
+        # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
         logger.debug("get_request_user: In MULTI_USER_MODE.")
-        if token is None:
-            # This condition is now critical because auto_error=False on oauth2_scheme
-            logger.warning("Multi-User Mode: Authorization Bearer token is missing (token is None).")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated (Bearer token required for multi-user mode)",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        # If token is present, proceed to verify it.
-        # verify_jwt_and_fetch_user should handle the actual decoding and user lookup.
-        logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
-        return await verify_jwt_and_fetch_user(token)
+        if token:
+            logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
+            return await verify_jwt_and_fetch_user(token)
+
+        # If no Bearer token but an API key is provided, validate via API key manager
+        if api_key:
+            try:
+                api_mgr = await get_api_key_manager()
+                key_info = await api_mgr.validate_api_key(api_key)
+                if not key_info:
+                    logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+                user_id = key_info.get("user_id")
+                if not isinstance(user_id, int):
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                user_data = await _get_user(user_id)
+                if not user_data:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+                return User(**user_data)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error validating API key in multi-user mode: {e}")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
+
+        # Neither Bearer token nor API key provided
+        logger.warning("Multi-User Mode: No credentials provided (missing Bearer token or X-API-KEY).")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated (provide Bearer token or X-API-KEY)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 

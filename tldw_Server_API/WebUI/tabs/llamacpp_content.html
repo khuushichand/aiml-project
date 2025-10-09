@@ -191,6 +191,53 @@
     </div>
 </div>
 
+<div id="tabLlamaCppReranking" class="tab-content" role="tabpanel">
+    <div class="endpoint-section">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/v1/reranking</span>
+        </h2>
+        <p>Rerank documents according to a given query using llama.cpp embeddings (GGUF). Requires authentication.</p>
+
+        <div class="form-group">
+            <label for="llamacppReranking_model">Model (GGUF path):</label>
+            <input type="text" id="llamacppReranking_model" placeholder="/models/Qwen3-Embedding-0.6B_f16.gguf">
+            <small>Optional: falls back to configured RAG_LLAMA_RERANKER_MODEL</small>
+        </div>
+
+        <div class="form-group">
+            <label for="llamacppReranking_backend">Backend:</label>
+            <select id="llamacppReranking_backend">
+                <option value="auto" selected>auto</option>
+                <option value="llamacpp">llamacpp (GGUF)</option>
+                <option value="transformers">transformers (GPU)</option>
+            </select>
+            <small>Choose reranker backend. Use transformers for HF models like BAAI/bge-reranker-v2-m3</small>
+        </div>
+
+        <div class="form-group">
+            <label for="llamacppReranking_query">Query <span class="required">*</span>:</label>
+            <input type="text" id="llamacppReranking_query" placeholder="What do llamas eat?">
+        </div>
+
+        <div class="form-group">
+            <label for="llamacppReranking_documents">Documents (one per line) <span class="required">*</span>:</label>
+            <textarea id="llamacppReranking_documents" rows="6" placeholder="Doc 1...&#10;Doc 2...&#10;Doc 3..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="llamacppReranking_topn">Top N:</label>
+            <input type="number" id="llamacppReranking_topn" value="3" min="1" max="100">
+        </div>
+
+        <button class="api-button" onclick="handleLlamaCppReranking()">
+            Run Reranking
+        </button>
+
+        <pre id="llamacppReranking_response"></pre>
+    </div>
+</div>
+
 <script>
 // Helper function for Llama.cpp start server
 function handleLlamaCppStart() {
@@ -264,5 +311,36 @@ function handleLlamaCppInference() {
     
     // Clean up
     document.body.removeChild(hiddenPayload);
+}
+</script>
+
+<script>
+function handleLlamaCppReranking() {
+    const model = document.getElementById('llamacppReranking_model').value.trim();
+    const query = document.getElementById('llamacppReranking_query').value.trim();
+    const docsText = document.getElementById('llamacppReranking_documents').value;
+    const topn = parseInt(document.getElementById('llamacppReranking_topn').value || 0);
+    const backend = document.getElementById('llamacppReranking_backend').value;
+
+    if (!query) { alert('Query is required'); return; }
+    const docs = (docsText || '').split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    if (docs.length === 0) { alert('At least one document is required'); return; }
+
+    const payload = { query: query, documents: docs };
+    if (model) payload.model = model;
+    if (topn && topn > 0) payload.top_n = topn;
+    if (backend) payload.backend = backend;
+
+    // Create hidden textarea with payload for makeRequest
+    const hidden = document.createElement('textarea');
+    hidden.id = 'llamacppReranking_payload';
+    hidden.style.display = 'none';
+    hidden.value = JSON.stringify(payload, null, 2);
+    document.body.appendChild(hidden);
+
+    makeRequest('llamacppReranking', 'POST', '/v1/reranking', 'json');
+
+    // Clean up
+    document.body.removeChild(hidden);
 }
 </script>

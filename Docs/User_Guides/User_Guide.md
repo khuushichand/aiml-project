@@ -1,119 +1,87 @@
-# tldw User Guide (WIP)
+# tldw_server User Guide
 
-## TABLE OF CONTENTS
-- [Introduction](#introduction)
-- [Quick Start](#quick-start)
-- [Simple Instructions](#simple-instructions)
-- [Detailed Usage](#detailed-usage)
-  - [Transcription / Summarization / Ingestion](#transcription--summarization--ingestion)
-  - [Search / Detailed View](#search--detailed-view)
-  - [Chat with an LLM](#chat-with-an-llm)
-  - [Edit Existing Items](#edit-existing-items)
-  - [Writing Tools](#writing-tools)
-  - [Keywords](#keywords)
-  - [Import/Export](#importexport)
-  - [Utilities](#utilities)
-- [FAQ](#faq)
-- [Troubleshooting](#troubleshooting)
-- [Feedback](#feedback)
-- [Contributing](#contributing)
+This guide shows how to use the integrated WebUI and API to ingest media, search and retrieve, chat with LLMs, generate embeddings, and run evaluations.
 
+## Quick Start
 
-https://openai.com/chatgpt/use-cases/student-writing-guide/
-https://huggingface.co/DavidAU/Maximizing-Model-Performance-All-Quants-Types-And-Full-Precision-by-Samplers_Parameters
+- Start the server: `python -m uvicorn tldw_Server_API.app.main:app --reload`
+- Open the WebUI: `http://127.0.0.1:8000/webui/`
+- Open API docs: `http://127.0.0.1:8000/docs`
 
-Look at:
-    https://upwarddynamism.com/2024/11/24/free-pocket-professor-7-ways-lifelong-learners-crush-it-with-notebooklm/
+Authentication:
+- Single‑user: enter your API key in the WebUI Global Settings; API calls use `X-API-KEY: <key>`.
+- Multi‑user: register/login in the WebUI; API calls use `Authorization: Bearer <token>`.
 
+## WebUI Overview
 
-### <a name="quick-start"></a>Quick Start
-Quick Start: Just click on the appropriate tab for what you're trying to do and fill in the required fields. Click "Process <video/audio/article/etc>" and wait for the results.
-## Simple Instructions
+Top navigation groups features into tabs. Notable areas include:
+- General: global API URL and token, request history, diagnostics.
+- Auth: token utilities, auth tests.
+- Media: upload/ingest files and URLs (video/audio with yt‑dlp; PDFs, EPUB, DOCX, HTML, Markdown), analysis, versioning, DB vs no‑DB processing, web scraping.
+- Chat: OpenAI‑compatible chat completions; Characters and Conversations.
+- Prompts and Notes: prompt library and notebook‑style notes.
+- RAG: unified search and embeddings flows.
+- Workflows: definitions and runs (scaffolding in 0.1).
+- Keywords: tagging and categorization.
+- Embeddings: providers, models, and admin ops.
+- Web Scraping: ingest pages, view status and jobs.
+- Audio: file transcription and real‑time streaming transcription.
+- Research: multi‑provider web/paper search.
+- Chatbooks: export/import and background jobs.
+- MCP: Model Context Protocol utilities.
+- LLM Inference: llama.cpp helpers and reranking.
+- Evaluations: unified evaluation flows and metrics.
+- Admin/Config/LLM/Health/Sync/Maintenance: server status, metrics, backups, cleanup, claims, and provider configuration.
 
-    Basic Usage:
-        If you don't have an API key/don't know what an LLM is/don't know what an API key is, please look further down the page for information on getting started.
-        If you want summaries/chat with an LLM, you'll need:
-            An API key for the LLM API service you want to use, or,
-            A local inference server running an LLM (like llamafile-server/llama.cpp - for instructions on how to do so see the projects README or below), or,
-            A "local" inference server you have access to running an LLM.
-        If you just want transcriptions you can ignore the above.
-        Select the tab for the task you want to perform
-        Fill in the required fields
-        Click the "Process" button
-        Wait for the results to appear
-        Download the results if needed
-        Repeat as needed
-        As of writing this, the UI is still a work in progress.
-        That being said, I plan to replace it all eventually. In the meantime, please have patience.
-        The UI is divided into tabs for different tasks.
-        Each tab has a set of fields that you can fill in to perform the task.
-        Some fields are mandatory, some are optional.
-        The fields are mostly self-explanatory, but I will try to add more detailed instructions as I go.
+## Common Tasks
 
+- Ingest media
+  - Go to Media → Ingestion (DB) to persist content; or Processing (No DB) for one‑off processing.
+  - Paste a URL (video/audio supported via yt‑dlp) or upload files (PDF/EPUB/DOCX/HTML/Markdown/audio/video).
+  - Optionally enable transcription and chunking; submit and monitor progress.
 
-### <a name="introduction"></a>Introduction
-This is a user guide for the tldw project. The tldw project is a web-based tool that allows users to interact with various LLMs (Large Language Models) to perform tasks like transcription, summarization, chat, and more. The project is still in the early stages of development, so the UI is a work in progress. That being said, I plan to replace it all(UI) eventually. In the meantime, please have patience for its shittiness.
+- Search and retrieve (RAG)
+  - Go to RAG → Search.
+  - Choose hybrid search options (FTS5 + vectors + re‑rank) and run queries against ingested content.
 
+- Chat with an LLM
+  - Go to Chat → Chat Completions.
+  - Select a provider/model and send prompts; streaming supported for many providers.
+  - Use Characters and Conversations for persona‑based chats and history.
 
-### <a name="detailed-usage"></a>Detailed Usage
-- **Detailed Usage:**
-    - Currently, there are 15 Top-level tabs in the UI. Each tab has a specific set of tasks that you can perform by selecting one of the 'sub-tabs' made available by clicking on the top tab.
-    - **The tabs are as follows:**
-        - `Transcribe / Analyze / Ingestion` - This tab is for processing videos, audio files, articles, books, and PDFs/office docs.
-        - `RAG Chat & Search` - This tab is for chatting with an LLM and searching the RAG database.
-        - `Chat with an LLM` - This tab is for chatting with an LLM to generate content based on the selected item and prompts.
-        - `Search / Detailed View` - This tab is for searching and displaying content from the database. You can also view detailed information about the selected item.
-        - `Character Chat` - This tab is for .
-        - `Writing Tools` - This tab is for using various writing tools like Grammar & Style check, Tone Analyzer & Editor, etc.
-        - `Search / View DB Items` - 
-        - `Prompts` - 
-        - `Manage Media DB Items` - 
-        - `Embeddings Management` - 
-        - `Keywords` - 
-        - `Import` - 
-        - `Export` - 
-        - `Database Management` - 
-        - `Utilities` -
-        - `Anki Deck Creation/Validation` - 
-        - `Local LLM` - 
-        - `Trashcan` - 
-        - `Evaluations` - 
-        - `Config Editor` - 
-        - Edit Existing Items - This tab is for editing existing items in the database (Prompts + ingested items).
-              Writing Tools - 
-              Keywords - This tab is for managing keywords for content search and display.
-              Import/Export - This tab is for importing notes from Obsidian and exporting keywords/items to markdown/CSV.
-              Utilities - This tab contains some random utilities that I thought might be useful.
-          Each sub-tab is responsible for that set of functionality. This is reflected in the codebase as well, where I have split the functionality into separate files for each tab/larger goal.
+- Transcribe audio
+  - Audio → Transcriptions: upload files for batch transcription.
+  - Audio → Streaming: connect microphone and stream real‑time transcription over WebSocket.
 
+- Text‑to‑Speech (TTS)
+  - TTS tab: select a voice/provider and synthesize speech; streaming and non‑streaming supported.
 
-#### <a name="transcription--summarization--ingestion"></a>Transcription / Summarization / Ingestion
+- Prompt Studio
+  - Prompt Studio: manage projects, prompts, test cases, and optimization flows.
 
-#### <a name="search--detailed-view"></a> Search / Detailed View
+- Evaluations
+  - Evaluations tab: run unified evaluations (RAG, batch, metrics) and inspect results.
 
-#### <a name="chat-with-an-llm"></a> Chat with an LLM
+- Vector stores and embeddings
+  - Embeddings and Vector Stores tabs: manage providers/models, warmups, caches, collections, upserts, and queries.
 
-#### <a name="edit-existing-items"></a> Edit Existing Items
+- Chatbooks
+  - Chatbooks: export/import content and manage background jobs.
 
-#### <a name="writing-tools"></a> Writing Tools
+## Tips
 
-#### <a name="keywords"></a> Keywords
-
-#### <a name="importexport"></a> Import/Export
-
-#### <a name="utilities"></a> Utilities
-
-
-### <a name="faq"></a>FAQ
-- [Troubleshooting](#troubleshooting)
-- [Feedback](#feedback)
-- [Contributing](#contributing)
+- Provider keys can be set in `.env` or `tldw_Server_API/Config_Files/config.txt`.
+- The WebUI sends either `X-API-KEY` (single‑user) or `Authorization: Bearer` (multi‑user) automatically.
+- The API docs at `/docs` include an Authorize button; you can try endpoints directly.
 
 ## Troubleshooting
-Coming soon — common issues and fixes.
 
-## Feedback
-Coming soon — how to share suggestions and report issues.
+- Authentication failures: verify mode and token type (API key vs JWT) and ensure the token is set in Global Settings.
+- FFmpeg errors: install FFmpeg and ensure it’s on PATH.
+- Provider errors: confirm API keys and model names; check logs for rate limits.
+- Database locks (SQLite): close other processes or switch to PostgreSQL for multi‑user deployments.
 
-## Contributing
-Coming soon — contribution guidelines and workflow.
+## Feedback & Contributing
+
+- File issues or suggestions in the repository.
+- Follow the contribution guidelines and write tests for new features.

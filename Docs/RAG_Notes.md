@@ -78,7 +78,7 @@ https://bytevagabond.com/post/how-to-build-enterprise-ai-rag/
 https://archive.is/dnSIi
 https://github.com/Future-House/paper-qa
 https://medium.com/@richardhightower/stop-the-hallucinations-hybrid-retrieval-with-bm25-pgvector-embedding-rerank-llm-rubric-rerank-895d8f7c7242
-
+https://arxiv.org/html/2510.02657v2#S6
 
 
 
