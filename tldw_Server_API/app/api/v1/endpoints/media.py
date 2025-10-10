@@ -88,9 +88,12 @@ from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_
 class ProcessCodeForm(BaseModel):
     urls: Optional[List[str]] = None
     perform_chunking: bool = True
-    chunk_method: Optional[str] = Field(default='lines', description="Chunk method for code: lines")
-    chunk_size: int = Field(default=200, description="Number of lines per chunk")
-    chunk_overlap: int = Field(default=20, description="Overlapping lines between chunks")
+    # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
+    chunk_method: Optional[str] = Field(default='code', description="Chunk method for code: 'code' or 'lines'")
+    # For 'code' method, interpreted as max characters per chunk; for 'lines', interpreted as lines per chunk
+    chunk_size: int = Field(default=4000, description="Chunk size: chars for 'code', lines for 'lines'")
+    # Overlap is in characters for 'code' and in lines for 'lines'
+    chunk_overlap: int = Field(default=200, description="Overlap: chars for 'code', lines for 'lines'")
 
 CODE_ALLOWED_EXTENSIONS: Set[str] = {
     '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
@@ -140,6 +143,34 @@ def _chunk_code_lines(text: str, lines_per_chunk: int, overlap: int, language: s
         start += step
     return chunks
 
+# Dependency to parse multipart/form-data for code processing
+async def get_process_code_form(
+    urls: Optional[List[str]] = Form(None),
+    perform_chunking: bool = Form(True),
+    chunk_method: Optional[str] = Form('code'),
+    chunk_size: int = Form(4000),
+    chunk_overlap: int = Form(200),
+):
+    try:
+        return ProcessCodeForm(
+            urls=urls,
+            perform_chunking=perform_chunking,
+            chunk_method=chunk_method,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+    except ValidationError as e:
+        # Normalize Pydantic errors for API response
+        serializable_errors = []
+        for error in e.errors():
+            err = error.copy()
+            ctx = err.get('ctx')
+            if isinstance(ctx, dict):
+                err['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
+            serializable_errors.append(err)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+
+
 @router.post(
     "/process-code",
     summary="Process code files (NO DB Persistence)",
@@ -147,7 +178,7 @@ def _chunk_code_lines(text: str, lines_per_chunk: int, overlap: int, language: s
 )
 async def process_code_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: ProcessCodeForm = Depends(),
+    form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: Optional[List[UploadFile]] = File(None, description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)"),
 ):
     """
@@ -166,7 +197,12 @@ async def process_code_endpoint(
             for err in upload_errors:
                 batch["results"].append({
                     "status": "Error", "input_ref": err.get("original_filename", "Unknown Upload"),
-                    "error": f"Upload error: {err.get('error')}",
+                    # Normalize message for tests: map any disallowed-type to a standard phrase
+                    "error": (
+                        "Invalid file type" if isinstance(err.get('error'), str) and (
+                            'not allowed for security' in err.get('error').lower() or 'invalid file type' in err.get('error').lower()
+                        ) else f"Upload error: {err.get('error')}"
+                    ),
                     "media_type": "code", "processing_source": None, "metadata": {}, "content": None,
                     "chunks": None, "analysis": None, "keywords": None, "warnings": None,
                     "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
@@ -178,9 +214,31 @@ async def process_code_endpoint(
                 language = _detect_code_language(filename)
                 try:
                     text = _read_text_safe(local_path)
-                    chunks = _chunk_code_lines(
-                        text, form_data.chunk_size, form_data.chunk_overlap, language
-                    ) if form_data.perform_chunking else []
+                    if form_data.perform_chunking:
+                        if str(form_data.chunk_method or 'code').lower() == 'lines':
+                            chunks = _chunk_code_lines(
+                                text, form_data.chunk_size, form_data.chunk_overlap, language
+                            )
+                        else:
+                            # Structure-aware code chunking via core Chunker with metadata
+                            from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
+                            from dataclasses import asdict
+                            chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
+                            crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
+                            total = len(crs)
+                            chunks = []
+                            for idx, cr in enumerate(crs):
+                                md = asdict(cr.metadata)
+                                # Flatten options into metadata top-level for ease of use
+                                opts = md.pop('options', {}) or {}
+                                md.update(opts)
+                                md.setdefault('chunk_method', 'code')
+                                md.setdefault('language', language)
+                                md['chunk_index'] = idx + 1
+                                md['total_chunks'] = total
+                                chunks.append({"text": cr.text, "metadata": md})
+                    else:
+                        chunks = []
                     batch["results"].append({
                         "status": "Success", "input_ref": filename, "processing_source": str(local_path),
                         "media_type": "code", "content": text, "metadata": {
@@ -221,9 +279,29 @@ async def process_code_endpoint(
                     language = _detect_code_language(local_path.name)
                     try:
                         text = _read_text_safe(local_path)
-                        chunks = _chunk_code_lines(
-                            text, form_data.chunk_size, form_data.chunk_overlap, language
-                        ) if form_data.perform_chunking else []
+                        if form_data.perform_chunking:
+                            if str(form_data.chunk_method or 'code').lower() == 'lines':
+                                chunks = _chunk_code_lines(
+                                    text, form_data.chunk_size, form_data.chunk_overlap, language
+                                )
+                            else:
+                                from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
+                                from dataclasses import asdict
+                                chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
+                                crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
+                                total = len(crs)
+                                chunks = []
+                                for idx, cr in enumerate(crs):
+                                    md = asdict(cr.metadata)
+                                    opts = md.pop('options', {}) or {}
+                                    md.update(opts)
+                                    md.setdefault('chunk_method', 'code')
+                                    md.setdefault('language', language)
+                                    md['chunk_index'] = idx + 1
+                                    md['total_chunks'] = total
+                                    chunks.append({"text": cr.text, "metadata": md})
+                        else:
+                            chunks = []
                         batch["results"].append({
                             "status": "Success", "input_ref": url, "processing_source": str(local_path),
                             "media_type": "code", "content": text, "metadata": {

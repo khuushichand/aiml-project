@@ -24,7 +24,7 @@ bootstrap both dependencies and model weights automatically.
 | `kokoro` (PyTorch) | `kokoro`, `torch`, optional `torchaudio` | Same as above plus PyTorch checkpoints (`kokoro.pt`, `config.json`) | PyTorch build must match platform (CUDA/MPS/CPU). |
 | `dia` | `transformers>=4.38`, `torch`, `accelerate`, `safetensors`, `sentencepiece`, `numpy`, `soundfile` | `nari-labs/dia` via Hugging Face | GPU strongly recommended. Large (1.6B) model; ensure adequate VRAM. |
 | `higgs` | `boson-multimodal` (from https://github.com/boson-ai/higgs-audio), `torch`, `torchaudio`, `soundfile`, `hydra-core`, `sentencepiece`, `numpy` | `bosonai/higgs-audio-v2-generation-3B-base`, `bosonai/higgs-audio-v2-tokenizer` | Installation currently requires cloning repo + `pip install -e`. GPU recommended; CPU fallback slow. |
-| `vibevoice` | `git+https://github.com/microsoft/VibeVoice.git` (includes deps), `torch>=2.1`, `torchaudio`, `numpy`, `sentencepiece`, `soundfile` | `microsoft/VibeVoice-1.5B` and/or `WestZhang/VibeVoice-Large-pt` | Installer already runs `pip install` for main package. Needs FlashAttention 2 or fallback to SDPA; GPU with ≥16GB VRAM advised. |
+| `vibevoice` | `git+https://github.com/vibevoice-community/VibeVoice.git` (includes deps), `torch>=2.1`, `torchaudio`, `numpy`, `sentencepiece`, `soundfile` | `microsoft/VibeVoice-1.5B` and/or `WestZhang/VibeVoice-Large-pt` | Installer already runs `pip install` for main package. Needs FlashAttention 2 or fallback to SDPA; GPU with ≥16GB VRAM advised. |
 
 ## Embedding Model Downloads
 

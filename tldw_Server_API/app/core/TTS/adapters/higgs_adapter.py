@@ -183,9 +183,11 @@ class HiggsAdapter(TTSAdapter):
                         }
                     )
             logger.info(f"{self.provider_name}: Initializing HiggsAudioServeEngine...")
+            # Note: HiggsAudioServeEngine expects (model_name_or_path, audio_tokenizer_name_or_path, tokenizer_name_or_path=None, device=...)
+            # Use explicit keyword names from the official API to avoid signature mismatch
             self.serve_engine = HiggsAudioServeEngine(
-                model_path=self.model_path,
-                audio_tokenizer_path=self.tokenizer_path,
+                model_name_or_path=self.model_path,
+                audio_tokenizer_name_or_path=self.tokenizer_path,
                 device=self.device
             )
             
@@ -408,56 +410,88 @@ class HiggsAdapter(TTSAdapter):
         Prepare ChatML format input for Higgs.
         Higgs uses a specific format for generation.
         """
-        # Build the ChatML structure
-        messages = []
-        
-        # System message if needed
-        if request.extra_params.get("system_prompt"):
-            messages.append({
-                "role": "system",
-                "content": request.extra_params["system_prompt"]
-            })
-        
-        # User message with the text to generate
+        # We construct HuggingFace-like ChatML using the official boson_multimodal dataclasses
+        # while keeping a dict payload to satisfy existing unit tests.
+        try:
+            from boson_multimodal.data_types import ChatMLSample, Message, TextContent, AudioContent
+            use_dataclasses = True
+        except Exception:
+            # Fallback to plain dicts if library is not available (e.g., unit tests without deps)
+            ChatMLSample = None  # type: ignore
+            Message = None       # type: ignore
+            TextContent = None   # type: ignore
+            AudioContent = None  # type: ignore
+            use_dataclasses = False
+
+        messages: List[Any] = []
+
+        # Optional system prompt
+        system_prompt = request.extra_params.get("system_prompt")
+        if system_prompt:
+            if use_dataclasses:
+                messages.append(Message(role="system", content=system_prompt))
+            else:
+                messages.append({"role": "system", "content": system_prompt})
+
+        # If we have a voice reference, follow the official pattern:
+        #   user (reference text) -> assistant (audio content) -> user (generation text)
+        if voice_reference_path:
+            ref_text = request.extra_params.get("reference_text", "Here is a reference voice sample.")
+            if use_dataclasses:
+                messages.append(Message(role="user", content=ref_text))
+                messages.append(Message(role="assistant", content=AudioContent(audio_url=voice_reference_path)))
+            else:
+                messages.append({"role": "user", "content": ref_text})
+                messages.append({
+                    "role": "assistant",
+                    "content": {"type": "audio", "audio_url": voice_reference_path}
+                })
+
+        # Build final user content
         user_content = request.text
-        
-        # Add language instruction if not English
+
+        # Language instruction
         if request.language and request.language != "en":
             user_content = f"Please generate speech in {request.language}: {user_content}"
-        
-        # Add emotion instruction if specified
+
+        # Emotion/style instructions
         if request.emotion:
-            intensity_desc = "strongly" if request.emotion_intensity > 1.5 else "moderately" if request.emotion_intensity > 0.5 else "slightly"
+            intensity_desc = (
+                "strongly" if request.emotion_intensity > 1.5
+                else "moderately" if request.emotion_intensity > 0.5
+                else "slightly"
+            )
             user_content = f"Say this {intensity_desc} {request.emotion}: {user_content}"
-        
-        # Add style instruction
+
         if request.style:
             user_content = f"In a {request.style} style: {user_content}"
-        
-        # Handle multi-speaker dialogue
+
+        # Multi-speaker hint (official model also supports [SPEAKERi] tags; we keep a generic hint here)
         if request.speakers:
             user_content = f"Generate a dialogue with multiple speakers: {user_content}"
-        
-        messages.append({
-            "role": "user", 
-            "content": user_content
-        })
-        
-        # Prepare the result
-        result = {
+
+        if use_dataclasses:
+            messages.append(Message(role="user", content=user_content))
+        else:
+            messages.append({"role": "user", "content": user_content})
+
+        # Return a dict payload compatible with both unit tests and the serve engine
+        payload: Dict[str, Any] = {
             "messages": messages,
+            # The following fields are not used by the official serve engine, but are
+            # kept to satisfy existing unit tests and potential higher-level consumers.
             "voice": request.voice or "narrator",
             "speed": request.speed,
-            "seed": request.seed
+            "seed": request.seed,
         }
-        
-        # Add voice reference if provided
+
         if voice_reference_path:
-            result["reference_audio_path"] = voice_reference_path
-            result["voice"] = "cloned"  # Override voice when using reference
+            # Preserve legacy key for unit tests while embedding reference audio above
+            payload["reference_audio_path"] = voice_reference_path
+            payload["voice"] = "cloned"
             logger.info(f"Added voice reference to Higgs ChatML: {voice_reference_path}")
-        
-        return result
+
+        return payload
     
     async def _prepare_voice_reference(self, voice_reference: bytes) -> Optional[str]:
         """

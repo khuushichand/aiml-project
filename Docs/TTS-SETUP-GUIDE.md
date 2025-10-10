@@ -266,7 +266,7 @@ dia:
 - **VRAM**: 4GB+ for GPU inference
 - **Best for**: Dialogue, conversations, storytelling
 
-### VibeVoice Setup (Microsoft)
+### VibeVoice Setup (Community Reference)
 
 VibeVoice generates expressive, long-form, multi-speaker conversational audio with spontaneous background music and voice cloning support.
 
@@ -275,8 +275,8 @@ VibeVoice generates expressive, long-form, multi-speaker conversational audio wi
 # Recommended: Use NVIDIA Deep Learning Container
 sudo docker run --privileged --gpus all --rm -it nvcr.io/nvidia/pytorch:24.07-py3
 
-# Install VibeVoice from GitHub
-git clone https://github.com/microsoft/VibeVoice.git
+# Install VibeVoice from GitHub (community reference)
+git clone https://github.com/vibevoice-community/VibeVoice.git
 cd VibeVoice/
 pip install -e .
 ```
@@ -307,6 +307,31 @@ python demo/inference_from_file.py \
   --txt_path demo/text_examples/2p_music.txt \
   --speaker_names Alice Frank
 ```
+
+#### Adapter: Speaker Mapping via Config
+
+You can define a default mapping between speakers in the script and voice samples so callers don’t need to pass it on each request. The adapter reads `vibevoice_speakers_to_voices` from its provider config.
+
+- INI (config.txt) example (store JSON as a string):
+
+```ini
+[TTS-Settings]
+vibevoice_speakers_to_voices = {"1": "en-Alice_woman", "2": "/abs/path/to/frank.wav"}
+```
+
+- YAML (tts_providers_config.yaml) example:
+
+```yaml
+providers:
+  vibevoice:
+    enabled: true
+    model_path: vibevoice/VibeVoice-1.5B
+    speakers_to_voices:
+      "1": en-Alice_woman
+      "2": /abs/path/to/frank.wav
+```
+
+At runtime, a request can still override the defaults by passing `extra_params["speakers_to_voices"]`.
 
 #### Configuration
 ```yaml

@@ -81,6 +81,39 @@ def add(a, b):
         assert result.get("metadata", {}).get("language") == "python"
         assert isinstance(result.get("chunks"), list)
 
+    def test_process_code_upload_py_with_code_metadata(self, client, dummy_headers, tmp_path: Path):
+        code_path = tmp_path / "sample_meta.py"
+        code_path.write_text(
+            """
+import os
+
+def foo(x):
+    return x + 1
+
+class Bar:
+    def baz(self):
+        return 42
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with open(code_path, "rb") as f:
+            files = {"files": (code_path.name, f, "text/x-python")}
+            resp = client.post(self.ENDPOINT, files=files, headers=dummy_headers)
+
+        data = check_batch_response(
+            resp, status.HTTP_200_OK, expected_processed=1, expected_errors=0, check_results_len=1
+        )
+        result = data["results"][0]
+        chunks = result.get("chunks") or []
+        assert isinstance(chunks, list) and len(chunks) >= 1
+        # Check that code-specific metadata exists
+        md = chunks[0].get("metadata", {})
+        assert md.get("chunk_method") == "code"
+        assert md.get("language") in ("python", "py")
+        # line-range metadata should exist
+        assert isinstance(md.get("start_line"), int) and isinstance(md.get("end_line"), int)
+
     def test_process_code_upload_invalid_extension_rejected(self, client, dummy_headers, tmp_path: Path):
         bad_path = tmp_path / "malware.exe"
         bad_path.write_bytes(b"MZ\x90\x00\x03\x00\x00\x00")
@@ -118,4 +151,3 @@ int main(){ printf("hi\n"); return 0; }
         assert result["status"] == "Success"
         assert result["media_type"] == "code"
         assert result.get("chunks") in ([], None)
-

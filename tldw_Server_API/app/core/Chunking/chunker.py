@@ -192,6 +192,9 @@ class Chunker:
                 f"{__package__}.strategies.paragraphs", fromlist=["ParagraphChunkingStrategy"]
             ).ParagraphChunkingStrategy(language=lang),
             'structure_aware': lambda: StructureAwareChunkingStrategy(language=lang),
+            'code': lambda: __import__(
+                f"{__package__}.strategies.code", fromlist=["CodeChunkingStrategy"]
+            ).CodeChunkingStrategy(language=lang),
             ChunkingMethod.PROPOSITIONS.value: lambda: __import__(
                 f"{__package__}.strategies.propositions", fromlist=["PropositionChunkingStrategy"]
             ).PropositionChunkingStrategy(language=lang, llm_call_func=self.llm_call_func, llm_config=self.llm_config),

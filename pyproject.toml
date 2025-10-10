@@ -289,8 +289,8 @@ TTS_vibevoice = [
   "transformers>=4.51.0",
   "accelerate>=0.20.0",
   "librosa>=0.10.0",
-  # Note: VibeVoice must be installed from source:
-  # git clone https://github.com/microsoft/VibeVoice.git && cd VibeVoice && pip install -e .
+  # Note: VibeVoice must be installed from source (community reference):
+  # git clone https://github.com/vibevoice-community/VibeVoice.git && cd VibeVoice && pip install -e .
 ]
 
 TTS_chatterbox = [

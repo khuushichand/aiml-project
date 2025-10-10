@@ -24,6 +24,7 @@ class ChunkingMethod(Enum):
     EBOOK_CHAPTERS = "ebook_chapters"
     ROLLING_SUMMARIZE = "rolling_summarize"
     FIXED_SIZE = "fixed_size"
+    CODE = "code"
 
 
 @dataclass

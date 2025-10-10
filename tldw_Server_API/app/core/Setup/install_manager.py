@@ -653,7 +653,7 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
         PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
     ],
     'vibevoice': [
-        PipRequirement(package='git+https://github.com/microsoft/VibeVoice.git', import_name='vibevoice'),
+        PipRequirement(package='git+https://github.com/vibevoice-community/VibeVoice.git', import_name='vibevoice'),
         PipRequirement(package='torch>=2.2.0', import_name='torch'),
         PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
         PipRequirement(package='sentencepiece>=0.1.99', import_name='sentencepiece'),

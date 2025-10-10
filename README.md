@@ -251,6 +251,7 @@ curl http://127.0.0.1:8000/api/v1/llamacpp/reranking \
 - Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
 - Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
 - Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
+- VibeVoice TTS (getting started): `Docs/VIBEVOICE_GETTING_STARTED.md`
 
 ## QuickStart
 

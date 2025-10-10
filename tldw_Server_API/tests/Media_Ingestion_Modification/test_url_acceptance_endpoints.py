@@ -298,6 +298,70 @@ def test_documents_url_acceptance(desc, url, final, headers, expect_error, clien
 
 
 ########################
+# Code
+########################
+
+@pytest.mark.parametrize(
+    "desc,url,final,headers,expect_error",
+    [
+        ("suffix .py", "http://t/x.py", None, {}, None),
+        ("content-disposition .ts", "http://t/dl", None, {"content-disposition": 'attachment; filename="f.ts"'}, None),
+        ("reject unknown", "http://t/bin", None, {"content-type": "application/octet-stream"}, "allowed extension"),
+    ],
+)
+def test_code_url_acceptance(desc, url, final, headers, expect_error, client, dummy_headers):
+    _stub_url(url, final=final, headers=headers, body=b"print('hi')\n")
+
+    resp = client.post(
+        "/api/v1/media/process-code",
+        data={"urls": [url], "perform_chunking": "false"},
+        headers=dummy_headers,
+    )
+
+    if expect_error:
+        assert resp.status_code == 207
+        data = resp.json()
+        assert any("Error" == r.get("status") for r in data.get("results", []))
+        assert any("allowed extension" in (r.get("error") or "") for r in data["results"]) \
+            or any("allowed extension" in e for e in data.get("errors", []))
+    else:
+        assert resp.status_code in (200, 207)
+        data = resp.json()
+        assert any("Success" == r.get("status") for r in data.get("results", []))
+
+
+def test_code_url_acceptance_redirect_final_suffix(client, dummy_headers):
+    url = "http://t/dl"
+    final = "http://t/file.rs"
+    _stub_url(url, final=final, headers={}, body=b"fn main() {}\n")
+
+    resp = client.post(
+        "/api/v1/media/process-code",
+        data={"urls": [url], "perform_chunking": "false"},
+        headers=dummy_headers,
+    )
+    assert resp.status_code in (200, 207)
+    assert any(r.get("status") == "Success" for r in resp.json().get("results", []))
+
+
+def test_code_mixed_urls_multi_status(client, dummy_headers):
+    ok_url = "http://t/good.py"
+    bad_url = "http://t/unknown"
+    _stub_url(ok_url, headers={}, body=b"def x():\n    return 1\n")
+    _stub_url(bad_url, headers={"content-type": "application/octet-stream"})
+
+    resp = client.post(
+        "/api/v1/media/process-code",
+        data={"urls": [ok_url, bad_url], "perform_chunking": "false"},
+        headers=dummy_headers,
+    )
+    assert resp.status_code == 207
+    data = resp.json()
+    assert any(r.get("status") == "Success" for r in data.get("results", []))
+    assert any(r.get("status") == "Error" for r in data.get("results", []))
+
+
+########################
 # Redirect final suffix acceptance
 ########################
 

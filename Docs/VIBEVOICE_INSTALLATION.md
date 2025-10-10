@@ -11,7 +11,7 @@ This guide covers the installation of the enhanced VibeVoice TTS adapter with al
 pip install -e ".[TTS_vibevoice]"
 
 # Clone and install VibeVoice library
-git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
+git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 cd ../..
 ```
@@ -55,7 +55,7 @@ pip install bitsandbytes
 pip install flash-attn --no-build-isolation
 
 # Clone VibeVoice
-git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
+git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -69,7 +69,7 @@ pip install -e ".[TTS_vibevoice]"
 # Bitsandbytes has limited MPS support
 
 # Clone VibeVoice
-git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
+git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -80,7 +80,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install -e ".[TTS_vibevoice]"
 
 # Clone VibeVoice
-git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
+git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -273,6 +273,30 @@ cp your_voice_sample.wav ./voices/custom_voice.wav
 text = "[1]: Hello, I'm speaker one. [2]: And I'm speaker two!"
 ```
 
+### Named Speaker Mapping (Adapter)
+When using the tldw_server adapter, you can explicitly map speakers in the script to voice IDs (from the `voices/` folder or uploaded voices) or direct file paths via `speakers_to_voices`.
+
+```python
+from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
+
+request = TTSRequest(
+    text="Speaker 1: Welcome!\nSpeaker 2: Thanks for having me.",
+    voice="speaker_1",  # fallback primary voice if no mapping for speaker 1
+    format=AudioFormat.WAV,
+    extra_params={
+        # Map speakers to known voice IDs (from the adapter's available_voices) or direct file paths
+        "speakers_to_voices": {
+            "1": "en-Alice_woman",          # resolves via available_voices
+            "2": "/abs/path/to/frank.wav"   # explicit file path
+        }
+    }
+)
+```
+
+Notes:
+- Speaker IDs may be 0- or 1-based; the adapter normalizes them to the processor’s expected order.
+- If any speaker lacks a voice sample and no additional files exist in `voices/`, the adapter disables cloning gracefully.
+
 ### Zero-Shot Voice Cloning
 ```python
 request = TTSRequest(
@@ -289,6 +313,14 @@ task = asyncio.create_task(adapter.generate(request))
 
 # Cancel if needed
 adapter.cancel_generation()
+```
+
+### Optional Warmup Forward (Adapter)
+Enable a tiny sanity-forward during initialization to catch lazy init errors:
+
+```ini
+[TTS-Settings]
+vibevoice_enable_warmup_forward = true
 ```
 
 ## Support
