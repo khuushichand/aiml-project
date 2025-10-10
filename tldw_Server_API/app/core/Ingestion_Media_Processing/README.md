@@ -28,3 +28,4 @@ VLM quick notes:
 - PDF processing can optionally run a VLM detector per page to create searchable chunks (separate from OCR).
 - Enable via process-pdfs endpoint form fields: `vlm_enable`, `vlm_backend`, `vlm_detect_tables_only`, `vlm_max_pages`.
 - Backends are pluggable; list current backends at `GET /api/v1/vlm/backends`.
+- Detailed guide: Docs/Code_Documentation/VLM_Backends.md
