@@ -7,6 +7,7 @@ Core media ingestion and processing module for audio, video, PDFs, EPUBs, docume
   - `Audio/` – transcription (faster_whisper, Nemo/Parakeet/Qwen2Audio), diarization, streaming
   - `Video/` – yt‑dlp download + transcription
   - `PDF/` – parsing (pymupdf4llm/PyMuPDF/Docling), optional OCR
+  - `VLM/` – vision-language processing (e.g., table detection via HF Table Transformer)
   - `Books/` – EPUB extraction (filtered/markdown/basic)
   - `Plaintext/` – txt/md/html/xml/docx/rtf conversion
   - `MediaWiki/` – XML dump processing (evented, optional DB persistence)
@@ -22,3 +23,8 @@ Per-pipeline docs:
 - `Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md`
 - `Docs/Code_Documentation/Ingestion_Pipeline_Documents.md`
 - `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
+
+VLM quick notes:
+- PDF processing can optionally run a VLM detector per page to create searchable chunks (separate from OCR).
+- Enable via process-pdfs endpoint form fields: `vlm_enable`, `vlm_backend`, `vlm_detect_tables_only`, `vlm_max_pages`.
+- Backends are pluggable; list current backends at `GET /api/v1/vlm/backends`.

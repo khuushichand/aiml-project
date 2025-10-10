@@ -190,6 +190,32 @@ class HiggsAdapter(TTSAdapter):
                 audio_tokenizer_name_or_path=self.tokenizer_path,
                 device=self.device
             )
+
+            # Nudge audio tokenizer to CPU on Apple Silicon (MPS) for stability
+            # Official engine binds tokenizer to the same device; embeddings/quant ops can struggle on MPS.
+            if self.device == "mps":
+                try:
+                    from boson_multimodal.audio_processing.higgs_audio_tokenizer import (
+                        load_higgs_audio_tokenizer as _load_higgs_tokenizer,
+                    )
+                    self.serve_engine.audio_tokenizer = _load_higgs_tokenizer(
+                        self.tokenizer_path, device="cpu"
+                    )
+                    # Refresh dependent fields
+                    self.serve_engine.audio_tokenizer_tps = self.serve_engine.audio_tokenizer.tps
+                    self.serve_engine.samples_per_token = int(
+                        self.serve_engine.audio_tokenizer.sampling_rate // self.serve_engine.audio_tokenizer_tps
+                    )
+                    self.serve_engine.hamming_window_len = (
+                        2 * self.serve_engine.audio_num_codebooks * self.serve_engine.samples_per_token
+                    )
+                    logger.info(
+                        f"{self.provider_name}: Audio tokenizer moved to CPU for MPS stability"
+                    )
+                except Exception as _mps_e:
+                    logger.warning(
+                        f"{self.provider_name}: Failed to move tokenizer to CPU on MPS: {_mps_e}"
+                    )
             
             # Register model with resource manager
             if self.serve_engine:

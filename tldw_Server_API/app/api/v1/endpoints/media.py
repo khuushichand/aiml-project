@@ -2842,8 +2842,43 @@ async def _process_batch_media(
                                     'chunk_type': _ctype,
                                     'metadata': _small,
                                 })
+                            # If processing produced extra chunks (e.g., VLM), merge them
+                            try:
+                                extra_chunks = (process_result or {}).get('extra_chunks')
+                                if isinstance(extra_chunks, list) and extra_chunks:
+                                    for ec in extra_chunks:
+                                        if not isinstance(ec, dict) or 'text' not in ec:
+                                            continue
+                                        chunks_for_sql.append({
+                                            'text': ec.get('text', ''),
+                                            'start_char': ec.get('start_char'),
+                                            'end_char': ec.get('end_char'),
+                                            'chunk_type': ec.get('chunk_type') or 'vlm',
+                                            'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
+                                        })
+                            except Exception:
+                                pass
                     except Exception:
                         chunks_for_sql = None
+
+                    # Merge VLM extra chunks even if chunking was disabled or failed
+                    try:
+                        extra_chunks_any = (process_result or {}).get('extra_chunks')
+                        if isinstance(extra_chunks_any, list) and extra_chunks_any:
+                            if chunks_for_sql is None:
+                                chunks_for_sql = []
+                            for ec in extra_chunks_any:
+                                if not isinstance(ec, dict) or 'text' not in ec:
+                                    continue
+                                chunks_for_sql.append({
+                                    'text': ec.get('text', ''),
+                                    'start_char': ec.get('start_char'),
+                                    'end_char': ec.get('end_char'),
+                                    'chunk_type': ec.get('chunk_type') or 'vlm',
+                                    'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
+                                })
+                    except Exception:
+                        pass
 
                     db_add_kwargs = dict(
                         url=str(original_input_ref),
@@ -5833,6 +5868,11 @@ async def process_pdfs_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: Optional[List[UploadFile]] = File(None,  description="PDF uploads"),
+    # VLM controls (separate from OCR)
+    vlm_enable: bool = Form(False, description="Enable VLM detection (separate from OCR)"),
+    vlm_backend: Optional[str] = Form(None, description="VLM backend (e.g., 'hf_table_transformer')"),
+    vlm_detect_tables_only: bool = Form(True, description="Only keep 'table' detections"),
+    vlm_max_pages: Optional[int] = Form(None, description="Max pages to scan with VLM"),
 ):
     """
     **Process PDFs (No Persistence)**
@@ -5982,28 +6022,33 @@ async def process_pdfs_endpoint(
              logger.debug(
                  f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
              # Create the async task
-             task = asyncio.create_task(
-                 pdf_lib.process_pdf_task(
-                     file_bytes=file_bytes,
-                     filename=original_ref, # Use original ref as filename hint
-                     parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",
-                     # Pass options from form
-                     title_override=form_data.title,
-                     author_override=form_data.author,
-                     keywords=form_data.keywords, # Pass list
-                     perform_chunking=form_data.perform_chunking or None,
-                     # Pass individual chunk params from form model
-                     chunk_method=chunk_opts_for_task['method'],
-                     max_chunk_size=chunk_opts_for_task['max_size'],
-                     chunk_overlap=chunk_opts_for_task['overlap'],
-                     perform_analysis=form_data.perform_analysis,
-                     api_name=form_data.api_name,
-                     # api_key removed - retrieved from server config
-                     custom_prompt=form_data.custom_prompt,
-                     system_prompt=form_data.system_prompt,
-                     summarize_recursively=form_data.summarize_recursively,
-                 )
-             )
+            task = asyncio.create_task(
+                pdf_lib.process_pdf_task(
+                    file_bytes=file_bytes,
+                    filename=original_ref, # Use original ref as filename hint
+                    parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",
+                    # Pass options from form
+                    title_override=form_data.title,
+                    author_override=form_data.author,
+                    keywords=form_data.keywords, # Pass list
+                    perform_chunking=form_data.perform_chunking or None,
+                    # Pass individual chunk params from form model
+                    chunk_method=chunk_opts_for_task['method'],
+                    max_chunk_size=chunk_opts_for_task['max_size'],
+                    chunk_overlap=chunk_opts_for_task['overlap'],
+                    perform_analysis=form_data.perform_analysis,
+                    api_name=form_data.api_name,
+                    # api_key removed - retrieved from server config
+                    custom_prompt=form_data.custom_prompt,
+                    system_prompt=form_data.system_prompt,
+                    summarize_recursively=form_data.summarize_recursively,
+                    # VLM
+                    enable_vlm=vlm_enable,
+                    vlm_backend=vlm_backend,
+                    vlm_detect_tables_only=vlm_detect_tables_only,
+                    vlm_max_pages=vlm_max_pages,
+                )
+            )
              tasks_with_refs.append((original_ref, task))
 
         # Gather results from processing tasks

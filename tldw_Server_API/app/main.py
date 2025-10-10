@@ -88,6 +88,7 @@ from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_se
 # Unified Evaluation endpoint
 from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
 from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
+from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
 #
 # Benchmark Endpoint
 from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
@@ -1304,6 +1305,7 @@ app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", 
 # Router for Unified Evaluation endpoint (combines both legacy endpoints)
 app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
 app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
+app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
 
 # Router for Benchmark endpoint (NEW)
 app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"])

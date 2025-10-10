@@ -1081,6 +1081,10 @@ class CreateFromMediaRequest(BaseModel):
     embedding_model: Optional[str] = None
     media_ids: Optional[List[int]] = None
     keywords: Optional[List[str]] = None
+    keyword_match: Optional[str] = Field(
+        default="any",
+        description="How to match multiple keywords: 'any' (union) or 'all' (intersection)."
+    )
     chunk_size: int = 500
     chunk_overlap: int = 100
     chunk_method: Optional[str] = 'words'
@@ -1109,9 +1113,49 @@ async def create_store_from_media(
                 items.append(rec)
     elif payload.keywords:
         try:
-            results = db.fetch_media_for_keywords(payload.keywords)
-            for kw, lst in results.items():
-                items.extend(lst)
+            # Support union (any) vs intersection (all) semantics for multiple keywords
+            match_mode = (payload.keyword_match or "any").strip().lower()
+            if match_mode not in ("any", "all"):
+                raise HTTPException(status_code=400, detail="keyword_match must be 'any' or 'all'")
+
+            if match_mode == "all":
+                # Use comprehensive search to find items that have ALL specified keywords
+                results_list, _total = db.search_media_db(
+                    search_query=None,
+                    must_have_keywords=[k for k in (payload.keywords or []) if k and str(k).strip()],
+                    results_per_page=10000,
+                    page=1,
+                    include_trash=False,
+                    include_deleted=False,
+                )
+                # search_media_db returns a list of media dictionaries
+                items = list(results_list or [])
+            else:
+                # Default: union of items associated with any of the keywords.
+                # Use search_media_db per-keyword to avoid backend-specific issues.
+                merged: Dict[int, Dict[str, Any]] = {}
+                for kw in (payload.keywords or []):
+                    kw_clean = (kw or "").strip()
+                    if not kw_clean:
+                        continue
+                    res_list, _ = db.search_media_db(
+                        search_query=None,
+                        must_have_keywords=[kw_clean],
+                        results_per_page=10000,
+                        page=1,
+                        include_trash=False,
+                        include_deleted=False,
+                    )
+                    for it in (res_list or []):
+                        try:
+                            mid = int(it.get('id'))
+                            merged[mid] = it
+                        except Exception:
+                            # Fallback: if id missing/non-int, just append
+                            items.append(it)
+                items.extend(list(merged.values()))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(400, detail=f"Keyword fetch failed: {e}")
     else:
@@ -1233,7 +1277,14 @@ async def create_store_from_media(
             })
             ids.append(f"media_{item.get('id')}_chunk_{idx}")
 
+    # De-duplicate by media id to avoid duplicate chunking/upserts across union modes
+    seen_ids: Set[Any] = set()
     for it in items:
+        mid = it.get('id') if isinstance(it, dict) else None
+        if mid is not None:
+            if mid in seen_ids:
+                continue
+            seen_ids.add(mid)
         add_chunks_for_item(it)
 
     if not texts:
