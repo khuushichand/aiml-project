@@ -74,3 +74,21 @@ class RateLimitResponse(BaseModel):
     limit_per_min: Optional[int]
     burst: Optional[int]
 
+
+class RolePermissionGrant(BaseModel):
+    role_id: int
+    permission_id: int
+
+
+class RolePermissionMatrixResponse(BaseModel):
+    roles: List[RoleResponse]
+    permissions: List[PermissionResponse]
+    grants: List[RolePermissionGrant]
+    total_roles: int
+
+
+class RolePermissionBooleanMatrixResponse(BaseModel):
+    roles: List[RoleResponse]
+    permission_names: List[str]
+    matrix: List[List[bool]]
+    total_roles: int

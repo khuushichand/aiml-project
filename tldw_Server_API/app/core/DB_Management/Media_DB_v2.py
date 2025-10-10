@@ -1148,6 +1148,60 @@ class MediaDatabase:
             )
             raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
 
+    # -------------------------
+    # Chunk-level FTS helpers
+    # -------------------------
+    def ensure_chunk_fts(self) -> None:
+        """Ensure the chunk-level FTS virtual table exists (SQLite only).
+
+        Uses content=UnvectorizedMediaChunks so rowid aligns with base table `id`.
+        Safe to call repeatedly. No-op for non-SQLite backends.
+        """
+        try:
+            if self.backend_type != BackendType.SQLITE:
+                return
+            ddl = (
+                "CREATE VIRTUAL TABLE IF NOT EXISTS unvectorized_chunks_fts "
+                "USING fts5(\n"
+                "  chunk_text,\n"
+                "  content='UnvectorizedMediaChunks',\n"
+                "  content_rowid='id'\n"
+                ")"
+            )
+            self.execute_query(ddl, commit=True)
+        except Exception as e:
+            logging.debug(f"ensure_chunk_fts skipped or failed: {e}")
+
+    def maybe_rebuild_chunk_fts_if_empty(self) -> None:
+        """Rebuild chunk FTS index if it exists and is currently empty.
+
+        This primes the FTS table after initial creation or bulk inserts
+        without requiring triggers. No-op for non-SQLite backends.
+        """
+        try:
+            if self.backend_type != BackendType.SQLITE:
+                return
+            # Check existence and emptiness
+            try:
+                cur = self.execute_query("SELECT count(*) AS c FROM unvectorized_chunks_fts")
+                row = cur.fetchone()
+                count_val = (row[0] if row and not isinstance(row, dict) else (row.get('c') if row else 0)) or 0
+            except Exception:
+                # Table missing - try to create and continue
+                self.ensure_chunk_fts()
+                cur = self.execute_query("SELECT count(*) AS c FROM unvectorized_chunks_fts")
+                row = cur.fetchone()
+                count_val = (row[0] if row and not isinstance(row, dict) else (row.get('c') if row else 0)) or 0
+
+            if int(count_val) == 0:
+                # Rebuild from content table
+                self.execute_query(
+                    "INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild')",
+                    commit=True,
+                )
+        except Exception as e:
+            logging.debug(f"maybe_rebuild_chunk_fts_if_empty skipped or failed: {e}")
+
     # --- Transaction Context (Unchanged) ---
     @contextmanager
     def transaction(self):

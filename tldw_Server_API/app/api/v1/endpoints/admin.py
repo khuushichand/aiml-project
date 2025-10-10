@@ -20,7 +20,11 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RegistrationCodeListResponse,
     SystemStatsResponse,
     AuditLogResponse,
-    UserQuotaUpdateRequest
+    UserQuotaUpdateRequest,
+    UsageDailyResponse,
+    UsageTopResponse,
+    UsageDailyRow,
+    UsageTopRow,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -43,6 +47,9 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     EffectivePermissionsResponse,
     RateLimitUpsertRequest,
     RateLimitResponse,
+    RolePermissionMatrixResponse,
+    RolePermissionGrant,
+    RolePermissionBooleanMatrixResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_admin,
@@ -59,6 +66,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
+from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
 
 #######################################################################################################################
 #
@@ -641,6 +649,310 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
     except Exception as e:
         logger.error(f"Failed to delete role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete role")
+
+
+@router.get("/roles/{role_id}/permissions", response_model=list[PermissionResponse])
+async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
+    """List permissions granted to a specific role (read-only matrix row)."""
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                """
+                SELECT p.id, p.name, p.description, p.category
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                WHERE rp.role_id = $1
+                ORDER BY p.name
+                """,
+                role_id,
+            )
+            return [PermissionResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                """
+                SELECT p.id, p.name, p.description, p.category
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                WHERE rp.role_id = ?
+                ORDER BY p.name
+                """,
+                (role_id,),
+            )
+            rows = await cur.fetchall()
+            return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to list permissions for role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list role permissions")
+
+
+@router.get("/roles/matrix", response_model=RolePermissionMatrixResponse)
+async def get_roles_matrix(
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    role_search: Optional[str] = Query(None),
+    role_names: Optional[List[str]] = Query(None),
+    roles_limit: Optional[int] = Query(100, ge=1, le=10000),
+    roles_offset: Optional[int] = Query(0, ge=0),
+    db=Depends(get_db_transaction),
+) -> RolePermissionMatrixResponse:
+    """Return roles, filtered permissions, and grants (matrix view).
+
+    Optional filters:
+    - category: permission category exact match
+    - search: substring match on name/description (case-insensitive)
+    """
+    try:
+        # Role filters + pagination
+        role_clauses = []
+        role_params: list[Any] = []
+        total_roles = 0
+        if hasattr(db, 'fetch'):
+            # Postgres
+            if role_search:
+                role_clauses.append(f"name ILIKE ${len(role_params)+1}")
+                role_params.append(f"%{role_search}%")
+            if role_names:
+                role_clauses.append(f"name = ANY(${len(role_params)+1})")
+                role_params.append(role_names)
+            role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
+            # total count
+            total_roles = await db.fetchval(f"SELECT COUNT(*) FROM roles{role_where}", *role_params)
+            # fetch with limit/offset
+            role_rows = await db.fetch(
+                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",
+                *role_params, roles_limit, roles_offset,
+            )
+            roles = [RoleResponse(**dict(r)) for r in role_rows]
+        else:
+            # SQLite
+            if role_search:
+                role_clauses.append("name LIKE ?")
+                role_params.append(f"%{role_search}%")
+            if role_names:
+                placeholders = ",".join(["?"] * len(role_names))
+                role_clauses.append(f"name IN ({placeholders})")
+                role_params.extend(role_names)
+            role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
+            # total count
+            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)
+            row = await cur.fetchone()
+            total_roles = int(row[0]) if row else 0
+            # fetch with limit/offset
+            cur = await db.execute(
+                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",
+                [*role_params, roles_limit, roles_offset],
+            )
+            role_rows = await cur.fetchall()
+            roles = [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in role_rows]
+
+        # Build WHERE for permissions
+        clauses = []
+        params: list[Any] = []
+        if hasattr(db, 'fetch'):
+            # Postgres
+            if category:
+                clauses.append(f"category = ${len(params)+1}")
+                params.append(category)
+            if search:
+                idx = len(params) + 1
+                clauses.append(f"(name ILIKE ${idx} OR description ILIKE ${idx})")
+                params.append(f"%{search}%")
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            perm_rows = await db.fetch(
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", *params
+            )
+            permissions = [PermissionResponse(**dict(r)) for r in perm_rows]
+
+            # Grants limited to filtered permissions via join
+            grant_rows = await db.fetch(
+                f"""
+                SELECT rp.role_id, rp.permission_id
+                FROM role_permissions rp
+                JOIN permissions p ON p.id = rp.permission_id
+                {where}
+                """,
+                *params,
+            )
+            grants = [RolePermissionGrant(role_id=r['role_id'], permission_id=r['permission_id']) for r in grant_rows]
+        else:
+            # SQLite
+            if category:
+                clauses.append("category = ?")
+                params.append(category)
+            if search:
+                clauses.append("(name LIKE ? OR description LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            cur = await db.execute(
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",
+                params,
+            )
+            perm_rows = await cur.fetchall()
+            permissions = [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in perm_rows]
+
+            cur = await db.execute(
+                f"""
+                SELECT rp.role_id, rp.permission_id
+                FROM role_permissions rp
+                JOIN permissions p ON p.id = rp.permission_id
+                {where}
+                """,
+                params,
+            )
+            grant_rows = await cur.fetchall()
+            grants = [RolePermissionGrant(role_id=row[0], permission_id=row[1]) for row in grant_rows]
+
+        return RolePermissionMatrixResponse(roles=roles, permissions=permissions, grants=grants, total_roles=total_roles)
+    except Exception as e:
+        logger.error(f"Failed to build roles/permissions matrix: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch role-permission matrix")
+
+
+@router.get("/roles/matrix-boolean", response_model=RolePermissionBooleanMatrixResponse)
+async def get_roles_matrix_boolean(
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    role_search: Optional[str] = Query(None),
+    role_names: Optional[List[str]] = Query(None),
+    roles_limit: Optional[int] = Query(100, ge=1, le=10000),
+    roles_offset: Optional[int] = Query(0, ge=0),
+    db=Depends(get_db_transaction),
+) -> RolePermissionBooleanMatrixResponse:
+    """Return a compact boolean matrix: roles x permission_names, with optional filters."""
+    try:
+        # Roles with filters + pagination
+        role_clauses = []
+        role_params: list[Any] = []
+        total_roles = 0
+        if hasattr(db, 'fetch'):
+            if role_search:
+                role_clauses.append(f"name ILIKE ${len(role_params)+1}")
+                role_params.append(f"%{role_search}%")
+            if role_names:
+                role_clauses.append(f"name = ANY(${len(role_params)+1})")
+                role_params.append(role_names)
+            role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
+            total_roles = await db.fetchval(f"SELECT COUNT(*) FROM roles{role_where}", *role_params)
+            role_rows = await db.fetch(
+                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",
+                *role_params, roles_limit, roles_offset,
+            )
+            roles = [RoleResponse(**dict(r)) for r in role_rows]
+        else:
+            if role_search:
+                role_clauses.append("name LIKE ?")
+                role_params.append(f"%{role_search}%")
+            if role_names:
+                placeholders = ",".join(["?"] * len(role_names))
+                role_clauses.append(f"name IN ({placeholders})")
+                role_params.extend(role_names)
+            role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
+            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)
+            row = await cur.fetchone()
+            total_roles = int(row[0]) if row else 0
+            cur = await db.execute(
+                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",
+                [*role_params, roles_limit, roles_offset],
+            )
+            role_rows = await cur.fetchall()
+            roles = [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in role_rows]
+
+        # Build WHERE for permissions
+        clauses = []
+        params: list[Any] = []
+        if hasattr(db, 'fetch'):
+            if category:
+                clauses.append(f"category = ${len(params)+1}")
+                params.append(category)
+            if search:
+                idx = len(params) + 1
+                clauses.append(f"(name ILIKE ${idx} OR description ILIKE ${idx})")
+                params.append(f"%{search}%")
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            perm_rows = await db.fetch(f"SELECT id, name FROM permissions{where} ORDER BY name", *params)
+            perm_ids = [r['id'] for r in perm_rows]
+            perm_names = [r['name'] for r in perm_rows]
+        else:
+            if category:
+                clauses.append("category = ?")
+                params.append(category)
+            if search:
+                clauses.append("(name LIKE ? OR description LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            cur = await db.execute(f"SELECT id, name FROM permissions{where} ORDER BY name", params)
+            perm_rows = await cur.fetchall()
+            perm_ids = [row[0] for row in perm_rows]
+            perm_names = [row[1] for row in perm_rows]
+
+        # Grants set (also restrict to selected roles if any)
+        if hasattr(db, 'fetch'):
+            role_ids = [r.id for r in roles]
+            grant_sql = (
+                f"""
+                SELECT rp.role_id, rp.permission_id
+                FROM role_permissions rp
+                JOIN permissions p ON p.id = rp.permission_id
+                {where}
+                """
+            )
+            grant_params = list(params)
+            if role_ids:
+                grant_sql += f" AND rp.role_id = ANY(${len(grant_params)+1})"
+                grant_params.append(role_ids)
+            grant_rows = await db.fetch(grant_sql, *grant_params)
+            grants_set = {(r['role_id'], r['permission_id']) for r in grant_rows}
+        else:
+            role_ids = [r.id for r in roles]
+            grant_sql = (
+                f"""
+                SELECT rp.role_id, rp.permission_id
+                FROM role_permissions rp
+                JOIN permissions p ON p.id = rp.permission_id
+                {where}
+                """
+            )
+            grant_params = list(params)
+            if role_ids:
+                placeholders = ",".join(["?"] * len(role_ids))
+                grant_sql += f" AND rp.role_id IN ({placeholders})"
+                grant_params.extend(role_ids)
+            cur = await db.execute(grant_sql, grant_params)
+            grant_rows = await cur.fetchall()
+            grants_set = {(row[0], row[1]) for row in grant_rows}
+
+        # Build matrix: rows per role, cols per permission (same order as perm_names)
+        role_ids = [r.id for r in roles]
+        matrix: list[list[bool]] = []
+        for rid in role_ids:
+            row = [ (rid, pid) in grants_set for pid in perm_ids ]
+            matrix.append(row)
+
+        return RolePermissionBooleanMatrixResponse(
+            roles=roles,
+            permission_names=perm_names,
+            matrix=matrix,
+            total_roles=total_roles,
+        )
+    except Exception as e:
+        logger.error(f"Failed to build boolean matrix: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch boolean matrix")
+
+
+@router.get("/permissions/categories", response_model=list[str])
+async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str]:
+    """List distinct permission categories (for UI filters)."""
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch("SELECT DISTINCT category FROM permissions WHERE category IS NOT NULL ORDER BY category")
+            return [r['category'] for r in rows]
+        else:
+            cur = await db.execute("SELECT DISTINCT category FROM permissions WHERE category IS NOT NULL ORDER BY category")
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to list permission categories: {e}")
+        return []
 
 
 @router.get("/permissions", response_model=list[PermissionResponse])
@@ -1406,6 +1718,178 @@ async def get_audit_log(
             detail="Failed to retrieve audit log"
         )
 
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Usage Reporting Endpoints
+
+@router.get("/usage/daily", response_model=UsageDailyResponse)
+async def get_usage_daily(
+    user_id: Optional[int] = None,
+    start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    db=Depends(get_db_transaction)
+) -> UsageDailyResponse:
+    """Query daily usage aggregates, optionally filtered by user and date range."""
+    try:
+        offset = (page - 1) * limit
+        conditions: list[str] = []
+        params: list = []
+
+        is_pg = hasattr(db, 'fetchrow')
+
+        if user_id is not None:
+            if is_pg:
+                conditions.append(f"user_id = ${len(params) + 1}")
+            else:
+                conditions.append("user_id = ?")
+            params.append(user_id)
+
+        if start:
+            if is_pg:
+                conditions.append(f"day >= ${len(params) + 1}::date")
+            else:
+                conditions.append("day >= ?")
+            params.append(start)
+
+        if end:
+            if is_pg:
+                conditions.append(f"day <= ${len(params) + 1}::date")
+            else:
+                conditions.append("day <= ?")
+            params.append(end)
+
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if is_pg:
+            count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
+            total = await db.fetchval(count_sql, *params)
+
+            data_sql = (
+                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                f"FROM usage_daily{where_clause} "
+                f"ORDER BY day DESC, user_id ASC "
+                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            rows = await db.fetch(data_sql, *params, limit, offset)
+        else:
+            count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
+            cur = await db.execute(count_sql, params)
+            total = (await cur.fetchone())[0]
+
+            data_sql = (
+                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                f"FROM usage_daily{where_clause} "
+                f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
+            )
+            params2 = list(params) + [limit, offset]
+            cur = await db.execute(data_sql, params2)
+            rows = await cur.fetchall()
+
+        items: list[UsageDailyRow] = []
+        for r in rows:
+            if isinstance(r, dict):
+                items.append(UsageDailyRow(**r))
+            else:
+                items.append(
+                    UsageDailyRow(
+                        user_id=int(r[0]),
+                        day=str(r[1]),
+                        requests=int(r[2] or 0),
+                        errors=int(r[3] or 0),
+                        bytes_total=int(r[4] or 0),
+                        latency_avg_ms=float(r[5]) if r[5] is not None else None,
+                    )
+                )
+
+        return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to query usage_daily: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load usage daily data")
+
+
+@router.get("/usage/top", response_model=UsageTopResponse)
+async def get_usage_top(
+    start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    limit: int = Query(10, ge=1, le=100),
+    metric: str = Query("requests", pattern="^(requests|bytes_total|errors)$"),
+    db=Depends(get_db_transaction)
+) -> UsageTopResponse:
+    """Top users by aggregate usage over a date range."""
+    try:
+        is_pg = hasattr(db, 'fetch')
+        conditions: list[str] = []
+        params: list = []
+
+        if start:
+            if is_pg:
+                conditions.append(f"day >= ${len(params) + 1}::date")
+            else:
+                conditions.append("day >= ?")
+            params.append(start)
+        if end:
+            if is_pg:
+                conditions.append(f"day <= ${len(params) + 1}::date")
+            else:
+                conditions.append("day <= ?")
+            params.append(end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        order_by = {
+            "requests": "SUM(requests) DESC",
+            "bytes_total": "SUM(bytes_total) DESC",
+            "errors": "SUM(errors) DESC",
+        }[metric]
+
+        if is_pg:
+            sql = (
+                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
+                f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+            ).replace('$ ', '$')
+            rows = await db.fetch(sql, *params, limit)
+        else:
+            sql = (
+                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
+                f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+            )
+            cur = await db.execute(sql, params + [limit])
+            rows = await cur.fetchall()
+
+        items: list[UsageTopRow] = []
+        for r in rows:
+            if isinstance(r, dict):
+                items.append(UsageTopRow(**r))
+            else:
+                items.append(
+                    UsageTopRow(
+                        user_id=int(r[0]),
+                        requests=int(r[1] or 0),
+                        errors=int(r[2] or 0),
+                        bytes_total=int(r[3] or 0),
+                        latency_avg_ms=float(r[4]) if r[4] is not None else None,
+                    )
+                )
+
+        return UsageTopResponse(items=items)
+    except Exception as e:
+        logger.error(f"Failed to query usage top: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load usage top data")
+
+
+@router.post("/usage/aggregate")
+async def run_usage_aggregate(day: Optional[str] = Query(None, description="YYYY-MM-DD")) -> dict:
+    """Trigger aggregation of usage_log into usage_daily for a specific day (UTC)."""
+    try:
+        await aggregate_usage_daily(day=day)
+        return {"status": "ok", "day": day}
+    except Exception as e:
+        logger.warning(f"Manual usage aggregation failed/skipped: {e}")
+        # Non-fatal: e.g., table absent in PG during partial setups
+        return {"status": "skipped", "reason": str(e), "day": day}
 
 #
 ## End of admin.py

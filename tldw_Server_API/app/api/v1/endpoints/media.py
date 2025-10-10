@@ -52,6 +52,9 @@ import redis
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+# FastAPI router must be defined before any @router decorators are executed
+router = APIRouter()
+
 #
 # Local Imports
 #
@@ -78,6 +81,170 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     fetch_keywords_for_media,
 )
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+
+# -----------------------------
+# Code processing helpers
+# -----------------------------
+class ProcessCodeForm(BaseModel):
+    urls: Optional[List[str]] = None
+    perform_chunking: bool = True
+    chunk_method: Optional[str] = Field(default='lines', description="Chunk method for code: lines")
+    chunk_size: int = Field(default=200, description="Number of lines per chunk")
+    chunk_overlap: int = Field(default=20, description="Overlapping lines between chunks")
+
+CODE_ALLOWED_EXTENSIONS: Set[str] = {
+    '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
+    '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
+    '.rb', '.php', '.pl', '.lua', '.sql', '.json', '.yaml',
+    '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx'
+}
+
+def _detect_code_language(filename: str) -> str:
+    ext = FilePath(filename).suffix.lower()
+    return {
+        '.py': 'python', '.c': 'c', '.h': 'c-header', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp',
+        '.cs': 'csharp', '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.swift': 'swift', '.rs': 'rust', '.go': 'go',
+        '.rb': 'ruby', '.php': 'php', '.pl': 'perl', '.lua': 'lua', '.sql': 'sql', '.json': 'json', '.yaml': 'yaml',
+        '.yml': 'yaml', '.toml': 'toml', '.ini': 'ini', '.cfg': 'ini', '.conf': 'conf', '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'jsx',
+    }.get(ext, ext.lstrip('.') or 'text')
+
+def _read_text_safe(path: FilePath) -> str:
+    try:
+        return path.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        return path.read_text(encoding='latin-1')
+
+def _chunk_code_lines(text: str, lines_per_chunk: int, overlap: int, language: str) -> List[Dict[str, Any]]:
+    lines = text.splitlines()
+    chunks: List[Dict[str, Any]] = []
+    if lines_per_chunk <= 0:
+        return chunks
+    step = max(1, lines_per_chunk - max(0, overlap))
+    start = 0
+    total = len(lines)
+    while start < total:
+        end = min(total, start + lines_per_chunk)
+        chunk_text = "\n".join(lines[start:end])
+        chunks.append({
+            'text': chunk_text,
+            'metadata': {
+                'language': language,
+                'start_line': start + 1,
+                'end_line': end,
+                'total_lines': total,
+                'chunk_method': 'lines'
+            }
+        })
+        if end == total:
+            break
+        start += step
+    return chunks
+
+@router.post(
+    "/process-code",
+    summary="Process code files (NO DB Persistence)",
+    tags=["Media Processing (No DB)"]
+)
+async def process_code_endpoint(
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    form_data: ProcessCodeForm = Depends(),
+    files: Optional[List[UploadFile]] = File(None, description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)"),
+):
+    """
+    Reads uploaded or downloaded code files as text, optionally chunks by lines,
+    and returns artifacts without DB writes.
+    """
+    _validate_inputs("code", form_data.urls, files)
+    batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
+    with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
+        temp_dir = FilePath(temp_dir_path)
+        # Handle uploads
+        if files:
+            saved, upload_errors = await _save_uploaded_files(
+                files, temp_dir, validator=file_validator_instance, allowed_extensions=sorted(CODE_ALLOWED_EXTENSIONS)
+            )
+            for err in upload_errors:
+                batch["results"].append({
+                    "status": "Error", "input_ref": err.get("original_filename", "Unknown Upload"),
+                    "error": f"Upload error: {err.get('error')}",
+                    "media_type": "code", "processing_source": None, "metadata": {}, "content": None,
+                    "chunks": None, "analysis": None, "keywords": None, "warnings": None,
+                    "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                })
+                batch["errors_count"] += 1
+            for info in saved:
+                filename = info["original_filename"]
+                local_path = FilePath(info["path"])
+                language = _detect_code_language(filename)
+                try:
+                    text = _read_text_safe(local_path)
+                    chunks = _chunk_code_lines(
+                        text, form_data.chunk_size, form_data.chunk_overlap, language
+                    ) if form_data.perform_chunking else []
+                    batch["results"].append({
+                        "status": "Success", "input_ref": filename, "processing_source": str(local_path),
+                        "media_type": "code", "content": text, "metadata": {
+                            "language": language, "filename": filename, "lines": text.count('\n') + 1
+                        }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
+                        "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                    })
+                    batch["processed_count"] += 1
+                except Exception as e:
+                    batch["results"].append({
+                        "status": "Error", "input_ref": filename, "processing_source": str(local_path),
+                        "media_type": "code", "error": f"Failed to read code file: {e}",
+                        "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                        "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                    })
+                    batch["errors_count"] += 1
+        # Handle URLs
+        if form_data.urls:
+            async with httpx.AsyncClient() as client:
+                tasks = [
+                    _download_url_async(
+                        client=client, url=u, target_dir=temp_dir,
+                        allowed_extensions=CODE_ALLOWED_EXTENSIONS, check_extension=True
+                    ) for u in form_data.urls
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for url, res in zip(form_data.urls, results):
+                    if isinstance(res, Exception):
+                        batch["results"].append({
+                            "status": "Error", "input_ref": url, "processing_source": None,
+                            "media_type": "code", "error": f"Download/preparation failed: {res}",
+                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["errors_count"] += 1
+                        continue
+                    local_path = FilePath(res)
+                    language = _detect_code_language(local_path.name)
+                    try:
+                        text = _read_text_safe(local_path)
+                        chunks = _chunk_code_lines(
+                            text, form_data.chunk_size, form_data.chunk_overlap, language
+                        ) if form_data.perform_chunking else []
+                        batch["results"].append({
+                            "status": "Success", "input_ref": url, "processing_source": str(local_path),
+                            "media_type": "code", "content": text, "metadata": {
+                                "language": language, "filename": local_path.name, "lines": text.count('\n') + 1
+                            }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
+                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["processed_count"] += 1
+                    except Exception as e:
+                        batch["results"].append({
+                            "status": "Error", "input_ref": url, "processing_source": str(local_path),
+                            "media_type": "code", "error": f"Failed to read code file: {e}",
+                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                        })
+                        batch["errors_count"] += 1
+
+    final_status = status.HTTP_200_OK if (batch["processed_count"] > 0 and batch["errors_count"] == 0) else (
+        status.HTTP_207_MULTI_STATUS if batch["results"] else status.HTTP_400_BAD_REQUEST
+    )
+    return JSONResponse(status_code=final_status, content=batch)
 from tldw_Server_API.app.api.v1.schemas.media_response_models import PaginationInfo, MediaListResponse, MediaListItem, \
     MediaDetailResponse, VersionDetailResponse
 from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter, MetadataPatchRequest, AdvancedVersionUpsertRequest
@@ -146,8 +313,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki im
 #
 
 # The router is a FastAPI object that allows us to define multiple endpoints under a single prefix.
-# Create a new router instance
-router = APIRouter()
 
 # Rate Limiter is imported from centralized configuration above
 
@@ -2566,6 +2731,42 @@ async def _process_batch_media(
                             safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                     except Exception:
                         safe_metadata_json = None
+                    # Build plaintext chunks for chunk-level FTS if chunking is requested
+                    chunks_for_sql = None
+                    try:
+                        _opts = chunk_options or {}
+                        if _opts:
+                            from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                            _ck = _Chunker()
+                            _flat = _ck.chunk_text_hierarchical_flat(
+                                content_for_db,
+                                method=_opts.get('method') or 'sentences',
+                                max_size=_opts.get('max_size') or 500,
+                                overlap=_opts.get('overlap') or 50,
+                            )
+                            _kind_map = {
+                                'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                            }
+                            chunks_for_sql = []
+                            for _it in _flat:
+                                _md = _it.get('metadata') or {}
+                                _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                _small = {}
+                                if _md.get('ancestry_titles'):
+                                    _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                if _md.get('section_path'):
+                                    _small['section_path'] = _md.get('section_path')
+                                chunks_for_sql.append({
+                                    'text': _it.get('text',''),
+                                    'start_char': _md.get('start_offset'),
+                                    'end_char': _md.get('end_offset'),
+                                    'chunk_type': _ctype,
+                                    'metadata': _small,
+                                })
+                    except Exception:
+                        chunks_for_sql = None
+
                     db_add_kwargs = dict(
                         url=str(original_input_ref),
                         title=title_for_db,
@@ -2579,6 +2780,7 @@ async def _process_batch_media(
                         author=author_for_db,
                         overwrite=form_data.overwrite_existing,
                         chunk_options=chunk_options,
+                        chunks=chunks_for_sql,
                     )
 
                     # --- Function to run in executor ---
@@ -2935,7 +3137,8 @@ async def _process_document_like_item(
 
         model_used = metadata_for_db.get('parser_used', 'Imported') # Check metadata first
         if not model_used and media_type == 'pdf': model_used = final_result.get('analysis_details', {}).get('parser', 'Imported')
-        title_for_db = metadata_for_db.get('title', form_data.title or (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
+        # Prefer explicit user-provided title; fall back to extracted metadata; then filename stem
+        title_for_db = form_data.title or metadata_for_db.get('title', (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
         author_for_db = metadata_for_db.get('author', form_data.author or 'Unknown')
 
 
@@ -2973,12 +3176,49 @@ async def _process_document_like_item(
                         safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
                 except Exception:
                     safe_metadata_json = None
+                # Build plaintext chunks for chunk-level FTS if chunking is requested
+                chunks_for_sql = None
+                try:
+                    _opts = chunk_options or {}
+                    if _opts:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=_opts.get('method') or 'sentences',
+                            max_size=_opts.get('max_size') or 500,
+                            overlap=_opts.get('overlap') or 50,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+
                 db_add_kwargs = dict(
                     url=item_input_ref, title=title_for_db, media_type=media_type,
                     content=content_for_db, keywords=final_keywords_list,
                     prompt=form_data.custom_prompt, analysis_content=analysis_for_db, safe_metadata=safe_metadata_json,
                     transcription_model=model_used, author=author_for_db,
                     overwrite=form_data.overwrite_existing, chunk_options=chunk_options,
+                    chunks=chunks_for_sql,
                 )
 
                 # --- Function to run in executor ---
@@ -4991,9 +5231,9 @@ async def process_documents_endpoint(
     logger.info("Request received for /process-documents (no persistence).")
     logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
 
-    # Define allowed extensions for this endpoint
-    # Make sure these match what convert_document_to_text supports
-    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml"] # Add others if supported
+    # Guardrails: restrict to a known set of document extensions for this endpoint.
+    # Dedicated code-file processing will be added separately.
+    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml"]
 
     _validate_inputs("document", form_data.urls, files)
 
@@ -5017,7 +5257,7 @@ async def process_documents_endpoint(
 
         # --- Handle Uploads ---
         if files:
-            # Use specific allowed extensions for documents
+            # Enforce allowed document extensions for uploads
             saved_files, upload_errors = await _save_uploaded_files(
                 files,
                 temp_dir,
@@ -5054,16 +5294,21 @@ async def process_documents_endpoint(
 
             # --- MODIFICATION: Create client first ---
             async with httpx.AsyncClient() as client:
-                # --- MODIFICATION: Create tasks *inside* the client block ---
-                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)  # Convert to set once
+                # Enforce allowed extensions for documents from URLs; still block generic HTML/XHTML/etc
+                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
                 download_tasks = [
-                    # Pass the client instance here
                     _download_url_async(
-                        client=client,  # Pass the active client
+                        client=client,
                         url=url,
                         target_dir=temp_dir,
-                        allowed_extensions=allowed_ext_set,  # Pass the set
-                        check_extension=True  # Perform the check
+                        allowed_extensions=allowed_ext_set,
+                        check_extension=True,
+                        disallow_content_types={
+                            "text/html",
+                            "application/xhtml+xml",
+                            "application/msword",
+                            "application/octet-stream",
+                        }
                     )
                     for url in form_data.urls
                 ]
@@ -6490,7 +6735,8 @@ async def _download_url_async(
         url: str,
         target_dir: Path,
         allowed_extensions: Optional[Set[str]] = None,  # Use a Set for faster lookups
-        check_extension: bool = True  # Flag to enable/disable check
+        check_extension: bool = True,  # Flag to enable/disable check
+        disallow_content_types: Optional[Set[str]] = None,  # Optional set of content-types to reject for inference
 ) -> Path:
     """
     Downloads a URL asynchronously and saves it to the target directory.
@@ -6552,6 +6798,11 @@ async def _download_url_async(
                     else:
                         # As a last resort, rely on Content-Type for known mappings
                         content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
+                        # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
+                        if disallow_content_types and content_type in disallow_content_types:
+                            allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                            raise ValueError(
+                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
                         content_type_map = {
                             'application/epub+zip': '.epub',
                             'application/pdf': '.pdf',

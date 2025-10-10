@@ -251,6 +251,12 @@ class Settings(BaseSettings):
         ],
         description="Request path prefixes to exclude from usage logging"
     )
+    USAGE_AGGREGATOR_INTERVAL_MINUTES: int = Field(
+        default=60,
+        ge=1,
+        le=24 * 60,
+        description="Background usage aggregator interval in minutes"
+    )
     
     # ===== Monitoring =====
     ENABLE_HEALTH_CHECK: bool = Field(

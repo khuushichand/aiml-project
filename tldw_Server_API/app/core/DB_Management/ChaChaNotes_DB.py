@@ -5283,15 +5283,38 @@ UPDATE db_schema_version
         now = self._get_current_utc_timestamp_iso()
         try:
             with self.transaction() as conn:
-                cursor = conn.execute(
-                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted) VALUES(?, ?, ?, ?, ?, 1, 0)",
-                    (name, description, now, now, self.client_id)
+                insert_sql = (
+                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?)"
                 )
-                deck_id = cursor.lastrowid
-                return int(deck_id)
+                params = (
+                    name,
+                    description,
+                    now,
+                    now,
+                    self.client_id,
+                    1,
+                    False,
+                )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    deck_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    deck_id = int(cursor.lastrowid)
+
+                if deck_id is None:
+                    raise CharactersRAGDBError("Failed to determine deck ID after insert")
+                return deck_id
         except sqlite3.IntegrityError as e:
             if "UNIQUE constraint failed: decks.name" in str(e):
                 raise ConflictError("Deck name already exists", entity="decks", identifier=name)
+            raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
+        except BackendDatabaseError as e:
+            if self._is_unique_violation(e):
+                raise ConflictError("Deck name already exists", entity="decks", identifier=name) from e
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
@@ -5340,25 +5363,68 @@ UPDATE db_schema_version
             reverse_flag = 1 if model_type == 'basic_reverse' else 0
         try:
             with self.transaction() as conn:
-                conn.execute(
+                insert_sql = (
                     """
-                    INSERT INTO flashcards(uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                                           source_ref_type, source_ref_id, ef, interval_days, repetitions,
-                                           lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version, model_type, reverse)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1, ?, ?)
-                    """,
-                    (uuid_val, deck_id, front, back, notes, extra, is_cloze, tags_json, source_ref_type, source_ref_id,
-                     now, now, self.client_id, model_type, 1 if reverse_flag else 0)
+                    INSERT INTO flashcards(
+                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
+                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version, model_type, reverse
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
                 )
+
+                params = (
+                    uuid_val,
+                    deck_id,
+                    front,
+                    back,
+                    notes,
+                    extra,
+                    bool(is_cloze),
+                    tags_json,
+                    source_ref_type,
+                    source_ref_id,
+                    2.5,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                    model_type,
+                    bool(reverse_flag),
+                )
+
+                conn.execute(insert_sql, params)
                 return uuid_val
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to add flashcard: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard: {exc}") from exc
 
     def add_flashcards_bulk(self, cards: List[Dict[str, Any]]) -> List[str]:
         """Bulk create flashcards; returns list of uuids in same order."""
         uuids: List[str] = []
         try:
             with self.transaction() as conn:
+                insert_sql = (
+                    """
+                    INSERT INTO flashcards(
+                        uuid, deck_id, front, back, notes, is_cloze, tags_json,
+                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                )
+
                 for card_data in cards:
                     uuid_val = self._generate_uuid()
                     uuids.append(uuid_val)
@@ -5367,25 +5433,42 @@ UPDATE db_schema_version
                     front = card_data['front']
                     back = card_data['back']
                     notes = card_data.get('notes')
-                    is_cloze = 1 if card_data.get('is_cloze') else 0
+                    is_cloze = bool(card_data.get('is_cloze'))
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
                     source_ref_id = card_data.get('source_ref_id')
-                    conn.execute(
-                        """
-                        INSERT INTO flashcards(uuid, deck_id, front, back, notes, is_cloze, tags_json,
-                                               source_ref_type, source_ref_id, ef, interval_days, repetitions,
-                                               lapses, due_at, last_reviewed_at, created_at, last_modified, deleted, client_id, version)
-                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, NULL, NULL, ?, ?, 0, ?, 1)
-                        """,
-                        (uuid_val, deck_id, front, back, notes, is_cloze, tags_json, source_ref_type, source_ref_id,
-                         now, now, self.client_id)
+
+                    params = (
+                        uuid_val,
+                        deck_id,
+                        front,
+                        back,
+                        notes,
+                        is_cloze,
+                        tags_json,
+                        source_ref_type,
+                        source_ref_id,
+                        2.5,
+                        0,
+                        0,
+                        0,
+                        None,
+                        None,
+                        now,
+                        now,
+                        False,
+                        self.client_id,
+                        1,
                     )
+
+                    conn.execute(insert_sql, params)
             return uuids
         except KeyError as e:
             raise InputError(f"Missing required field in bulk flashcard: {e}") from e
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {exc}") from exc
 
     def list_flashcards(self,
                         deck_id: Optional[int] = None,

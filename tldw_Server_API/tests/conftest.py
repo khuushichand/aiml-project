@@ -32,6 +32,9 @@ os.environ.setdefault("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS", "15")
 # Disable auto-download of large models during tests to avoid network/hangs
 os.environ.setdefault("TTS_AUTO_DOWNLOAD", "0")
 
+# Always isolate per-test user DBs to a writable temp path to avoid noisy migrations touching default DBs
+os.environ.setdefault("USER_DB_BASE_DIR", str(TEST_TEMP / "user_databases"))
+
 # Increase per-process file descriptor limit to avoid EMFILE during large suites
 try:
     import resource  # type: ignore

@@ -564,6 +564,41 @@ async def pmc_oa_ingest_pdf(
                         safe_metadata_json = _json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False)
                     except Exception:
                         safe_metadata_json = None
+                # Build plaintext chunks for chunk-level FTS if chunking enabled
+                chunks_for_sql = None
+                try:
+                    if perform_chunking:
+                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                        _ck = _Chunker()
+                        _flat = _ck.chunk_text_hierarchical_flat(
+                            content_for_db,
+                            method=chunk_method or "sentences",
+                            max_size=chunk_size,
+                            overlap=chunk_overlap,
+                        )
+                        _kind_map = {
+                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                        }
+                        chunks_for_sql = []
+                        for _it in _flat:
+                            _md = _it.get('metadata') or {}
+                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                            _small = {}
+                            if _md.get('ancestry_titles'):
+                                _small['ancestry_titles'] = _md.get('ancestry_titles')
+                            if _md.get('section_path'):
+                                _small['section_path'] = _md.get('section_path')
+                            chunks_for_sql.append({
+                                'text': _it.get('text',''),
+                                'start_char': _md.get('start_offset'),
+                                'end_char': _md.get('end_offset'),
+                                'chunk_type': _ctype,
+                                'metadata': _small,
+                            })
+                except Exception:
+                    chunks_for_sql = None
+
                 db_id, media_uuid, db_msg = await loop.run_in_executor(
                     None,
                     lambda: db.add_media_with_keywords(
@@ -583,6 +618,7 @@ async def pmc_oa_ingest_pdf(
                             "max_size": chunk_size,
                             "overlap": chunk_overlap,
                         } if perform_chunking else None,
+                        chunks=chunks_for_sql,
                     )
                 )
             except Exception as e:
@@ -707,6 +743,41 @@ async def arxiv_ingest(
         title_for_db = meta.get('title') or arxiv_id
         author_for_db = meta.get('authors')
 
+        # Build plaintext chunks for chunk-level FTS if chunking enabled
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
             lambda: db.add_media_with_keywords(
@@ -722,6 +793,7 @@ async def arxiv_ingest(
                 author=author_for_db,
                 overwrite=False,
                 chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
             )
         )
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
@@ -822,6 +894,41 @@ async def pubmed_ingest(
         analysis_for_db = result.get('summary') or result.get('analysis')
         title_for_db = meta.get('title') or f"PMID {pmid}"
         author_for_db = sm.get('authors')
+        # Build plaintext chunks for chunk-level FTS if chunking enabled
+        chunks_for_sql = None
+        try:
+            if perform_chunking:
+                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                _ck = _Chunker()
+                _flat = _ck.chunk_text_hierarchical_flat(
+                    content_for_db,
+                    method=chunk_method or "sentences",
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                )
+                _kind_map = {
+                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                }
+                chunks_for_sql = []
+                for _it in _flat:
+                    _md = _it.get('metadata') or {}
+                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                    _small = {}
+                    if _md.get('ancestry_titles'):
+                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                    if _md.get('section_path'):
+                        _small['section_path'] = _md.get('section_path')
+                    chunks_for_sql.append({
+                        'text': _it.get('text',''),
+                        'start_char': _md.get('start_offset'),
+                        'end_char': _md.get('end_offset'),
+                        'chunk_type': _ctype,
+                        'metadata': _small,
+                    })
+        except Exception:
+            chunks_for_sql = None
+
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
             lambda: db.add_media_with_keywords(
@@ -837,6 +944,7 @@ async def pubmed_ingest(
                 author=author_for_db,
                 overwrite=False,
                 chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
+                chunks=chunks_for_sql,
             )
         )
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}

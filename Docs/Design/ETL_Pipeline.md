@@ -11,6 +11,7 @@ https://python.langchain.com/docs/integrations/document_loaders/source_code/
 https://python.langchain.com/docs/integrations/document_loaders/
 https://github.com/whyhow-ai/knowledge-table
 https://olmocr.allenai.org/papers/olmocr.pdf
+https://github.com/NanoNets/docstrange
 https://github.com/breezedeus/Pix2Text
 https://huggingface.co/papers/2409.01704
 https://huggingface.co/abhinand/GOT-OCR-2.0

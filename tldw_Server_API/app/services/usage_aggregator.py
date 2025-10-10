@@ -76,8 +76,8 @@ async def _aggregator_loop(stop_event: asyncio.Event):
     if not getattr(settings, "USAGE_LOG_ENABLED", False):
         logger.info("Usage aggregator disabled (USAGE_LOG_ENABLED is false)")
         return
-    interval_minutes = 60  # simple default interval
-    logger.info("Starting usage aggregator task (interval: %s min)", interval_minutes)
+    interval_minutes = int(getattr(settings, "USAGE_AGGREGATOR_INTERVAL_MINUTES", 60) or 60)
+    logger.info(f"Starting usage aggregator task (interval: {interval_minutes} min)")
     try:
         while not stop_event.is_set():
             await aggregate_usage_daily()
@@ -111,4 +111,3 @@ async def stop_usage_aggregator(task: Optional[asyncio.Task]) -> None:
         task.cancel()
     except Exception:
         pass
-

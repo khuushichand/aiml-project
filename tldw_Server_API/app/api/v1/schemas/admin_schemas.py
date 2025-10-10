@@ -5,6 +5,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from datetime import date
 
 #######################################################################################################################
 #
@@ -186,6 +187,49 @@ class BatchOperationResponse(BaseModel):
     failed_ids: List[int] = []
     message: str
     
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Usage Reporting Schemas
+
+class UsageDailyRow(BaseModel):
+    """Single usage_daily record."""
+    user_id: int
+    day: date | str
+    requests: int
+    errors: int
+    bytes_total: int
+    latency_avg_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageDailyResponse(BaseModel):
+    """Response for daily usage query."""
+    items: List[UsageDailyRow]
+    total: int
+    page: int
+    limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageTopRow(BaseModel):
+    """Aggregated usage by user for a date range."""
+    user_id: int
+    requests: int
+    errors: int
+    bytes_total: int
+    latency_avg_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageTopResponse(BaseModel):
+    items: List[UsageTopRow]
+
     model_config = ConfigDict(from_attributes=True)
 
 

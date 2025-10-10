@@ -181,6 +181,7 @@ async def unified_rag_pipeline(
     
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
+    fts_level: Literal["media", "chunk"] = "media",
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
     auto_temporal_filters: bool = False,
@@ -648,13 +649,18 @@ async def unified_rag_pipeline(
                     if character_db_path:
                         db_paths["character_cards_db"] = character_db_path
                     
-                    # Initialize retriever; pass media_db if supported (tests patch constructor)
-                    retriever = MultiDatabaseRetriever(
-                        db_paths,
-                        user_id=user_id or "0",
-                        media_db=media_db,
-                        chacha_db=chacha_db
-                    )
+                    # Initialize retriever (minimal signature). Tests may patch this constructor.
+                    try:
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=user_id or "0",
+                            media_db=media_db,
+                        )
+                    except TypeError:
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=user_id or "0",
+                        )
 
                     # Configure retrieval
                     config = RetrievalConfig(
@@ -662,7 +668,8 @@ async def unified_rag_pipeline(
                         min_score=min_score,
                         use_fts=(search_mode in ["fts", "hybrid"]),
                         use_vector=(search_mode in ["vector", "hybrid"]),
-                        include_metadata=True
+                        include_metadata=True,
+                        fts_level=fts_level
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):

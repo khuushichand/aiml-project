@@ -8,7 +8,7 @@ including media database, notes, prompts, and character cards.
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Sequence
+from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Sequence, Literal
 from dataclasses import dataclass, field
 from enum import Enum
 import sqlite3
@@ -42,6 +42,8 @@ class RetrievalConfig:
     date_filter: Optional[Tuple[datetime, datetime]] = None
     tags_filter: Optional[List[str]] = None
     source_filter: Optional[List[str]] = None
+    # FTS search level: media-level (default) or chunk-level (UnvectorizedMediaChunks)
+    fts_level: Literal['media', 'chunk'] = 'media'
 
 
 class BaseRetriever(ABC):
@@ -160,10 +162,39 @@ class MediaDBRetriever(BaseRetriever):
     ) -> None:
         """Initialize MediaDBRetriever with optional vector store."""
         super().__init__(db_path, config, db_adapter=media_db)
-        self.media_db = media_db
+        # Prefer an explicit adapter, otherwise try to attach the canonical MediaDatabase
+        attached = None
+        own = False
+        if media_db is None:
+            attached = self._maybe_attach_media_db(db_path)
+            own = attached is not None
+        self.media_db = media_db or attached
+        self._own_media_db = own
         self.user_id = user_id
         self.vector_store = None
         self._initialize_vector_store()
+
+    def _maybe_attach_media_db(self, db_path: Optional[str]):
+        """Best-effort: attach MediaDatabase adapter if path points to a Media_DB_v2 file.
+
+        This enables robust retrieval in tests/CI where only the sqlite path is provided.
+        """
+        if not db_path:
+            return None
+        try:
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
+            return MediaDatabase(db_path=db_path, client_id="rag_service")
+        except Exception:
+            return None
+
+    def close(self):
+        try:
+            if self._own_media_db and self.media_db is not None:
+                close_fn = getattr(self.media_db, 'close_connection', None)
+                if callable(close_fn):
+                    close_fn()
+        except Exception:
+            pass
     
     def _initialize_vector_store(self):
         """Initialize vector store adapter if configured."""
@@ -188,6 +219,13 @@ class MediaDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """Retrieve documents from the media database."""
         if self.media_db is not None:
+            # Branch on FTS level when FTS search is enabled
+            try:
+                if self.config.use_fts and getattr(self.config, 'fts_level', 'media') == 'chunk':
+                    return self._retrieve_chunk_fts(query, media_type)
+            except Exception:
+                # Fall back gracefully to media-level
+                pass
             return self._retrieve_via_backend(query, media_type)
 
         documents = []
@@ -252,6 +290,118 @@ class MediaDBRetriever(BaseRetriever):
         logger.debug(f"Retrieved {len(documents)} documents from Media_DB")
         
         return documents
+
+    def _retrieve_chunk_fts(self, query: str, media_type: Optional[str]) -> List[Document]:
+        """Retrieve chunk-level matches using FTS5 over UnvectorizedMediaChunks.
+
+        Requires SQLite backend. Creates the virtual table on demand (no-op if exists).
+        """
+        if self.media_db is None:
+            return []
+
+        # Ensure FTS virtual table exists; rebuild if empty to prime content
+        try:
+            ensure = getattr(self.media_db, 'ensure_chunk_fts', None)
+            if callable(ensure):
+                self.media_db.ensure_chunk_fts()
+            # Optionally prime FTS if empty (cheap count)
+            check = getattr(self.media_db, 'maybe_rebuild_chunk_fts_if_empty', None)
+            if callable(check):
+                self.media_db.maybe_rebuild_chunk_fts_if_empty()
+        except Exception as exc:
+            logger.debug(f"Chunk FTS ensure/rebuild skipped: {exc}")
+
+        # Build FTS query and SQL
+        fts_query = self._build_fts_query(query)
+
+        sql = """
+            SELECT 
+                u.uuid AS chunk_uuid,
+                u.id   AS chunk_rowid,
+                u.media_id,
+                u.chunk_text,
+                u.start_char,
+                u.end_char,
+                u.chunk_type,
+                u.chunk_index,
+                m.title,
+                m.type AS media_type,
+                m.url,
+                bm25(unvectorized_chunks_fts) AS rank
+            FROM unvectorized_chunks_fts
+            JOIN UnvectorizedMediaChunks u ON unvectorized_chunks_fts.rowid = u.id
+            JOIN Media m ON u.media_id = m.id
+            WHERE unvectorized_chunks_fts MATCH ?
+              AND m.deleted = 0 AND m.is_trash = 0 AND u.deleted = 0
+        """
+        params: List[Any] = [fts_query]
+        if media_type:
+            sql += " AND m.type = ?"
+            params.append(media_type)
+
+        # Optional date filter against Media.ingestion_date
+        if self.config.date_filter:
+            start_date, end_date = self.config.date_filter
+            sql += " AND m.ingestion_date BETWEEN ? AND ?"
+            params.extend([start_date.isoformat(), end_date.isoformat()])
+
+        sql += " ORDER BY rank DESC LIMIT ?"
+        params.append(self.config.max_results)
+
+        try:
+            rows = self.media_db.execute_query(sql, tuple(params)).fetchall()  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Chunk FTS query failed: {exc}")
+            return []
+
+        docs: List[Document] = []
+        min_score = float(self.config.min_score or 0.0)
+        for row in rows or []:
+            try:
+                raw_rank = row.get('rank') if isinstance(row, dict) else row["rank"]
+            except Exception:
+                raw_rank = 0.0
+            try:
+                score_val = float(raw_rank) if raw_rank is not None else 0.0
+            except (TypeError, ValueError):
+                score_val = 0.0
+            # SQLite bm25 often returns lower (more negative) for better matches
+            if score_val < 0:
+                score_val = -score_val
+            if score_val < min_score:
+                continue
+
+            md: Dict[str, Any] = {}
+            if self.config.include_metadata:
+                md = {
+                    'title': (row.get('title') if isinstance(row, dict) else None),
+                    'media_type': (row.get('media_type') if isinstance(row, dict) else None),
+                    'url': (row.get('url') if isinstance(row, dict) else None),
+                    'media_id': str(row.get('media_id') if isinstance(row, dict) else None),
+                    'chunk_type': (row.get('chunk_type') if isinstance(row, dict) else None),
+                    'chunk_index': int(row.get('chunk_index') or 0) if isinstance(row, dict) else 0,
+                    'start_char': row.get('start_char') if isinstance(row, dict) else None,
+                    'end_char': row.get('end_char') if isinstance(row, dict) else None,
+                    'source': 'media_db',
+                }
+
+            chunk_uuid = str(row.get('chunk_uuid')) if isinstance(row, dict) else str(row["chunk_uuid"])  # type: ignore[index]
+            content_text = (row.get('chunk_text') if isinstance(row, dict) else row["chunk_text"]) or ""
+
+            docs.append(
+                Document(
+                    id=chunk_uuid,
+                    content=content_text,
+                    source=DataSource.MEDIA_DB,
+                    metadata=md,
+                    score=score_val,
+                    start_char=md.get('start_char'),
+                    end_char=md.get('end_char'),
+                    chunk_index=md.get('chunk_index'),
+                )
+            )
+
+        return docs
 
     def _retrieve_via_backend(self, query: str, media_type: Optional[str]) -> List[Document]:
         if self.media_db is None:
@@ -1037,7 +1187,7 @@ class CharacterCardsRetriever(BaseRetriever):
 class MultiDatabaseRetriever:
     """Orchestrates retrieval across multiple databases."""
 
-    def __init__(self, db_paths: Dict[str, str], user_id: str = "0"):
+    def __init__(self, db_paths: Dict[str, str], user_id: str = "0", *, media_db: Optional[Any] = None):
         """
         Initialize multi-database retriever.
 
@@ -1050,7 +1200,7 @@ class MultiDatabaseRetriever:
         # Initialize retrievers for available databases
         if "media_db" in db_paths:
             self.retrievers[DataSource.MEDIA_DB] = MediaDBRetriever(
-                db_paths["media_db"], user_id=user_id
+                db_paths["media_db"], user_id=user_id, media_db=media_db
             )
 
         if "notes_db" in db_paths:
@@ -1073,6 +1223,36 @@ class MultiDatabaseRetriever:
                 self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
             except Exception as e:
                 logger.debug(f"ClaimsRetriever init skipped: {e}")
+
+    # Resource management
+    def close(self) -> None:
+        try:
+            for retr in list(self.retrievers.values()):
+                close_fn = getattr(retr, "close", None)
+                if callable(close_fn):
+                    try:
+                        close_fn()
+                    except Exception:
+                        pass
+        finally:
+            self.retrievers.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.close()
+        except Exception:
+            pass
+        # Do not suppress exceptions
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     async def retrieve(
         self,
@@ -1287,7 +1467,31 @@ class ClaimsRetriever(BaseRetriever):
         media_db: Optional['MediaDatabase'] = None
     ) -> None:
         super().__init__(db_path, config, db_adapter=media_db)
-        self.media_db = media_db
+        attached = None
+        own = False
+        if media_db is None:
+            attached = self._maybe_attach_media_db(db_path)
+            own = attached is not None
+        self.media_db = media_db or attached
+        self._own_media_db = own
+
+    def _maybe_attach_media_db(self, db_path: Optional[str]):
+        if not db_path:
+            return None
+        try:
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
+            return MediaDatabase(db_path=db_path, client_id="rag_service")
+        except Exception:
+            return None
+
+    def close(self):
+        try:
+            if self._own_media_db and self.media_db is not None:
+                close_fn = getattr(self.media_db, 'close_connection', None)
+                if callable(close_fn):
+                    close_fn()
+        except Exception:
+            pass
 
     async def retrieve(self, query: str, **kwargs) -> List[Document]:
         if self.media_db is not None:

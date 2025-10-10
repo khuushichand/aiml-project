@@ -183,25 +183,29 @@ class SQLiteBackend(DatabaseBackend):
     
     @contextmanager
     def transaction(self, connection: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.Connection, None, None]:
-        """SQLite transaction context manager."""
+        """SQLite transaction context manager.
+
+        Uses explicit BEGIN/COMMIT/ROLLBACK and guards with in_transaction to
+        avoid errors when statements (e.g., executescript) implicitly end a txn.
+        """
         if connection:
-            # Use existing connection
             conn = connection
-            owns_connection = False
         else:
-            # Get connection from pool
             conn = self.get_pool().get_connection()
-            owns_connection = False  # Pool manages connection
-        
+
         try:
-            # Begin transaction
-            conn.execute("BEGIN")
+            if not getattr(conn, "in_transaction", False):
+                conn.execute("BEGIN")
             yield conn
-            # Commit on success
-            conn.execute("COMMIT")
+            if getattr(conn, "in_transaction", False):
+                conn.execute("COMMIT")
         except Exception as e:
-            # Rollback on error
-            conn.execute("ROLLBACK")
+            if getattr(conn, "in_transaction", False):
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    # Best effort; ignore if no active transaction
+                    pass
             logger.error(f"Transaction failed: {e}")
             raise
     

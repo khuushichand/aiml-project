@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 # Import the enhanced service
 from tldw_Server_API.app.services.enhanced_web_scraping_service import (
@@ -218,6 +219,38 @@ async def process_web_scraping_task(
                         }
                         safe_metadata_json = json.dumps({k: v for k, v in safe_meta.items() if v is not None}, ensure_ascii=False)
 
+                        # Build plaintext chunks for FTS-first retrieval
+                        try:
+                            ck = Chunker()
+                            flat = ck.chunk_text_hierarchical_flat(content_text, method=chunk_method or 'sentences', max_size=chunk_size, overlap=chunk_overlap)
+                            kind_map = {
+                                'paragraph': 'text',
+                                'list_unordered': 'list',
+                                'list_ordered': 'list',
+                                'code_fence': 'code',
+                                'table_md': 'table',
+                                'header_line': 'heading',
+                                'header_atx': 'heading',
+                            }
+                            chunks_for_sql = []
+                            for it in flat:
+                                md = it.get('metadata') or {}
+                                ctype = kind_map.get(str(md.get('paragraph_kind') or '').lower(), 'text')
+                                small = {}
+                                if md.get('ancestry_titles'):
+                                    small['ancestry_titles'] = md.get('ancestry_titles')
+                                if md.get('section_path'):
+                                    small['section_path'] = md.get('section_path')
+                                chunks_for_sql.append({
+                                    'text': it.get('text',''),
+                                    'start_char': md.get('start_offset'),
+                                    'end_char': md.get('end_offset'),
+                                    'chunk_type': ctype,
+                                    'metadata': small,
+                                })
+                        except Exception:
+                            chunks_for_sql = []
+
                         media_id, media_uuid, message = db.add_media_with_keywords(
                             url=article.get("url", ""),
                             title=article.get("title", "Untitled"),
@@ -230,7 +263,8 @@ async def process_web_scraping_task(
                             transcription_model="web-scraping-import",
                             author=article.get("author", None),
                             ingestion_date=None,
-                            overwrite=False
+                            overwrite=False,
+                            chunks=chunks_for_sql
                         )
                         if media_id:
                             media_ids.append(media_id)

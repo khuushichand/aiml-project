@@ -17,12 +17,17 @@ try:
     _DEF_PARENT_MAX_TOK = int(_ctx_defaults.get("parent_max_tokens", 1200))
     _DEF_INC_SIB = bool(_ctx_defaults.get("include_sibling_chunks", False))
     _DEF_ENH_CHUNK = bool(_ctx_defaults.get("enable_enhanced_chunking", False))
+    # Default FTS level for RAG: 'media' or 'chunk'
+    _DEF_FTS_LVL = str(_settings.get("RAG_DEFAULT_FTS_LEVEL", "media")).lower()
+    if _DEF_FTS_LVL not in ("media", "chunk"):
+        _DEF_FTS_LVL = "media"
 except Exception:
     _DEF_SIB_WIN = 1
     _DEF_INC_PARENT = False
     _DEF_PARENT_MAX_TOK = 1200
     _DEF_INC_SIB = False
     _DEF_ENH_CHUNK = False
+    _DEF_FTS_LVL = "media"
 
 
 class UnifiedRAGRequest(BaseModel):
@@ -70,6 +75,13 @@ class UnifiedRAGRequest(BaseModel):
         default="hybrid",
         description="Search mode: fts (full-text), vector (semantic), or hybrid",
         example="hybrid"
+    )
+    
+    # FTS granularity: media-level (Media.title/content) or chunk-level (UnvectorizedMediaChunks)
+    fts_level: Literal["media", "chunk"] = Field(
+        default=_DEF_FTS_LVL,
+        description="FTS granularity: 'media' searches Media FTS; 'chunk' searches plaintext chunks",
+        example="chunk"
     )
     
     hybrid_alpha: float = Field(

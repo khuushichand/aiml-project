@@ -1,4 +1,5 @@
 import os
+import pytest
 import uuid
 import hmac
 import hashlib
@@ -6,6 +7,10 @@ import asyncio
 
 import asyncpg
 from fastapi.testclient import TestClient
+
+# Skip this module unless explicitly enabled (requires Postgres + network)
+RUN_PG_INTEGRATION = os.getenv("RUN_PG_INTEGRATION", "0").lower() in {"1", "true", "yes"}
+pytestmark = pytest.mark.skipif(not RUN_PG_INTEGRATION, reason="Postgres integration tests disabled (set RUN_PG_INTEGRATION=1 to enable)")
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -20,7 +25,8 @@ def test_media_add_requires_media_create(isolated_test_environment):
     client, db_name = isolated_test_environment
     # Prepare: create a user without roles and an active API key for that user
     dsn = os.environ.get("DATABASE_URL")
-    assert dsn and dsn.startswith("postgresql"), "DATABASE_URL must be set for multi-user tests"
+    if not dsn or not dsn.startswith("postgresql"):
+        pytest.skip("PostgreSQL DATABASE_URL not configured; skipping integration test")
 
     async def _setup_user_and_key():
         conn = await asyncpg.connect(dsn)
@@ -65,4 +71,3 @@ def test_media_add_requires_media_create(isolated_test_environment):
     headers = {"X-API-KEY": api_key}
     r = client.post("/api/v1/media/add", headers=headers, json={})
     assert r.status_code == 403, r.text
-

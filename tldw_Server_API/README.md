@@ -68,6 +68,11 @@ See `app/main.py` for router includes and full route namespaces.
 ## Providers and Configuration
 
 - Central provider configuration lives in `Config_Files/config.txt` (plus `.env`).
+- RAG defaults can be tuned via env or config file. In particular, you can set the default FTS granularity for retrieval:
+  - Environment (highest precedence): `RAG_DEFAULT_FTS_LEVEL=media|chunk`
+  - Config file: `tldw_Server_API/Config_Files/config.txt`
+    - Under `[RAG]`: `default_fts_level = media` (or `chunk`)
+  - Requests can still override with `fts_level` in the unified RAG API payload.
 - The `GET /api/v1/llm/providers` endpoint reflects configured providers and models.
 - Chat request validation is in `app/api/v1/schemas/chat_request_schemas.py` and related modules.
 

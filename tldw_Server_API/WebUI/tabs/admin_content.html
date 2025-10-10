@@ -626,6 +626,180 @@
     </div>
 </div>
 
+    <!-- Usage Reporting Section -->
+    <div class="endpoint-section" id="adminUsageReports">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/admin/usage/* - Usage Reports</span>
+        </h2>
+        <p>View aggregated usage (per-day) by user. Requires usage logging to be enabled.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="usage_userId">User ID (optional):</label>
+                    <input type="number" id="usage_userId" placeholder="e.g., 1" />
+                </div>
+                <div class="form-group">
+                    <label for="usage_start">Start (YYYY-MM-DD):</label>
+                    <input type="text" id="usage_start" placeholder="2025-01-01" />
+                </div>
+                <div class="form-group">
+                    <label for="usage_end">End (YYYY-MM-DD):</label>
+                    <input type="text" id="usage_end" placeholder="2025-01-31" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="usage_page">Page:</label>
+                    <input type="number" id="usage_page" value="1" min="1" />
+                </div>
+                <div class="form-group">
+                    <label for="usage_limit">Limit:</label>
+                    <input type="number" id="usage_limit" value="50" min="1" max="500" />
+                </div>
+                <div class="form-group">
+                    <label for="usage_top_limit">Top limit:</label>
+                    <input type="number" id="usage_top_limit" value="10" min="1" max="100" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="adminLoadUsageDaily()">Load Daily</button>
+            <button class="api-button" onclick="adminLoadUsageTop()">Top Users</button>
+        </div>
+
+        <h3>Daily Usage</h3>
+        <pre id="adminUsageDaily_raw" style="display:none">---</pre>
+        <div id="adminUsageDaily_table"></div>
+
+        <h3>Top Users</h3>
+        <pre id="adminUsageTop_raw" style="display:none">---</pre>
+        <div id="adminUsageTop_table"></div>
+
+        <hr />
+        <h3>Manual Aggregate Day</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="usage_agg_day">Day (YYYY-MM-DD):</label>
+                    <input type="text" id="usage_agg_day" placeholder="2025-01-15" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="btn-group" style="margin-top: 20px;">
+                    <button class="api-button" onclick="adminRunUsageAggregate()">Aggregate</button>
+                </div>
+            </div>
+        </div>
+        <pre id="adminUsageAgg_result">---</pre>
+
+        <script>
+            function _usageQS() {
+                const params = new URLSearchParams();
+                const uid = parseInt(document.getElementById('usage_userId').value || '');
+                const start = document.getElementById('usage_start').value.trim();
+                const end = document.getElementById('usage_end').value.trim();
+                const page = parseInt(document.getElementById('usage_page').value || '1', 10);
+                const limit = parseInt(document.getElementById('usage_limit').value || '50', 10);
+                if (!isNaN(uid)) params.set('user_id', String(uid));
+                if (start) params.set('start', start);
+                if (end) params.set('end', end);
+                if (page) params.set('page', String(page));
+                if (limit) params.set('limit', String(limit));
+                return params.toString();
+            }
+
+            function _renderDailyTable(items) {
+                if (!Array.isArray(items) || items.length === 0) {
+                    return '<p>No data.</p>';
+                }
+                let html = '<table class="simple-table"><thead><tr>' +
+                    '<th>User ID</th><th>Day</th><th>Requests</th><th>Errors</th><th>Bytes</th><th>Avg Latency (ms)</th>' +
+                    '</tr></thead><tbody>';
+                for (const r of items) {
+                    html += `<tr>
+                        <td>${r.user_id}</td>
+                        <td>${r.day}</td>
+                        <td>${r.requests}</td>
+                        <td>${r.errors}</td>
+                        <td>${r.bytes_total}</td>
+                        <td>${r.latency_avg_ms ?? ''}</td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                return html;
+            }
+
+            function _renderTopTable(items) {
+                if (!Array.isArray(items) || items.length === 0) {
+                    return '<p>No data.</p>';
+                }
+                let html = '<table class="simple-table"><thead><tr>' +
+                    '<th>User ID</th><th>Requests</th><th>Errors</th><th>Bytes</th><th>Avg Latency (ms)</th>' +
+                    '</tr></thead><tbody>';
+                for (const r of items) {
+                    html += `<tr>
+                        <td>${r.user_id}</td>
+                        <td>${r.requests}</td>
+                        <td>${r.errors}</td>
+                        <td>${r.bytes_total}</td>
+                        <td>${r.latency_avg_ms ?? ''}</td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                return html;
+            }
+
+            async function adminLoadUsageDaily() {
+                try {
+                    const qs = _usageQS();
+                    const res = await apiClient.get(`/api/v1/admin/usage/daily?${qs}`);
+                    document.getElementById('adminUsageDaily_raw').textContent = JSON.stringify(res, null, 2);
+                    document.getElementById('adminUsageDaily_table').innerHTML = _renderDailyTable(res.items || []);
+                    Toast.success('Loaded daily usage');
+                } catch (e) {
+                    document.getElementById('adminUsageDaily_table').innerHTML = '';
+                    Toast.error('Failed to load daily usage');
+                }
+            }
+
+            async function adminLoadUsageTop() {
+                try {
+                    const params = new URLSearchParams();
+                    const start = document.getElementById('usage_start').value.trim();
+                    const end = document.getElementById('usage_end').value.trim();
+                    const topLimit = parseInt(document.getElementById('usage_top_limit').value || '10', 10);
+                    if (start) params.set('start', start);
+                    if (end) params.set('end', end);
+                    if (topLimit) params.set('limit', String(topLimit));
+                    const res = await apiClient.get(`/api/v1/admin/usage/top?${params.toString()}`);
+                    document.getElementById('adminUsageTop_raw').textContent = JSON.stringify(res, null, 2);
+                    document.getElementById('adminUsageTop_table').innerHTML = _renderTopTable(res.items || []);
+                    Toast.success('Loaded top users');
+                } catch (e) {
+                    document.getElementById('adminUsageTop_table').innerHTML = '';
+                    Toast.error('Failed to load top users');
+                }
+            }
+
+            async function adminRunUsageAggregate() {
+                try {
+                    const day = document.getElementById('usage_agg_day').value.trim();
+                    const qs = day ? `?day=${encodeURIComponent(day)}` : '';
+                    const res = await apiClient.post(`/api/v1/admin/usage/aggregate${qs}`, {});
+                    document.getElementById('adminUsageAgg_result').textContent = JSON.stringify(res, null, 2);
+                    Toast.success('Aggregation requested');
+                } catch (e) {
+                    document.getElementById('adminUsageAgg_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to run aggregation');
+                }
+            }
+        </script>
+    </div>
+</div>
+
 <!-- Access Control (RBAC) Tab -->
 <div id="tabAccessControl" class="tab-content">
     <div class="endpoint-section">
@@ -785,6 +959,712 @@
             const uid = _rbacUserId();
             const res = await apiClient.get(`/api/v1/admin/users/${uid}/effective-permissions`);
             document.getElementById('rbacUserEffPermsOut').textContent = JSON.stringify(res, null, 2);
+        }
+    </script>
+
+    <div class="endpoint-section" id="adminRbacMatrix">
+        <h3>RBAC Matrix</h3>
+        <p>Inspect role-to-permission assignments in a single view.</p>
+
+        <style>
+            .rbac-sticky-left { position: sticky; left: 0; background: var(--panel-bg, #111); z-index: 2; }
+            .rbac-sticky-left.header { z-index: 3; }
+            .small-table th, .small-table td { white-space: nowrap; }
+            .scroll-x { overflow-x: auto; }
+            .scroll-y { overflow-y: auto; }
+            .spinner {
+                width: 36px; height: 36px; border: 4px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.8);
+                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 8px auto;
+            }
+            @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
+
+        <div class="columns" style="margin-bottom:8px;">
+            <div class="column">
+                <label for="rbacMatrixCategory">Category:</label>
+                <select id="rbacMatrixCategory" onchange="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div class="column">
+                <label for="rbacVisibleCats">Visible Categories (client-side):</label>
+                <select id="rbacVisibleCats" multiple size="4" style="min-width: 160px;" onchange="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean(); _saveRbacFilterState()}"></select>
+            </div>
+            <div class="column">
+                <label for="rbacMatrixSearch">Search:</label>
+                <input type="text" id="rbacMatrixSearch" placeholder="filter permissions by name (substring)" oninput="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}" />
+            </div>
+            <div class="column">
+                <label for="rbacMatrixPinned">Pin columns (prefix list):</label>
+                <input type="text" id="rbacMatrixPinned" placeholder="e.g. media., users.read" oninput="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}" />
+            </div>
+            <div class="column">
+                <label for="rbacRoleNames">Role names (exact):</label>
+                <select id="rbacRoleNames" multiple size="4" style="min-width: 180px;"></select>
+                <div class="btn-group" style="margin-top:6px;">
+                    <button class="api-button" onclick="rbacSelectAllRoleNames()">Select All</button>
+                    <button class="api-button" onclick="rbacClearRoleNames()">Clear</button>
+                </div>
+            </div>
+            <div class="column">
+                <label for="rbacRoleSearch">Role search:</label>
+                <input type="text" id="rbacRoleSearch" placeholder="filter roles by name (substring)" />
+            </div>
+            <div class="column">
+                <label for="rbacRolesLimit">Roles limit:</label>
+                <input type="number" id="rbacRolesLimit" value="100" min="1" max="1000" />
+            </div>
+            <div class="column">
+                <label for="rbacRolesOffset">Roles offset:</label>
+                <input type="number" id="rbacRolesOffset" value="0" min="0" />
+            </div>
+        </div>
+
+        <div class="btn-group" style="margin-bottom:8px;">
+            <button class="api-button" onclick="loadRbacMatrixList()">Load Role→Permissions (list)</button>
+            <button class="api-button" onclick="loadRbacMatrixBoolean()">Load RBAC Matrix (boolean grid)</button>
+        </div>
+
+        <div class="columns" style="align-items:center; margin: 4px 0 12px 0;">
+            <div class="column">
+                <span id="rbacRolesInfo">Roles: –</span>
+                <span id="rbacRolesNote" style="opacity:0.75; margin-left:8px;"></span>
+            </div>
+            <div class="column">
+                <div class="btn-group" style="justify-content:flex-end;">
+                    <button class="api-button" id="rbacPrevBtn" onclick="rbacPrevPage()">Prev</button>
+                    <button class="api-button" id="rbacNextBtn" onclick="rbacNextPage()">Next</button>
+                    <button class="api-button" onclick="reloadRbacMatrices()">Reload</button>
+                    <button class="api-button" onclick="exportRbacMatrixCsv()">Export CSV</button>
+                    <button class="api-button" onclick="exportRbacListCsv()">Export List CSV</button>
+                    <button class="api-button" onclick="copyRbacSummary()">Copy Summary</button>
+                    <button class="api-button" onclick="clearRbacFilters()">Clear Filters</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <h4>Boolean Grid</h4>
+                <div id="rbacMatrixBoolean"></div>
+            </div>
+            <div class="column">
+                <h4>Per-Role Permissions</h4>
+                <div id="rbacMatrixList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const RBAC_CACHE = { list: null, boolean: null, categoriesLoaded: false };
+        const RBAC_META = { categories: [], permCategoryByName: {} };
+        function _escapeHtml(text) {
+            const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
+        }
+
+        async function loadRbacMatrixList() {
+            try {
+                await _ensurePermissionCategories();
+                await _ensureRolesList();
+                _setLoading('rbacMatrixList', true);
+                const { category, search } = _filters();
+                const qs = new URLSearchParams();
+                if (category) qs.set('category', category);
+                if (search) qs.set('search', search);
+                const roleSearch = (document.getElementById('rbacRoleSearch').value || '').trim();
+                const rolesLimit = parseInt(document.getElementById('rbacRolesLimit').value || '100', 10);
+                const rolesOffset = parseInt(document.getElementById('rbacRolesOffset').value || '0', 10);
+                if (roleSearch) qs.set('role_search', roleSearch);
+                if (!isNaN(rolesLimit)) qs.set('roles_limit', String(rolesLimit));
+                if (!isNaN(rolesOffset)) qs.set('roles_offset', String(rolesOffset));
+                const roleNamesSel = document.getElementById('rbacRoleNames');
+                const selectedNames = Array.from(roleNamesSel.selectedOptions || []).map(o => o.value);
+                for (const n of selectedNames) qs.append('role_names', n);
+                const path = qs.toString() ? `/api/v1/admin/roles/matrix?${qs.toString()}` : '/api/v1/admin/roles/matrix';
+                const data = await apiClient.get(path);
+                RBAC_CACHE.list = data;
+                _rebuildPermCategoryByName();
+                RBAC_CACHE.total_roles = typeof data.total_roles === 'number' ? data.total_roles : undefined;
+                renderRbacMatrixList();
+                _updateRbacRolesInfo(Array.isArray(data.roles) ? data.roles.length : 0);
+                _saveRbacFilterState();
+                Toast.success('Loaded RBAC role→permissions list');
+            } catch (e) {
+                document.getElementById('rbacMatrixList').innerHTML = `<pre>${_escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                Toast.error('Failed to load matrix');
+            }
+        }
+
+        async function loadRbacMatrixBoolean() {
+            try {
+                await _ensurePermissionCategories();
+                await _ensureRolesList();
+                _setLoading('rbacMatrixBoolean', true);
+                if (!RBAC_CACHE.list) {
+                    // Build category mapping for client-side visibility
+                    await loadRbacMatrixList();
+                }
+                const { category, search } = _filters();
+                const qs = new URLSearchParams();
+                if (category) qs.set('category', category);
+                if (search) qs.set('search', search);
+                const roleSearch = (document.getElementById('rbacRoleSearch').value || '').trim();
+                const rolesLimit = parseInt(document.getElementById('rbacRolesLimit').value || '100', 10);
+                const rolesOffset = parseInt(document.getElementById('rbacRolesOffset').value || '0', 10);
+                if (roleSearch) qs.set('role_search', roleSearch);
+                if (!isNaN(rolesLimit)) qs.set('roles_limit', String(rolesLimit));
+                if (!isNaN(rolesOffset)) qs.set('roles_offset', String(rolesOffset));
+                const roleNamesSel = document.getElementById('rbacRoleNames');
+                const selectedNames = Array.from(roleNamesSel.selectedOptions || []).map(o => o.value);
+                for (const n of selectedNames) qs.append('role_names', n);
+                const path = qs.toString() ? `/api/v1/admin/roles/matrix-boolean?${qs.toString()}` : '/api/v1/admin/roles/matrix-boolean';
+                const data = await apiClient.get(path);
+                RBAC_CACHE.boolean = data;
+                RBAC_CACHE.total_roles = typeof data.total_roles === 'number' ? data.total_roles : RBAC_CACHE.total_roles;
+                renderRbacMatrixBoolean();
+                _updateRbacRolesInfo(Array.isArray(data.roles) ? data.roles.length : 0);
+                _saveRbacFilterState();
+                Toast.success('Loaded RBAC boolean matrix');
+            } catch (e) {
+                document.getElementById('rbacMatrixBoolean').innerHTML = `<pre>${_escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                Toast.error('Failed to load boolean matrix');
+            }
+        }
+
+        function reloadRbacMatrices() {
+            // Reload both views with current filter + pagination
+            loadRbacMatrixList();
+            loadRbacMatrixBoolean();
+        }
+
+        function _rebuildPermCategoryByName() {
+            try {
+                const list = RBAC_CACHE.list;
+                const perms = (list && Array.isArray(list.permissions)) ? list.permissions : [];
+                const map = {};
+                for (const p of perms) {
+                    if (!p || !p.name) continue;
+                    map[p.name] = p.category || '';
+                }
+                RBAC_META.permCategoryByName = map;
+            } catch (_) { /* ignore */ }
+        }
+
+        function rbacSelectAllRoleNames() {
+            try {
+                const sel = document.getElementById('rbacRoleNames');
+                for (const opt of Array.from(sel.options || [])) opt.selected = true;
+                _saveRbacFilterState();
+                reloadRbacMatrices();
+            } catch (_) { /* ignore */ }
+        }
+
+        function rbacClearRoleNames() {
+            try {
+                const sel = document.getElementById('rbacRoleNames');
+                for (const opt of Array.from(sel.options || [])) opt.selected = false;
+                _saveRbacFilterState();
+                reloadRbacMatrices();
+            } catch (_) { /* ignore */ }
+        }
+
+        function _getRolesLimitOffset() {
+            const limit = parseInt(document.getElementById('rbacRolesLimit').value || '100', 10);
+            const offset = parseInt(document.getElementById('rbacRolesOffset').value || '0', 10);
+            return { limit: isNaN(limit) ? 100 : limit, offset: isNaN(offset) ? 0 : offset };
+        }
+
+        function _setRolesOffset(newOffset) {
+            if (newOffset < 0) newOffset = 0;
+            document.getElementById('rbacRolesOffset').value = String(newOffset);
+        }
+
+        function _updateRbacRolesInfo(rolesReturned) {
+            const info = document.getElementById('rbacRolesInfo');
+            const note = document.getElementById('rbacRolesNote');
+            const total = RBAC_CACHE.total_roles || 0;
+            const { limit, offset } = _getRolesLimitOffset();
+            const start = total ? Math.min(total, offset + 1) : (offset + 1);
+            const end = total ? Math.min(total, offset + rolesReturned) : (offset + rolesReturned);
+            const text = total ? `Roles: ${start}–${end} of ${total}` : `Roles: ${start}–${end}`;
+            info.textContent = text;
+            // Update pager disabled states
+            const prevBtn = document.getElementById('rbacPrevBtn');
+            const nextBtn = document.getElementById('rbacNextBtn');
+            if (prevBtn) prevBtn.disabled = offset <= 0;
+            if (nextBtn) nextBtn.disabled = (total && offset + rolesReturned >= total) || rolesReturned === 0;
+            if (note) {
+                if (total && end < total) {
+                    if (offset === 0) note.textContent = `Showing first ${end} of ${total}. Use Next to see more.`;
+                    else note.textContent = `More roles available. Use pager to navigate.`;
+                } else {
+                    note.textContent = '';
+                }
+            }
+        }
+
+        function rbacPrevPage() {
+            const { limit, offset } = _getRolesLimitOffset();
+            const newOffset = Math.max(0, offset - limit);
+            _setRolesOffset(newOffset);
+            reloadRbacMatrices();
+        }
+
+        function rbacNextPage() {
+            const { limit, offset } = _getRolesLimitOffset();
+            const total = RBAC_CACHE.total_roles || 0;
+            const newOffset = (total && offset + limit >= total) ? offset : offset + limit;
+            _setRolesOffset(newOffset);
+            reloadRbacMatrices();
+        }
+
+        function clearRbacFilters() {
+            try {
+                document.getElementById('rbacMatrixCategory').value = '';
+                document.getElementById('rbacMatrixSearch').value = '';
+                document.getElementById('rbacMatrixPinned').value = '';
+                document.getElementById('rbacRoleSearch').value = '';
+                document.getElementById('rbacRolesLimit').value = '100';
+                document.getElementById('rbacRolesOffset').value = '0';
+                const sel = document.getElementById('rbacRoleNames');
+                for (const opt of Array.from(sel.options || [])) opt.selected = false;
+                _saveRbacFilterState();
+                reloadRbacMatrices();
+            } catch (_) { /* ignore */ }
+        }
+
+        async function exportRbacMatrixCsv() {
+            try {
+                // Ensure boolean matrix is loaded for export
+                if (!RBAC_CACHE.boolean) {
+                    await loadRbacMatrixBoolean();
+                    if (!RBAC_CACHE.boolean) return;
+                }
+                const data = RBAC_CACHE.boolean;
+                const roles = Array.isArray(data.roles) ? data.roles : [];
+                if (!roles.length) {
+                    Toast.error('No roles to export');
+                    return;
+                }
+                // Apply same filtered/reordered permission names as current view
+                let permNames = Array.isArray(data.permission_names) ? data.permission_names.slice() : [];
+                const { category, search, pinned } = _filters();
+                if (category && window.RBAC_META && RBAC_META.categories) {
+                    // We don't have category-by-name map now; rely on server-side filtering having removed unmatching perms
+                }
+                if (search) {
+                    const s = search.toLowerCase();
+                    permNames = permNames.filter(n => n.toLowerCase().includes(s));
+                }
+                if (pinned && pinned.length) {
+                    const isPinned = (name) => pinned.some(p => name.startsWith(p));
+                    const left = permNames.filter(isPinned);
+                    const right = permNames.filter(n => !isPinned(n));
+                    permNames = [...left, ...right];
+                }
+                const matrix = Array.isArray(data.matrix) ? data.matrix : [];
+                const originalNames = Array.isArray(data.permission_names) ? data.permission_names : [];
+                const nameToIndex = new Map();
+                for (let i = 0; i < originalNames.length; i++) nameToIndex.set(originalNames[i], i);
+
+                const csvEscape = (v) => '"' + String(v).replace(/"/g, '""') + '"';
+                let csv = '';
+                // Header
+                csv += [csvEscape('Role \\ Permission'), ...permNames.map(csvEscape)].join(',') + '\n';
+                // Rows
+                for (let r = 0; r < roles.length; r++) {
+                    const role = roles[r];
+                    const fullRow = matrix[r] || [];
+                    const cells = [csvEscape(role.name || '')];
+                    for (const pn of permNames) {
+                        const idx = nameToIndex.get(pn);
+                        const v = idx != null ? !!fullRow[idx] : false;
+                        cells.push(v ? '1' : '0');
+                    }
+                    csv += cells.join(',') + '\n';
+                }
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'rbac_matrix.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                Toast.success('Matrix CSV downloaded');
+            } catch (e) {
+                console.error(e);
+                Toast.error('Failed to export CSV');
+            }
+        }
+
+        async function exportRbacListCsv() {
+            try {
+                // Ensure list is loaded
+                if (!RBAC_CACHE.list) {
+                    await loadRbacMatrixList();
+                    if (!RBAC_CACHE.list) return;
+                }
+                const data = RBAC_CACHE.list;
+                const roles = Array.isArray(data.roles) ? data.roles : [];
+                const perms = Array.isArray(data.permissions) ? data.permissions : [];
+                const grants = new Set((data.grants || []).map(g => `${g.role_id}:${g.permission_id}`));
+                if (!roles.length) {
+                    Toast.error('No roles to export');
+                    return;
+                }
+                // Build aggregated list
+                const permIdToName = {};
+                for (const p of perms) permIdToName[p.id] = p.name;
+                const csvEscape = (v) => '"' + String(v).replace(/"/g, '""') + '"';
+                let csv = '';
+                csv += [csvEscape('Role'), csvEscape('Permissions')].join(',') + '\n';
+                for (const role of roles) {
+                    const names = [];
+                    for (const p of perms) {
+                        if (grants.has(`${role.id}:${p.id}`)) names.push(permIdToName[p.id] || p.name);
+                    }
+                    csv += [csvEscape(role.name || ''), csvEscape(names.join('; '))].join(',') + '\n';
+                }
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'rbac_list.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                Toast.success('List CSV downloaded');
+            } catch (e) {
+                console.error(e);
+                Toast.error('Failed to export list CSV');
+            }
+        }
+
+        async function copyRbacSummary() {
+            try {
+                // Prefer list view for readable summary
+                if (!RBAC_CACHE.list) {
+                    await loadRbacMatrixList();
+                    if (!RBAC_CACHE.list) return;
+                }
+                const data = RBAC_CACHE.list;
+                const roles = Array.isArray(data.roles) ? data.roles : [];
+                const perms = Array.isArray(data.permissions) ? data.permissions : [];
+                const grants = new Set((data.grants || []).map(g => `${g.role_id}:${g.permission_id}`));
+                const permIdToName = {};
+                for (const p of perms) permIdToName[p.id] = p.name;
+                let text = '';
+                for (const role of roles) {
+                    const names = [];
+                    for (const p of perms) {
+                        if (grants.has(`${role.id}:${p.id}`)) names.push(permIdToName[p.id] || p.name);
+                    }
+                    text += `${role.name}: ${names.join(', ')}` + '\n';
+                }
+                await navigator.clipboard.writeText(text);
+                Toast.success('Summary copied to clipboard');
+            } catch (e) {
+                console.error(e);
+                Toast.error('Failed to copy summary');
+            }
+        }
+
+        function _setLoading(targetId, isLoading) {
+            try {
+                const target = document.getElementById(targetId);
+                if (!target) return;
+                if (isLoading) {
+                    target.innerHTML = '<div class="spinner" aria-label="Loading"></div>';
+                }
+            } catch (_) { /* ignore */ }
+        }
+
+        function rbacShowOnlyCategory() {
+            try {
+                const cat = (document.getElementById('rbacPinCategory').value || '').trim();
+                document.getElementById('rbacMatrixCategory').value = cat;
+                _saveRbacFilterState();
+                reloadRbacMatrices();
+            } catch (_) { /* ignore */ }
+        }
+
+        function rbacPinCategory() {
+            try {
+                const cat = (document.getElementById('rbacPinCategory').value || '').trim();
+                if (!cat) return;
+                const field = document.getElementById('rbacMatrixPinned');
+                const prefix = cat + '.';
+                const parts = (field.value || '').split(',').map(s => s.trim()).filter(Boolean);
+                if (!parts.includes(prefix)) parts.unshift(prefix);
+                field.value = parts.join(',');
+                _saveRbacFilterState();
+                if (RBAC_CACHE.boolean) renderRbacMatrixBoolean();
+            } catch (_) { /* ignore */ }
+        }
+
+        function rbacUnpinCategory() {
+            try {
+                const cat = (document.getElementById('rbacPinCategory').value || '').trim();
+                if (!cat) return;
+                const field = document.getElementById('rbacMatrixPinned');
+                const prefix = cat + '.';
+                const parts = (field.value || '').split(',').map(s => s.trim()).filter(Boolean);
+                const filtered = parts.filter(p => p !== prefix);
+                field.value = filtered.join(',');
+                _saveRbacFilterState();
+                if (RBAC_CACHE.boolean) renderRbacMatrixBoolean();
+            } catch (_) { /* ignore */ }
+        }
+
+        async function exportRbacGrantsJson() {
+            try {
+                await _ensurePermissionCategories();
+                const { category, search } = _filters();
+                const qs = new URLSearchParams();
+                if (category) qs.set('category', category);
+                if (search) qs.set('search', search);
+                const roleSearch = (document.getElementById('rbacRoleSearch').value || '').trim();
+                const rolesLimit = parseInt(document.getElementById('rbacRolesLimit').value || '100', 10);
+                const rolesOffset = parseInt(document.getElementById('rbacRolesOffset').value || '0', 10);
+                if (roleSearch) qs.set('role_search', roleSearch);
+                if (!isNaN(rolesLimit)) qs.set('roles_limit', String(rolesLimit));
+                if (!isNaN(rolesOffset)) qs.set('roles_offset', String(rolesOffset));
+                const roleNamesSel = document.getElementById('rbacRoleNames');
+                const selectedNames = Array.from(roleNamesSel.selectedOptions || []).map(o => o.value);
+                for (const n of selectedNames) qs.append('role_names', n);
+                const path = qs.toString() ? `/api/v1/admin/roles/matrix?${qs.toString()}` : '/api/v1/admin/roles/matrix';
+                const payload = await apiClient.get(path);
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'rbac_grants.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                Toast.success('Grants JSON downloaded');
+            } catch (e) {
+                console.error(e);
+                Toast.error('Failed to export grants JSON');
+            }
+        }
+
+        async function _ensureRolesList() {
+            try {
+                if (RBAC_CACHE.rolesLoaded) return;
+                const res = await apiClient.get('/api/v1/admin/roles');
+                const sel = document.getElementById('rbacRoleNames');
+                const current = new Set(Array.from(sel.selectedOptions || []).map(o => o.value));
+                let html = '';
+                for (const r of (res || [])) {
+                    const name = r.name || '';
+                    const selected = current.has(name) ? ' selected' : '';
+                    html += `<option value="${_escapeHtml(name)}"${selected}>${_escapeHtml(name)}</option>`;
+                }
+                sel.innerHTML = html;
+                RBAC_CACHE.rolesLoaded = true;
+                _applySavedRoleNamesSelection();
+            } catch (_) { /* ignore */ }
+        }
+
+        function _saveRbacFilterState() {
+            try {
+                const data = {
+                    category: document.getElementById('rbacMatrixCategory').value || '',
+                    search: document.getElementById('rbacMatrixSearch').value || '',
+                    pinned: document.getElementById('rbacMatrixPinned').value || '',
+                    roleSearch: document.getElementById('rbacRoleSearch').value || '',
+                    rolesLimit: document.getElementById('rbacRolesLimit').value || '100',
+                    rolesOffset: document.getElementById('rbacRolesOffset').value || '0',
+                    roleNames: Array.from((document.getElementById('rbacRoleNames').selectedOptions || [])).map(o => o.value),
+                    visibleCats: Array.from((document.getElementById('rbacVisibleCats').selectedOptions || [])).map(o => o.value),
+                };
+                localStorage.setItem('rbac_matrix_filters', JSON.stringify(data));
+            } catch (_) { /* ignore */ }
+        }
+
+        function _loadRbacFilterState() {
+            try {
+                const raw = localStorage.getItem('rbac_matrix_filters');
+                if (!raw) return null;
+                const data = JSON.parse(raw);
+                if (!data || typeof data !== 'object') return null;
+                document.getElementById('rbacMatrixCategory').value = data.category || '';
+                document.getElementById('rbacMatrixSearch').value = data.search || '';
+                document.getElementById('rbacMatrixPinned').value = data.pinned || '';
+                document.getElementById('rbacRoleSearch').value = data.roleSearch || '';
+                document.getElementById('rbacRolesLimit').value = data.rolesLimit || '100';
+                document.getElementById('rbacRolesOffset').value = data.rolesOffset || '0';
+                RBAC_CACHE.savedRoleNames = Array.isArray(data.roleNames) ? data.roleNames : [];
+                RBAC_CACHE.savedVisibleCats = Array.isArray(data.visibleCats) ? data.visibleCats : [];
+                return data;
+            } catch (_) { return null; }
+        }
+
+        function _applySavedRoleNamesSelection() {
+            try {
+                const saved = RBAC_CACHE.savedRoleNames || [];
+                if (!saved.length) return;
+                const sel = document.getElementById('rbacRoleNames');
+                const options = Array.from(sel.options || []);
+                for (const opt of options) opt.selected = saved.includes(opt.value);
+            } catch (_) { /* ignore */ }
+        }
+
+        function _applySavedVisibleCatsSelection() {
+            try {
+                const saved = RBAC_CACHE.savedVisibleCats || [];
+                if (!saved.length) return;
+                const sel = document.getElementById('rbacVisibleCats');
+                const options = Array.from(sel.options || []);
+                for (const opt of options) opt.selected = saved.includes(opt.value);
+            } catch (_) { /* ignore */ }
+        }
+
+        (function initRbacFilters() {
+            _loadRbacFilterState();
+            _ensurePermissionCategories();
+            _ensureRolesList();
+            try {
+                const ids = ['rbacMatrixCategory','rbacMatrixSearch','rbacMatrixPinned','rbacRoleSearch','rbacRolesLimit','rbacRolesOffset','rbacRoleNames'];
+                for (const id of ids) {
+                    const el = document.getElementById(id);
+                    if (!el) continue;
+                    const ev = (id === 'rbacRoleNames' || id === 'rbacMatrixCategory') ? 'change' : 'input';
+                    el.addEventListener(ev, () => _saveRbacFilterState());
+                }
+                const vis = document.getElementById('rbacVisibleCats');
+                if (vis) vis.addEventListener('change', () => _saveRbacFilterState());
+            } catch (_) { /* ignore */ }
+        })();
+
+        function _filters() {
+            const category = document.getElementById('rbacMatrixCategory').value || '';
+            const search = (document.getElementById('rbacMatrixSearch').value || '').trim();
+            const pinned = (document.getElementById('rbacMatrixPinned').value || '')
+                .split(',').map(s => s.trim()).filter(Boolean);
+            return { category, search, pinned };
+        }
+
+async function _ensurePermissionCategories() {
+            if (RBAC_CACHE.categoriesLoaded) return;
+            try {
+                const cats = await apiClient.get('/api/v1/admin/permissions/categories');
+                RBAC_META.categories = Array.isArray(cats) ? cats : [];
+            } catch (_) {
+                RBAC_META.categories = [];
+            }
+            const sel = document.getElementById('rbacMatrixCategory');
+            const current = sel.value;
+            let html = '<option value="">All</option>';
+            for (const c of RBAC_META.categories) html += `<option value="${_escapeHtml(c)}">${_escapeHtml(c)}</option>`;
+            sel.innerHTML = html;
+    if (RBAC_META.categories.includes(current)) sel.value = current;
+    RBAC_CACHE.categoriesLoaded = true;
+    // Also populate quick pin/unpin category select if present
+    try {
+        const pinSel = document.getElementById('rbacPinCategory');
+        if (pinSel) {
+            let ph = '';
+            for (const c of RBAC_META.categories) ph += `<option value="${_escapeHtml(c)}">${_escapeHtml(c)}</option>`;
+            pinSel.innerHTML = ph;
+        }
+    } catch (_) { /* ignore */ }
+}
+
+        function renderRbacMatrixBoolean() {
+            const data = RBAC_CACHE.boolean;
+            const container = document.getElementById('rbacMatrixBoolean');
+            const roles = Array.isArray(data.roles) ? data.roles : [];
+            let permNames = Array.isArray(data.permission_names) ? data.permission_names.slice() : [];
+            const matrix = Array.isArray(data.matrix) ? data.matrix : [];
+            if (!roles.length || !permNames.length) {
+                container.innerHTML = '<p>No roles or permissions.</p>';
+                return;
+            }
+            const { category, search, pinned } = _filters();
+            // Apply client-side visible categories filter (independent of server filter)
+            try {
+                const visSel = document.getElementById('rbacVisibleCats');
+                const vis = visSel ? Array.from(visSel.selectedOptions || []).map(o => o.value) : [];
+                if (vis && vis.length && RBAC_META.permCategoryByName) {
+                    permNames = permNames.filter(n => vis.includes(RBAC_META.permCategoryByName[n] || ''));
+                }
+            } catch (_) { /* ignore */ }
+            // Keep server category filter behavior if set and mapping present
+            if (category && RBAC_META.permCategoryByName) permNames = permNames.filter(n => (RBAC_META.permCategoryByName[n] || '') === category);
+            if (search) {
+                const s = search.toLowerCase();
+                permNames = permNames.filter(n => n.toLowerCase().includes(s));
+            }
+            if (pinned.length) {
+                const isPinned = (name) => pinned.some(p => name.startsWith(p));
+                const left = permNames.filter(isPinned);
+                const right = permNames.filter(n => !isPinned(n));
+                permNames = [...left, ...right];
+            }
+            // Build table
+            let html = '<div class="scroll-x"><table class="simple-table small-table">';
+            html += '<thead><tr><th class="rbac-sticky-left header">Role \\ Permission</th>' + permNames.map(n => `<th>${_escapeHtml(n)}</th>`).join('') + '</tr></thead>';
+            html += '<tbody>';
+            for (let r = 0; r < roles.length; r++) {
+                const role = roles[r];
+                const fullRow = matrix[r] || [];
+                const nameToIndex = new Map();
+                const originalNames = RBAC_CACHE.boolean.permission_names;
+                for (let i = 0; i < originalNames.length; i++) nameToIndex.set(originalNames[i], i);
+                html += `<tr><td class="rbac-sticky-left"><strong>${_escapeHtml(role.name)}</strong></td>`;
+                for (let c = 0; c < permNames.length; c++) {
+                    const idx = nameToIndex.get(permNames[c]);
+                    const v = idx != null ? !!fullRow[idx] : false;
+                    html += `<td style="text-align:center;">${v ? '✓' : ''}</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        function renderRbacMatrixList() {
+            const data = RBAC_CACHE.list;
+            const container = document.getElementById('rbacMatrixList');
+            const roles = Array.isArray(data.roles) ? data.roles : [];
+            let perms = Array.isArray(data.permissions) ? data.permissions.slice() : [];
+            const grants = new Set((data.grants || []).map(g => `${g.role_id}:${g.permission_id}`));
+            if (!roles.length || !perms.length) {
+                container.innerHTML = '<p>No roles or permissions.</p>';
+                return;
+            }
+            const { category, search, pinned } = _filters();
+            if (category) perms = perms.filter(p => (p.category || '') === category);
+            if (search) {
+                const s = search.toLowerCase();
+                perms = perms.filter(p => p.name.toLowerCase().includes(s));
+            }
+            if (pinned.length) {
+                const isPinned = (name) => pinned.some(p => name.startsWith(p));
+                const left = perms.filter(p => isPinned(p.name));
+                const right = perms.filter(p => !isPinned(p.name));
+                perms = [...left, ...right];
+            }
+            const permIdToName = {};
+            for (const p of perms) permIdToName[p.id] = p.name;
+            let html = '<div class="scroll-y" style="max-height:360px">';
+            for (const role of roles) {
+                const names = [];
+                for (const p of perms) {
+                    if (grants.has(`${role.id}:${p.id}`)) names.push(p.name);
+                }
+                html += `<div class="card"><div class="card-header"><strong>${_escapeHtml(role.name)}</strong></div>`;
+                html += `<div class="card-body"><div>${names.length ? names.map(_escapeHtml).join(', ') : '<em>No permissions</em>'}</div></div></div>`;
+            }
+            html += '</div>';
+            container.innerHTML = html;
         }
     </script>
 </div>

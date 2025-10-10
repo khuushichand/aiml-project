@@ -707,6 +707,13 @@ def load_settings():
                 _cp.get('RAG', 'default_llm_model', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
             )
         ))(os.getenv('RAG_DEFAULT_LLM_MODEL'), load_comprehensive_config()),
+
+        # RAG default FTS level ('media' or 'chunk')
+        "RAG_DEFAULT_FTS_LEVEL": (lambda _env, _cp: (
+            (_env.lower() if isinstance(_env, str) else None) if _env is not None else (
+                (_cp.get('RAG', 'default_fts_level', fallback='media').lower() if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'media')
+            )
+        ))(os.getenv('RAG_DEFAULT_FTS_LEVEL'), load_comprehensive_config()),
     }
 
     # --- Warnings ---

@@ -394,6 +394,7 @@ async def unified_search_endpoint(
             
             # Search configuration
             search_mode=request.search_mode,
+            fts_level=request.fts_level,
             hybrid_alpha=request.hybrid_alpha,
             top_k=request.top_k,
             min_score=request.min_score,
@@ -685,6 +686,7 @@ async def unified_search_stream_endpoint(
                         use_fts=(request.search_mode in ["fts", "hybrid"]),
                         use_vector=(request.search_mode in ["vector", "hybrid"]),
                         include_metadata=True,
+                        fts_level=request.fts_level,
                     )
                     # Determine sources
                     src_map = {"media_db": DataSource.MEDIA_DB, "notes": DataSource.NOTES, "characters": DataSource.CHARACTER_CARDS, "chats": DataSource.CHARACTER_CARDS}

@@ -540,8 +540,7 @@ class AnalyticsDatabase:
         try:
             with self.transaction() as conn:
                 query_hash = hashlib.sha256(search_data.get('query', '').encode()).hexdigest()[:16]
-                self._execute(
-                    conn,
+                raw_query = (
                     """
                     INSERT INTO search_analytics (
                         query_hash, query_length, query_complexity, search_type,
@@ -549,24 +548,26 @@ class AnalyticsDatabase:
                         cache_hit, reranking_used, expansion_used, filters_used,
                         error_occurred, error_type
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        query_hash,
-                        search_data.get('query_length'),
-                        search_data.get('query_complexity'),
-                        search_data.get('search_type'),
-                        search_data.get('results_count'),
-                        search_data.get('max_score'),
-                        search_data.get('avg_score'),
-                        search_data.get('response_time_ms'),
-                        search_data.get('cache_hit', False),
-                        search_data.get('reranking_used', False),
-                        search_data.get('expansion_used', False),
-                        json.dumps(search_data.get('filters_used', [])),
-                        search_data.get('error_occurred', False),
-                        search_data.get('error_type'),
-                    ),
+                    """
                 )
+                raw_params = (
+                    query_hash,
+                    search_data.get('query_length'),
+                    search_data.get('query_complexity'),
+                    search_data.get('search_type'),
+                    search_data.get('results_count'),
+                    search_data.get('max_score'),
+                    search_data.get('avg_score'),
+                    search_data.get('response_time_ms'),
+                    search_data.get('cache_hit', False),
+                    search_data.get('reranking_used', False),
+                    search_data.get('expansion_used', False),
+                    json.dumps(search_data.get('filters_used', [])),
+                    search_data.get('error_occurred', False),
+                    search_data.get('error_type'),
+                )
+                prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
+                self._execute(conn, prepared_query, prepared_params)
                 logger.debug("Recorded search analytics for query hash: %s", query_hash)
         except Exception as exc:
             logger.error("Failed to record search analytics: %s", exc)
