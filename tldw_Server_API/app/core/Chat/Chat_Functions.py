@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatCon
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError, ConflictError, CharactersRAGDBError
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai, chat_with_anthropic, chat_with_cohere, \
     chat_with_groq, chat_with_openrouter, chat_with_deepseek, chat_with_mistral, chat_with_huggingface, chat_with_google, \
-    chat_with_qwen
+    chat_with_qwen, chat_with_bedrock
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import chat_with_aphrodite, chat_with_local_llm, chat_with_ollama, \
     chat_with_kobold, chat_with_llama, chat_with_oobabooga, chat_with_tabbyapi, chat_with_vllm, chat_with_custom_openai, \
     chat_with_custom_openai_2
@@ -71,6 +71,7 @@ def approximate_token_count(history):
 # 1. Dispatch table for handler functions
 API_CALL_HANDLERS = {
     'openai': chat_with_openai,
+    'bedrock': chat_with_bedrock,
     'anthropic': chat_with_anthropic,
     'cohere': chat_with_cohere,
     'groq': chat_with_groq,
@@ -101,6 +102,31 @@ FIXME: The mappings and handlers should be validated for correctness.
 # 2. Parameter mapping for each provider
 # Maps generic chat_api_call param name to provider-specific param name
 PROVIDER_PARAM_MAP = {
+    'bedrock': {
+        'api_key': 'api_key',
+        'messages_payload': 'input_data',
+        'prompt': 'custom_prompt_arg',
+        'temp': 'temp',
+        'system_message': 'system_message',
+        'streaming': 'streaming',
+        'maxp': 'maxp',
+        'model': 'model',
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
+        'logprobs': 'logprobs',
+        'top_logprobs': 'top_logprobs',
+        'logit_bias': 'logit_bias',
+        'presence_penalty': 'presence_penalty',
+        'frequency_penalty': 'frequency_penalty',
+        'max_tokens': 'max_tokens',
+        'seed': 'seed',
+        'stop': 'stop',
+        'response_format': 'response_format',
+        'n': 'n',
+        'user_identifier': 'user',
+        'extra_headers': 'extra_headers',
+        'extra_body': 'extra_body',
+    },
     'openai': {
         'api_key': 'api_key',
         'messages_payload': 'input_data',
@@ -501,7 +527,9 @@ def chat_api_call(
     stop: Optional[Union[str, List[str]]] = None,
     response_format: Optional[Dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
     n: Optional[int] = None,
-    user_identifier: Optional[str] = None  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     ):
     """
     Acts as a unified dispatcher to call various LLM API providers.
@@ -596,7 +624,9 @@ def chat_api_call(
         'stop': stop,
         'response_format': response_format,
         'n': n,
-        'user_identifier': user_identifier
+        'user_identifier': user_identifier,
+        'extra_headers': extra_headers,
+        'extra_body': extra_body,
     }
 
     for generic_param_name, provider_param_name in params_map.items():

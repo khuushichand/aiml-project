@@ -537,6 +537,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'type': 'commercial',
                 'section': 'API'
             },
+            'bedrock': {
+                'display_name': 'AWS Bedrock',
+                'api_key_field': 'bedrock_api_key',
+                'model_field': 'bedrock_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             'anthropic': {
                 'display_name': 'Anthropic', 
                 'api_key_field': 'anthropic_api_key',

@@ -5,10 +5,10 @@ This module provides a concrete implementation of the DatabaseBackend
 interface for PostgreSQL databases, enabling the application to use
 PostgreSQL as an alternative to SQLite.
 
-Note: This implementation requires psycopg2 or psycopg3 to be installed:
-    pip install psycopg2-binary psycopg2-pool
-    # or
-    pip install "psycopg[binary,pool]"
+Note: This implementation requires psycopg (v3) to be installed:
+    pip install "psycopg[binary]"
+    # optional pooling extras:
+    pip install psycopg-pool
 """
 
 import logging
@@ -31,83 +31,133 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Try to import psycopg2, but don't fail if not available
+# Try to import psycopg v3. Keep the legacy flag name for test compatibility.
 try:
-    import psycopg2
-    import psycopg2.extras
-    import psycopg2.pool
-    PSYCOPG2_AVAILABLE = True
-except ImportError:
+    import psycopg  # type: ignore
+    from psycopg.rows import dict_row  # type: ignore
+    try:
+        import psycopg_pool  # type: ignore
+    except Exception:  # pool is optional
+        psycopg_pool = None  # type: ignore
+    PSYCOPG2_AVAILABLE = True  # Legacy name used by tests to simulate missing driver
+except Exception:
     PSYCOPG2_AVAILABLE = False
-    logger.warning("psycopg2 not available. PostgreSQL backend will not work.")
+    logger.warning("psycopg (v3) not available. PostgreSQL backend will not work.")
 
 
 class PostgreSQLConnectionPool(ConnectionPool):
-    """PostgreSQL connection pool using psycopg2."""
-    
+    """PostgreSQL connection pool using psycopg (v3).
+
+    Uses psycopg_pool when available; otherwise falls back to a simple
+    on-demand pool creating connections up to pool_size.
+    """
+
     def __init__(self, config: DatabaseConfig):
-        """
-        Initialize PostgreSQL connection pool.
-        
-        Args:
-            config: Database configuration
-        """
         if not PSYCOPG2_AVAILABLE:
-            raise DatabaseError("psycopg2 is not installed. Install with: pip install psycopg2-binary")
-        
+            # Keep message for backward-compatible tests
+            raise DatabaseError("psycopg2 is not installed. Install with: pip install psycopg[binary]")
+
         self.config = config
         self._closed = False
-        
-        # Build connection parameters
-        conn_params = {
-            'host': config.pg_host or 'localhost',
-            'port': config.pg_port or 5432,
-            'database': config.pg_database or 'tldw',
-            'user': config.pg_user or 'tldw_user',
-            'password': config.pg_password or '',
-            'sslmode': config.pg_sslmode or 'prefer',
-            'connect_timeout': config.connect_timeout or 10,
-            'cursor_factory': psycopg2.extras.RealDictCursor,
-        }
-        
-        # Create connection pool
-        self._pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=config.pool_size or 10,
-            **conn_params
+        self._connections: List[Any] = []
+        self._free: List[Any] = []
+        self._max = max(1, int(config.pool_size or 10))
+
+        dsn = (
+            f"host={config.pg_host or 'localhost'} "
+            f"port={config.pg_port or 5432} "
+            f"dbname={config.pg_database or 'tldw'} "
+            f"user={config.pg_user or 'tldw_user'} "
+            f"password={config.pg_password or ''} "
+            f"sslmode={config.pg_sslmode or 'prefer'} "
+            f"connect_timeout={config.connect_timeout or 10}"
         )
-    
+
+        self._dsn = dsn
+        self._use_psycopg_pool = psycopg_pool is not None
+        if self._use_psycopg_pool:
+            # Create a psycopg_pool.ConnectionPool
+            self._pool = psycopg_pool.ConnectionPool(self._dsn)
+        else:
+            self._pool = None
+
+    def _new_connection(self) -> Any:
+        conn = psycopg.connect(self._dsn)
+        # Ensure rows are dicts by default
+        conn.row_factory = dict_row
+        return conn
+
     def get_connection(self) -> Any:
-        """Get a connection from the pool."""
         if self._closed:
             raise DatabaseError("Connection pool is closed")
-        return self._pool.getconn()
-    
+        if self._use_psycopg_pool:
+            # Use context-managed acquire; return a raw connection and rely on return_connection to close()
+            conn = self._pool.getconn() if hasattr(self._pool, 'getconn') else self._pool.connection().__enter__()
+            if hasattr(conn, 'row_factory'):
+                conn.row_factory = dict_row
+            return conn
+        # Fallback minimal pool
+        if self._free:
+            return self._free.pop()
+        if len(self._connections) < self._max:
+            conn = self._new_connection()
+            self._connections.append(conn)
+            return conn
+        # As a last resort, create a new connection (no hard block)
+        return self._new_connection()
+
     def return_connection(self, connection: Any) -> None:
-        """Return a connection to the pool."""
-        if not self._closed:
-            self._pool.putconn(connection)
-    
+        if self._closed or connection is None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            return
+        if self._use_psycopg_pool:
+            if hasattr(self._pool, 'putconn'):
+                self._pool.putconn(connection)
+            else:
+                # If acquired via context manager, close() returns to pool
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            return
+        # Minimal pool: store for reuse up to capacity; else close
+        if len(self._free) < self._max:
+            self._free.append(connection)
+        else:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
     @contextmanager
     def connection(self) -> Generator[Any, None, None]:
-        """Context manager for connection handling."""
         conn = self.get_connection()
         try:
             yield conn
         finally:
             self.return_connection(conn)
-    
+
     def close_all(self) -> None:
-        """Close all connections in the pool."""
         self._closed = True
-        self._pool.closeall()
-    
+        if self._use_psycopg_pool:
+            try:
+                self._pool.close()
+            except Exception:
+                pass
+            return
+        for conn in self._connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._connections.clear()
+        self._free.clear()
+
     def get_stats(self) -> Dict[str, Any]:
-        """Get pool statistics."""
-        return {
-            "closed": self._closed,
-            "backend": "postgresql"
-        }
+        return {"closed": self._closed, "backend": "postgresql"}
 
 
 class PostgreSQLBackend(DatabaseBackend):
@@ -136,21 +186,20 @@ class PostgreSQLBackend(DatabaseBackend):
     def connect(self) -> Any:
         """Create a new PostgreSQL connection."""
         if not PSYCOPG2_AVAILABLE:
+            # Keep message for compatibility with existing tests
             raise DatabaseError("psycopg2 is not installed")
-        
-        conn = psycopg2.connect(
-            host=self.config.pg_host or 'localhost',
-            port=self.config.pg_port or 5432,
-            database=self.config.pg_database or 'tldw',
-            user=self.config.pg_user or 'tldw_user',
-            password=self.config.pg_password or '',
-            sslmode=self.config.pg_sslmode or 'prefer',
-            connect_timeout=self.config.connect_timeout or 10
+
+        dsn = (
+            f"host={self.config.pg_host or 'localhost'} "
+            f"port={self.config.pg_port or 5432} "
+            f"dbname={self.config.pg_database or 'tldw'} "
+            f"user={self.config.pg_user or 'tldw_user'} "
+            f"password={self.config.pg_password or ''} "
+            f"sslmode={self.config.pg_sslmode or 'prefer'} "
+            f"connect_timeout={self.config.connect_timeout or 10}"
         )
-        
-        # Use RealDictCursor for dict-like row access
-        conn.cursor_factory = psycopg2.extras.RealDictCursor
-        
+        conn = psycopg.connect(dsn)
+        conn.row_factory = dict_row
         return conn
     
     def disconnect(self, connection: Any) -> None:
@@ -204,7 +253,6 @@ class PostgreSQLBackend(DatabaseBackend):
         
         try:
             cursor = conn.cursor()
-
             if params:
                 cursor.execute(query, params)
             else:
@@ -216,14 +264,15 @@ class PostgreSQLBackend(DatabaseBackend):
 
             if has_description:
                 rows = cursor.fetchall()
-                if rows and not isinstance(rows[0], dict):
-                    column_names = [col[0] for col in cursor.description or []]
+                # psycopg v3 will yield dicts if row_factory is set; otherwise adapt
+                if rows and isinstance(rows[0], dict):
+                    result_rows = rows  # already dicts
+                else:
+                    column_names = [col[0] for col in (cursor.description or [])]
                     result_rows = [
                         {column_names[idx]: value for idx, value in enumerate(row)}
                         for row in rows
                     ]
-                else:
-                    result_rows = [dict(row) for row in rows]
                 if not statement_upper.startswith("SELECT"):
                     conn.commit()
             else:
@@ -320,13 +369,11 @@ class PostgreSQLBackend(DatabaseBackend):
     
     def table_exists(self, table_name: str, connection: Optional[Any] = None) -> bool:
         """Check if a table exists."""
-        query = """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name = %s
-            )
-        """
+        query = (
+            "SELECT EXISTS ("
+            " SELECT FROM information_schema.tables"
+            " WHERE table_schema = 'public' AND table_name = %s)"
+        )
         result = self.execute(query, (table_name,), connection)
         return result.scalar
     
@@ -518,11 +565,18 @@ class PostgreSQLBackend(DatabaseBackend):
             external_conn = False
         
         try:
-            old_isolation = conn.isolation_level
-            conn.set_isolation_level(0)  # AUTOCOMMIT
+            # Use autocommit for VACUUM
+            old_autocommit = getattr(conn, 'autocommit', False)
+            try:
+                conn.autocommit = True
+            except Exception:
+                pass
             cursor = conn.cursor()
             cursor.execute("VACUUM ANALYZE")
-            conn.set_isolation_level(old_isolation)
+            try:
+                conn.autocommit = old_autocommit
+            except Exception:
+                pass
         finally:
             if not external_conn:
                 conn.close()

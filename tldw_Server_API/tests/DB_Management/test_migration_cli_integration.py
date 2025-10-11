@@ -15,9 +15,14 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Da
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 try:
-    import psycopg2
-except ImportError:  # pragma: no cover - psycopg2 may be missing locally
-    psycopg2 = None
+    import psycopg as _psycopg_v3
+    _PG_DRIVER = "psycopg"
+except Exception:  # pragma: no cover - may be missing locally
+    try:
+        import psycopg2 as _psycopg2
+        _PG_DRIVER = "psycopg2"
+    except Exception:
+        _PG_DRIVER = None
 
 _required_env = [
     "POSTGRES_TEST_HOST",
@@ -28,7 +33,7 @@ _required_env = [
 ]
 
 pytestmark = pytest.mark.skipif(
-    psycopg2 is None or any(env not in os.environ for env in _required_env),
+    _PG_DRIVER is None or any(env not in os.environ for env in _required_env),
     reason="PostgreSQL test environment not configured",
 )
 
@@ -169,14 +174,23 @@ def sqlite_workflows_db(tmp_path: Path) -> Path:
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
-    assert psycopg2 is not None
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
@@ -186,14 +200,23 @@ def _reset_postgres_database(config: DatabaseConfig) -> None:
 
 
 def _postgres_counts(config: DatabaseConfig) -> tuple[int, int]:
-    assert psycopg2 is not None
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM media")
@@ -227,13 +250,22 @@ def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_co
     assert pg_media > 0
     assert pg_claims > 0
 
-    conn = psycopg2.connect(
-        host=postgres_config.pg_host,
-        port=postgres_config.pg_port,
-        database=postgres_config.pg_database,
-        user=postgres_config.pg_user,
-        password=postgres_config.pg_password,
-    )
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=postgres_config.pg_host,
+            port=postgres_config.pg_port,
+            dbname=postgres_config.pg_database,
+            user=postgres_config.pg_user,
+            password=postgres_config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=postgres_config.pg_host,
+            port=postgres_config.pg_port,
+            database=postgres_config.pg_database,
+            user=postgres_config.pg_user,
+            password=postgres_config.pg_password,
+        )
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT claim_text FROM claims ORDER BY id LIMIT 1")
@@ -245,14 +277,23 @@ def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_co
 
 
 def _postgres_workflow_counts(config: DatabaseConfig) -> tuple[int, int, int, int]:
-    assert psycopg2 is not None
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM workflows")

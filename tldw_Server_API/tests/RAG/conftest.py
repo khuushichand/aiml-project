@@ -14,10 +14,15 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-try:  # Optional dependency; Postgres tests are skipped when unavailable
-    import psycopg2
-except ImportError:  # pragma: no cover - the skip hook handles missing driver
-    psycopg2 = None
+try:  # Optional dependency; Postgres tests are skipped when unavailable (prefer psycopg v3)
+    import psycopg as _psycopg_v3  # type: ignore
+    _PG_DRIVER = "psycopg"
+except Exception:  # pragma: no cover - the skip hook handles missing driver
+    try:
+        import psycopg2 as _psycopg2  # type: ignore
+        _PG_DRIVER = "psycopg2"
+    except Exception:
+        _PG_DRIVER = None
 
 
 _POSTGRES_ENV_VARS = (
@@ -28,7 +33,7 @@ _POSTGRES_ENV_VARS = (
     "POSTGRES_TEST_PASSWORD",
 )
 
-_HAS_POSTGRES = psycopg2 is not None and all(env in os.environ for env in _POSTGRES_ENV_VARS)
+_HAS_POSTGRES = (_PG_DRIVER is not None) and all(env in os.environ for env in _POSTGRES_ENV_VARS)
 
 
 @dataclass
@@ -43,14 +48,23 @@ class DualBackendEnv:
 def _reset_postgres_database(config: DatabaseConfig) -> None:
     """Drop and recreate the public schema so each test gets a clean slate."""
 
-    assert psycopg2 is not None
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     conn.autocommit = True
     try:
         with conn.cursor() as cur:

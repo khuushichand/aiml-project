@@ -9,6 +9,7 @@ import string
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import PlainTextResponse
 from loguru import logger
 #
 # Local imports
@@ -25,6 +26,12 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UsageTopResponse,
     UsageDailyRow,
     UsageTopRow,
+    LLMUsageLogResponse,
+    LLMUsageLogRow,
+    LLMUsageSummaryResponse,
+    LLMUsageSummaryRow,
+    LLMTopSpendersResponse,
+    LLMTopSpenderRow,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -67,6 +74,23 @@ from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
+from tldw_Server_API.app.services.llm_usage_aggregator import aggregate_llm_usage_daily
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    create_organization,
+    list_organizations,
+    create_team,
+    add_team_member,
+    list_team_members,
+)
+from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
+    OrganizationCreateRequest,
+    OrganizationResponse,
+    TeamCreateRequest,
+    TeamResponse,
+    TeamMemberAddRequest,
+    TeamMemberResponse,
+    VirtualKeyCreateRequest,
+)
 
 #######################################################################################################################
 #
@@ -349,6 +373,130 @@ async def admin_update_user_api_key(
         logger.error(f"Admin failed to update API key {key_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to update API key")
 
+
+#######################################################################################################################
+#
+# Organizations and Teams
+
+@router.post("/orgs", response_model=OrganizationResponse)
+async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationResponse:
+    try:
+        row = await create_organization(name=payload.name, owner_user_id=payload.owner_user_id, slug=payload.slug)
+        return OrganizationResponse(**row)
+    except Exception as e:
+        logger.error(f"Failed to create organization: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create organization")
+
+
+@router.get("/orgs", response_model=list[OrganizationResponse])
+async def admin_list_orgs(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)) -> list[OrganizationResponse]:
+    try:
+        rows = await list_organizations(limit=limit, offset=offset)
+        return [OrganizationResponse(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list organizations: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list organizations")
+
+
+@router.post("/orgs/{org_id}/teams", response_model=TeamResponse)
+async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResponse:
+    try:
+        row = await create_team(org_id=org_id, name=payload.name, slug=payload.slug, description=payload.description)
+        return TeamResponse(**row)
+    except Exception as e:
+        logger.error(f"Failed to create team: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create team")
+
+
+@router.get("/orgs/{org_id}/teams", response_model=list[TeamResponse])
+async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                "SELECT id, org_id, name, slug, description, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM teams WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                org_id, limit, offset,
+            )
+            return [TeamResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                "SELECT id, org_id, name, slug, description, COALESCE(is_active,1), created_at, updated_at FROM teams WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (org_id, limit, offset),
+            )
+            rows = await cur.fetchall()
+            return [
+                TeamResponse(
+                    id=r[0], org_id=r[1], name=r[2], slug=r[3], description=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
+                ) for r in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to list teams: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list teams")
+
+
+@router.post("/teams/{team_id}/members", response_model=TeamMemberResponse)
+async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest) -> TeamMemberResponse:
+    try:
+        row = await add_team_member(team_id=team_id, user_id=payload.user_id, role=payload.role or 'member')
+        return TeamMemberResponse(**row)
+    except Exception as e:
+        logger.error(f"Failed to add team member: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add team member")
+
+
+@router.get("/teams/{team_id}/members", response_model=list[TeamMemberResponse])
+async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
+    try:
+        rows = await list_team_members(team_id)
+        return [TeamMemberResponse(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list team members: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list team members")
+
+
+@router.post("/users/{user_id}/virtual-keys")
+async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateRequest) -> Dict[str, Any]:
+    try:
+        api_mgr = await get_api_key_manager()
+        result = await api_mgr.create_virtual_key(
+            user_id=user_id,
+            name=payload.name,
+            description=payload.description,
+            expires_in_days=payload.expires_in_days,
+            org_id=payload.org_id,
+            team_id=payload.team_id,
+            allowed_endpoints=payload.allowed_endpoints,
+            budget_day_tokens=payload.budget_day_tokens,
+            budget_month_tokens=payload.budget_month_tokens,
+            budget_day_usd=payload.budget_day_usd,
+            budget_month_usd=payload.budget_month_usd,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Admin failed to create virtual key for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create virtual key")
+
+
+@router.get("/users/{user_id}/virtual-keys", response_model=list[APIKeyMetadata])
+async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) -> list[APIKeyMetadata]:
+    try:
+        wanted = {
+            'id','key_prefix','name','description','scope','status','created_at','expires_at','usage_count','last_used_at','last_used_ip'
+        }
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = $1 AND COALESCE(is_virtual,FALSE) = TRUE ORDER BY created_at DESC", user_id)
+            items = [APIKeyMetadata(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = ? AND COALESCE(is_virtual,0) = 1 ORDER BY created_at DESC", (user_id,))
+            rows = await cur.fetchall()
+            items = [
+                APIKeyMetadata(
+                    id=r[0], key_prefix=r[1], name=r[2], description=r[3], scope=r[4], status=r[5], created_at=r[6], expires_at=r[7], usage_count=r[8], last_used_at=r[9], last_used_ip=r[10]
+                ) for r in rows
+            ]
+        return items
+    except Exception as e:
+        logger.error(f"Admin failed to list virtual keys for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list virtual keys")
 
 @router.get("/api-keys/{key_id}/audit-log", response_model=APIKeyAuditListResponse)
 async def admin_get_api_key_audit_log(
@@ -1890,6 +2038,297 @@ async def run_usage_aggregate(day: Optional[str] = Query(None, description="YYYY
         logger.warning(f"Manual usage aggregation failed/skipped: {e}")
         # Non-fatal: e.g., table absent in PG during partial setups
         return {"status": "skipped", "reason": str(e), "day": day}
+
+
+@router.post("/llm-usage/aggregate")
+async def run_llm_usage_aggregate(day: Optional[str] = Query(None, description="YYYY-MM-DD")) -> dict:
+    """Trigger aggregation of llm_usage_log into llm_usage_daily for a specific day (UTC)."""
+    try:
+        await aggregate_llm_usage_daily(day=day)
+        return {"status": "ok", "day": day}
+    except Exception as e:
+        logger.warning(f"Manual LLM usage aggregation failed/skipped: {e}")
+        return {"status": "skipped", "reason": str(e), "day": day}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# LLM Usage Reporting Endpoints
+
+@router.get("/llm-usage", response_model=LLMUsageLogResponse)
+async def get_llm_usage(
+    user_id: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    operation: Optional[str] = None,
+    status_code: Optional[int] = Query(None, alias="status"),
+    start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    db=Depends(get_db_transaction)
+) -> LLMUsageLogResponse:
+    try:
+        offset = (page - 1) * limit
+        conditions: list[str] = []
+        params: list = []
+        is_pg = hasattr(db, 'fetchrow')
+
+        def add_cond(sql: str, value):
+            if value is None:
+                return
+            if is_pg:
+                conditions.append(sql.replace('?', f"${len(params) + 1}"))
+            else:
+                conditions.append(sql)
+            params.append(value)
+
+        add_cond("user_id = ?", user_id)
+        add_cond("LOWER(provider) = LOWER(?)", provider)
+        add_cond("LOWER(model) = LOWER(?)", model)
+        add_cond("operation = ?", operation)
+        add_cond("status = ?", status_code)
+        if start:
+            add_cond("ts >= ?", start)
+        if end:
+            add_cond("ts <= ?", end)
+
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if is_pg:
+            count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
+            total = await db.fetchval(count_sql, *params)
+            data_sql = (
+                f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
+                f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
+                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            rows = await db.fetch(data_sql, *params, limit, offset)
+            items = [LLMUsageLogRow(**dict(r)) for r in rows]
+        else:
+            count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
+            cur = await db.execute(count_sql, params)
+            total = (await cur.fetchone())[0]
+            data_sql = (
+                f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
+                f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
+                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"
+            )
+            cur = await db.execute(data_sql, params + [limit, offset])
+            rows = await cur.fetchall()
+            items = [
+                LLMUsageLogRow(
+                    id=row[0], ts=row[1], user_id=row[2], key_id=row[3], endpoint=row[4], operation=row[5],
+                    provider=row[6], model=row[7], status=row[8], latency_ms=row[9], prompt_tokens=row[10],
+                    completion_tokens=row[11], total_tokens=row[12], total_cost_usd=row[13], currency=row[14],
+                    estimated=bool(row[15]), request_id=row[16]
+                ) for row in rows
+            ]
+
+        return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to query llm_usage_log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage data")
+
+
+@router.get("/llm-usage/summary", response_model=LLMUsageSummaryResponse)
+async def get_llm_usage_summary(
+    start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    group_by: str = Query("user", pattern="^(user|provider|model|operation|day)$"),
+    db=Depends(get_db_transaction)
+) -> LLMUsageSummaryResponse:
+    try:
+        is_pg = hasattr(db, 'fetch')
+        conditions: list[str] = []
+        params: list = []
+        if start:
+            if is_pg:
+                conditions.append(f"ts >= ${len(params)+1}")
+            else:
+                conditions.append("ts >= ?")
+            params.append(start)
+        if end:
+            if is_pg:
+                conditions.append(f"ts <= ${len(params)+1}")
+            else:
+                conditions.append("ts <= ?")
+            params.append(end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # Group key expression
+        if group_by == "user":
+            key_expr = "COALESCE(CAST(user_id AS TEXT),'0')"
+        elif group_by == "provider":
+            key_expr = "COALESCE(provider,'')"
+        elif group_by == "model":
+            key_expr = "COALESCE(model,'')"
+        elif group_by == "operation":
+            key_expr = "COALESCE(operation,'')"
+        else:
+            # day
+            key_expr = "CAST(date(ts) AS TEXT)" if not is_pg else "CAST(date(ts) AS TEXT)"
+
+        sql = (
+            "SELECT {key} as group_value, "
+            "COUNT(*) as requests, "
+            "SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, "
+            "COALESCE(SUM(COALESCE(prompt_tokens,0)),0) as input_tokens, "
+            "COALESCE(SUM(COALESCE(completion_tokens,0)),0) as output_tokens, "
+            "COALESCE(SUM(COALESCE(total_tokens,0)),0) as total_tokens, "
+            "COALESCE(SUM(COALESCE(total_cost_usd,0)),0) as total_cost_usd, "
+            "AVG(latency_ms) as latency_avg_ms "
+            f"FROM llm_usage_log{where} GROUP BY {key} ORDER BY total_cost_usd DESC" 
+        ).format(key=key_expr, where=where_clause)
+
+        if is_pg:
+            rows = await db.fetch(sql, *params)
+            items = [LLMUsageSummaryRow(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(sql, params)
+            rows = await cur.fetchall()
+            items = [
+                LLMUsageSummaryRow(
+                    group_value=row[0], requests=int(row[1] or 0), errors=int(row[2] or 0),
+                    input_tokens=int(row[3] or 0), output_tokens=int(row[4] or 0), total_tokens=int(row[5] or 0),
+                    total_cost_usd=float(row[6] or 0.0), latency_avg_ms=float(row[7]) if row[7] is not None else None
+                ) for row in rows
+            ]
+
+        return LLMUsageSummaryResponse(items=items)
+    except Exception as e:
+        logger.error(f"Failed to summarize llm_usage_log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage summary")
+
+
+@router.get("/llm-usage/top-spenders", response_model=LLMTopSpendersResponse)
+async def get_llm_top_spenders(
+    start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    limit: int = Query(10, ge=1, le=500),
+    db=Depends(get_db_transaction)
+) -> LLMTopSpendersResponse:
+    try:
+        is_pg = hasattr(db, 'fetch')
+        conditions: list[str] = []
+        params: list = []
+        if start:
+            if is_pg:
+                conditions.append(f"ts >= ${len(params)+1}")
+            else:
+                conditions.append("ts >= ?")
+            params.append(start)
+        if end:
+            if is_pg:
+                conditions.append(f"ts <= ${len(params)+1}")
+            else:
+                conditions.append("ts <= ?")
+            params.append(end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if is_pg:
+            sql = (
+                f"SELECT COALESCE(user_id,0) as user_id, COUNT(*) as requests, SUM(COALESCE(total_cost_usd,0)) as total_cost_usd "
+                f"FROM llm_usage_log{where_clause} GROUP BY COALESCE(user_id,0) ORDER BY total_cost_usd DESC LIMIT $ {len(params)+1}"
+            ).replace('$ ', '$')
+            rows = await db.fetch(sql, *params, limit)
+            items = [LLMTopSpenderRow(user_id=int(r["user_id"] or 0), total_cost_usd=float(r["total_cost_usd"] or 0.0), requests=int(r["requests"] or 0)) for r in rows]
+        else:
+            sql = (
+                f"SELECT IFNULL(user_id,0) as user_id, COUNT(*) as requests, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd "
+                f"FROM llm_usage_log{where_clause} GROUP BY IFNULL(user_id,0) ORDER BY total_cost_usd DESC LIMIT ?"
+            )
+            cur = await db.execute(sql, params + [limit])
+            rows = await cur.fetchall()
+            items = [
+                LLMTopSpenderRow(user_id=int(row[0] or 0), requests=int(row[1] or 0), total_cost_usd=float(row[2] or 0.0))
+                for row in rows
+            ]
+        return LLMTopSpendersResponse(items=items)
+    except Exception as e:
+        logger.error(f"Failed to load llm top spenders: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM top spenders")
+
+
+@router.get("/llm-usage/export.csv", response_class=PlainTextResponse)
+async def export_llm_usage_csv(
+    user_id: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    operation: Optional[str] = None,
+    status_code: Optional[int] = Query(None, alias="status"),
+    start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
+    limit: int = Query(1000, ge=1, le=10000),
+    db=Depends(get_db_transaction)
+) -> PlainTextResponse:
+    """Export filtered llm_usage_log rows as CSV."""
+    try:
+        is_pg = hasattr(db, 'fetch')
+        conditions: list[str] = []
+        params: list = []
+
+        def add_cond(sql: str, value):
+            if value is None:
+                return
+            if is_pg:
+                conditions.append(sql.replace('?', f"${len(params) + 1}"))
+            else:
+                conditions.append(sql)
+            params.append(value)
+
+        add_cond("user_id = ?", user_id)
+        add_cond("LOWER(provider) = LOWER(?)", provider)
+        add_cond("LOWER(model) = LOWER(?)", model)
+        add_cond("operation = ?", operation)
+        add_cond("status = ?", status_code)
+        if start:
+            add_cond("ts >= ?", start)
+        if end:
+            add_cond("ts <= ?", end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if is_pg:
+            sql = (
+                f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
+                f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
+                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT $ {len(params) + 1}"
+            ).replace('$ ', '$')
+            rows = await db.fetch(sql, *params, limit)
+            data = [(
+                r["id"], r["ts"], r["user_id"], r["key_id"], r["endpoint"], r["operation"], r["provider"], r["model"], r["status"], r["latency_ms"],
+                r["prompt_tokens"], r["completion_tokens"], r["total_tokens"], r["total_cost_usd"], r["currency"], r["estimated"], r["request_id"]
+            ) for r in rows]
+        else:
+            sql = (
+                f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "
+                f"IFNULL(prompt_tokens,0), IFNULL(completion_tokens,0), IFNULL(total_tokens,0), IFNULL(total_cost_usd,0), currency, estimated, request_id "
+                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ?"
+            )
+            cur = await db.execute(sql, params + [limit])
+            data = await cur.fetchall()
+
+        # Build CSV
+        header = [
+            "id","ts","user_id","key_id","endpoint","operation","provider","model","status","latency_ms",
+            "prompt_tokens","completion_tokens","total_tokens","total_cost_usd","currency","estimated","request_id"
+        ]
+        lines = [",".join(header)]
+        for row in data:
+            # row is tuple-like in both branches
+            def _fmt(x):
+                if x is None:
+                    return ""
+                s = str(x)
+                if "," in s or "\n" in s:
+                    return '"' + s.replace('"', '""') + '"'
+                return s
+            lines.append(
+                ",".join(_fmt(c) for c in row)
+            )
+        content = "\n".join(lines) + "\n"
+        return PlainTextResponse(content=content, media_type="text/csv")
+    except Exception as e:
+        logger.error(f"Failed to export llm usage CSV: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export CSV")
 
 #
 ## End of admin.py

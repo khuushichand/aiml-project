@@ -559,6 +559,19 @@ log_metrics_file = ./Logs/tldw_metrics_logs.json
 max_bytes = 
 backup_count = 5
 
+[Moderation]
+enabled = False
+input_enabled = True
+output_enabled = True
+# Actions: block | redact | warn
+input_action = block
+output_action = redact
+redact_replacement = [REDACTED]
+# Optional files; can be overridden by env MODERATION_BLOCKLIST_FILE / MODERATION_USER_OVERRIDES_FILE
+blocklist_file = tldw_Server_API/Config_Files/moderation_blocklist.txt
+user_overrides_file = tldw_Server_API/Config_Files/moderation_user_overrides.json
+per_user_overrides = True
+
 [Redis]
 redis_enabled = False
 redis_host = localhost
@@ -568,4 +581,3 @@ cache_ttl = 300
 
 [Web-Scraping]
 stealth_wait_ms = 5000
-

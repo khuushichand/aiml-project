@@ -293,6 +293,15 @@ class DOIRequestForm:
         self.doi = doi
 
 
+# ---------------- RePEc / CitEc Schemas ----------------
+
+class RepecCitationsResponse(BaseModel):
+    handle: str
+    cited_by: int
+    cites: int
+    uri: Optional[str] = None
+    date: Optional[str] = None
+
 # ---------------- BioRxiv Reports Schemas ----------------
 
 class BioRxivFunderPaper(BaseModel):

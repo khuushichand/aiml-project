@@ -2079,6 +2079,7 @@ from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo
 from tldw_Server_API.app.core.Third_Party import Figshare as Figshare
 from tldw_Server_API.app.core.Third_Party import Vixra as Vixra
 from tldw_Server_API.app.core.Third_Party import HAL as HAL
+from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
 
 
 def _handle_provider_error(err: str) -> None:
@@ -2093,6 +2094,62 @@ def _handle_provider_error(err: str) -> None:
         # Fall back to 502 if no specific status is included in message
         raise HTTPException(status_code=502, detail=err)
     raise HTTPException(status_code=502, detail=err)
+
+
+# ---------------- RePEc / CitEc Endpoints ----------------
+
+from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
+    GenericPaper,
+    RepecCitationsResponse,
+)
+
+
+@router.get(
+    "/repec/by-handle",
+    response_model=GenericPaper,
+    summary="Get RePEc record by handle (IDEAS getref)",
+    tags=["paper-search"],
+)
+async def repec_by_handle(handle: str = Query(..., min_length=8)):
+    """Lookup a RePEc item by its handle via IDEAS API.
+
+    Requires `REPEC_API_CODE` to be configured in the environment.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        item, err = await loop.run_in_executor(None, RePEc.get_ref_by_handle, handle)
+        if err:
+            _handle_provider_error(err)
+        if not item:
+            raise HTTPException(status_code=404, detail="RePEc handle not found")
+        return GenericPaper(**item)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected RePEc by-handle error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected RePEc error: {str(e)}")
+
+
+@router.get(
+    "/repec/citations",
+    response_model=RepecCitationsResponse,
+    summary="Get CitEc citation summary for a RePEc handle",
+    tags=["paper-search"],
+)
+async def repec_citations(handle: str = Query(..., min_length=8)):
+    loop = asyncio.get_running_loop()
+    try:
+        data, err = await loop.run_in_executor(None, RePEc.get_citations_plain, handle)
+        if err:
+            _handle_provider_error(err)
+        if not data:
+            raise HTTPException(status_code=404, detail="CitEc record not found for handle")
+        return RepecCitationsResponse(**data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected RePEc/CitEc citations error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected RePEc/CitEc error: {str(e)}")
 
 
 @router.get(

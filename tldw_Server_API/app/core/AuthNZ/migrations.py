@@ -620,6 +620,179 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
     logger.info("Migration 014: Seeded default roles and permissions")
 
 
+def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
+    """Create llm_usage_log and llm_usage_daily tables (SQLite)."""
+    # Per-request LLM usage log
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            key_id INTEGER,
+            endpoint TEXT,
+            operation TEXT,
+            provider TEXT,
+            model TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            prompt_cost_usd REAL,
+            completion_cost_usd REAL,
+            total_cost_usd REAL,
+            currency TEXT DEFAULT 'USD',
+            estimated INTEGER DEFAULT 0,
+            request_id TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Helpful indexes for common queries
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+
+    # Daily aggregate table
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+            day DATE NOT NULL,
+            user_id INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            total_cost_usd REAL DEFAULT 0.0,
+            latency_avg_ms REAL,
+            PRIMARY KEY (day, user_id, operation, provider, model),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 015: Created LLM usage tables (llm_usage_log, llm_usage_daily)")
+
+
+def migration_016_create_orgs_teams(conn: sqlite3.Connection) -> None:
+    """Create Organizations/Teams hierarchy tables (SQLite)."""
+    # organizations
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE,
+            name TEXT UNIQUE NOT NULL,
+            slug TEXT UNIQUE,
+            owner_user_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
+
+    # org_members
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_members (
+            org_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT DEFAULT 'member',
+            status TEXT DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (org_id, user_id),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+
+    # teams
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            slug TEXT,
+            description TEXT,
+            is_active INTEGER DEFAULT 1,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (org_id, name),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
+
+    # team_members
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            team_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT DEFAULT 'member',
+            status TEXT DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, user_id),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
+
+    conn.commit()
+    logger.info("Migration 016: Created organizations, org_members, teams, team_members")
+
+
+def migration_017_extend_api_keys_virtual(conn: sqlite3.Connection) -> None:
+    """Extend api_keys table with Virtual Key fields (SQLite)."""
+    # Helper to check column existence
+    cur = conn.execute("PRAGMA table_info(api_keys)")
+    cols = {row[1] for row in cur.fetchall()}
+
+    def add_col(name: str, decl: str) -> None:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+
+    add_col('is_virtual', "is_virtual INTEGER DEFAULT 0")
+    add_col('parent_key_id', "parent_key_id INTEGER REFERENCES api_keys(id)")
+    add_col('org_id', "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+    add_col('team_id', "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+    add_col('llm_budget_day_tokens', "llm_budget_day_tokens INTEGER")
+    add_col('llm_budget_month_tokens', "llm_budget_month_tokens INTEGER")
+    add_col('llm_budget_day_usd', "llm_budget_day_usd REAL")
+    add_col('llm_budget_month_usd', "llm_budget_month_usd REAL")
+    add_col('llm_allowed_endpoints', "llm_allowed_endpoints TEXT")
+    add_col('llm_allowed_providers', "llm_allowed_providers TEXT")
+    add_col('llm_allowed_models', "llm_allowed_models TEXT")
+
+    # Helpful indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
+
+    conn.commit()
+    logger.info("Migration 017: Extended api_keys with virtual key fields")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -642,6 +815,9 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(12, "Create RBAC core tables", migration_012_create_rbac_tables),
         Migration(13, "Create RBAC limits and usage tables", migration_013_create_rbac_limits_and_usage),
         Migration(14, "Seed default roles and permissions", migration_014_seed_roles_permissions),
+        Migration(15, "Create LLM usage tables", migration_015_create_llm_usage_tables),
+        Migration(16, "Create organizations and teams tables", migration_016_create_orgs_teams),
+        Migration(17, "Extend api_keys with virtual key fields", migration_017_extend_api_keys_virtual),
     ]
 
 

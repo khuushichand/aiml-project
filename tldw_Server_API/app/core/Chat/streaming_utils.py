@@ -122,7 +122,8 @@ class StreamingResponseHandler:
         model_name: str,
         idle_timeout: int = STREAMING_IDLE_TIMEOUT,
         heartbeat_interval: int = HEARTBEAT_INTERVAL,
-        max_response_size: int = 10 * 1024 * 1024  # 10MB default
+        max_response_size: int = 10 * 1024 * 1024,  # 10MB default
+        text_transform: Optional[callable] = None,
     ):
         """
         Initialize the streaming response handler.
@@ -144,6 +145,10 @@ class StreamingResponseHandler:
         self.full_response = []
         self.response_size = 0
         self.error_occurred = False
+        # Optional transform to apply to textual deltas before emission (e.g., moderation redaction)
+        self.text_transform = text_transform
+        # Track whether a terminal [DONE] was already sent (directly or via transform-combined payload)
+        self.done_sent = False
         
     def update_activity(self):
         """Update the last activity timestamp."""
@@ -222,6 +227,24 @@ class StreamingResponseHandler:
                                 outputs.append(f"data: {json.dumps(error_payload)}\n\n")
                                 return outputs, True
                             if text_content:
+                                # Optional text transform
+                                if self.text_transform:
+                                    try:
+                                        text_content = self.text_transform(text_content)
+                                    except StopIteration:
+                                        # Reserved for internal stream signalling — treat as stop
+                                        return outputs, True
+                                    except Exception as _tf_e:
+                                        # If transform wishes to abort the stream gracefully with an SSE error, it can
+                                        # raise a StopStreamWithError; other exceptions are logged and ignored
+                                        if isinstance(_tf_e, StopStreamWithError):
+                                            self.error_occurred = True
+                                            err_payload = {"error": {"message": str(_tf_e) or "Stream blocked by policy", "type": _tf_e.error_type}}
+                                            combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]" + "\n\n"
+                                            outputs.append(combined)
+                                            self.done_sent = True
+                                            return outputs, True
+                                        logger.debug(f"text_transform error ignored: {_tf_e}")
                                 # Enforce size limit
                                 chunk_size = len(text_content.encode('utf-8'))
                                 if self.response_size + chunk_size > self.max_response_size:
@@ -286,6 +309,20 @@ class StreamingResponseHandler:
                                 outputs.append(f"data: {json.dumps(error_payload)}\n\n")
                                 return outputs, True
                             if text_content:
+                                if self.text_transform:
+                                    try:
+                                        text_content = self.text_transform(text_content)
+                                    except StopIteration:
+                                        return outputs, True
+                                    except Exception as _tf_e:
+                                        if isinstance(_tf_e, StopStreamWithError):
+                                            self.error_occurred = True
+                                            err_payload = {"error": {"message": str(_tf_e) or "Stream blocked by policy", "type": _tf_e.error_type}}
+                                            combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]" + "\n\n"
+                                            outputs.append(combined)
+                                            self.done_sent = True
+                                            return outputs, True
+                                        logger.debug(f"text_transform error ignored: {_tf_e}")
                                 chunk_size = len(text_content.encode('utf-8'))
                                 if self.response_size + chunk_size > self.max_response_size:
                                     logger.warning(f"Stream response size limit exceeded for {self.conversation_id}")
@@ -348,17 +385,18 @@ class StreamingResponseHandler:
                 if self.is_cancelled:
                     return
 
-                if not self.error_occurred and not self.is_cancelled:
-                    # Send completion message
-                    done_payload = {
-                        "id": f"chatcmpl-{datetime.now(timezone.utc).timestamp()}",
-                        "object": "chat.completion.chunk",
-                        "created": int(datetime.now(timezone.utc).timestamp()),
-                        "model": self.model_name,
-                        "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
-                        "conversation_id": self.conversation_id
-                    }
-                    yield f"data: {json.dumps(done_payload)}\n\n"
+                if not self.is_cancelled:
+                    # Send completion marker(s). If error occurred, still send [DONE] for graceful finish.
+                    if not self.error_occurred:
+                        done_payload = {
+                            "id": f"chatcmpl-{datetime.now(timezone.utc).timestamp()}",
+                            "object": "chat.completion.chunk",
+                            "created": int(datetime.now(timezone.utc).timestamp()),
+                            "model": self.model_name,
+                            "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
+                            "conversation_id": self.conversation_id
+                        }
+                        yield f"data: {json.dumps(done_payload)}\n\n"
                     yield "data: [DONE]\n\n"
                 
                 # Save the full response if callback provided (only when not cancelled)
@@ -378,6 +416,10 @@ class StreamingResponseHandler:
                 # Send stream end event (only when not cancelled)
                 if not self.is_cancelled:
                     yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+                    # Ensure final [DONE] sentinel for client compatibility (unless already sent)
+                    if not self.done_sent:
+                        yield "data: [DONE]\n\n"
+                        self.done_sent = True
                 
             except Exception as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")
@@ -389,7 +431,8 @@ async def create_streaming_response_with_timeout(
     model_name: str,
     save_callback: Optional[callable] = None,
     idle_timeout: int = STREAMING_IDLE_TIMEOUT,
-    heartbeat_interval: int = HEARTBEAT_INTERVAL
+    heartbeat_interval: int = HEARTBEAT_INTERVAL,
+    text_transform: Optional[callable] = None,
 ) -> AsyncIterator[str]:
     """
     Create a streaming response with timeout and error handling.
@@ -409,7 +452,8 @@ async def create_streaming_response_with_timeout(
         conversation_id=conversation_id,
         model_name=model_name,
         idle_timeout=idle_timeout,
-        heartbeat_interval=heartbeat_interval
+        heartbeat_interval=heartbeat_interval,
+        text_transform=text_transform,
     )
     
     # Create tasks for streaming and heartbeat using persistent generator instances
@@ -465,6 +509,13 @@ async def create_streaming_response_with_timeout(
                         await asyncio.gather(stream_task, heartbeat_task, return_exceptions=True)
                     except Exception:
                         pass
+                    # As a safety net, emit a final [DONE] only if it hasn't been sent yet
+                    try:
+                        if not handler.done_sent and not handler.is_cancelled:
+                            yield "data: [DONE]\n\n"
+                            handler.done_sent = True
+                    except Exception:
+                        pass
                     break
         finally:
             # Ensure generators are properly closed; avoid yielding here
@@ -479,6 +530,13 @@ async def create_streaming_response_with_timeout(
     
     async for message in stream_with_heartbeat():
         yield message
+
+
+class StopStreamWithError(Exception):
+    """Signal the streaming handler to stop after emitting an SSE error payload."""
+    def __init__(self, message: str = "Stream blocked by policy", error_type: str = "stream_error"):
+        super().__init__(message)
+        self.error_type = error_type
 
 
 #

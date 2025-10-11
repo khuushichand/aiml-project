@@ -39,6 +39,7 @@ from datetime import datetime
 import uuid
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
@@ -281,7 +282,7 @@ def test_client(test_env_vars):
     with TestClient(app) as client:
         yield client
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_client(test_env_vars):
     """Create an async test client for streaming tests."""
     from tldw_Server_API.app.main import app

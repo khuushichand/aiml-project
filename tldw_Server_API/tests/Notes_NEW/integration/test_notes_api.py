@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app
+from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -32,13 +32,13 @@ def client_with_notes_db(tmp_path):
     def override_db_dep():
         return db
 
-    app.dependency_overrides[get_request_user] = override_user
-    app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
+    fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
 
-    with TestClient(app) as client:
+    with TestClient(fastapi_app) as client:
         yield client
 
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 def test_create_get_update_delete_note(client_with_notes_db: TestClient):

@@ -7,10 +7,10 @@ performance, and production-readiness.
 
 from .server import MCPServer, get_mcp_server
 from .protocol import MCPProtocol, MCPRequest, MCPResponse
-from .modules.base import BaseModule
+from .modules.base import BaseModule, ModuleConfig
 from .modules.registry import ModuleRegistry, get_module_registry
-from .auth.jwt_manager import JWTManager
-from .auth.rbac import RBACPolicy, UserRole, Permission
+from .auth.jwt_manager import JWTManager, get_jwt_manager
+from .auth.rbac import RBACPolicy, UserRole, Permission, get_rbac_policy
 from .config import get_config
 
 __version__ = "3.0.0"
@@ -22,10 +22,13 @@ __all__ = [
     "MCPRequest",
     "MCPResponse",
     "BaseModule",
+    "ModuleConfig",
     "ModuleRegistry",
     "get_module_registry",
     "JWTManager",
+    "get_jwt_manager",
     "RBACPolicy",
+    "get_rbac_policy",
     "UserRole",
     "Permission",
     "get_config",

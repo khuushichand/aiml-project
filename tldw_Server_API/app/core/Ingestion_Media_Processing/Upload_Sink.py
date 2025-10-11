@@ -102,6 +102,12 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "allowed_mimetypes": {'application/pdf'},
         "max_size_mb": media_config.get('max_pdf_file_size_mb', 50),
     },
+    "email": {
+        "allowed_extensions": {'.eml'},
+        # Note: some EML files may be detected as text/plain by magic; allow both
+        "allowed_mimetypes": {'message/rfc822', 'text/plain'},
+        "max_size_mb": media_config.get('max_document_file_size_mb', 50),
+    },
     "html": {
         "allowed_extensions": {'.html', '.htm'},
         "allowed_mimetypes": {'text/html'},
@@ -139,6 +145,7 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.html': 'html', '.htm': 'html',
     '.xml': 'xml', '.opml': 'xml',
     '.zip': 'archive',
+    '.eml': 'email',
 }
 
 

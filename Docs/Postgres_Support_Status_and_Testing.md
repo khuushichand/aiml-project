@@ -54,10 +54,10 @@ export POSTGRES_TEST_USER=tldw_user
 export POSTGRES_TEST_PASSWORD=TestPassword123!
 ```
 
-3) Install psycopg driver
+3) Install psycopg driver (v3)
 
 ```bash
-python3 -m pip install psycopg2-binary==2.9.9
+python3 -m pip install "psycopg[binary]~=3.2"
 ```
 
 ## Run the Dual‑Backend Test Matrix
@@ -169,8 +169,8 @@ export TLDW_SETUP_ALLOW_REMOTE=1             # optional (be cautious)
 - FATAL: password authentication failed / no password supplied
   - Ensure Postgres env vars are exported in the shell running pytest and/or the app.
 
-- psycopg2 “cannot convert dictionary update sequence …”
-  - This indicates dicts were passed as query parameters; tests and backend helpers now normalize to tuples. If you see this in custom code, pass sequences (tuples) rather than dicts.
+- psycopg parameter errors
+  - Ensure parameters are passed as sequences/tuples (not dicts) when using %s placeholders.
 
 - relation "sync_log" does not exist (Prompt Studio)
   - Sync logging is optional; errors are swallowed. Create the `sync_log` table if you need local sync capture; otherwise you can ignore the debug messages.

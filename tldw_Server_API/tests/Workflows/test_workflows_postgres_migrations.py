@@ -11,9 +11,14 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Da
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 try:
-    import psycopg2  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    psycopg2 = None
+    import psycopg as _psycopg_v3  # type: ignore
+    _PG_DRIVER = "psycopg"
+except Exception:  # pragma: no cover - optional dependency
+    try:
+        import psycopg2 as _psycopg2  # type: ignore
+        _PG_DRIVER = "psycopg2"
+    except Exception:
+        _PG_DRIVER = None
 
 _REQUIRED_ENV = (
     "POSTGRES_TEST_HOST",
@@ -24,7 +29,7 @@ _REQUIRED_ENV = (
 )
 
 pytestmark = pytest.mark.skipif(
-    psycopg2 is None or any(env not in os.environ for env in _REQUIRED_ENV),
+    _PG_DRIVER is None or any(env not in os.environ for env in _REQUIRED_ENV),
     reason="PostgreSQL test environment not configured",
 )
 
@@ -41,14 +46,23 @@ def _postgres_config() -> DatabaseConfig:
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
-    assert psycopg2 is not None
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     conn.autocommit = True
     try:
         with conn.cursor() as cur:

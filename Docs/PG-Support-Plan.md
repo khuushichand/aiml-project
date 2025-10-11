@@ -5,7 +5,7 @@
 - **Tests Written**: Unit, integration, and dual-backend coverage now include ChaChaNotes PostgreSQL FTS flows, backend smoke tests for Media/analytics, RAG database retrievers, the migration tooling, Postgres media search SQL assertions, the Prompt Studio API parity suites (`test_media_postgres_support.py`, `test_analytics_backend.py`, `test_claims_retriever.py`, `test_migration_tools.py`, `test_migration_cli_integration.py`, `test_dual_backend_end_to_end.py`, `tests/prompt_studio/integration/test_dual_backend_prompt_studio.py`, `.../test_projects_prompts_flows.py`, `.../test_import_csv_and_async_eval.py`), the Workflow dual-backend smoke test (`tests/Workflows/test_dual_backend_workflows.py`), the engine runtime smoke test (`tests/Workflows/test_dual_backend_engine.py`), the workflow migration regression (`tests/Workflows/test_workflows_postgres_migrations.py`), and the opt-in stress suite for runs/events/artifacts (`tests/Workflows/test_workflow_stress.py`, guarded by `TLDW_WORKFLOW_STRESS=1`). Initial hybrid/vector parity now runs inside `test_dual_backend_end_to_end.py`, with broader vector matrix coverage still outstanding.
 - **Files Created**: Backend modules and MediaDatabase refactor (tracked in repo).
 - **Git Status**: Backend factory + content database wiring checked in; ongoing edits confined to Media_DB_v2/ChaChaNotes.
-- **Dependencies**: psycopg2-binary enabled in `requirements.txt`; ensure environments install it before switching to Postgres.
+- **Dependencies**: psycopg-binary enabled in `requirements.txt`; ensure environments install it before switching to Postgres.
 - **Configuration**: Backend selection flows through `content_backend.py` and env/config plumbing; see `Docs/Deployment/Postgres_Migration_Guide.md` for rollout examples.
 - **Main Issue**: Remaining blockers include broad end-to-end verification on PostgreSQL, hardened migration/rollback tooling for large datasets, configuration UX for production rollout, and performance tuning before declaring full parity.
 
@@ -94,7 +94,7 @@ Tasks:
 - [x] Implement FTS using tsvector/tsquery (CODE EXISTS, NOT TESTED)
 - [x] Handle transaction differences (CODE EXISTS, NOT TESTED)
 - [x] Write PostgreSQL-specific tests (migration CLI, media claims, ChaCha FTS)
-- [x] Add psycopg2 to requirements.txt (enabled as optional dependency)
+- [x] Add psycopg (v3) to requirements.txt (enabled as optional dependency)
 
 Key Components:
 ```python
@@ -164,7 +164,7 @@ Tasks:
 **Solution**:
 - Abstract ConnectionPool interface
 - SQLite: Thread-local pool (current behavior)
-- PostgreSQL: Use psycopg2 pool or SQLAlchemy
+- PostgreSQL: Use psycopg (v3) with a lightweight internal pool (psycopg-pool optional) or SQLAlchemy later
 
 ### Challenge 3: Transaction Handling
 **Problem**: Different transaction semantics between databases
@@ -338,7 +338,7 @@ TLDW_PG_PASSWORD=secure_password
 3. Should we use SQLAlchemy Core for abstraction?
    - **Decision**: No, maintain lightweight custom abstraction for better control
 4. Connection pool library preference (psycopg2 vs SQLAlchemy)?
-   - **Decision**: psycopg2-pool for simplicity, can migrate later if needed
+   - **Decision**: psycopg v3 + simple internal pool (psycopg-pool optional); can migrate to SQLAlchemy later if needed
 
 ## Change Log
 - 2024-01-XX: Initial plan created
@@ -363,7 +363,7 @@ TLDW_PG_PASSWORD=secure_password
 ### PostgreSQL Backend ✅
 - **postgresql_backend.py**: Full PostgreSQL implementation with feature parity
 - **Features**: Connection pooling, tsvector/tsquery FTS, triggers for FTS updates
-- **Note**: Requires psycopg2 installation
+- **Note**: Requires psycopg installation (pip install "psycopg[binary]")
 
 ### Backend Factory ✅
 - **factory.py**: Dynamic backend selection based on configuration

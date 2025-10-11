@@ -257,6 +257,23 @@ class Settings(BaseSettings):
         le=24 * 60,
         description="Background usage aggregator interval in minutes"
     )
+
+    # ===== Virtual Keys / LLM Budgeting =====
+    VIRTUAL_KEYS_ENABLED: bool = Field(
+        default=True,
+        description="Enable Virtual API Keys features (org/team association, budgets)"
+    )
+    LLM_BUDGET_ENFORCE: bool = Field(
+        default=True,
+        description="Reject requests from over-budget virtual keys"
+    )
+    LLM_BUDGET_ENDPOINTS: list[str] = Field(
+        default_factory=lambda: [
+            "/api/v1/chat/completions",
+            "/api/v1/embeddings"
+        ],
+        description="Paths where LLM budget middleware is applied"
+    )
     
     # ===== Monitoring =====
     ENABLE_HEALTH_CHECK: bool = Field(

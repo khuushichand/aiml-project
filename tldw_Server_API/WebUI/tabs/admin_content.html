@@ -115,7 +115,7 @@
                 Toast.error('Failed to create user');
             }
         }
-    </script>
+</script>
 
     <div class="endpoint-section" id="adminRegistrationCodes">
         <h2>
@@ -163,7 +163,449 @@
         <div id="adminRegCodes_list"></div>
     </div>
 
+    <!-- LLM Usage Reporting -->
+    <div class="endpoint-section" id="adminLLMUsageList">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/admin/llm-usage - LLM Usage Log</span>
+        </h2>
+        <p>Query per-request LLM usage by user/provider/model/operation and time range.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLM_user_id">User ID:</label>
+                    <input type="number" id="adminLLM_user_id" placeholder="e.g., 1">
+                </div>
+                <div class="form-group">
+                    <label for="adminLLM_provider">Provider:</label>
+                    <input type="text" id="adminLLM_provider" placeholder="openai">
+                </div>
+                <div class="form-group">
+                    <label for="adminLLM_model">Model:</label>
+                    <input type="text" id="adminLLM_model" placeholder="gpt-4o">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLM_operation">Operation:</label>
+                    <select id="adminLLM_operation">
+                        <option value="">All</option>
+                        <option value="chat">chat</option>
+                        <option value="embeddings">embeddings</option>
+                        <option value="tts">tts</option>
+                        <option value="stt">stt</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="adminLLM_status">HTTP Status:</label>
+                    <input type="number" id="adminLLM_status" placeholder="e.g., 200">
+                </div>
+                <div class="form-group">
+                    <label for="adminLLM_limit">Limit:</label>
+                    <input type="number" id="adminLLM_limit" value="50" min="1" max="5000">
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLM_start">Start (ISO):</label>
+                    <input type="text" id="adminLLM_start" placeholder="YYYY-MM-DD or ISO timestamp">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLM_end">End (ISO):</label>
+                    <input type="text" id="adminLLM_end" placeholder="YYYY-MM-DD or ISO timestamp">
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="adminQueryLLMUsage()">Query</button>
+            <button class="api-button" onclick="adminDownloadLLMUsageCSV()">Download CSV</button>
+        </div>
+
+        <h3>Latest Result:</h3>
+        <pre id="adminLLMUsage_result">---</pre>
+    </div>
+
     <script>
+        function _llmUsageQueryParams() {
+            const q = new URLSearchParams();
+            const user_id = document.getElementById('adminLLM_user_id').value.trim();
+            const provider = document.getElementById('adminLLM_provider').value.trim();
+            const model = document.getElementById('adminLLM_model').value.trim();
+            const operation = document.getElementById('adminLLM_operation').value;
+            const status = document.getElementById('adminLLM_status').value.trim();
+            const limit = document.getElementById('adminLLM_limit').value.trim();
+            const start = document.getElementById('adminLLM_start').value.trim();
+            const end = document.getElementById('adminLLM_end').value.trim();
+            if (user_id) q.append('user_id', user_id);
+            if (provider) q.append('provider', provider);
+            if (model) q.append('model', model);
+            if (operation) q.append('operation', operation);
+            if (status) q.append('status', status);
+            if (limit) q.append('limit', limit);
+            if (start) q.append('start', start);
+            if (end) q.append('end', end);
+            return q.toString();
+        }
+
+        async function adminQueryLLMUsage() {
+            try {
+                const q = _llmUsageQueryParams();
+                const url = '/api/v1/admin/llm-usage' + (q ? ('?' + q) : '');
+                const res = await apiClient.get(url);
+                document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(res, null, 2);
+            } catch (e) {
+                document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to fetch LLM usage');
+            }
+        }
+
+        function adminDownloadLLMUsageCSV() {
+            const q = _llmUsageQueryParams();
+            const url = '/api/v1/admin/llm-usage/export.csv' + (q ? ('?' + q) : '');
+            window.open(url, '_blank');
+        }
+    </script>
+
+    <!-- LLM Usage Charts -->
+    <div class="endpoint-section" id="adminLLMUsageCharts">
+        <h2>LLM Usage Charts</h2>
+        <p>Visual summaries for top spenders and model mix.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLMCharts_start">Start (YYYY-MM-DD):</label>
+                    <input type="text" id="adminLLMCharts_start" placeholder="2025-01-01">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminLLMCharts_end">End (YYYY-MM-DD):</label>
+                    <input type="text" id="adminLLMCharts_end" placeholder="2025-01-31">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="llmCharts_model_metric">Model Metric:</label>
+                    <select id="llmCharts_model_metric">
+                        <option value="tokens" selected>Tokens</option>
+                        <option value="cost">Cost</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="llmCharts_provider_metric">Provider Metric:</label>
+                    <select id="llmCharts_provider_metric">
+                        <option value="tokens">Tokens</option>
+                        <option value="cost" selected>Cost</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="llmCharts_model_palette">Model Palette:</label>
+                    <select id="llmCharts_model_palette">
+                        <option value="distinct" selected>Distinct</option>
+                        <option value="provider">By Provider</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="adminLoadLLMCharts()">Load Charts</button>
+        </div>
+
+        <div class="columns mt-3">
+            <div class="column">
+                <h3>Top Spenders</h3>
+                <div id="llmChartTopSpenders" class="chart-container"></div>
+                <div id="llmLegendTopSpenders" class="chart-legend"></div>
+            </div>
+            <div class="column">
+                <h3>Model Mix</h3>
+                <div id="llmChartModelMix" class="chart-container"></div>
+                <div id="llmLegendModelMix" class="chart-legend"></div>
+            </div>
+            <div class="column">
+                <h3>Provider Mix</h3>
+                <div id="llmChartProviderMix" class="chart-container"></div>
+                <div id="llmLegendProviderMix" class="chart-legend"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function _hashString(str) {
+            let h = 0;
+            for (let i = 0; i < str.length; i++) {
+                h = (h << 5) - h + str.charCodeAt(i);
+                h |= 0; // Convert to 32bit int
+            }
+            return Math.abs(h);
+        }
+
+        function _colorFromLabel(label) {
+            const h = _hashString(label) % 360;
+            const base = `hsl(${h}, 65%, 52%)`;
+            const light = `hsl(${h}, 70%, 65%)`;
+            const dark = `hsl(${h}, 60%, 42%)`;
+            return { base, light, dark };
+        }
+        function _hexToHsl(hex) {
+            hex = hex.replace('#','');
+            if (hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
+            const r = parseInt(hex.substring(0,2),16)/255;
+            const g = parseInt(hex.substring(2,4),16)/255;
+            const b = parseInt(hex.substring(4,6),16)/255;
+            const max = Math.max(r,g,b), min = Math.min(r,g,b);
+            let h,s,l=(max+min)/2;
+            if(max===min){h=s=0;} else {
+                const d = max-min;
+                s = l>0.5 ? d/(2-max-min) : d/(max+min);
+                switch(max){
+                    case r: h=(g-b)/d+(g<b?6:0); break;
+                    case g: h=(b-r)/d+2; break;
+                    case b: h=(r-g)/d+4; break;
+                }
+                h/=6;
+            }
+            return {h: Math.round(h*360), s: Math.round(s*100), l: Math.round(l*100)};
+        }
+        function _shadeFromHex(hex, lighten=10, darken=10) {
+            const hsl = _hexToHsl(hex);
+            const l1 = Math.min(100, Math.max(0, hsl.l + lighten));
+            const l2 = Math.min(100, Math.max(0, hsl.l - darken));
+            return {
+                light: `hsl(${hsl.h}, ${hsl.s}%, ${l1}%)`,
+                base: `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`,
+                dark: `hsl(${hsl.h}, ${hsl.s}%, ${l2}%)`
+            };
+        }
+        function _colorForProvider(provider) {
+            const p = String(provider || '').toLowerCase();
+            const map = {
+                'openai': '#10a37f',
+                'anthropic': '#8e44ad',
+                'groq': '#e67e22',
+                'mistral': '#2980b9',
+                'google': '#4285f4',
+                'cohere': '#f39c12',
+                'qwen': '#2ecc71',
+                'deepseek': '#16a085',
+                'openrouter': '#34495e',
+                'xai': '#2c3e50',
+                'huggingface': '#ffcc4d'
+            };
+            const hex = map[p];
+            return hex ? _shadeFromHex(hex, 10, 10) : null;
+        }
+        function _formatValue(val, unit) {
+            const n = Number(val || 0);
+            if (unit && unit.toLowerCase().includes('usd')) {
+                return `$${n.toFixed(2)}`;
+            }
+            return n.toLocaleString();
+        }
+
+        function _renderBarChart(containerId, dataPairs, valueLabel, getColor) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const maxVal = Math.max(...dataPairs.map(p => p.value), 1);
+            container.innerHTML = `
+                <div class="chart-placeholder">
+                    <div class="chart-bars">
+                        ${dataPairs.map(p => {
+                            const c = getColor ? getColor(p.label) : null;
+                            const style = c ? `background: linear-gradient(180deg, ${c.light} 0%, ${c.base} 100%); border-color: ${c.dark};` : '';
+                            const h = Math.max(5, (p.value / maxVal) * 100);
+                            return `
+                                <div class="chart-bar" data-label="${p.label}" data-value="${p.value}" style="height:${h}%; ${style}">
+                                    <span class="chart-bar-label">${p.label}</span>
+                                    <span class="chart-bar-value">${_formatValue(p.value, valueLabel)} ${valueLabel || ''}</span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+            _attachTooltips(containerId);
+        }
+
+        function _renderLegend(containerId, dataPairs, getColor) {
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            el.innerHTML = dataPairs.map(p => {
+                const c = getColor ? getColor(p.label) : null;
+                const style = c ? `background:${c.base}; border-color:${c.dark};` : '';
+                return `<span class="legend-item"><span class="legend-swatch" style="${style}"></span>${p.label}</span>`;
+            }).join('');
+        }
+
+        // Tooltip singleton
+        let _chartTooltip = null;
+        function _ensureTooltip() {
+            if (_chartTooltip) return _chartTooltip;
+            _chartTooltip = document.createElement('div');
+            _chartTooltip.className = 'chart-tooltip';
+            document.body.appendChild(_chartTooltip);
+            return _chartTooltip;
+        }
+
+        function _attachTooltips(containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const tooltip = _ensureTooltip();
+            container.querySelectorAll('.chart-bar').forEach(bar => {
+                bar.addEventListener('mouseenter', (e) => {
+                    const label = bar.getAttribute('data-label') || '';
+                    const value = bar.getAttribute('data-value') || '';
+                    const unit = containerId.includes('Provider') ? (document.getElementById('llmCharts_provider_metric') && document.getElementById('llmCharts_provider_metric').value === 'tokens' ? 'tokens' : 'USD') : (containerId.includes('Model') ? (document.getElementById('llmCharts_model_metric') && document.getElementById('llmCharts_model_metric').value === 'cost' ? 'USD' : 'tokens') : 'USD');
+                    tooltip.innerHTML = `<strong>${label}</strong><br/>${_formatValue(value, unit)} ${unit}`;
+                    tooltip.style.display = 'block';
+                });
+                bar.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.clientX + 12) + 'px';
+                    tooltip.style.top = (e.clientY + 12) + 'px';
+                });
+                bar.addEventListener('mouseleave', () => {
+                    tooltip.style.display = 'none';
+                });
+            });
+        }
+
+        async function adminLoadLLMCharts() {
+            try {
+                const start = document.getElementById('adminLLMCharts_start').value.trim();
+                const end = document.getElementById('adminLLMCharts_end').value.trim();
+                const qs = new URLSearchParams();
+                if (start) qs.append('start', start);
+                if (end) qs.append('end', end);
+                const topN = Math.max(3, Math.min(50, parseInt((document.getElementById('llmCharts_topN') || {}).value || '10', 10)));
+
+                // Top spenders
+                const topUrl = '/api/v1/admin/llm-usage/top-spenders' + (qs.toString() ? ('?' + qs.toString()) : '');
+                const top = await apiClient.get(topUrl);
+                const topPairs = (top.items || []).slice(0, topN).map(r => ({ label: String(r.user_id), value: Number(r.total_cost_usd || 0) }));
+                _renderBarChart('llmChartTopSpenders', topPairs, 'USD', _colorFromLabel);
+                _renderLegend('llmLegendTopSpenders', topPairs, _colorFromLabel);
+                _attachLegendToggle('llmLegendTopSpenders', 'llmChartTopSpenders');
+
+                // Model mix by model
+                const mixUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=model';
+                const mix = await apiClient.get(mixUrl);
+                const modelMetric = (document.getElementById('llmCharts_model_metric').value || 'tokens');
+                const valueKey = modelMetric === 'cost' ? 'total_cost_usd' : 'total_tokens';
+                const valueLabel = modelMetric === 'cost' ? 'USD' : 'tokens';
+                let mixPairs = (mix.items || []).map(r => ({ label: String(r.group_value), value: Number(r[valueKey] || 0) }));
+                mixPairs.sort((a,b) => b.value - a.value);
+                mixPairs = mixPairs.slice(0, topN);
+                const palette = (document.getElementById('llmCharts_model_palette').value || 'distinct');
+                let getColor = _colorFromLabel;
+                if (palette === 'provider') {
+                    const mapping = await _fetchProviderMappingForModels(start, end, modelMetric);
+                    getColor = (label) => _colorForProvider(mapping[label]) || _colorFromLabel(mapping[label] || label);
+                }
+                _renderBarChart('llmChartModelMix', mixPairs, valueLabel, getColor);
+                _renderLegend('llmLegendModelMix', mixPairs, getColor);
+                _attachLegendToggle('llmLegendModelMix', 'llmChartModelMix');
+
+                // Provider mix by total cost
+                const provUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=provider';
+                const prov = await apiClient.get(provUrl);
+                const provMetric = (document.getElementById('llmCharts_provider_metric').value || 'cost');
+                const provKey = provMetric === 'tokens' ? 'total_tokens' : 'total_cost_usd';
+                const provLabel = provMetric === 'tokens' ? 'tokens' : 'USD';
+                let provPairs = (prov.items || []).map(r => ({ label: String(r.group_value || 'unknown'), value: Number(r[provKey] || 0) }));
+                provPairs.sort((a,b) => b.value - a.value);
+                provPairs = provPairs.slice(0, topN);
+                _renderBarChart('llmChartProviderMix', provPairs, provLabel, _colorForProvider);
+                _renderLegend('llmLegendProviderMix', provPairs, _colorForProvider);
+                _attachLegendToggle('llmLegendProviderMix', 'llmChartProviderMix');
+                Toast.success('LLM charts loaded');
+            } catch (e) {
+                console.error('Failed to load LLM charts', e);
+                Toast.error('Failed to load LLM charts');
+            }
+        }
+        
+        const _providerMappingCache = {};
+        async function _fetchProviderMappingForModels(start, end, metric) {
+            // Fetch sample of raw usage and map model -> most frequent provider by chosen metric
+            const cacheKey = `${start}|${end}|${metric}`;
+            if (_providerMappingCache[cacheKey]) return _providerMappingCache[cacheKey];
+            const qs = new URLSearchParams();
+            if (start) qs.append('start', start);
+            if (end) qs.append('end', end);
+            qs.append('limit', '1000');
+            const url = '/api/v1/admin/llm-usage' + (qs.toString() ? ('?' + qs.toString()) : '');
+            try {
+                const res = await apiClient.get(url);
+                const items = res.items || [];
+                const scoreKey = metric === 'cost' ? 'total_cost_usd' : 'total_tokens';
+                const acc = {};
+                for (const row of items) {
+                    const model = String(row.model || '');
+                    const prov = String(row.provider || '');
+                    const score = Number(row[scoreKey] || 0);
+                    if (!model) continue;
+                    const key = model.toLowerCase();
+                    acc[key] = acc[key] || {};
+                    acc[key][prov] = (acc[key][prov] || 0) + (score > 0 ? score : 1); // fallback weight
+                }
+                const mapping = {};
+                for (const m in acc) {
+                    let bestProv = null;
+                    let bestVal = -1;
+                    for (const p in acc[m]) {
+                        if (acc[m][p] > bestVal) {
+                            bestVal = acc[m][p];
+                            bestProv = p;
+                        }
+                    }
+                    mapping[m] = bestProv || '';
+                }
+                const prox = new Proxy(mapping, { get: (t, k) => t[String(k).toLowerCase()] });
+                _providerMappingCache[cacheKey] = prox;
+                return prox;
+            } catch (e) {
+                return {};
+            }
+        }
+    </script>
+
+    <script>
+        function _attachLegendToggle(legendId, chartId) {
+            const legend = document.getElementById(legendId);
+            const chart = document.getElementById(chartId);
+            if (!legend || !chart) return;
+            legend.querySelectorAll('.legend-item').forEach(item => {
+                item.style.cursor = 'pointer';
+                item.addEventListener('click', () => {
+                    const label = item.textContent.trim();
+                    const disabled = item.classList.toggle('disabled');
+                    chart.querySelectorAll(`.chart-bar[data-label="${label}"]`).forEach(bar => {
+                        if (disabled) bar.classList.add('hidden'); else bar.classList.remove('hidden');
+                    });
+                });
+            });
+        }
+
+        function _resetLegendVisibility(legendId, chartId) {
+            const legend = document.getElementById(legendId);
+            const chart = document.getElementById(chartId);
+            if (!legend || !chart) return;
+            legend.querySelectorAll('.legend-item').forEach(i => i.classList.remove('disabled'));
+            chart.querySelectorAll('.chart-bar.hidden').forEach(b => b.classList.remove('hidden'));
+        }
         async function createRegCode() {
             try {
                 const payload = {
@@ -231,6 +673,193 @@
             container.innerHTML = html;
         }
     </script>
+
+    <div id="tabModeration" class="tab-content">
+    <!-- Moderation Management -->
+    <div class="endpoint-section" id="moderationBlocklist">
+        <h2>
+            <span class="endpoint-method get">GET/PUT</span>
+            <span class="endpoint-path">/api/v1/moderation/blocklist - Blocklist</span>
+        </h2>
+        <p>View and update the global moderation blocklist. Each line is a literal substring or a regex when wrapped in slashes (e.g., <code>/secret\d+/</code>).</p>
+
+        <div class="form-group">
+            <label for="moderationBlocklist_text">Blocklist:</label>
+            <textarea id="moderationBlocklist_text" rows="10" placeholder="# One pattern per line"></textarea>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="moderationLoadBlocklist()">Load</button>
+            <button class="api-button" onclick="moderationSaveBlocklist()">Save</button>
+        </div>
+
+        <h3>Status:</h3>
+        <pre id="moderationBlocklist_status">---</pre>
+    </div>
+
+    <script>
+        async function moderationLoadBlocklist() {
+            try {
+                const lines = await apiClient.get('/api/v1/moderation/blocklist');
+                document.getElementById('moderationBlocklist_text').value = (lines || []).join('\n');
+                document.getElementById('moderationBlocklist_status').textContent = 'Loaded';
+                Toast.success('Loaded blocklist');
+            } catch (e) {
+                document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load blocklist');
+            }
+        }
+
+        async function moderationSaveBlocklist() {
+            try {
+                const raw = document.getElementById('moderationBlocklist_text').value || '';
+                const lines = raw.split(/\r?\n/);
+                const res = await apiClient.put('/api/v1/moderation/blocklist', { lines });
+                document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Blocklist saved');
+            } catch (e) {
+                document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to save blocklist');
+            }
+        }
+    </script>
+
+    <div class="endpoint-section" id="moderationOverrides">
+        <h2>
+            <span class="endpoint-method get">GET/PUT/DELETE</span>
+            <span class="endpoint-path">/api/v1/moderation/users/{user_id} - Per-user Overrides</span>
+        </h2>
+        <p>Configure user-specific moderation behavior. Empty fields leave global defaults in place.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="modUserId">User ID:</label>
+                    <input id="modUserId" type="text" placeholder="e.g., 1" />
+                </div>
+                <div class="form-group">
+                    <label for="modEnabled">Enabled:</label>
+                    <select id="modEnabled">
+                        <option value="">(inherit)</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modInputEnabled">Input Enabled:</label>
+                    <select id="modInputEnabled">
+                        <option value="">(inherit)</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="modOutputEnabled">Output Enabled:</label>
+                    <select id="modOutputEnabled">
+                        <option value="">(inherit)</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modInputAction">Input Action:</label>
+                    <select id="modInputAction">
+                        <option value="">(inherit)</option>
+                        <option value="block">block</option>
+                        <option value="redact">redact</option>
+                        <option value="warn">warn</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modOutputAction">Output Action:</label>
+                    <select id="modOutputAction">
+                        <option value="">(inherit)</option>
+                        <option value="block">block</option>
+                        <option value="redact">redact</option>
+                        <option value="warn">warn</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="modRedact">Redact Replacement:</label>
+            <input id="modRedact" type="text" placeholder="[REDACTED]" />
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="loadUserOverride()">Load</button>
+            <button class="api-button" onclick="saveUserOverride()">Save</button>
+            <button class="api-button" onclick="deleteUserOverride()">Delete</button>
+        </div>
+
+        <h3>Result:</h3>
+        <pre id="moderationOverrides_result">---</pre>
+    </div>
+
+    <script>
+        function _buildOverridePayload() {
+            const v = (id) => (document.getElementById(id)?.value ?? '').trim();
+            const maybeBool = (x) => x === '' ? undefined : (x === 'true');
+            const payload = {};
+            const enabled = maybeBool(v('modEnabled'));
+            const inp = maybeBool(v('modInputEnabled'));
+            const outp = maybeBool(v('modOutputEnabled'));
+            const ia = v('modInputAction');
+            const oa = v('modOutputAction');
+            const rr = v('modRedact');
+            if (enabled !== undefined) payload.enabled = enabled;
+            if (inp !== undefined) payload.input_enabled = inp;
+            if (outp !== undefined) payload.output_enabled = outp;
+            if (ia) payload.input_action = ia;
+            if (oa) payload.output_action = oa;
+            if (rr) payload.redact_replacement = rr;
+            return payload;
+        }
+
+        async function loadUserOverride() {
+            try {
+                const uid = (document.getElementById('modUserId').value || '').trim();
+                if (!uid) { Toast.error('Enter a user ID'); return; }
+                const res = await apiClient.get(`/api/v1/moderation/users/${uid}`);
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Loaded override');
+            } catch (e) {
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load override');
+            }
+        }
+
+        async function saveUserOverride() {
+            try {
+                const uid = (document.getElementById('modUserId').value || '').trim();
+                if (!uid) { Toast.error('Enter a user ID'); return; }
+                const payload = _buildOverridePayload();
+                const res = await apiClient.put(`/api/v1/moderation/users/${uid}`, payload);
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Saved override');
+            } catch (e) {
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to save override');
+            }
+        }
+
+        async function deleteUserOverride() {
+            try {
+                const uid = (document.getElementById('modUserId').value || '').trim();
+                if (!uid) { Toast.error('Enter a user ID'); return; }
+                if (!confirm('Delete override for user ' + uid + '?')) return;
+                const res = await apiClient.delete(`/api/v1/moderation/users/${uid}`);
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Deleted override');
+            } catch (e) {
+                document.getElementById('moderationOverrides_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to delete override');
+            }
+        }
+    </script>
+    </div>
 
     <div class="endpoint-section" id="adminUserGet">
         <h2>

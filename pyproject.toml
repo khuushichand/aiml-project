@@ -316,8 +316,8 @@ backend_vllm = [
 
 # Database backends
 db_postgres = [
-  "psycopg2-binary>=2.9.0",
-  "psycopg2>=2.9.0"
+  "psycopg[binary]>=3.1",
+  "psycopg-pool>=3.1"
 ]
 
 db_opensearch = [
@@ -417,6 +417,8 @@ addopts = [
     "--disable-warnings",
     "-p pytest_asyncio"
 ]
+timeout = 300
+timeout_method = "thread"
 import_mode = "importlib"
 
 ###########################

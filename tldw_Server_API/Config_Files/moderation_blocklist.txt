@@ -1,0 +1,10 @@
+# Moderation blocklist patterns
+# Lines starting and ending with / are treated as regex (case-insensitive)
+# Otherwise, they are matched as literal substrings (case-insensitive)
+
+# Examples (remove or replace as needed):
+profanity_word_example
+/offensive\s+phrase/i
+/\bnsfw\b/
+/\bhate\s*speech\b/
+

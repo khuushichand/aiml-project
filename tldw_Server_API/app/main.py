@@ -1038,6 +1038,7 @@ from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddlewa
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
+from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
 
 _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
 _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
@@ -1051,6 +1052,9 @@ app.add_middleware(HTTPMetricsMiddleware)
 
 # Per-request usage logging (guarded by settings flag)
 app.add_middleware(UsageLoggingMiddleware)
+
+# LLM budgets and virtual-key endpoint allowlists (guarded by settings)
+app.add_middleware(LLMBudgetMiddleware)
 
 # Request ID propagation (adds X-Request-ID header)
 app.add_middleware(RequestIDMiddleware)
@@ -1215,7 +1219,9 @@ async def api_metrics():
 
 # Router for health monitoring endpoints (NEW)
 from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
 app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
+app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
 
 # Router for authentication endpoints (NEW)
 app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])

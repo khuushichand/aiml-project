@@ -55,6 +55,7 @@ Base prefix: `/api/v1/media`
   - `POST /process-documents`
   - `POST /process-pdfs`
   - `POST /process-ebooks`
+  - `POST /process-emails`
 - MediaWiki (streaming):
   - `POST /mediawiki/ingest-dump` — Process and persist; streams item events.
   - `POST /mediawiki/process-dump` — Process only; streams item events.

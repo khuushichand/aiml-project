@@ -269,6 +269,14 @@ async def get_request_user(
                 try:
                     request.state.user_id = user_id
                     request.state.api_key_id = key_info.get("id")
+                    # Attach org/team context if present (virtual keys)
+                    try:
+                        if key_info.get("org_id") is not None:
+                            request.state.org_id = key_info.get("org_id")
+                        if key_info.get("team_id") is not None:
+                            request.state.team_id = key_info.get("team_id")
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 

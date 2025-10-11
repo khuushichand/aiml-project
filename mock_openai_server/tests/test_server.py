@@ -12,9 +12,10 @@ from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
 # Import the app and configuration
-from mock_openai.server import app
-from mock_openai.config import MockConfig, load_config
-from mock_openai.responses import ResponseManager
+from ..mock_openai.server import app
+from ..mock_openai.config import MockConfig, load_config
+from ..mock_openai.config import ResponsePattern
+from ..mock_openai.responses import ResponseManager
 
 
 @pytest.fixture
@@ -26,7 +27,7 @@ def client():
 @pytest.fixture
 async def async_client():
     """Create an async test client."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(base_url="http://test") as ac:
         yield ac
 
 
@@ -277,7 +278,6 @@ class TestConfiguration:
     
     def test_pattern_matching(self):
         """Test request pattern matching."""
-        from mock_openai.config import ResponsePattern
         
         pattern = ResponsePattern(
             match={"model": "gpt-4", "content_regex": ".*test.*"},

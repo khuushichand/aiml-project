@@ -33,7 +33,7 @@ flows behave consistently across the SQLite and PostgreSQL content backends.
   resetting the Postgres schema before each test run.
 - Tests seed data via the public database APIs to mirror production flows and
   rebuild FTS structures to guarantee parity.
-- Postgres parametrisations are skipped automatically when psycopg2 or the
+- Postgres parametrisations are skipped automatically when psycopg (or psycopg2) or the
   required env vars are absent, keeping local developer runs lightweight.
 
 ## CI Hook

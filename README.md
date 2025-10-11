@@ -42,9 +42,65 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **1000+ Sites** [Stable]: Compatible with any site supported by yt-dlp
 - **OCR Backends** [Stable]: List/health for OCR backends and preload support (`GET /api/v1/ocr/backends`, `POST /api/v1/ocr/points/preload`). Docs: `Docs/API-related/OCR_API_Documentation.md`
 
+#### Email Archives (ZIP of .eml, MBOX, PST/OST)
+- Supported: Single `.eml` files (default), ZIP archives of `.eml`, and MBOX mailboxes when explicitly enabled per request. PST/OST is feature‑flagged with informative errors until external tools are configured.
+- Opt-in flags:
+  - `accept_archives=true` to allow `.zip` uploads of `.eml` files.
+  - `accept_mbox=true` to allow `.mbox` uploads.
+  - `accept_pst=true` to allow `.pst`/`.ost` uploads (feature flag; parsing requires external tools).
+- Grouping: Each child email extracted from a ZIP receives `email_archive:<zip_file_stem>`; from an MBOX receives `email_mbox:<mbox_file_stem>`; PST/OST include `email_pst:<pst_file_stem>` for easy filtering in UI and search.
+- Persistence: For `/api/v1/media/add`, each child email is persisted individually; the synthetic parent (ZIP/MBOX/PST) is not persisted.
+
+Examples (cURL)
+
+Process-only (returns child results, does not persist):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/process-emails \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "accept_archives=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.zip;type=application/zip"
+```
+
+Add to media (persists each child email):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/add \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "media_type=email" \
+  -F "accept_archives=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.zip;type=application/zip"
+```
+
+MBOX (process-only and add):
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/media/process-emails \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "accept_mbox=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.mbox;type=application/mbox"
+
+curl -X POST http://127.0.0.1:8000/api/v1/media/add \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "media_type=email" \
+  -F "accept_mbox=true" \
+  -F "perform_chunking=true" \
+  -F "files=@/path/to/emails.mbox;type=application/mbox"
+```
+
+Notes:
+- By default, only `.eml` is accepted for `media_type=email`. When `accept_archives=true`, `.zip` is also allowed; when `accept_mbox=true`, `.mbox` is also allowed; when `accept_pst=true`, `.pst`/`.ost` uploads are accepted but require external tooling to parse.
+- Non-`.eml` entries inside the ZIP are ignored. Container limits (member count and uncompressed size) are enforced for safety; MBOX enforces message count and size limits.
+
+PST/OST note
+- When `pypff` (libpff) is installed, PST/OST messages are expanded and processed like MBOX with guardrails. Without `pypff`, enabling `accept_pst=true` returns an informative error; grouping keyword is still included for UI filtering.
+
 ### Content Analysis
 - **17+ LLM Providers** [Stable]: 
-  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen
+  - Commercial: OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, HuggingFace, Mistral, OpenRouter, Qwen, AWS Bedrock
   - Local: Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, Custom OpenAI API endpoints supported
 - **Flexible Analysis** [Stable]: Multiple chunking strategies and prompt customization
 - **Evaluation System** [Stable]: G-Eval, RAG evaluation, response quality metrics
@@ -61,6 +117,11 @@ Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 - **Chat API** [Stable]: OpenAI-compatible chat with history (`/api/v1/chat/completions`, `app/core/Chat/`)
 - **Chat Dictionaries** [Stable]: CRUD + processing endpoints (`/api/v1/chat/*dictionaries*`)
 - **Providers** [Stable]: 16+ providers + local backends; listing/health and model metadata (`/api/v1/llm/providers`, `/api/v1/llm/providers/{name}`, `/api/v1/llm/models`, `/api/v1/llm/models/metadata`, `/api/v1/llm/health`; code: `app/api/v1/endpoints/llm_providers.py`)
+
+### AuthNZ, Organizations, and Keys
+- **Auth Modes** [Stable]: Single-user API key; Multi-user JWT
+- **Organizations & Teams** [New]: Group users into orgs and teams; membership management APIs
+- **Virtual Keys** [New]: API keys with endpoint allowlists and day/month token/USD budgets for LLM usage control; optional provider/model allowlists
 
 ### Audio
 - **Speech-to-Text** [Stable]: faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`)
@@ -1132,3 +1193,71 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
 ---
 
 **Note**: This is v0.1.0 with stable core functionality. Some features are still in development. Check the [roadmap](https://github.com/rmusser01/tldw_server/milestone/22) for upcoming features.
+- AWS Bedrock (OpenAI-compatible Chat API)
+
+  - Env vars (or config.txt [API] keys):
+    - `BEDROCK_API_KEY` or `AWS_BEARER_TOKEN_BEDROCK`
+    - `BEDROCK_REGION` (e.g., `us-west-2`) or `BEDROCK_RUNTIME_ENDPOINT` (e.g., `https://bedrock-runtime.us-west-2.amazonaws.com`)
+    - `BEDROCK_MODEL` (optional default, e.g., `openai.gpt-oss-20b-1:0`)
+
+  - Request example (Bedrock guardrails supported):
+
+    POST /api/v1/chat/completions
+    {
+      "api_provider": "bedrock",
+      "model": "openai.gpt-oss-20b-1:0",
+      "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"}
+      ],
+      "extra_headers": {
+        "X-Amzn-Bedrock-GuardrailIdentifier": "gr-123",
+        "X-Amzn-Bedrock-GuardrailVersion": "1",
+        "X-Amzn-Bedrock-Trace": "ENABLED"
+      },
+      "extra_body": {
+        "amazon-bedrock-guardrailConfig": {"tagSuffix": "audit-tag"}
+      }
+    }
+
+  - See Docs/Providers/AWS_Bedrock.md for details.
+- performance: opt-in performance/scale tests (e.g., large ZIP/MBOX containers). Run with `-m "performance"`.
+- requires_pypff: tests that require `pypff`/`libpff` to be installed locally. Run with `-m "requires_pypff"` (these skip if the module is not available).
+
+Examples:
+
+```
+python -m pytest -q -m "performance" tldw_Server_API/tests/Media_Ingestion_Modification
+python -m pytest -q -m "requires_pypff" tldw_Server_API/tests/Media_Ingestion_Modification
+```
+## Organizations, Teams, and Virtual Keys
+
+You can logically group users into Organizations and Teams (teams belong to an org) and issue Virtual API Keys with tight scopes and budgets to limit LLM usage and reduce blast radius if a key leaks.
+
+- Hierarchy
+  - Organization → Teams → Users (membership tables managed by admin endpoints)
+- Virtual Keys (API keys with extra metadata)
+  - Endpoint allowlists: e.g., allow only `chat.completions` and/or `embeddings`
+  - Budgets: day/month token limits and day/month USD limits
+  - Optional provider/model allowlists: set allowlists and send `X-LLM-Provider` header; models are read from request JSON when available
+
+Server-side enforcement
+- Middleware checks Virtual Keys on LLM endpoints (`/api/v1/chat/completions`, `/api/v1/embeddings` by default)
+- Blocks disallowed endpoints with 403
+- Checks budgets from `llm_usage_log` and returns 402 if exceeded
+
+Admin API (selected)
+- POST `/api/v1/admin/orgs` — create organization; GET `/api/v1/admin/orgs` — list
+- POST `/api/v1/admin/orgs/{org_id}/teams` — create team; GET `/api/v1/admin/orgs/{org_id}/teams` — list
+- POST `/api/v1/admin/teams/{team_id}/members` — add user to team; GET `/api/v1/admin/teams/{team_id}/members` — list
+- POST `/api/v1/admin/users/{user_id}/virtual-keys` — create virtual key with budgets/scopes
+- GET `/api/v1/admin/users/{user_id}/virtual-keys` — list virtual keys (metadata only)
+
+Configuration
+- `VIRTUAL_KEYS_ENABLED` default true
+- `LLM_BUDGET_ENFORCE` default true
+- `LLM_BUDGET_ENDPOINTS`: defaults to `[/api/v1/chat/completions, /api/v1/embeddings]`
+
+Notes
+- Budgets use the `llm_usage_log` table (already part of usage/cost tracking)
+- Provider/model allowlist enforcement is optional and best-effort (parses JSON body when possible)

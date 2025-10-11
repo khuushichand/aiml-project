@@ -120,6 +120,18 @@ class APIKeyManager:
                             FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
                         )
                     """)
+                    # Ensure Virtual Key columns (Postgres)
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints JSONB")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers JSONB")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models JSONB")
                     
                 else:
                     # SQLite
@@ -149,12 +161,33 @@ class APIKeyManager:
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
-                    
+                    # Ensure Virtual Key columns (SQLite)
+                    cur = await conn.execute("PRAGMA table_info(api_keys)")
+                    rows = await cur.fetchall()
+                    cols = {r[1] for r in rows}
+                    async def _add_col(name: str, decl: str):
+                        if name not in cols:
+                            await conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+                    await _add_col('is_virtual', "is_virtual INTEGER DEFAULT 0")
+                    await _add_col('parent_key_id', "parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await _add_col('org_id', "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await _add_col('team_id', "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await _add_col('llm_budget_day_tokens', "llm_budget_day_tokens INTEGER")
+                    await _add_col('llm_budget_month_tokens', "llm_budget_month_tokens INTEGER")
+                    await _add_col('llm_budget_day_usd', "llm_budget_day_usd REAL")
+                    await _add_col('llm_budget_month_usd', "llm_budget_month_usd REAL")
+                    await _add_col('llm_allowed_endpoints', "llm_allowed_endpoints TEXT")
+                    await _add_col('llm_allowed_providers', "llm_allowed_providers TEXT")
+                    await _add_col('llm_allowed_models', "llm_allowed_models TEXT")
+
                     # Create indexes
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
                     
                     # Create API key audit log table
                     await conn.execute("""
@@ -318,6 +351,106 @@ class APIKeyManager:
         except Exception as e:
             logger.error(f"Failed to create API key: {e}")
             raise DatabaseError(f"Failed to create API key: {e}")
+
+    async def create_virtual_key(
+        self,
+        *,
+        user_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        expires_in_days: Optional[int] = 30,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        allowed_endpoints: Optional[list[str]] = None,
+        budget_day_tokens: Optional[int] = None,
+        budget_month_tokens: Optional[int] = None,
+        budget_day_usd: Optional[float] = None,
+        budget_month_usd: Optional[float] = None,
+        parent_key_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Create a Virtual API Key with LLM endpoint scope and budgets."""
+        if not self._initialized:
+            await self.initialize()
+
+        full_key, key_hash = self.generate_api_key()
+        key_prefix = full_key[:10] + "..."
+        expires_at = None
+        if expires_in_days:
+            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                import json
+                if hasattr(conn, 'fetchval'):
+                    key_id = await conn.fetchval(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                            is_virtual, parent_key_id, org_id, team_id,
+                            llm_budget_day_tokens, llm_budget_month_tokens,
+                            llm_budget_day_usd, llm_budget_month_usd,
+                            llm_allowed_endpoints
+                        ) VALUES (
+                            $1,$2,$3,$4,$5,$6,'active',$7,
+                            TRUE,$8,$9,$10,
+                            $11,$12,$13,$14,$15
+                        ) RETURNING id
+                        """,
+                        user_id, key_hash, key_prefix, name, description, 'read', expires_at,
+                        parent_key_id, org_id, team_id,
+                        budget_day_tokens, budget_month_tokens,
+                        budget_day_usd, budget_month_usd,
+                        json.dumps(allowed_endpoints) if allowed_endpoints else None,
+                    )
+                else:
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                            is_virtual, parent_key_id, org_id, team_id,
+                            llm_budget_day_tokens, llm_budget_month_tokens,
+                            llm_budget_day_usd, llm_budget_month_usd,
+                            llm_allowed_endpoints
+                        ) VALUES (?,?,?,?,?,?,'active',?,
+                            1,?,?,?,?,?,?,?,?
+                        )
+                        """,
+                        (
+                            user_id, key_hash, key_prefix, name, description, 'read',
+                            expires_at.isoformat() if expires_at else None,
+                            parent_key_id, org_id, team_id,
+                            budget_day_tokens, budget_month_tokens,
+                            budget_day_usd, budget_month_usd,
+                            (json.dumps(allowed_endpoints) if allowed_endpoints else None),
+                        )
+                    )
+                    key_id = cursor.lastrowid
+                    await conn.commit()
+
+            await self._log_action(key_id, "created_virtual", user_id, {
+                "org_id": org_id, "team_id": team_id, "budgets": {
+                    "day_tokens": budget_day_tokens,
+                    "month_tokens": budget_month_tokens,
+                    "day_usd": budget_day_usd,
+                    "month_usd": budget_month_usd,
+                },
+                "allowed_endpoints": allowed_endpoints or []
+            })
+
+            return {
+                "id": key_id,
+                "key": full_key,
+                "key_prefix": key_prefix,
+                "name": name,
+                "scope": 'read',
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "created_at": datetime.utcnow().isoformat(),
+                "message": "Store this key securely - it will not be shown again"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to create virtual API key: {e}")
+            raise DatabaseError(f"Failed to create virtual API key: {e}")
     
     async def validate_api_key(
         self,
@@ -346,7 +479,12 @@ class APIKeyManager:
             result = await self.db_pool.fetchone(
                 """
                 SELECT id, user_id, name, scope, status, expires_at,
-                       rate_limit, allowed_ips, usage_count
+                       rate_limit, allowed_ips, usage_count,
+                       COALESCE(is_virtual, 0) AS is_virtual,
+                       parent_key_id, org_id, team_id,
+                       llm_budget_day_tokens, llm_budget_month_tokens,
+                       llm_budget_day_usd, llm_budget_month_usd,
+                       llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
                 FROM api_keys
                 WHERE key_hash = ? AND status = ?
                 """,

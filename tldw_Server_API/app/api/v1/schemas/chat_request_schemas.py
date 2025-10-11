@@ -55,6 +55,7 @@ def _get_setting(env_var, section, key, default=""):
     
     return default
 ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
+    "bedrock",
     "anthropic",
     "cohere",
     "deepseek",
@@ -126,6 +127,7 @@ API_KEYS = get_api_keys()
 
 # For type hinting - define explicitly
 SUPPORTED_API_ENDPOINTS = Literal[
+    "bedrock",
     "anthropic",
     "cohere",
     "deepseek",
@@ -288,6 +290,19 @@ class ChatCompletionRequest(BaseModel):
     tools: Optional[List[ToolDefinition]] = Field(None, max_length=128, description="Tools the model may call (provider support varies).")
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field("auto", description="Controls tool usage (provider support varies).")
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
+
+    # --- Bedrock Guardrails Extensions ---
+    extra_headers: Optional[Dict[str, str]] = Field(
+        None,
+        description="Provider-specific additional headers to include via the request body (e.g., Bedrock guardrails)."
+                    " For Bedrock, include keys: 'X-Amzn-Bedrock-GuardrailIdentifier',"
+                    " 'X-Amzn-Bedrock-GuardrailVersion', and optional 'X-Amzn-Bedrock-Trace'."
+    )
+    extra_body: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider-specific extra body content. For Bedrock guardrails, include"
+                    " 'amazon-bedrock-guardrailConfig': { 'tagSuffix': '...'} if needed."
+    )
 
     # --- Extended Parameters for chat_api_call ---
     minp: Optional[float] = Field(None, description="[Extension] Minimum probability threshold (provider specific).")

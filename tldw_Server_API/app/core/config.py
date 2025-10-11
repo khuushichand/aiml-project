@@ -1017,6 +1017,19 @@ def load_and_log_configs():
         openrouter_api_retries = config_parser_object.get('API', 'openrouter_api_retry', fallback='3')
         openrouter_api_retry_delay = config_parser_object.get('API', 'openrouter_api_retry_delay', fallback='5')
 
+        # Bedrock
+        bedrock_api_key = os.getenv('BEDROCK_API_KEY') or os.getenv('AWS_BEARER_TOKEN_BEDROCK') or config_parser_object.get('API', 'bedrock_api_key', fallback=None)
+        bedrock_region = os.getenv('BEDROCK_REGION') or config_parser_object.get('API', 'bedrock_region', fallback='us-west-2')
+        bedrock_runtime_endpoint = os.getenv('BEDROCK_RUNTIME_ENDPOINT') or config_parser_object.get('API', 'bedrock_runtime_endpoint', fallback=None)
+        bedrock_model = os.getenv('BEDROCK_MODEL') or config_parser_object.get('API', 'bedrock_model', fallback=None)
+        bedrock_streaming = config_parser_object.get('API', 'bedrock_streaming', fallback='False')
+        bedrock_temperature = config_parser_object.get('API', 'bedrock_temperature', fallback='0.7')
+        bedrock_top_p = config_parser_object.get('API', 'bedrock_top_p', fallback='')
+        bedrock_max_tokens = config_parser_object.get('API', 'bedrock_max_tokens', fallback='')
+        bedrock_api_timeout = config_parser_object.get('API', 'bedrock_api_timeout', fallback='90')
+        bedrock_api_retries = config_parser_object.get('API', 'bedrock_api_retry', fallback='3')
+        bedrock_api_retry_delay = config_parser_object.get('API', 'bedrock_api_retry_delay', fallback='5')
+
         # Logging Checks for model loads
         # logging.debug(f"Loaded Anthropic Model: {anthropic_model}")
         # logging.debug(f"Loaded Cohere Model: {cohere_model}")
@@ -1601,6 +1614,19 @@ def load_and_log_configs():
                 'api_timeout': openrouter_api_timeout,
                 'api_retries': openrouter_api_retries,
                 'api_retry_delay': openrouter_api_retry_delay
+            },
+            'bedrock_api': {
+                'api_key': bedrock_api_key,
+                'region': bedrock_region,
+                'runtime_endpoint': bedrock_runtime_endpoint,
+                'model': bedrock_model,
+                'streaming': bedrock_streaming,
+                'temperature': bedrock_temperature,
+                'top_p': bedrock_top_p,
+                'max_tokens': bedrock_max_tokens,
+                'api_timeout': bedrock_api_timeout,
+                'api_retries': bedrock_api_retries,
+                'api_retry_delay': bedrock_api_retry_delay
             },
             'openai_api': {
                 'api_key': openai_api_key,

@@ -130,9 +130,11 @@
         <h3>Vectors</h3>
         <div class="columns">
             <div class="column">
-                <div class="form-group">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_id">Store ID:</label>
-                    <input id="vs_id" placeholder="vs_...">
+                    <input id="vs_id" placeholder="vs_..." onblur="vsUpdateIndexBadgeFromId()">
+                    <span id="vs_index_badge" style="padding:2px 6px; border-radius:10px; font-size:12px; background:#ccc; color:#222; display:none;">index: n/a</span>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
                 </div>
                 <div class="form-group">
                     <label for="vec_text">Content (auto-embed) or Values (JSON array):</label>
@@ -180,8 +182,9 @@
             <div class="column">
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_admin_id">Store ID:</label>
-                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;">
+                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;" onblur="vsUpdateIndexBadgeFromId()">
                     <button class="api-button" onclick="vsAdminIndexInfo()">Index Info</button>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center;">
                     <label for="vs_ef_search">ef_search:</label>
@@ -199,7 +202,7 @@
                     <input id="vs_index_efc" type="number" value="200" min="1" style="width:120px;">
                     <label for="vs_index_lists">lists (IVF):</label>
                     <input id="vs_index_lists" type="number" value="100" min="1" style="width:100px;">
-                    <button class="api-button" onclick="vsAdminRebuildIndex()">Rebuild Index</button>
+                    <button class="api-button btn-danger" onclick="vsAdminRebuildIndex()">Rebuild Index</button>
                 </div>
             </div>
         </div>
@@ -228,6 +231,27 @@ async function vsList(){
     li.innerHTML = `${s.name} (<code>${s.id}</code>) — dim=${s.dimensions} ` +
                    `<button class="btn-small" onclick="vsRenameQuick('${s.id}')">Rename</button>` +
                    ` <button class="btn-small" onclick="vsSelect('${s.id}','${s.name.replace(/"/g,'&quot;')}')">Select</button>`;
+    // Add inline index-type badge and manual refresh button
+    try {
+      const rowBadge = document.createElement('span');
+      rowBadge.id = `vs_row_badge_${s.id}`;
+      rowBadge.className = 'vs-row-badge';
+      rowBadge.style.cssText = 'margin-left:6px; padding:2px 6px; border-radius:10px; font-size:12px; background:#eee; color:#444;';
+      rowBadge.textContent = 'index: …';
+      li.appendChild(rowBadge);
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'btn-small';
+      refreshBtn.textContent = 'Refresh';
+      refreshBtn.onclick = (ev) => { ev.stopPropagation(); vsRefreshRowBadge(s.id); };
+      li.appendChild(refreshBtn);
+      // Lazy-load badge on first hover
+      li.addEventListener('mouseenter', () => {
+        const badgeEl = document.getElementById(`vs_row_badge_${s.id}`);
+        if (badgeEl && !badgeEl.dataset.loaded) {
+          vsFetchIndexBadgeForStore(s.id, badgeEl).catch(()=>{});
+        }
+      }, { once: true });
+    } catch {}
     li.style.cursor = 'pointer';
     li.onclick = () => {
       document.getElementById('vs_edit_id').value = s.id;
@@ -330,6 +354,7 @@ async function vsAdminIndexInfo(){
   if (!id){ alert('Enter store id'); return; }
   const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/index_info`);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  vsRenderIndexBadge(res);
 }
 
 async function vsAdminSetEfSearch(){
@@ -346,8 +371,94 @@ async function vsAdminRebuildIndex(){
   const m = parseInt(document.getElementById('vs_index_m')?.value || '16');
   const ef_construction = parseInt(document.getElementById('vs_index_efc')?.value || '200');
   const lists = parseInt(document.getElementById('vs_index_lists')?.value || '100');
-  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/rebuild_index`, { index_type, metric, m, ef_construction, lists });
-  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+  // Styled danger modal instead of confirm
+  const notes = `
+    <div style="border-left:4px solid var(--color-error); padding:8px 12px; background: var(--color-surface-alt); margin-bottom:10px;">
+      <div style="font-weight:600; color: var(--color-error); margin-bottom:6px;">Danger: Rebuild Index</div>
+      <div style="color: var(--color-text-secondary);">
+        This operation will drop and recreate the ANN index for <code>${Utils.escapeHtml(id)}</code>.<br>
+        During rebuild, query performance may degrade. For large datasets, consider running off-peak.<br>
+        Settings:<br>
+        • Type: <b>${Utils.escapeHtml(index_type)}</b> • Metric: <b>${Utils.escapeHtml(metric)}</b><br>
+        • HNSW → m=<b>${m}</b>, ef_construction=<b>${ef_construction}</b> • IVFFLAT → lists=<b>${lists}</b>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" type="button" id="rb_cancel">Cancel</button>
+    <button class="btn btn-danger" type="button" id="rb_confirm">Rebuild Index</button>
+  `;
+  const modal = new Modal({ title: 'Confirm Rebuild', content: notes, size: 'medium', footer });
+  modal.show();
+  const onConfirm = async () => {
+    try {
+      const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/rebuild_index`, { index_type, metric, m, ef_construction, lists });
+      document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+      vsRenderIndexBadge(res);
+      try { vsRefreshRowBadge(id); } catch {}
+      if (typeof Toast !== 'undefined') Toast.success('Index rebuild started');
+    } catch(e){
+      if (typeof Toast !== 'undefined') Toast.error(`Rebuild failed: ${e?.message||e}`);
+    } finally {
+      modal.close();
+    }
+  };
+  const onCancel = () => modal.close();
+  modal.modal.querySelector('#rb_confirm').onclick = onConfirm;
+  modal.modal.querySelector('#rb_cancel').onclick = onCancel;
+}
+
+async function vsUpdateIndexBadgeFromId(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  const badge = document.getElementById('vs_index_badge');
+  if (!id || !badge){ return; }
+  try {
+    const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/index_info`);
+    vsRenderIndexBadge(res);
+  } catch(e) { badge.style.display = 'none'; }
+}
+
+function vsRenderIndexBadge(info){
+  const badge = document.getElementById('vs_index_badge');
+  if (!badge) return;
+  const t = (info.index_type || info.backend || 'n/a').toString().toLowerCase();
+  let text = `index: ${t}`;
+  if (info.ops) text += ` (${info.ops})`;
+  badge.textContent = text;
+  badge.style.display = 'inline-block';
+  let bg = '#ccc', fg = '#222';
+  if (t === 'hnsw') { bg = '#d1f2d1'; fg = '#195c19'; }
+  else if (t === 'ivfflat') { bg = '#ffe0b3'; fg = '#5c3c19'; }
+  else if (t === 'managed') { bg = '#d9e7ff'; fg = '#123c7a'; }
+  badge.style.background = bg;
+  badge.style.color = fg;
+}
+
+async function vsFetchIndexBadgeForStore(storeId, badgeEl){
+  try {
+    if (!badgeEl) badgeEl = document.getElementById(`vs_row_badge_${storeId}`);
+    if (!badgeEl) return;
+    badgeEl.textContent = 'index: …';
+    const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(storeId)}/admin/index_info`);
+    const t = (res.index_type || res.backend || 'n/a').toString().toLowerCase();
+    let text = `index: ${t}`;
+    if (res.ops) text += ` (${res.ops})`;
+    badgeEl.textContent = text;
+    let bg = '#eee', fg = '#444';
+    if (t === 'hnsw') { bg = '#d1f2d1'; fg = '#195c19'; }
+    else if (t === 'ivfflat') { bg = '#ffe0b3'; fg = '#5c3c19'; }
+    else if (t === 'managed') { bg = '#d9e7ff'; fg = '#123c7a'; }
+    badgeEl.style.background = bg; badgeEl.style.color = fg;
+    badgeEl.dataset.loaded = '1';
+  } catch (e){
+    if (badgeEl) { badgeEl.textContent = 'index: n/a'; badgeEl.style.background = '#eee'; badgeEl.style.color = '#888'; }
+  }
+}
+
+function vsRefreshRowBadge(storeId){
+  const badgeEl = document.getElementById(`vs_row_badge_${storeId}`);
+  if (badgeEl) { delete badgeEl.dataset.loaded; }
+  vsFetchIndexBadgeForStore(storeId, badgeEl);
 }
 
 async function vsBulkUpsert(){

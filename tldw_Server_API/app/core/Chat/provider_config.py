@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_openai, chat_with_anthropic, chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
-    chat_with_qwen
+    chat_with_qwen, chat_with_bedrock
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
 # 1. Dispatch table for handler functions
 API_CALL_HANDLERS: Dict[str, Callable] = {
     'openai': chat_with_openai,
+    'bedrock': chat_with_bedrock,
     'anthropic': chat_with_anthropic,
     'cohere': chat_with_cohere,
     'groq': chat_with_groq,
@@ -59,6 +60,31 @@ corresponding handler functions (e.g., `chat_with_openai`). This is used by
 # 2. Parameter mapping for each provider
 # Maps generic chat_api_call param name to provider-specific param name
 PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
+    'bedrock': {
+        'api_key': 'api_key',
+        'messages_payload': 'input_data',
+        'prompt': 'custom_prompt_arg',
+        'temp': 'temp',
+        'system_message': 'system_message',
+        'streaming': 'streaming',
+        'maxp': 'maxp',
+        'model': 'model',
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
+        'logprobs': 'logprobs',
+        'top_logprobs': 'top_logprobs',
+        'logit_bias': 'logit_bias',
+        'presence_penalty': 'presence_penalty',
+        'frequency_penalty': 'frequency_penalty',
+        'max_tokens': 'max_tokens',
+        'seed': 'seed',
+        'stop': 'stop',
+        'response_format': 'response_format',
+        'n': 'n',
+        'user_identifier': 'user',
+        'extra_headers': 'extra_headers',
+        'extra_body': 'extra_body',
+    },
     'openai': {
         'api_key': 'api_key',
         'messages_payload': 'input_data',

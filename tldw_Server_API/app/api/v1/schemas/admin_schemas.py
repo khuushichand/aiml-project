@@ -233,6 +233,74 @@ class UsageTopResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+#######################################################################################################################
+#
+# LLM Usage Schemas
+
+class LLMUsageLogRow(BaseModel):
+    id: int
+    ts: datetime
+    user_id: Optional[int] = None
+    key_id: Optional[int] = None
+    endpoint: Optional[str] = None
+    operation: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    status: Optional[int] = None
+    latency_ms: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    total_cost_usd: Optional[float] = None
+    currency: Optional[str] = None
+    estimated: Optional[bool] = None
+    request_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageLogResponse(BaseModel):
+    items: List[LLMUsageLogRow]
+    total: int
+    page: int
+    limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageSummaryRow(BaseModel):
+    group_value: str
+    requests: int
+    errors: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    total_cost_usd: float
+    latency_avg_ms: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMUsageSummaryResponse(BaseModel):
+    items: List[LLMUsageSummaryRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMTopSpenderRow(BaseModel):
+    user_id: int
+    total_cost_usd: float
+    requests: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMTopSpendersResponse(BaseModel):
+    items: List[LLMTopSpenderRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #
 ## End of admin_schemas.py
 #######################################################################################################################

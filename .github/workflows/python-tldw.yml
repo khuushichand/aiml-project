@@ -304,7 +304,7 @@ jobs:
             tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
             tldw_Server_API/tests/Workflows/test_dual_backend_engine.py \
             tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
-            --junit-xml=postgres-tests.xml
+            --timeout=300 --junit-xml=postgres-tests.xml
 
       - name: Upload postgres test results
         if: always()
@@ -373,7 +373,7 @@ jobs:
         run: |
           pytest -v -n auto \
             tldw_Server_API/tests/prompt_studio/integration/test_optimizations_dual_backend_heavy.py \
-            --junit-xml=postgres-heavy-ps-tests.xml
+            --timeout=300 --junit-xml=postgres-heavy-ps-tests.xml
 
       - name: Upload heavy PS test results
         if: always()

@@ -287,6 +287,113 @@ async def setup_database():
                             PRIMARY KEY (user_id, day)
                         )
                     """)
+                    # LLM usage tables (per-request log + daily aggregate)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            operation TEXT,
+                            provider TEXT,
+                            model TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            prompt_tokens INTEGER,
+                            completion_tokens INTEGER,
+                            total_tokens INTEGER,
+                            prompt_cost_usd DOUBLE PRECISION,
+                            completion_cost_usd DOUBLE PRECISION,
+                            total_cost_usd DOUBLE PRECISION,
+                            currency TEXT DEFAULT 'USD',
+                            estimated BOOLEAN DEFAULT FALSE,
+                            request_id TEXT
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+                            day DATE NOT NULL,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            operation TEXT NOT NULL,
+                            provider TEXT NOT NULL,
+                            model TEXT NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            input_tokens BIGINT DEFAULT 0,
+                            output_tokens BIGINT DEFAULT 0,
+                            total_tokens BIGINT DEFAULT 0,
+                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (day, user_id, operation, provider, model)
+                        )
+                    """)
+
+                    # Organizations and Teams hierarchy
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS organizations (
+                            id SERIAL PRIMARY KEY,
+                            uuid VARCHAR(64) UNIQUE,
+                            name VARCHAR(255) UNIQUE NOT NULL,
+                            slug VARCHAR(255) UNIQUE,
+                            owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            metadata JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS org_members (
+                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role VARCHAR(32) DEFAULT 'member',
+                            status VARCHAR(32) DEFAULT 'active',
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (org_id, user_id)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS teams (
+                            id SERIAL PRIMARY KEY,
+                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                            name VARCHAR(255) NOT NULL,
+                            slug VARCHAR(255),
+                            description TEXT,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            metadata JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE (org_id, name)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS team_members (
+                            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            role VARCHAR(32) DEFAULT 'member',
+                            status VARCHAR(32) DEFAULT 'active',
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (team_id, user_id)
+                        )
+                    """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
+
+                    # Extend api_keys with Virtual Key fields
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints JSONB")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers JSONB")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models JSONB")
             print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC)")
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")

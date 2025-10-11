@@ -38,7 +38,7 @@ pip install -r tldw_Server_API/requirements.txt
 pip install gunicorn uvloop httptools redis aioredis prometheus-client
 
 # Optional: PostgreSQL support
-pip install asyncpg psycopg2-binary
+pip install asyncpg "psycopg[binary]"
 ```
 
 ### 2. Set Up Directory Structure

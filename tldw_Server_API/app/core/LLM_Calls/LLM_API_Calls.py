@@ -506,6 +506,177 @@ def chat_with_openai(
         raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")
 
 
+def chat_with_bedrock(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+):
+    """
+    AWS Bedrock via OpenAI-compatible Chat Completions endpoint.
+
+    Uses Bedrock Runtime OpenAI compatibility layer:
+    https://bedrock-runtime.<region>.amazonaws.com/openai/v1/chat/completions
+
+    Auth supports Bedrock API key (Bearer). AWS SigV4 is not implemented here.
+    """
+    loaded_config_data = load_and_log_configs()
+    if loaded_config_data is None:
+        raise ChatConfigurationError(provider="bedrock", message="Configuration not available.")
+
+    br_cfg = loaded_config_data.get('bedrock_api', {})
+    final_api_key = api_key or br_cfg.get('api_key') or os.getenv('BEDROCK_API_KEY')
+    if not final_api_key:
+        # Support the AWS docs' bearer token env var as a fallback
+        final_api_key = os.getenv('AWS_BEARER_TOKEN_BEDROCK')
+    if not final_api_key:
+        raise ChatConfigurationError(provider="bedrock", message="Bedrock API key is required (BEDROCK_API_KEY or AWS_BEARER_TOKEN_BEDROCK).")
+
+    # Determine endpoint
+    runtime_endpoint = br_cfg.get('runtime_endpoint')  # e.g., https://bedrock-runtime.us-west-2.amazonaws.com
+    region = br_cfg.get('region') or os.getenv('BEDROCK_REGION') or 'us-west-2'
+    api_base_url = br_cfg.get('api_base_url')
+    if not api_base_url:
+        if runtime_endpoint:
+            api_base_url = runtime_endpoint.rstrip('/') + '/openai'
+        else:
+            api_base_url = f"https://bedrock-runtime.{region}.amazonaws.com/openai"
+
+    current_model = model or br_cfg.get('model')
+    if not current_model:
+        raise ChatConfigurationError(provider="bedrock", message="Bedrock model is required (set model or configure bedrock_model).")
+
+    current_temp = temp if temp is not None else _safe_cast(br_cfg.get('temperature'), float, 0.7)
+    current_streaming = streaming if streaming is not None else (
+        str(br_cfg.get('streaming', 'false')).lower() == 'true'
+    )
+    current_top_p = maxp if maxp is not None else _safe_cast(br_cfg.get('top_p'), float, None)
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(br_cfg.get('max_tokens'), int, None)
+
+    headers = {
+        'Authorization': f'Bearer {final_api_key}',
+        'Content-Type': 'application/json'
+    }
+
+    # Build messages list and payload
+    api_messages: List[Dict[str, Any]] = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    payload: Dict[str, Any] = {
+        "model": current_model,
+        "messages": api_messages,
+        "stream": current_streaming,
+    }
+    if current_temp is not None: payload["temperature"] = current_temp
+    if current_top_p is not None: payload["top_p"] = current_top_p
+    if current_max_tokens is not None: payload["max_tokens"] = current_max_tokens
+    if n is not None: payload["n"] = n
+    if stop is not None: payload["stop"] = stop
+    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None: payload["logit_bias"] = logit_bias
+    if seed is not None: payload["seed"] = seed
+    if response_format is not None: payload["response_format"] = response_format
+    if tools is not None: payload["tools"] = tools
+    if tool_choice is not None: payload["tool_choice"] = tool_choice
+    if logprobs is not None: payload["logprobs"] = logprobs
+    if top_logprobs is not None: payload["top_logprobs"] = top_logprobs
+    if user is not None: payload["user"] = user
+    if extra_headers is not None: payload["extra_headers"] = extra_headers
+    if extra_body is not None: payload["extra_body"] = extra_body
+
+    # Endpoint path
+    api_url = api_base_url.rstrip('/') + '/v1/chat/completions'
+
+    retry_count = _safe_cast(br_cfg.get('api_retries'), int, 3)
+    retry_delay = _safe_cast(br_cfg.get('api_retry_delay'), float, 1.0)
+    timeout = _safe_cast(br_cfg.get('api_timeout'), float, 90.0)
+
+    logging.debug(f"Bedrock: POST {api_url} (stream={current_streaming})")
+
+    try:
+        retry_strategy = Retry(
+            total=retry_count,
+            backoff_factor=retry_delay,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session = requests.Session()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        if current_streaming:
+            response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=timeout+60)
+            response.raise_for_status()
+
+            def stream_generator():
+                try:
+                    for line in response.iter_lines(decode_unicode=True):
+                        if line:
+                            yield line + "\n\n"
+                except requests.exceptions.ChunkedEncodingError as e_chunk:
+                    logging.error(f"Bedrock stream chunked encoding error: {e_chunk}")
+                    err = json.dumps({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "bedrock_stream_error"}})
+                    yield f"data: {err}\n\n"
+                except Exception as e_stream:
+                    logging.error(f"Bedrock stream iteration error: {e_stream}", exc_info=True)
+                    err = json.dumps({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
+                    yield f"data: {err}\n\n"
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+            return stream_generator()
+        else:
+            response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
+            logging.debug(f"Bedrock: status={response.status_code}")
+            response.raise_for_status()
+            return response.json()
+
+    except requests.exceptions.HTTPError as e:
+        status_code = getattr(e.response, 'status_code', None)
+        error_text = getattr(e.response, 'text', str(e))
+        logging.error(f"Bedrock HTTPError {status_code}: {repr(error_text[:500])}")
+        if status_code in (400, 404, 422):
+            raise ChatBadRequestError(provider="bedrock", message=error_text)
+        elif status_code in (401, 403):
+            raise ChatAuthenticationError(provider="bedrock", message=error_text)
+        elif status_code == 429:
+            raise ChatRateLimitError(provider="bedrock", message=error_text)
+        elif status_code in (500, 502, 503, 504):
+            raise ChatProviderError(provider="bedrock", message=error_text, status_code=status_code)
+        else:
+            raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Bedrock RequestException: {e}", exc_info=True)
+        raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
+    except Exception as e:
+        logging.error(f"Bedrock unexpected error: {e}", exc_info=True)
+        raise ChatProviderError(provider="bedrock", message=f"Unexpected error: {e}")
+
+
 def chat_with_anthropic(
         input_data: List[Dict[str, Any]], # Mapped from 'messages_payload'
         model: Optional[str] = None,

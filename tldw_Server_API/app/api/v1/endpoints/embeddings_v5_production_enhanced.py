@@ -37,6 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from pydantic import BaseModel, Field
 
 # Authentication
@@ -1481,6 +1482,32 @@ async def create_embedding_endpoint(
             }
         )
         
+        # Persist a usage log entry (best-effort)
+        try:
+            user_id = getattr(current_user, 'id', None)
+            api_key_id = None
+            try:
+                if request is not None and hasattr(request, 'state'):
+                    api_key_id = getattr(request.state, 'api_key_id', None)
+            except Exception:
+                api_key_id = None
+            await log_llm_usage(
+                user_id=user_id,
+                key_id=api_key_id,
+                endpoint=f"{request.method}:{request.url.path}",
+                operation="embeddings",
+                provider=provider,
+                model=model,
+                status=200,
+                latency_ms=int((duration) * 1000),
+                prompt_tokens=int(num_tokens or 0),
+                completion_tokens=0,
+                total_tokens=int(num_tokens or 0),
+                request_id=request.headers.get('X-Request-ID') if request else None,
+            )
+        except Exception:
+            pass
+
         return CreateEmbeddingResponse(
             data=output_data,
             model=f"{provider}:{model}" if provider != "openai" else model,

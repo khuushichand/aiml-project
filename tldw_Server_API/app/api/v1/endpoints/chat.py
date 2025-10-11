@@ -155,6 +155,8 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_p
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -613,6 +615,73 @@ async def create_chat_completion(
     except ValueError as e:
         logger.warning(f"Input validation error: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Moderation: apply global/per-user policy to input messages (redact or block)
+    try:
+        moderation = get_moderation_service()
+        # Prefer authenticated user_id from request state, fall back to client_id
+        req_user_id = None
+        try:
+            if request is not None and hasattr(request, 'state'):
+                req_user_id = getattr(request.state, 'user_id', None)
+        except Exception:
+            req_user_id = None
+        eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+        def _moderate_text_in_place(text: str) -> str:
+            if not eff_policy.enabled or not eff_policy.input_enabled:
+                return text
+            flagged, sample = moderation.check_text(text, eff_policy)
+            if not flagged:
+                return text
+            logger.info(f"Input moderation flag (user={req_user_id or client_id}): pattern={sample}")
+            # Metrics + Audit (input)
+            try:
+                metrics.track_moderation_input(str(req_user_id or client_id), eff_policy.input_action, category="default")
+            except Exception:
+                pass
+            try:
+                if audit_service and context:
+                    # Fire and forget to avoid blocking in nested function
+                    import asyncio as _asyncio
+                    _asyncio.create_task(
+                        audit_service.log_event(
+                            event_type=AuditEventType.SECURITY_VIOLATION,
+                            context=context,
+                            action="moderation.input",
+                            result=("failure" if eff_policy.input_action == 'block' else "success"),
+                            metadata={
+                                "phase": "input",
+                                "action": eff_policy.input_action,
+                                "pattern": sample,
+                            }
+                        )
+                    )
+            except Exception:
+                pass
+            if eff_policy.input_action == 'block':
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
+            if eff_policy.input_action == 'redact':
+                return moderation.redact_text(text, eff_policy)
+            return text  # warn → pass-through
+
+        if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
+            for m in request_data.messages:
+                if getattr(m, 'role', None) != 'user':
+                    continue
+                if isinstance(m.content, str):
+                    m.content = _moderate_text_in_place(m.content)
+                elif isinstance(m.content, list):
+                    for part in m.content:
+                        try_type = getattr(part, 'type', None)
+                        if try_type == 'text':
+                            current = getattr(part, 'text', None)
+                            if isinstance(current, str):
+                                setattr(part, 'text', _moderate_text_in_place(current))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Moderation input processing error: {e}")
 
     # Parse provider from model string if it contains a provider prefix (e.g., "anthropic/claude-3-opus")
     model_str = request_data.model or ""
@@ -1113,18 +1182,142 @@ async def create_chat_completion(
                     )
                 else:
                     logger.info(f"No persistent save (should_persist={should_persist}) or missing data for conv_id {final_conversation_id}.")
+                # After streaming completes, log estimated usage for streaming calls
+                try:
+                    import json as _json
+                    # Estimate prompt tokens from templated payload size
+                    pt_est = 0
+                    try:
+                        pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                    except Exception:
+                        pt_est = 0
+                    # Estimate completion tokens from full_reply size
+                    ct_est = max(0, len(full_reply or "") // 4)
+                    user_id = None
+                    api_key_id = None
+                    try:
+                        if request is not None and hasattr(request, 'state'):
+                            user_id = getattr(request.state, 'user_id', None)
+                            api_key_id = getattr(request.state, 'api_key_id', None)
+                    except Exception:
+                        pass
+                    # Latency since provider call started
+                    try:
+                        latency_ms = int((time.time() - llm_start_time) * 1000)
+                    except Exception:
+                        latency_ms = 0
+                    await log_llm_usage(
+                        user_id=user_id,
+                        key_id=api_key_id,
+                        endpoint=f"{request.method}:{request.url.path}",
+                        operation="chat",
+                        provider=provider,
+                        model=model,
+                        status=200,
+                        latency_ms=latency_ms,
+                        prompt_tokens=int(pt_est),
+                        completion_tokens=int(ct_est),
+                        total_tokens=int(pt_est + ct_est),
+                        request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
+                        estimated=True,
+                    )
+                except Exception:
+                    pass
 
             # Create streaming response with timeout and heartbeat support
             # Wrap the generator with metrics tracking
             async def tracked_streaming_generator():
                 async with metrics.track_streaming(final_conversation_id) as stream_tracker:
+                    # Build an optional text transform for output moderation
+                    moderation = get_moderation_service()
+                    req_user_id = None
+                    try:
+                        if request is not None and hasattr(request, 'state'):
+                            req_user_id = getattr(request.state, 'user_id', None)
+                    except Exception:
+                        req_user_id = None
+                    eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+                    from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
+
+                    stream_block_logged = False
+                    stream_redact_logged = False
+
+                    def _out_transform(s: str) -> str:
+                        if not eff_policy.enabled or not eff_policy.output_enabled:
+                            return s
+                        flagged, sample = moderation.check_text(s, eff_policy)
+                        if flagged:
+                            if eff_policy.output_action == 'block':
+                                # Abort stream gracefully after sending SSE error
+                                try:
+                                    if not stream_block_logged:
+                                        metrics.track_moderation_stream_block(str(req_user_id or client_id), category="default")
+                                        stream_block_logged = True
+                                except Exception:
+                                    pass
+                                try:
+                                    if audit_service and context and not stream_block_logged:
+                                        import asyncio as _asyncio
+                                        _asyncio.create_task(
+                                            audit_service.log_event(
+                                                event_type=AuditEventType.SECURITY_VIOLATION,
+                                                context=context,
+                                                action="moderation.output",
+                                                result="failure",
+                                                metadata={
+                                                    "phase": "output",
+                                                    "streaming": True,
+                                                    "action": "block",
+                                                    "pattern": sample,
+                                                }
+                                            )
+                                        )
+                                except Exception:
+                                    pass
+                                raise StopStreamWithError(
+                                    message="Output violates moderation policy",
+                                    error_type="output_moderation_block"
+                                )
+                            if eff_policy.output_action == 'redact':
+                                try:
+                                    if not stream_redact_logged:
+                                        metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category="default")
+                                        stream_redact_logged = True
+                                except Exception:
+                                    pass
+                                try:
+                                    if audit_service and context and not stream_redact_logged:
+                                        import asyncio as _asyncio
+                                        _asyncio.create_task(
+                                            audit_service.log_event(
+                                                event_type=AuditEventType.SECURITY_VIOLATION,
+                                                context=context,
+                                                action="moderation.output",
+                                                result="success",
+                                                metadata={
+                                                    "phase": "output",
+                                                    "streaming": True,
+                                                    "action": "redact",
+                                                    "pattern": sample,
+                                                }
+                                            )
+                                        )
+                                except Exception:
+                                    pass
+                                return moderation.redact_text(s, eff_policy)
+                            # warn → pass-through
+                            return s
+                        return s
+
                     generator = create_streaming_response_with_timeout(
                         stream=raw_stream_iter,
                         conversation_id=final_conversation_id,
                         model_name=request_data.model,
                         save_callback=save_callback,
                         idle_timeout=300,  # 5 minutes
-                        heartbeat_interval=30  # 30 seconds
+                        heartbeat_interval=30,  # 30 seconds
+                        text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None
                     )
                     async for chunk in generator:
                         # Track chunks and heartbeats
@@ -1163,6 +1356,33 @@ async def create_chat_completion(
                 # Normalize unexpected HTTPExceptions from provider layer to generic 500
                 llm_latency = time.time() - llm_start_time
                 metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(he).__name__)
+                # Log failed usage record (no tokens)
+                try:
+                    user_id = None
+                    api_key_id = None
+                    try:
+                        if request is not None and hasattr(request, 'state'):
+                            user_id = getattr(request.state, 'user_id', None)
+                            api_key_id = getattr(request.state, 'api_key_id', None)
+                    except Exception:
+                        pass
+                    await log_llm_usage(
+                        user_id=user_id,
+                        key_id=api_key_id,
+                        endpoint=f"{request.method}:{request.url.path}",
+                        operation="chat",
+                        provider=provider,
+                        model=model,
+                        status=500,
+                        latency_ms=int(llm_latency * 1000),
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                        request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
+                        estimated=True,
+                    )
+                except Exception:
+                    pass
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail="An unexpected internal server error occurred.")
             except Exception as e:
@@ -1220,12 +1440,150 @@ async def create_chat_completion(
                         model=model,
                         provider=provider
                     )
+                    # Persist usage log (success)
+                    try:
+                        user_id = None
+                        api_key_id = None
+                        try:
+                            if request is not None and hasattr(request, 'state'):
+                                user_id = getattr(request.state, 'user_id', None)
+                                api_key_id = getattr(request.state, 'api_key_id', None)
+                        except Exception:
+                            pass
+                        await log_llm_usage(
+                            user_id=user_id,
+                            key_id=api_key_id,
+                            endpoint=f"{request.method}:{request.url.path}",
+                            operation="chat",
+                            provider=provider,
+                            model=model,
+                            status=200,
+                            latency_ms=int(llm_latency * 1000),
+                            prompt_tokens=int(prompt_tokens or 0),
+                            completion_tokens=int(completion_tokens or 0),
+                            total_tokens=int((usage.get("total_tokens") or 0) or (int(prompt_tokens or 0) + int(completion_tokens or 0))),
+                            request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    # No usage provided: estimate very roughly from payload sizes
+                    try:
+                        import json as _json
+                        pt_est = 0
+                        try:
+                            pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                        except Exception:
+                            pt_est = 0
+                        ct_est = 0
+                        try:
+                            if content_to_save:
+                                ct_est = max(0, len(content_to_save) // 4)
+                        except Exception:
+                            ct_est = 0
+                        user_id = None
+                        api_key_id = None
+                        try:
+                            if request is not None and hasattr(request, 'state'):
+                                user_id = getattr(request.state, 'user_id', None)
+                                api_key_id = getattr(request.state, 'api_key_id', None)
+                        except Exception:
+                            pass
+                        await log_llm_usage(
+                            user_id=user_id,
+                            key_id=api_key_id,
+                            endpoint=f"{request.method}:{request.url.path}",
+                            operation="chat",
+                            provider=provider,
+                            model=model,
+                            status=200,
+                            latency_ms=int(llm_latency * 1000),
+                            prompt_tokens=int(pt_est),
+                            completion_tokens=int(ct_est),
+                            total_tokens=int(pt_est + ct_est),
+                            request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
+                            estimated=True,
+                        )
+                    except Exception:
+                        pass
             elif llm_response and isinstance(llm_response, str):
                 content_to_save = llm_response
             elif llm_response is None:
                 logger.error("LLM response is None - treating as provider unavailable error")
                 # Map to provider error (Bad Gateway) to satisfy resilience tests
                 raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
+
+            # Apply output moderation (non-streaming) before persisting
+            try:
+                moderation = get_moderation_service()
+                req_user_id = None
+                try:
+                    if request is not None and hasattr(request, 'state'):
+                        req_user_id = getattr(request.state, 'user_id', None)
+                except Exception:
+                    req_user_id = None
+                eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+                if eff_policy.enabled and eff_policy.output_enabled and content_to_save:
+                    flagged, sample = moderation.check_text(content_to_save, eff_policy)
+                    if flagged and eff_policy.output_action == 'block':
+                        logger.info(f"Output moderation block (user={req_user_id or client_id}): pattern={sample}")
+                        try:
+                            metrics.track_moderation_output(str(req_user_id or client_id), "block", streaming=False, category="default")
+                        except Exception:
+                            pass
+                        try:
+                            if audit_service and context:
+                                await audit_service.log_event(
+                                    event_type=AuditEventType.SECURITY_VIOLATION,
+                                    context=context,
+                                    action="moderation.output",
+                                    result="failure",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": False,
+                                        "action": "block",
+                                        "pattern": sample,
+                                    }
+                                )
+                        except Exception:
+                            pass
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
+                    if flagged or eff_policy.output_action == 'redact':
+                        if flagged:
+                            try:
+                                metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category="default")
+                            except Exception:
+                                pass
+                            try:
+                                if audit_service and context:
+                                    await audit_service.log_event(
+                                        event_type=AuditEventType.SECURITY_VIOLATION,
+                                        context=context,
+                                        action="moderation.output",
+                                        result="success",
+                                        metadata={
+                                            "phase": "output",
+                                            "streaming": False,
+                                            "action": "redact",
+                                            "pattern": sample,
+                                        }
+                                    )
+                            except Exception:
+                                pass
+                        content_to_save = moderation.redact_text(content_to_save, eff_policy)
+                        # Also update llm_response dict if applicable
+                        try:
+                            if isinstance(llm_response, dict):
+                                if llm_response.get('choices') and isinstance(llm_response['choices'], list) and llm_response['choices']:
+                                    msg = llm_response['choices'][0].get('message') or {}
+                                    if isinstance(msg, dict):
+                                        msg['content'] = content_to_save
+                        except Exception:
+                            pass
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Moderation output processing error: {e}")
 
             if should_persist and content_to_save:
                 # Sanitize character name for OpenAI API compatibility (no spaces or special chars)

@@ -7,7 +7,9 @@ Designed to be simple and easy to use.
 Generative endpoints follow openai API spec where possible.
 See [API Design](API_Design.md) for more details.
 
-See also: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
+See also:
+- `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
+- `Docs/API-related/Email_Processing_API.md` for the email processing endpoint (`POST /api/v1/media/process-emails`) and email ingestion via `/media/add`.
 
 ### URLs
 - **URLs**

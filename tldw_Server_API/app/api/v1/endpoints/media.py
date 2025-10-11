@@ -333,6 +333,7 @@ import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing
 import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_lib
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib
 from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
@@ -586,6 +587,12 @@ def get_add_media_form(
     chunk_overlap: int = Form(200, description="Chunk overlap size"),
     custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
     perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
+    # Email options
+    ingest_attachments: bool = Form(False, description="For emails: parse nested .eml attachments and ingest as separate items"),
+    max_depth: int = Form(2, description="Max depth for nested email parsing when ingest_attachments is true"),
+    accept_archives: bool = Form(False, description="Accept .zip archives of EMLs and expand/process members"),
+    accept_mbox: bool = Form(False, description="Accept .mbox mailboxes and expand/process messages"),
+    accept_pst: bool = Form(False, description="Accept .pst/.ost containers (feature-flag; parsing may require external tools)"),
     # Contextual chunking options
     enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
     contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
@@ -694,6 +701,12 @@ def get_add_media_form(
             context_window_size=context_window_size,
             context_strategy=context_strategy,  # pydantic will validate allowed values
             context_token_budget=context_token_budget,
+            # Email options
+            ingest_attachments=ingest_attachments,
+            max_depth=max_depth,
+            accept_archives=accept_archives,
+            accept_mbox=accept_mbox,
+            accept_pst=accept_pst,
             generate_embeddings=generate_embeddings,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
@@ -2418,6 +2431,26 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
 
     final_chunk_method = form_data.chunk_method or default_chunk_method
 
+    # Determine size/overlap defaults by media type while respecting user-provided values
+    # Base defaults come from AddMediaForm (size=500, overlap=200). For 'document' and 'email',
+    # align to ProcessDocuments/Emails endpoints: size=1000 when user didn't override.
+    chunk_size_used = form_data.chunk_size
+    chunk_overlap_used = form_data.chunk_overlap
+    if str(form_data.media_type) in ["document", "email"]:
+        try:
+            # If user didn't explicitly pick a different size (i.e., it's the model default 500), bump to 1000
+            if chunk_size_used is None or int(chunk_size_used) == 500:
+                chunk_size_used = 1000
+        except Exception:
+            chunk_size_used = 1000
+    # Email-specific overlap decoupling: use 150 when not explicitly overridden (model default 200)
+    if str(form_data.media_type) == "email":
+        try:
+            if chunk_overlap_used is None or int(chunk_overlap_used) == 200:
+                chunk_overlap_used = 150
+        except Exception:
+            chunk_overlap_used = 150
+
     # Override to 'ebook_chapters' if media_type is 'ebook', regardless of user input
     if form_data.media_type == 'ebook':
         final_chunk_method = 'ebook_chapters'
@@ -2426,8 +2459,8 @@ def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str
     inferred_enable_contextual = bool(getattr(form_data, 'contextual_llm_model', None) or getattr(form_data, 'context_window_size', None))
     chunk_options = {
         'method': final_chunk_method,
-        'max_size': form_data.chunk_size,
-        'overlap': form_data.chunk_overlap,
+        'max_size': chunk_size_used,
+        'overlap': chunk_overlap_used,
         'adaptive': form_data.use_adaptive_chunking,
         'multi_level': form_data.use_multi_level_chunking,
         # Use specific chunk language, fallback to transcription lang, else None
@@ -3097,6 +3130,9 @@ async def _process_document_like_item(
                      # Use aiofiles directly here since we have the path
                      async with aiofiles.open(processing_filepath, "rb") as f:
                          file_bytes = await f.read()
+                 elif media_type == 'email':
+                      async with aiofiles.open(processing_filepath, "rb") as f:
+                          file_bytes = await f.read()
                  # Update source to the actual path used for processing
                  final_result["processing_source"] = str(processing_filepath) # Keep track of the temp file path
             else:
@@ -3110,6 +3146,9 @@ async def _process_document_like_item(
             processing_filename = path_obj.name
             if media_type == 'pdf':
                  async with aiofiles.open(processing_filepath, "rb") as f: # Use processing_filepath here
+                      file_bytes = await f.read()
+            elif media_type == 'email':
+                 async with aiofiles.open(processing_filepath, "rb") as f:
                       file_bytes = await f.read()
             # processing_source is already the path string
             final_result["processing_source"] = processing_source
@@ -3186,6 +3225,53 @@ async def _process_document_like_item(
                  specific_args["custom_chapter_pattern"] = form_data.custom_chapter_pattern
              # Ensure all necessary args from common_args are passed if needed by process_epub
 
+        elif media_type == "email":
+            # For email, we operate on bytes (consistent with PDF pattern)
+            if file_bytes is None and processing_filepath:
+                try:
+                    async with aiofiles.open(processing_filepath, "rb") as f:
+                        file_bytes = await f.read()
+                except Exception as _e:
+                    raise ValueError(f"Email processing requires file bytes: {_e}")
+            if file_bytes is None:
+                raise ValueError("Email processing requires file bytes, but they were not available.")
+
+            # If this is a supported email container and accepted, process as multiple children
+            name_lower = (processing_filename or item_input_ref).lower()
+            if name_lower.endswith('.zip') and getattr(form_data, 'accept_archives', False):
+                processing_func = email_lib.process_eml_archive_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "archive_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            elif name_lower.endswith('.mbox') and getattr(form_data, 'accept_mbox', False):
+                processing_func = email_lib.process_mbox_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "mbox_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            elif (name_lower.endswith('.pst') or name_lower.endswith('.ost')) and getattr(form_data, 'accept_pst', False):
+                processing_func = email_lib.process_pst_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "pst_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+            else:
+                processing_func = email_lib.process_email_task
+                # Keep run_in_executor=True since it's sync
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "filename": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(form_data, 'ingest_attachments', False),
+                    "max_depth": getattr(form_data, 'max_depth', 2),
+                }
+
         else:
              raise NotImplementedError(f"Processor not implemented for media type: '{media_type}'")
 
@@ -3207,13 +3293,62 @@ async def _process_document_like_item(
             else: # For async functions like process_pdf_task
                 process_result_dict = await processing_func(**final_args)
 
-            if not isinstance(process_result_dict, dict):
-                raise TypeError(f"Processor '{func_name}' returned non-dict: {type(process_result_dict)}")
+            # For email containers (zip/mbox), the processing function may return a list of children results
+            if media_type == 'email' and isinstance(process_result_dict, list) and (
+                getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)
+            ):
+                # Build a synthetic parent result to carry children; no parent DB persistence
+                final_result.update({
+                    "status": "Success",
+                    "media_type": "email",
+                    "content": None,
+                    "metadata": {"title": (form_data.title or (processing_filename or item_input_ref)), "parser_used": "builtin-email"},
+                    "children": process_result_dict,
+                })
+                # Ensure the parent reflects the container grouping keyword for client visibility
+                try:
+                    arch_name = (processing_filename or item_input_ref)
+                    arch_kw = None
+                    if arch_name and str(arch_name).lower().endswith('.zip'):
+                        arch_kw = f"email_archive:{FilePath(arch_name).stem}"
+                    elif arch_name and str(arch_name).lower().endswith('.mbox'):
+                        arch_kw = f"email_mbox:{FilePath(arch_name).stem}"
+                    elif arch_name and (str(arch_name).lower().endswith('.pst') or str(arch_name).lower().endswith('.ost')):
+                        arch_kw = f"email_pst:{FilePath(arch_name).stem}"
+                    if arch_kw:
+                        base_kws: list[str] = []
+                        try:
+                            if isinstance(getattr(form_data, 'keywords', None), list):
+                                base_kws = [str(k).strip().lower() for k in form_data.keywords if k]
+                        except Exception:
+                            base_kws = []
+                        final_result["keywords"] = sorted(set((final_result.get("keywords") or []) + base_kws + [arch_kw]))
+                except Exception:
+                    pass
+            else:
+                if not isinstance(process_result_dict, dict):
+                    raise TypeError(f"Processor '{func_name}' returned non-dict: {type(process_result_dict)}")
+                # Merge the result from the processing function into our final_result
+                final_result.update(process_result_dict)
+                final_result["status"] = process_result_dict.get("status", "Error" if process_result_dict.get("error") else "Success")
+            # Normalize warnings whether result is a dict or a list (archive children)
+            proc_warnings = None
+            if isinstance(process_result_dict, dict):
+                proc_warnings = process_result_dict.get("warnings")
+            elif isinstance(process_result_dict, list):
+                try:
+                    agg = []
+                    for _child in process_result_dict:
+                        if isinstance(_child, dict):
+                            w = _child.get("warnings")
+                            if isinstance(w, list):
+                                agg.extend(w)
+                            elif w:
+                                agg.append(str(w))
+                    proc_warnings = agg if agg else None
+                except Exception:
+                    proc_warnings = None
 
-            # Merge the result from the processing function into our final_result
-            final_result.update(process_result_dict)
-            final_result["status"] = process_result_dict.get("status", "Error" if process_result_dict.get("error") else "Success")
-            proc_warnings = process_result_dict.get("warnings")
             if isinstance(proc_warnings, list):
                  # Ensure warnings list exists before extending
                  if not isinstance(final_result.get("warnings"), list): final_result["warnings"] = []
@@ -3246,7 +3381,55 @@ async def _process_document_like_item(
         combined_keywords = set(form_data.keywords or []) # Use list from form
         if isinstance(extracted_keywords, list):
             combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and k.strip())
+        # If we processed an email archive, propagate child keywords (e.g., archive tag) to the parent
+        try:
+            if media_type == 'email':
+                children = final_result.get('children')
+                if isinstance(children, list):
+                    for _child in children:
+                        if isinstance(_child, dict):
+                            _kws = _child.get('keywords') or []
+                            for _kw in _kws:
+                                if isinstance(_kw, str) and _kw.strip():
+                                    combined_keywords.add(_kw.strip())
+        except Exception:
+            pass
+        # For email with attachment ingestion enabled, add a shared group tag for UI grouping
+        try:
+            if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
+                parent_msg_id = None
+                try:
+                    parent_msg_id = ((metadata_for_db or {}).get('email') or {}).get('message_id')
+                except Exception:
+                    parent_msg_id = None
+                if parent_msg_id:
+                    combined_keywords.add(f"email_group:{str(parent_msg_id)}")
+            # For email containers, add a grouping tag to keywords
+            if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
+                try:
+                    arch_name = (processing_filename or item_input_ref)
+                    if arch_name:
+                        lower = str(arch_name).lower()
+                        if lower.endswith('.zip'):
+                            arch_tag = f"email_archive:{FilePath(arch_name).stem}"
+                            combined_keywords.add(arch_tag)
+                        elif lower.endswith('.mbox'):
+                            mbox_tag = f"email_mbox:{FilePath(arch_name).stem}"
+                            combined_keywords.add(mbox_tag)
+                        elif lower.endswith('.pst') or lower.endswith('.ost'):
+                            pst_tag = f"email_pst:{FilePath(arch_name).stem}"
+                            combined_keywords.add(pst_tag)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         final_keywords_list = sorted(list(combined_keywords))
+        # Reflect final keywords in the response object for client visibility
+        try:
+            final_result["keywords"] = final_keywords_list
+            logging.info(f"Archive parent keywords set for {item_input_ref}: {final_keywords_list}")
+        except Exception as _kw_err:
+            logging.warning(f"Failed to set parent keywords for {item_input_ref}: {_kw_err}")
 
         model_used = metadata_for_db.get('parser_used', 'Imported') # Check metadata first
         if not model_used and media_type == 'pdf': model_used = final_result.get('analysis_details', {}).get('parser', 'Imported')
@@ -3356,6 +3539,100 @@ async def _process_document_like_item(
                 final_result["media_uuid"] = media_uuid_result # Add UUID
                 logger.info(f"DB persistence result for {item_input_ref}: ID={media_id_result}, UUID={media_uuid_result}, Msg='{db_message_result}'")
 
+                # --- Persist child emails (if any and requested) ---
+                try:
+                    if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
+                        children = final_result.get('children') or []
+                        if isinstance(children, list) and children:
+                            child_db_results = []
+                            for child in children:
+                                try:
+                                    c_content = child.get('content')
+                                    c_meta = child.get('metadata') or {}
+                                    if not c_content:
+                                        continue
+                                    # Safe metadata subset for child
+                                    allowed_keys = {
+                                        'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                                        'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                                        'publisher','source','creators','rights','parent_media_uuid'
+                                    }
+                                    safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
+                                    safe_c_meta['parent_media_uuid'] = media_uuid_result
+                                    safe_c_meta_json = None
+                                    try:
+                                        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                                        safe_c_meta = normalize_safe_metadata(safe_c_meta)
+                                        safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
+                                    except Exception:
+                                        pass
+
+                                    # Child chunking
+                                    c_chunks_for_sql = None
+                                    try:
+                                        _opts = chunk_options or {}
+                                        if _opts:
+                                            from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                                            _ck = _Chunker()
+                                            _flat = _ck.chunk_text_hierarchical_flat(
+                                                c_content,
+                                                method=_opts.get('method') or 'sentences',
+                                                max_size=_opts.get('max_size') or 500,
+                                                overlap=_opts.get('overlap') or 50,
+                                            )
+                                            _kind_map = {
+                                                'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                                'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                                            }
+                                            c_chunks_for_sql = []
+                                            for _it in _flat:
+                                                _md = _it.get('metadata') or {}
+                                                _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                                _small = {}
+                                                if _md.get('ancestry_titles'):
+                                                    _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                                if _md.get('section_path'):
+                                                    _small['section_path'] = _md.get('section_path')
+                                                c_chunks_for_sql.append({
+                                                    'text': _it.get('text',''),
+                                                    'start_char': _md.get('start_offset'),
+                                                    'end_char': _md.get('end_offset'),
+                                                    'chunk_type': _ctype,
+                                                    'metadata': _small,
+                                                })
+                                    except Exception:
+                                        c_chunks_for_sql = None
+
+                                    c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (child)')
+                                    c_author = c_meta.get('author') or form_data.author or 'Unknown'
+                                    c_url = f"{item_input_ref}::child::{c_meta.get('filename') or c_title}"
+
+                                    def _db_child_worker():
+                                        worker_db = None
+                                        try:
+                                            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                                            return worker_db.add_media_with_keywords(
+                                                url=c_url, title=c_title, media_type=media_type,
+                                                content=c_content, keywords=final_keywords_list,
+                                                prompt=form_data.custom_prompt, analysis_content=None,
+                                                safe_metadata=safe_c_meta_json, transcription_model=model_used,
+                                                author=c_author, overwrite=form_data.overwrite_existing,
+                                                chunk_options=chunk_options, chunks=c_chunks_for_sql,
+                                            )
+                                        finally:
+                                            if worker_db:
+                                                worker_db.close_connection()
+
+                                    c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_worker)
+                                    child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
+                                except Exception as child_db_err:
+                                    logging.warning(f"Child email persistence failed: {child_db_err}")
+                            if child_db_results:
+                                final_result['child_db_results'] = child_db_results
+                except Exception:
+                    pass
+
+
             except (DatabaseError, InputError, ConflictError) as db_err:
                  logger.error(f"Database operation failed for {item_input_ref}: {db_err}", exc_info=True)
                  final_result['status'] = 'Warning' # Keep Warning status
@@ -3379,10 +3656,106 @@ async def _process_document_like_item(
                  final_result["db_id"] = None # Ensure None on error
                  final_result["media_uuid"] = None
         else:
-             logger.warning(f"Skipping DB persistence for {item_input_ref} due to missing content.")
-             final_result["db_message"] = "DB persistence skipped (no content)."
-             final_result["db_id"] = None # Ensure None
-             final_result["media_uuid"] = None
+             # No parent content: if this is an email container (zip/mbox/pst) with children, persist children directly
+             persisted_any_children = False
+             if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
+                 try:
+                     children = final_result.get('children') or []
+                     if isinstance(children, list) and children:
+                         child_db_results = []
+                         for child in children:
+                             try:
+                                 c_content = child.get('content')
+                                 c_meta = child.get('metadata') or {}
+                                 if not c_content:
+                                     continue
+                                 # Safe metadata for child
+                                 allowed_keys = {
+                                     'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                                     'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                                     'publisher','source','creators','rights'
+                                 }
+                                 safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
+                                 safe_c_meta_json = None
+                                 try:
+                                     from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                                     safe_c_meta = normalize_safe_metadata(safe_c_meta)
+                                     safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
+                                 except Exception:
+                                     pass
+                                 # Chunking for child
+                                 c_chunks_for_sql = None
+                                 try:
+                                     _opts = chunk_options or {}
+                                     if _opts:
+                                         from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                                         _ck = _Chunker()
+                                         _flat = _ck.chunk_text_hierarchical_flat(
+                                             c_content,
+                                             method=_opts.get('method') or 'sentences',
+                                             max_size=_opts.get('max_size') or 500,
+                                             overlap=_opts.get('overlap') or 50,
+                                         )
+                                         _kind_map = {
+                                             'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                             'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                                         }
+                                         c_chunks_for_sql = []
+                                         for _it in _flat:
+                                             _md = _it.get('metadata') or {}
+                                             _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                             _small = {}
+                                             if _md.get('ancestry_titles'):
+                                                 _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                             if _md.get('section_path'):
+                                                 _small['section_path'] = _md.get('section_path')
+                                             c_chunks_for_sql.append({
+                                                 'text': _it.get('text',''),
+                                                 'start_char': _md.get('start_offset'),
+                                                 'end_char': _md.get('end_offset'),
+                                                 'chunk_type': _ctype,
+                                                 'metadata': _small,
+                                             })
+                                 except Exception:
+                                     c_chunks_for_sql = None
+
+                                 c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (archive child)')
+                                 c_author = c_meta.get('author') or form_data.author or 'Unknown'
+                                 c_url = f"{item_input_ref}::archive::{c_meta.get('filename') or c_title}"
+
+                                 def _db_child_arch_worker():
+                                     worker_db = None
+                                     try:
+                                         worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                                         return worker_db.add_media_with_keywords(
+                                             url=c_url, title=c_title, media_type=media_type,
+                                             content=c_content, keywords=final_keywords_list,
+                                             prompt=form_data.custom_prompt, analysis_content=None,
+                                             safe_metadata=safe_c_meta_json, transcription_model=model_used,
+                                             author=c_author, overwrite=form_data.overwrite_existing,
+                                             chunk_options=chunk_options, chunks=c_chunks_for_sql,
+                                         )
+                                     finally:
+                                         if worker_db:
+                                             worker_db.close_connection()
+
+                                 c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_arch_worker)
+                                 child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
+                                 persisted_any_children = True
+                             except Exception as child_db_err:
+                                 logging.warning(f"Archive child email persistence failed: {child_db_err}")
+                         if child_db_results:
+                             final_result['child_db_results'] = child_db_results
+                 except Exception:
+                     pass
+
+             if not persisted_any_children:
+                 logger.warning(f"Skipping DB persistence for {item_input_ref} due to missing content.")
+                 final_result["db_message"] = "DB persistence skipped (no content)."
+                 final_result["db_id"] = None # Ensure None
+                 final_result["media_uuid"] = None
+             else:
+                 final_result["db_message"] = "Persisted archive children."
     else:
         # If processing failed, set DB message accordingly
         final_result["db_message"] = "DB operation skipped (processing failed)."
@@ -3538,6 +3911,10 @@ async def add_media(
                 "audio": ['.mp3', '.aac', '.flac', '.wav', '.ogg', '.m4a', '.wma'],
                 "pdf": ['.pdf'],
                 "ebook": ['.epub'],
+                "email": ['.eml']
+                    + (['.zip'] if getattr(form_data, 'accept_archives', False) else [])
+                    + (['.mbox'] if getattr(form_data, 'accept_mbox', False) else [])
+                    + (['.pst', '.ost'] if getattr(form_data, 'accept_pst', False) else []),
                 # For 'document', allow a broad set; leave None to let validator handle
             }
             allowed_exts = allowed_ext_map.get(str(form_data.media_type).lower())
@@ -5164,6 +5541,332 @@ async def process_ebooks_endpoint(
 
 #
 # End of Ebook Processing Endpoint
+#################################################################################################
+
+######################## Email Processing Endpoint ###################################
+
+# ─────────────────────── Form Model ─────────────────────────
+class ProcessEmailsForm(AddMediaForm):
+    media_type: Literal["email"] = "email"
+    keep_original_file: bool = False # Always cleanup tmp dir for this endpoint
+
+    # Chunking defaults for emails
+    perform_chunking: bool = True
+    chunk_method: Optional[ChunkMethod] = Field('sentences', description="Default chunking method for emails")
+    chunk_size: int = Field(1000, gt=0, description="Target chunk size for emails")
+    chunk_overlap: int = Field(200, ge=0, description="Chunk overlap size for emails")
+    ingest_attachments: bool = Field(False, description="Parse and include nested .eml attachments as children")
+    max_depth: int = Field(2, ge=1, le=5, description="Max depth for nested email parsing when ingest_attachments=true")
+    accept_archives: bool = Field(False, description="Accept .zip archives of EMLs and expand/process members")
+    accept_mbox: bool = Field(False, description="Accept .mbox mailboxes and expand/process messages")
+    accept_pst: bool = Field(False, description="Accept .pst/.ost containers (feature-flag; parsing may require external tools)")
+
+
+# ────────────────────── Dependency Function ───────────────────
+def get_process_emails_form(
+    urls: Optional[List[str]] = Form(None, description="List of URLs of the emails (optional)"),
+    title: Optional[str] = Form(None, description="Optional title override"),
+    author: Optional[str] = Form(None, description="Optional author override"),
+    keywords: str = Form("", alias="keywords", description="Comma-separated keywords"),
+    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt for analysis"),
+    system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
+    overwrite_existing: bool = Form(False),
+    perform_analysis: bool = Form(False),
+    api_name: Optional[str] = Form(None),
+    use_cookies: bool = Form(False),
+    cookies: Optional[str] = Form(None),
+    summarize_recursively: bool = Form(False),
+    # Chunking options
+    perform_chunking: bool = Form(True),
+    chunk_method: Optional[ChunkMethod] = Form('sentences'),
+    chunk_language: Optional[str] = Form(None),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(200),
+    custom_chapter_pattern: Optional[str] = Form(None),
+    use_adaptive_chunking: bool = Form(False),
+    use_multi_level_chunking: bool = Form(False),
+    # Contextual chunking (optional for emails)
+    enable_contextual_chunking: bool = Form(False),
+    contextual_llm_model: Optional[str] = Form(None),
+    context_window_size: Optional[int] = Form(None),
+    context_strategy: Optional[str] = Form(None),
+    context_token_budget: Optional[int] = Form(None),
+    # Attachment handling
+    ingest_attachments: bool = Form(False),
+    max_depth: int = Form(2),
+    accept_archives: bool = Form(False),
+    accept_mbox: bool = Form(False),
+    accept_pst: bool = Form(False),
+) -> "ProcessEmailsForm":
+    try:
+        form_data = {
+            "media_type": "email",
+            "keep_original_file": False,
+            "urls": urls,
+            "title": title,
+            "author": author,
+            "keywords": keywords,
+            "custom_prompt": custom_prompt,
+            "system_prompt": system_prompt,
+            "overwrite_existing": overwrite_existing,
+            "perform_analysis": perform_analysis,
+            "api_name": api_name,
+            "use_cookies": use_cookies,
+            "cookies": cookies,
+            "summarize_recursively": summarize_recursively,
+            # Chunking
+            "perform_chunking": perform_chunking,
+            "chunk_method": chunk_method,
+            "chunk_language": chunk_language,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "custom_chapter_pattern": custom_chapter_pattern,
+            "use_adaptive_chunking": use_adaptive_chunking,
+            "use_multi_level_chunking": use_multi_level_chunking,
+            # Contextual
+            "enable_contextual_chunking": enable_contextual_chunking,
+            "contextual_llm_model": contextual_llm_model,
+            "context_window_size": context_window_size,
+            "context_strategy": (context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
+            "context_token_budget": (int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
+            # Attachments
+            "ingest_attachments": ingest_attachments,
+            "max_depth": max_depth,
+            "accept_archives": accept_archives,
+            "accept_mbox": accept_mbox,
+            "accept_pst": accept_pst,
+            "accept_pst": accept_pst,
+        }
+        filtered = {k: v for k, v in form_data.items() if v is not None}
+        filtered["media_type"] = "email"
+        filtered["keep_original_file"] = False
+        return ProcessEmailsForm(**filtered)
+    except ValidationError as e:
+        serializable_errors = []
+        for error in e.errors():
+            serializable_error = error.copy()
+            if 'ctx' in serializable_error and isinstance(serializable_error.get('ctx'), dict):
+                serializable_error['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in serializable_error['ctx'].items()}
+            serializable_error['input'] = serializable_error.get('input', serializable_error.get('loc'))
+            serializable_errors.append(serializable_error)
+        logger.warning(f"Pydantic validation failed for Email processing: {json.dumps(serializable_errors)}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+    except Exception as e:
+        logger.error(f"Unexpected error creating ProcessEmailsForm: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error during form processing: {type(e).__name__}")
+
+
+# ─────────────────────── Endpoint Implementation ────────────────
+@router.post(
+    "/process-emails",
+    summary="Extract, chunk, analyse Emails (NO DB Persistence)",
+    tags=["Media Processing (No DB)"]
+)
+async def process_emails_endpoint(
+    form_data: ProcessEmailsForm = Depends(get_process_emails_form),
+    files: Optional[List[UploadFile]] = File(None),
+):
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one EML file must be uploaded.")
+
+    loop = asyncio.get_running_loop()
+    batch_result: Dict[str, Any] = {
+        "results": [],
+        "processed_count": 0,
+        "errors_count": 0,
+        "errors": [],
+    }
+
+    temp_dir_mgr = TempDirManager(prefix="email_process_", cleanup=True)
+    with temp_dir_mgr as temp_dir:
+        # Save uploaded .eml files with validation
+        allowed_exts = ['.eml']
+        # Allow .zip when accept_archives is true; .mbox when accept_mbox is true
+        allowed_exts = (
+            ['.eml']
+            + (['.zip'] if form_data.accept_archives else [])
+            + (['.mbox'] if getattr(form_data, 'accept_mbox', False) else [])
+            + (['.pst', '.ost'] if getattr(form_data, 'accept_pst', False) else [])
+        )
+        saved_files_info, file_errors = await _save_uploaded_files(files or [], temp_dir, validator=file_validator_instance, allowed_extensions=allowed_exts)
+
+        for err in file_errors:
+            batch_result["results"].append({
+                "status": "Error",
+                "input_ref": err.get("input_ref"),
+                "processing_source": None,
+                "media_type": "email",
+                "error": err.get("error", "File save failed"),
+                "metadata": {}, "content": None, "chunks": None,
+                "analysis": None, "keywords": None, "warnings": None,
+                "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+            })
+            batch_result["errors_count"] += 1
+            if err.get("error"): batch_result["errors"].append(err.get("error"))
+
+        # Process saved files
+        for pf in saved_files_info:
+            try:
+                path = FilePath(pf["path"]).resolve()
+                # Read bytes
+                async with aiofiles.open(path, "rb") as f:
+                    file_bytes = await f.read()
+                # Chunk options
+                chunk_opts = {
+                    "method": form_data.chunk_method if form_data.chunk_method else "sentences",
+                    "max_size": form_data.chunk_size,
+                    "overlap": form_data.chunk_overlap,
+                }
+                # If this is a supported container and accepted, expand and process members
+                name_lower = (pf.get("original_filename") or path.name).lower()
+                if name_lower.endswith('.zip') and form_data.accept_archives:
+                    arch_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_eml_archive_bytes,
+                        file_bytes=file_bytes,
+                        archive_name=arch_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    # Append each child as its own result
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"archive:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or arch_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                elif name_lower.endswith('.mbox') and getattr(form_data, 'accept_mbox', False):
+                    mbox_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_mbox_bytes,
+                        file_bytes=file_bytes,
+                        mbox_name=mbox_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"mbox:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or mbox_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                elif (name_lower.endswith('.pst') or name_lower.endswith('.ost')) and getattr(form_data, 'accept_pst', False):
+                    pst_name = pf.get("original_filename") or path.name
+                    processor = functools.partial(
+                        email_lib.process_pst_bytes,
+                        file_bytes=file_bytes,
+                        pst_name=pst_name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res_list = await loop.run_in_executor(None, processor)
+                    for r_item in res_list:
+                        r_item.setdefault("media_type", "email")
+                        r_item.setdefault("processing_source", f"pst:{str(path)}")
+                        r_item.setdefault("input_ref", r_item.get("input_ref") or pst_name)
+                        r_item.update({"db_id": None, "db_message": "Processing only endpoint."})
+                        batch_result["results"].append(r_item)
+                        if r_item.get("status") in ("Success", "Warning"):
+                            batch_result["processed_count"] += 1
+                        else:
+                            batch_result["errors_count"] += 1
+                            if r_item.get("error"): batch_result["errors"].append(r_item.get("error"))
+                else:
+                    # Run processor in executor (sync function)
+                    processor = functools.partial(
+                        email_lib.process_email_task,
+                        file_bytes=file_bytes,
+                        filename=pf.get("original_filename") or path.name,
+                        title_override=form_data.title,
+                        author_override=form_data.author,
+                        keywords=form_data.keywords,
+                        perform_chunking=form_data.perform_chunking,
+                        chunk_options=chunk_opts,
+                        perform_analysis=form_data.perform_analysis,
+                        api_name=form_data.api_name,
+                        api_key=None,
+                        custom_prompt=form_data.custom_prompt,
+                        system_prompt=form_data.system_prompt,
+                        summarize_recursively=form_data.summarize_recursively,
+                        ingest_attachments=form_data.ingest_attachments,
+                        max_depth=form_data.max_depth,
+                    )
+                    res = await loop.run_in_executor(None, processor)
+                    # Normalize minimal fields
+                    res.setdefault("media_type", "email")
+                    res.setdefault("processing_source", str(path))
+                    res.setdefault("input_ref", pf.get("original_filename") or path.name)
+                    # Remove DB related fields
+                    res.update({"db_id": None, "db_message": "Processing only endpoint."})
+                    batch_result["results"].append(res)
+                    if res.get("status") == "Success" or res.get("status") == "Warning":
+                        batch_result["processed_count"] += 1
+                    else:
+                        batch_result["errors_count"] += 1
+                        if res.get("error"): batch_result["errors"].append(res.get("error"))
+            except Exception as e:
+                batch_result["results"].append({
+                    "status": "Error", "input_ref": pf.get("original_filename"),
+                    "processing_source": str(pf.get("path")), "media_type": "email",
+                    "error": f"Processing failed: {e}",
+                    "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
+                    "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
+                })
+                batch_result["errors_count"] += 1
+                batch_result["errors"].append(str(e))
+
+    final_status = status.HTTP_200_OK if (batch_result["processed_count"] > 0 and batch_result["errors_count"] == 0) else (
+        status.HTTP_207_MULTI_STATUS if batch_result["results"] else status.HTTP_400_BAD_REQUEST
+    )
+    return JSONResponse(status_code=final_status, content=batch_result)
+
+#
+# End of Email Processing Endpoint
 #################################################################################################
 
 ######################## Document Processing Endpoint ###################################

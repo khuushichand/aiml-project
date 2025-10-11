@@ -233,6 +233,7 @@
     MCP: 'Manage Model Context Protocol host settings, tokens, and exposed tools.',
     'MCP-Unified': 'Unified MCP service configuration including tool registry and RBAC.',
     Logging: 'Direct logs to files or services, adjust verbosity, and enable observability hooks.',
+    Moderation: 'Configure chat guardrails: enablement, input/output actions, redact replacement, blocklist path, and per-user overrides file.',
   };
   const MODULE_WALKTHROUGHS = {
     chat: {
@@ -271,6 +272,22 @@
             { section: 'Chat-Module', key: 'enable_provider_fallback' },
             { section: 'Chat-Module', key: 'chat_save_default' },
             { section: 'Chat-Module', key: 'rate_limit_per_minute' },
+          ],
+        },
+        {
+          title: 'Review moderation & guardrails',
+          description: 'Enable moderation and set how violations are handled globally (block, redact, or warn). You can also provide a blocklist file and per-user overrides file.',
+          points: [
+            'Toggle Moderation.enabled on to enforce guardrails.',
+            'Choose input_action and output_action (block, redact, warn).',
+            'Set redact_replacement and point to your blocklist file.',
+          ],
+          focus: [
+            { section: 'Moderation', key: 'enabled' },
+            { section: 'Moderation', key: 'input_action' },
+            { section: 'Moderation', key: 'output_action' },
+            { section: 'Moderation', key: 'blocklist_file' },
+            { section: 'Moderation', key: 'user_overrides_file' },
           ],
         },
       ],

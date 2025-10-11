@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from typing import Any
 
-from tldw_Server_API.app.main import app
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
@@ -22,10 +22,15 @@ os.environ["TEST_MODE"] = "true"
 os.environ["AUTH_MODE"] = "single_user"
 os.environ["CSRF_ENABLED"] = "false"
 
-try:  # Postgres optional dependency for dual-backend runs
-    import psycopg2  # type: ignore
+try:  # Postgres optional dependency for dual-backend runs (prefer psycopg v3)
+    import psycopg as _psycopg_v3  # type: ignore
+    _PG_DRIVER = "psycopg"
 except ImportError:  # pragma: no cover - handled by skip marker
-    psycopg2 = None
+    try:
+        import psycopg2 as _psycopg2  # type: ignore
+        _PG_DRIVER = "psycopg2"
+    except Exception:
+        _PG_DRIVER = None
 
 _POSTGRES_ENV_VARS = (
     "POSTGRES_TEST_HOST",
@@ -35,7 +40,7 @@ _POSTGRES_ENV_VARS = (
     "POSTGRES_TEST_PASSWORD",
 )
 
-_HAS_POSTGRES = psycopg2 is not None and all(env in os.environ for env in _POSTGRES_ENV_VARS)
+_HAS_POSTGRES = (_PG_DRIVER is not None) and all(env in os.environ for env in _POSTGRES_ENV_VARS)
 
 
 def _build_postgres_config() -> DatabaseConfig:
@@ -50,16 +55,25 @@ def _build_postgres_config() -> DatabaseConfig:
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
-    if psycopg2 is None:  # pragma: no cover - guarded by skip
-        raise RuntimeError("psycopg2 is required for Postgres-backed tests")
+    if _PG_DRIVER is None:  # pragma: no cover - guarded by skip
+        raise RuntimeError("psycopg (or psycopg2) is required for Postgres-backed tests")
 
-    conn = psycopg2.connect(
-        host=config.pg_host,
-        port=config.pg_port,
-        database=config.pg_database,
-        user=config.pg_user,
-        password=config.pg_password,
-    )
+    if _PG_DRIVER == "psycopg":
+        conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database=config.pg_database,
+            user=config.pg_user,
+            password=config.pg_password,
+        )
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
@@ -182,11 +196,14 @@ def prompt_studio_dual_backend_client(
 ):
     """Yield a FastAPI TestClient wired to the selected Prompt Studio backend."""
 
-    from tldw_Server_API.app.core import config as cfg
+    from tldw_Server_API.app.core.config import settings as app_settings
+    # Patch prompt_studio_deps.get_current_active_user directly; dependency_overrides
+    # on auth_deps does not affect this symbol.
+    from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as ps_deps
 
     backend_label, db_instance = prompt_studio_dual_backend_db
 
-    monkeypatch.setitem(cfg.settings, "USER_DB_BASE_DIR", tmp_path)
+    monkeypatch.setitem(app_settings, "USER_DB_BASE_DIR", tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
 
     async def override_user():
@@ -195,19 +212,20 @@ def prompt_studio_dual_backend_client(
             username=mock_current_user.get("username", "testuser"),
             email=mock_current_user.get("email", "test@example.com"),
             is_active=True,
-            is_admin=True,
         )
 
     async def override_db():
         return db_instance
 
-    app.dependency_overrides[get_request_user] = override_user
-    app.dependency_overrides[get_current_active_user] = lambda: mock_current_user
-    app.dependency_overrides[get_prompt_studio_db] = override_db
+    _app: Any = fastapi_app  # appease static analyzers about dynamic attributes
+    _app.dependency_overrides[get_request_user] = override_user
+    _app.dependency_overrides[get_prompt_studio_db] = override_db
+    # get_prompt_studio_user calls ps_deps.get_current_active_user directly; patch it
+    monkeypatch.setattr(ps_deps, "get_current_active_user", lambda: mock_current_user, raising=False)
 
     try:
-        with TestClient(app) as client:
+        with TestClient(_app) as client:
             yield backend_label, client, db_instance
     finally:
-        app.dependency_overrides.clear()
+        _app.dependency_overrides.clear()
         monkeypatch.delenv("TEST_MODE", raising=False)
