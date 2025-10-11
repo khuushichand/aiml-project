@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import shutil
 import importlib.util
 import json
 import os
@@ -184,12 +185,60 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
         raise PipInstallBlockedError('Package installs disabled via TLDW_SETUP_SKIP_PIP')
 
     logger.info('Installing dependency %s', package_name)
-    command = [sys.executable, '-m', 'pip', 'install', '--upgrade', '--no-input', package_name]
-    pip_index = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
-    if pip_index:
-        command.extend(['--index-url', pip_index])
+    # Prefer python -m pip when available; fall back to `uv pip` if pip isn't available
+    def _pip_available() -> bool:
+        try:
+            probe = subprocess.run(
+                [sys.executable, '-m', 'pip', '--version'],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return probe.returncode == 0
+        except Exception:
+            return False
 
-    _run_subprocess(command)
+    def _pip_cmd(pkg: str) -> list[str]:
+        cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade', '--no-input', pkg]
+        idx = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
+        if idx:
+            cmd.extend(['--index-url', idx])
+        return cmd
+
+    def _uv_pip_cmd(pkg: str) -> list[str] | None:
+        uv = shutil.which('uv')
+        if not uv:
+            return None
+        cmd = [uv, 'pip', 'install', '--upgrade', pkg]
+        idx = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
+        if idx:
+            cmd.extend(['--index-url', idx])
+        return cmd
+
+    tried_commands: list[list[str]] = []
+    if _pip_available():
+        tried_commands.append(_pip_cmd(package_name))
+        uv_cmd = _uv_pip_cmd(package_name)
+        if uv_cmd:
+            tried_commands.append(uv_cmd)
+    else:
+        uv_cmd = _uv_pip_cmd(package_name)
+        if uv_cmd:
+            tried_commands.append(uv_cmd)
+        tried_commands.append(_pip_cmd(package_name))
+
+    last_err: Exception | None = None
+    for cmd in tried_commands:
+        try:
+            logger.info('Attempting installer: %s', ' '.join(cmd[:3]))
+            _run_subprocess(cmd)
+            last_err = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            logger.warning('Installer command failed: %s', exc)
+    if last_err is not None:
+        raise last_err
     _INSTALLED_DEPENDENCIES.add(package_name)
 
 

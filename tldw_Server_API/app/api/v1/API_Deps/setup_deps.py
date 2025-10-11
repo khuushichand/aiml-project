@@ -105,12 +105,33 @@ async def require_local_setup_access(request: Request) -> None:
     """Guard mutating setup operations so they can only be called locally.
 
     Bypass when ``TLDW_SETUP_ALLOW_REMOTE`` is set to a truthy value.
+
+    Special-case: Allow GET /api/v1/setup/config when the request targets
+    localhost (by Host header or client IP), even if proxy headers are present.
+    This keeps the Setup UI functional behind common local reverse proxies,
+    while keeping POST/PUT restricted.
     """
     allow_remote = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
     if allow_remote:
         return
 
-    # If we detect proxy-related headers, block by default to avoid local spoofing via reverse proxies.
+    path = (request.url.path or "").lower()
+    method = (request.method or "").upper()
+
+    # Localhost detection helpers
+    client_host = request.client.host if request.client else None
+    host_header_is_local = _host_header_is_local(request)
+    client_is_local = _is_local_host(client_host, None)
+
+    # Permit proxied, localhost GET to setup config snapshot
+    if method == "GET" and path.endswith("/api/v1/setup/config"):
+        if host_header_is_local or client_is_local:
+            # Allow even if proxy headers are present; read-only endpoint
+            if _has_proxy_headers(request):
+                logger.debug("Allowing proxied localhost GET to /api/v1/setup/config")
+            return
+
+    # For all other guarded endpoints, block when proxy headers are present
     if _has_proxy_headers(request):
         logger.warning("Blocked setup access due to proxy headers present")
         raise HTTPException(
@@ -122,13 +143,10 @@ async def require_local_setup_access(request: Request) -> None:
         )
 
     # Require both client host to be local and Host header to target local
-    host = request.client.host if request.client else None
-    if _is_local_host(host, None) and _host_header_is_local(request):
+    if client_is_local and host_header_is_local:
         return
 
-    logger.warning(
-        "Blocked remote setup access from host=%s", host,
-    )
+    logger.warning("Blocked remote setup access from host=%s", client_host)
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=(

@@ -1,34 +1,25 @@
 [Setup]
-# Controls the first-time setup experience. Set enable_first_time_setup to false to disable
-# the guided setup screen. Once setup is complete, the application will flip setup_completed
-# to true to suppress the setup flow on subsequent launches.
 enable_first_time_setup = true
-setup_completed = false
+setup_completed = true
 
 [Server]
-# Server-level toggles. Disable CORS only when you fully control all clients.
 disable_cors = false
 
 [Processing]
 processing_choice = cuda
 
 [Media-Processing]
-# File size limits (in MB)
 max_audio_file_size_mb = 500
 max_pdf_file_size_mb = 50
 max_video_file_size_mb = 1000
 max_epub_file_size_mb = 100
 max_document_file_size_mb = 50
-# Processing timeouts (in seconds)
 pdf_conversion_timeout_seconds = 300
 audio_processing_timeout_seconds = 600
 video_processing_timeout_seconds = 1200
-# Archive processing limits
 max_archive_internal_files = 100
 max_archive_uncompressed_size_mb = 200
-# Transcription settings
 audio_transcription_buffer_size_mb = 10
-# General settings
 uuid_generation_length = 8
 
 [Chat-Dictionaries]
@@ -42,48 +33,25 @@ max_tokens = 1000
 default_rag_prompt = simplified_promptflow_RAG_system_prompt
 
 [Chat-Module]
-# Provider fallback settings
-# When enabled, if the requested provider fails, the system will try alternative providers
-# Set to False to disable automatic fallback (recommended for production)
 enable_provider_fallback = False
-# Request size limits
 max_base64_image_size_mb = 3
 max_text_length_per_message = 400000
 max_messages_per_request = 1000
 max_images_per_request = 10
 max_request_size_bytes = 1000000
-# Streaming settings
 streaming_idle_timeout_seconds = 300
 streaming_heartbeat_interval_seconds = 30
 streaming_max_response_size_mb = 10
-# Persistence defaults
-# By default, chats are ephemeral and are not saved to the database unless
-# the request explicitly sets `save_to_db: true`.
-# You can change the server-wide default here or via environment variables.
-#
-# Option A (Chat-Module):
-#   chat_save_default = False   # Set to True to save new chats by default
-# Option B (Env var – takes precedence):
-#   CHAT_SAVE_DEFAULT=true
-# Fallback (if neither provided):
-#   [Auto-Save] save_character_chats is used as a legacy default
 chat_save_default = False
-# Transaction retry settings
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
-# Rate limiting
 rate_limit_per_minute = 60
 rate_limit_per_conversation_per_minute = 20
 
 [Character-Chat]
-# Rate limiting for character operations
-# Maximum number of character operations (create/update/import) per user per time window
 CHARACTER_RATE_LIMIT_OPS = 100
-# Time window for rate limiting in seconds (3600 = 1 hour)
 CHARACTER_RATE_LIMIT_WINDOW = 3600
-# Maximum number of characters a single user can have
 MAX_CHARACTERS_PER_USER = 1000
-# Maximum size for character import files in MB
 MAX_CHARACTER_IMPORT_SIZE_MB = 10
 
 [Settings]
@@ -102,24 +70,12 @@ prompt_sample = "What is the meaning of life?"
 video_summarize_prompt = "Above is the transcript of a video. Please read through the transcript carefully. Identify the main topics that are discussed over the course of the transcript. Then, summarize the key points about each main topic in bullet points. The bullet points should cover the key information conveyed about each topic in the video, but should be much shorter than the full transcript. Please output your bullet point summary inside <bulletpoints> tags. Do not repeat yourself while writing the summary."
 
 [Database]
-# NOTE: This section configures the CONTENT/MEDIA databases (not AuthNZ).
-# AuthNZ/User DB is configured via the `DATABASE_URL` environment variable and supports PostgreSQL
-# (recommended for multi-user) and SQLite (dev/local). This section below controls the media/notes/characters/chat DBs.
-#
-# Content DB backend type: supported values are 'sqlite', 'postgresql' & 'elasticsearch'(WIP).
-# Set to 'postgresql' to store all content (media + notes/characters) in a PostgreSQL instance.
 type = sqlite
-# SQLite configuration
 sqlite_path = Databases/server_media_summary.db
 sqlite_wal_mode = true
 sqlite_foreign_keys = true
-#
-# Backups
 backup_path = ./tldw_DB_Backups/
-# Path to the backup location for the database. If the path does not exist, the backup will not be created.
-#
-# PostgreSQL configuration (used when type = postgresql)
-pg_connection_string =
+pg_connection_string = 
 pg_host = localhost
 pg_port = 5432
 pg_database = tldw_content
@@ -129,8 +85,6 @@ pg_sslmode = prefer
 pg_pool_size = 20
 pg_max_overflow = 40
 pg_pool_timeout = 30.0
-#
-# elasticsearch options
 elasticsearch_host = localhost
 elasticsearch_port = 9200
 chroma_db_path = Databases/chroma_db
@@ -139,98 +93,69 @@ rag_qa_db_path = Databases/RAG_QA_Chat.db
 character_db_path = Databases/chatDB.db
 
 [Chunking]
-# Chunking Defaults
 `chunking_method` = words
-# 'method' Can be 'words' / 'sentences' / 'paragraphs' / 'semantic' / 'tokens' / 'json' + more, see docs
 chunk_max_size = 400
 chunk_overlap = 200
-# Use ntlk+punkt to split text into sentences and then ID average sentence length and set that as the chunk size
 adaptive_chunking = false
 chunking_multi_level = false
 language = english
-# Contextual Retrieval Settings
 enable_contextual_retrieval = false
 context_window_size = 500
-# When enabled, adds LLM-generated context to chunks for better retrieval
-# override this or force full-document context by default.
 include_parent_context = false
-# Include parent document context when retrieving chunks
-#
-# Default Chunking Options for each media type
-#
-# Article Chunking
 article_chunking_method = 'words'
 article_chunk_max_size = 400
 article_chunk_overlap = 200
 article_adaptive_chunking = false
 article_chunking_multi_level = false
 article_language = english
-#
-# Audio file Chunking
 audio_chunking_method = 'words'
 audio_chunk_max_size = 400
 audio_chunk_overlap = 200
 audio_adaptive_chunking = false
 audio_chunking_multi_level = false
 audio_language = english
-#
-# Book Chunking
 book_chunking_method = 'words'
 book_chunk_max_size = 400
 book_chunk_overlap = 200
 book_adaptive_chunking = false
 book_chunking_multi_level = false
 book_language = english
-#
-# Document Chunking
 document_chunking_method = 'words'
 document_chunk_max_size = 400
 document_chunk_overlap = 200
 document_adaptive_chunking = false
 document_chunking_multi_level = false
 document_language = english
-#
-# Mediawiki Article Chunking
 mediawiki_article_chunking_method = 'words'
 mediawiki_article_chunk_max_size = 400
 mediawiki_article_chunk_overlap = 200
 mediawiki_article_adaptive_chunking = false
 mediawiki_article_chunking_multi_level = false
 mediawiki_article_language = english
-#
-# Mediawiki Dump Chunking
 mediawiki_dump_chunking_method = 'words'
 mediawiki_dump_chunk_max_size = 400
 mediawiki_dump_chunk_overlap = 200
 mediawiki_dump_adaptive_chunking = false
 mediawiki_dump_chunking_multi_level = false
 mediawiki_dump_language = english
-#
-# Obsidian Note Chunking
 obsidian_note_chunking_method = 'words'
 obsidian_note_chunk_max_size = 400
 obsidian_note_chunk_overlap = 200
 obsidian_note_adaptive_chunking = false
 obsidian_note_chunking_multi_level = false
 obsidian_note_language = english
-#
-# Podcast Chunking
 podcast_chunking_method = 'words'
 podcast_chunk_max_size = 400
 podcast_chunk_overlap = 200
 podcast_adaptive_chunking = false
 podcast_chunking_multi_level = false
 podcast_language = english
-#
-# Text Chunking
 text_chunking_method = 'words'
 text_chunk_max_size = 400
 text_chunk_overlap = 200
 text_adaptive_chunking = false
 text_chunking_multi_level = false
 text_language = english
-#
-# Video Transcription Chunking
 video_chunking_method = 'words'
 video_chunk_max_size = 400
 video_chunk_overlap = 200
@@ -240,46 +165,15 @@ video_language = english
 chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
 
 [AuthNZ]
-# Optional: configure authentication and AuthNZ DB via config.txt.
-# Environment variables still take precedence.
-#
-# Authentication mode: single_user (API key) or multi_user (JWT)
 auth_mode = single_user
-# FIXME
-# AuthNZ database can be configured in two ways (environment still wins):
-#   A) Provide a full URL (recommended):
-#      database_url = sqlite:///./Databases/users.db
-#      # or
-#      database_url = postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
-#   B) Use structured fields, and the server will synthesize DATABASE_URL if not set:
-#      db_type = sqlite            # sqlite | postgresql
-#      sqlite_path = ./Databases/users.db
-#      # Postgres fields (used when db_type=postgresql)
-#      pg_host = localhost
-#      pg_port = 5432
-#      pg_db = tldw_users
-#      pg_user = tldw_user
-#      pg_password = ChangeMeStrong123!
-#      pg_sslmode = prefer
 database_url = sqlite:///./Databases/users.db
-# Secrets (for dev only; prefer .env or real env in production)
-# jwt_secret_key = CHANGE_ME_MIN_32_CHARS
-# single_user_api_key = CHANGE_ME_SECURE_KEY
-# Registration controls
 enable_registration = true
 require_registration_code = false
-#
-# Rate limits (Auth endpoints)
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10
-#
-# Token lifetimes
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
-# Optional Redis for sessions
-# redis_url = redis://localhost:6379/0
-
 
 [Embeddings]
 embedding_provider = huggingface
@@ -287,118 +181,52 @@ embedding_model = Qwen/Qwen3-Embedding-0.6B
 onnx_model_path = ./App_Function_Libraries/models/onnx_models/
 model_dir = ./App_Function_Libraries/models/embedding_models
 embedding_api_url = http://localhost:8080/v1/embeddings
-# Embedding API key should be set in .env file (EMBEDDING_API_KEY)
 chunk_size = 400
 overlap = 200
-# 'embedding_provider' Can be 'openai', 'local', or 'huggingface'
-# `embedding_model` Set to the model name you want to use for embeddings. For OpenAI, this can be 'text-embedding-3-small', or 'text-embedding-3-large'.
-#
-# Contextual Chunking Settings
 enable_contextual_chunking = false
-# When enabled, uses LLM to add contextual information to each chunk before embedding
 contextual_llm_model = gpt-3.5-turbo
-# LLM model to use for generating contextual summaries (overrides Claims.contextual_llm_model)
 context_window_size = None
-# Default context window size (characters). Set to None to use full document by default.
 context_strategy = auto
-# Context selection strategy for situating chunks:
-#   auto           -> full document for short docs; window + outline for long docs (based on token budget)
-#   full           -> always use full document context
-#   window         -> always use local window around each chunk
-#   outline_window -> always use per-chunk window and prepend a one-time document outline
 context_token_budget = 6000
-# Approximate token budget used by 'auto' strategy (heuristic len(text)/4)
-# Note: The prompts used for contextualization and outline generation are stored in
-#       tldw_Server_API/Config_Files/Prompts/embeddings.prompts.yaml (or .md). You can
-#       edit them without changing code.
 
 [Claims]
-# Ingestion-time claim extraction and optional embeddings (default off)
 ENABLE_INGESTION_CLAIMS = false
 CLAIM_EXTRACTOR_MODE = heuristic
 CLAIMS_MAX_PER_CHUNK = 3
 CLAIMS_EMBED = false
 CLAIMS_EMBED_MODEL_ID = ""
-#
-# Claims extraction via LLM: choose a provider for local or remote use
-# Set CLAIM_EXTRACTOR_MODE to 'llm' or directly to a provider name below
-# Supported providers include: openai, anthropic, cohere, google, groq, huggingface,
-# openrouter, deepseek, mistral, ollama, kobold, ooba, tabbyapi, vllm,
-# custom-openai-api, custom-openai-api-2, local-llm, llama.cpp
-# For a local setup, a common choice is 'ollama'
 CLAIMS_LLM_PROVIDER = ollama
-# Optional temperature for the LLM claim extractor (float)
 CLAIMS_LLM_TEMPERATURE = 0.1
-CLAIMS_LLM_MODEL =
-# Optional specific model override for claims extraction (per provider)
-# Examples: openai: gpt-4o-mini, google: gemini-2.0-pro-exp, llama.cpp: your-model
-#
-# Background claims rebuild worker (default off)
+CLAIMS_LLM_MODEL = 
 CLAIMS_REBUILD_ENABLED = false
 CLAIMS_REBUILD_INTERVAL_SEC = 3600
-# Policy can be 'missing', 'all', or 'stale'
 CLAIMS_REBUILD_POLICY = missing
 CLAIMS_STALE_DAYS = 7
 contextual_llm_model = gpt-3.5-turbo
-# LLM model to use for generating contextual summaries
 contextual_chunk_method = situate_context
-# Method for adding context: 'situate_context' adds document-aware summaries
-# huggingface: model = dunzhang/stella_en_400M_v5
-# Trusted Model Definitions
 trusted_hf_remote_code_models = NovaSearch/stella_en_400M_v5, BAAI/bge
-#
-# Resource Management Settings
 max_models_in_memory = 3
-# Maximum number of embedding models to keep loaded in memory simultaneously
 max_model_memory_gb = 8
-# Maximum total memory (in GB) allocated for all embedding models
 model_lru_ttl_seconds = 3600
-# Time to keep unused models in memory before eviction (in seconds, default 1 hour)
 
 [RAG]
-# RAG (Retrieval-Augmented Generation) Settings
 vector_store_type = chromadb
-#
 enable_parent_expansion = false
-# When enabled, expands retrieved chunks with parent document context
 parent_expansion_size = 500
 include_sibling_chunks = false
-# Number of sibling chunks to include on each side of a selected chunk
 sibling_window = 1
-# Include the full parent document for each selected chunk if it is below a token threshold
 include_parent_document = false
-# Approximate token threshold for including parent documents (len(text)/4 heuristic)
 parent_max_tokens = 1200
-#
-# Default LLM to use for lightweight RAG tasks (query expansion, gap analysis)
 default_llm_provider = openai
 default_llm_model = gpt-4o-mini
-#
-# HyDE defaults (provider/model used to generate hypothetical answers)
 hyde_provider = openai
 hyde_model = gpt-4o-mini
-#
-# Enable enhanced chunking in unified pipeline (sentence-based)
-# Include adjacent chunks from the same document for continuity
-# Performance Settings
 semantic_cache_enabled = true
-# Enable semantic caching for faster repeated queries
 cache_similarity_threshold = 0.85
-# Similarity threshold for cache hits (0-1)
-#
-# Reranking Settings
 enable_reranking = true
-# Enable document reranking for better relevance
 rerank_top_k = 10
-# Number of documents to keep after reranking
-#
-# LLM-Based Reranking (LLM_SCORING)
-# Configure the provider and model to use if you select reranking strategy 'llm_scoring'.
-# If no model is set here, the pipeline will automatically fall back to 'flashrank'.
 llm_reranker_provider = openai
 llm_reranker_model = 
-; llama.cpp (GGUF) reranker options (optional)
-; If set, enable_reranking with reranking_strategy=llama_cpp will use these
 llama_reranker_binary = llama-embedding
 llama_reranker_model = 
 llama_reranker_ngl = 0
@@ -407,19 +235,11 @@ llama_reranker_output = json+
 llama_reranker_pooling = last
 llama_reranker_normalize = -1
 llama_reranker_max_doc_chars = 2000
-; Template/prefix handling for instruct-style embedding models (auto|bge|jina|none)
 llama_reranker_template_mode = auto
-; Optional explicit prefixes (for BGE-style instruct)
-; llama_reranker_query_prefix = query: 
-; llama_reranker_doc_prefix = passage: 
-; Transformers cross-encoder reranker default model (e.g., BAAI/bge-reranker-v2-m3)
 transformers_reranker_model = 
 
 [API]
-# Note: All API keys have been moved to .env file for security
-# See .env.template for configuration instructions
 anthropic_model = claude-opus-4-20250514
-# Model Options: fixme
 anthropic_streaming = True
 anthropic_temperature = 0.7
 anthropic_top_p = 0.95
@@ -428,17 +248,13 @@ anthropic_max_tokens = 4096
 anthropic_api_timeout = 90
 anthropic_api_retry = 3
 anthropic_api_retry_delay = 1
-#
 cohere_model = command-a-03-2025
-# Model Options: command-r7b-12-2024, command-r-plus-04-2024, command-r-plus, command-r-08-2024, command-r-03-2024, command, command-nightly, command-light, command-light-nightly
 cohere_streaming = True
 cohere_temperature = 0.7
 cohere_max_tokens = 4096
 cohere_api_timeout = 90
 cohere_api_retry = 3
 cohere_api_retry_delay = 1
-#
-# Options: 'deepseek-chat' or 'deepseek-reasoner'
 deepseek_model = deepseek-chat
 deepseek_streaming = True
 deepseek_temperature = 0.7
@@ -446,8 +262,6 @@ deepseek_max_tokens = 4096
 deepseek_api_timeout = 90
 deepseek_api_retry = 3
 deepseek_api_retry_delay = 1
-#
-# DashScope-compatible commercial Qwen models
 qwen_model = qwen-plus
 qwen_streaming = True
 qwen_temperature = 0.7
@@ -457,52 +271,38 @@ qwen_api_timeout = 90
 qwen_api_retry = 3
 qwen_api_retry_delay = 1
 qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-#
-# Available Model Options:
 google_model = gemini-2.5-flash
-# Model Options: gemini-2.5-pro-preview-05-06, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro
 google_streaming = True
 google_temperature = 0.7
 google_max_tokens = 4096
 google_api_timeout = 90
 google_api_retry = 3
 google_api_retry_delay = 1
-#
 groq_model = gemma2-9b-it
-# Model Options: llama-3.3-70b-versatile, llama-3.1-8b-instant, llama3-70b-8192, llama3-8b-8192
 groq_streaming = True
 groq_temperature = 0.7
 groq_max_tokens = 4096
 groq_api_timeout = 90
 groq_api_retry = 3
-#
-# Set to true if targeting router.huggingface.co
 groq_api_retry_delay = 1
-
 huggingface_use_router_url_format = false
-# Default router base
 huggingface_router_base_url = https://router.huggingface.co/hf-inference/models
 huggingface_api_chat_path = v1/chat/completions
 huggingface_model = meta-llama/Meta-Llama-3.1-8B-Instruct
-# model options: meta-llama/Meta-Llama-3.1-70B-Instruct
 huggingface_streaming = True
 huggingface_temperature = 0.7
 huggingface_max_tokens = 4096
 huggingface_api_timeout = 90
 huggingface_api_retry = 3
 huggingface_api_retry_delay = 1
-#
 mistral_model = open-mistral-nemo
-# Model Options: mistral-medium-2505, codestral-2501, mistral-saba-2502, mistral-large-2411, ministral-3b-2410, ministral-8b-2410, mistral-moderation-2411, devstral-small-2505, mistral-small-2503, mistral-large-latest
 mistral_streaming = True
 mistral_temperature = 0.7
 mistral_max_tokens = 4096
 mistral__api_timeout = 90
 mistral_api_retry = 3
 mistral_api_retry_delay = 1
-#
 openai_model = gpt-4.1-2025-04-14
-# Model Options: , o4-mini-2025-04-16, o3-2025-04-16, o3-mini-2025-01-31, o1-2024-12-17, chatgpt-4o-latest, gpt-4o-2024-11-20, gpt-4o-2024-08-06, gpt-4.1-mini-2025-04-14, gpt-4.1-nano-2025-04-14, gpt-4o-mini-2024-07-18, gpt-5-nano-2025-08-07
 openai_streaming = False
 openai_temperature = 0.7
 openai_top_p = 0.95
@@ -512,13 +312,10 @@ openai_api_retry = 3
 openai_api_retry_delay = 1
 model_for_summarization = gpt-4o
 openrouter_model = openai/gpt-4o-mini
-# Sample Model options:  anthropic/claude-3.7-sonnet, google/gemini-2.0-flash-001, google/gemini-2.5-pro-preview, google/gemini-2.5-flash-preview, deepseek/deepseek-chat-v3-0324:free, deepseek/deepseek-chat-v3-0324, openai/gpt-4.1, anthropic/claude-sonnet-4, deepseek/deepseek-r1:free, anthropic/claude-3.7-sonnet:thinking, google/gemini-flash-1.5-8b, mistralai/mistral-nemo, google/gemini-2.5-flash-preview-05-20
 openrouter_max_tokens = 4096
 openrouter_api_timeout = 90
 openrouter_api_retry = 3
 openrouter_api_retry_delay = 1
-#
-# Custom OpenAI-compatible endpoint #1 (set API key in .env)
 custom_openai_api_model = <model_name_here>
 custom_openai_api_streaming = True
 custom_openai_api_temperature = 0.7
@@ -528,8 +325,6 @@ custom_openai_api_max_tokens = 4096
 custom_openai_api_timeout = 90
 custom_openai_api__api_retry = 3
 custom_openai_api__api_retry_delay = 1
-#
-# Custom OpenAI-compatible endpoint #2 (set API key in .env)
 custom_openai2_api_model = <model_name_here>
 custom_openai2_api_streaming = True
 custom_openai2_api_temperature = 0.7
@@ -539,12 +334,10 @@ custom_openai2_api_max_tokens = 4096
 custom_openai2_api_timeout = 90
 custom_openai2_api_api_retry = 3
 custom_openai2_api_api_retry_delay = 1
-#
 default_api = openai
 default_api_for_tasks = anthropic
 
 [Local-API]
-# Note: Local API keys (if needed) should be set in .env file
 kobold_api_IP = http://127.0.0.1:5001/api/v1/generate
 kobold_openai_api_IP = http://127.0.0.1:5001/v1/chat/completions
 kobold_streaming = False
@@ -556,7 +349,6 @@ kobold_max_tokens = 4096
 kobold_api_timeout = 90
 kobold_api_retry = 3
 kobold_api_retry_delay = 1
-#
 llama_api_IP = http://127.0.0.1:8080/completion
 llama_streaming = True
 llama_temperature = 0.7
@@ -567,7 +359,6 @@ llama_max_tokens = 4096
 llama_api_timeout = 90
 llama_api_retry = 3
 llama_api_retry_delay = 1
-#
 ooba_api_IP = http://192.168.2.235:5000/v1/chat/completions
 ooba_streaming = False
 ooba_temperature = 0.7
@@ -578,7 +369,6 @@ ooba_max_tokens = 4096
 ooba_api_timeout = 90
 ooba_api_retry = 3
 ooba_api_retry_delay = 1
-#
 tabby_api_IP = http://127.0.0.1:5000/v1/chat/completions
 tabby_streaming = False
 tabby_temperature = 0.7
@@ -587,7 +377,6 @@ tabby_max_tokens = 4096
 tabby_api_timeout = 90
 tabby_api_retry = 3
 tabby_api_retry_delay = 1
-#
 vllm_api_IP = http://127.0.0.1:8000/v1/chat/completions
 vllm_model = 
 vllm_streaming = False
@@ -599,7 +388,6 @@ vllm_max_tokens = 4096
 vllm_api_timeout = 90
 vllm_api_retry = 3
 vllm_api_retry_delay = 1
-#
 ollama_api_IP = http://127.0.0.1:11434/v1/chat/completions
 ollama_model = llama3
 ollama_streaming = False
@@ -609,7 +397,6 @@ ollama_max_tokens = 4096
 ollama_api_timeout = 9009
 ollama_api_retry = 3
 ollama_api_retry_delay = 1
-#
 aphrodite_api_IP = http://127.0.0.1:8080/completion
 aphrodite_streaming = False
 aphrodite_temperature = 0.7
@@ -620,7 +407,6 @@ aprhodite_max_tokens = 4096
 aphrodite_api_timeout = 90
 aphrodite_api_retry = 3
 aphrodite_api_retry_delay = 1
-#
 max_tokens = 4096
 local_api_timeout = 90
 local_api_retries = 3
@@ -629,78 +415,33 @@ streaming = True
 temperature = 0.7
 top_p = 0.9
 min_p = 0.05
-# https://artefact2.github.io/llm-sampling/
 
 [STT-Settings]
-# Speech-to-Text Settings
 default_transcriber = faster-whisper
-# Options: faster-whisper, qwen2audio, parakeet, canary, external
 nemo_model_variant = mlx
-# Options for Parakeet: standard, onnx, mlx
 nemo_device = cpu
-# Options: cpu, cuda
 nemo_cache_dir = ./models/nemo
-# Directory to cache downloaded Nemo models
 nemo_chunk_duration = 120
-# Duration in seconds for chunking long audio (0 to disable)
 nemo_overlap_duration = 15
-# Overlap between chunks in seconds for context
 streaming_fallback_to_whisper = false
-# If true, automatically fall back to Whisper when requested streaming STT model is unavailable
-# MLX optimal settings (for Apple Silicon)
 mlx_chunk_duration = 30.0
 mlx_overlap_duration = 5.0
-# Buffered transcription for long audio
 buffered_chunk_duration = 20.0
 buffered_total_buffer = 25.0
 buffered_merge_algo = lcs
-# Options: middle, lcs, tdt, overlap, simple
 
-# External transcription provider settings
-# Allows forwarding requests to external OpenAI-compatible APIs
-# Multiple providers can be configured with different names
 [external_providers]
-# Example provider configuration (uncomment and modify to use):
-# [external_providers.default]
-# base_url = https://api.example.com/v1/audio/transcriptions
-# api_key = your-api-key-here
-# model = whisper-1
-# timeout = 300
-# max_retries = 3
-# verify_ssl = true
-# response_format = json
-# temperature = 0.0
-# language =
-# prompt =
-
-# Additional provider example for a local server:
-# [external_providers.local]
-# base_url = http://localhost:8080/v1/audio/transcriptions
-# api_key =
-# model = local-whisper
-# timeout = 60
-# max_retries = 2
-# verify_ssl = false
-# response_format = json
 
 [TTS-Settings]
-# General TTS Settings
-# Options: 'cpu', 'cuda'
 local_tts_device = cpu
 default_tts_provider = kokoro
 default_tts_voice = af_bella
 default_tts_speed = 1
-#
-# OpenAI TTS Settings
-# available voices are 'alloy`, `echo`, `fable`, `onyx`, `nova`, and `shimmer'
 default_openai_tts_voice = shimmer
 default_openai_tts_speed = 1
-# available models are 'tts-1' or 'tts-1-hd'
 default_openai_tts_model = tts-1-hd
 default_openai_tts_output_format = mp3
 default_openai_tts_streaming = False
-#
-# ElevenLabs TTS Settings
 default_eleven_tts_voice = pNInz6obpgDQGcFmaJgB
 default_eleven_tts_model = 
 default_eleven_tts_language_code = 
@@ -711,84 +452,55 @@ default_eleven_tts_voice_use_speaker_boost =
 default_eleven_tts_voice_pronunciation_dictionary_locators_dict_id = 
 default_eleven_tts_voice_pronunciation_dictionary_locators_version_id = 
 default_eleven_tts_speed = 1
-# Output options: 'mp3_22050_32', 'mp3_44100_32', 'mp3_44100_64', 'mp3_44100_96', 'mp3_44100_128', 'mp3_44100_192', 'pcm_16000', 'pcm_22050', 'pcm_24000', 'pcm_44100', 'ulaw_8000'
 default_eleven_tts_output_format = mp3_44100_128
-# Google TTS Settings
 default_google_tts_model = FIXME
 default_google_tts_voice = FIXME
 default_google_tts_speed = 1
-#
-# MS Edge TTS Settings
 edge_tts_voice = FIXME
-#
-# GPT-Sovits
-#
-# AllTalk TTS Settings
 default_alltalk_tts_speed = 1.0
 default_alltalk_tts_voice = alloy
 default_alltalk_tts_model = alltalk
 default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
-#
-# Kokoro TTS Settings
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
-# Options: bella, nicole, sarah, sky, adam, michael, emma, isabella, george, lewis
 default_kokoro_tts_voice = sky
-# Options: onnx, pht
 default_kokoro_tts_model = pht
-# Options: wav, mp3
 default_kokoro_tts_output_format = wav
-#
-# Self-Hosted OpenAI API Settings
 default_custom_openai_tts_voice = shimmer
 default_custom_openai_tts_speed = 1
 default_custom_openai_tts_model = tts-1-hd
 default_custom_openai_tts_output_format = mp3
 default_custom_openai_api_ip = http://
 default_custom_openai_api_streaming = True
-#
-# VibeVoice TTS Settings
-# Model variant: '1.5B' or '7B'
 vibevoice_variant = 1.5B
-# Model path (HuggingFace repo or local path)
 vibevoice_model_path = microsoft/VibeVoice-1.5B
-# Device: 'cpu', 'cuda', 'mps', or 'auto'
 vibevoice_device = auto
-# Performance settings
 vibevoice_use_fp16 = True
 vibevoice_batch_size = 1
-# Memory optimization
 vibevoice_use_quantization = False
 vibevoice_auto_cleanup = True
 vibevoice_auto_download = True
-# Attention mechanisms
 vibevoice_attention_type = auto
 vibevoice_enable_sage = False
-# Generation parameters
 vibevoice_cfg_scale = 1.3
 vibevoice_diffusion_steps = 20
 vibevoice_temperature = 1.0
 vibevoice_top_p = 0.95
 vibevoice_top_k = 50
-# Streaming optimization
 vibevoice_stream_chunk_size = 0.25
 vibevoice_stream_buffer_size = 4096
-# Audio settings
 vibevoice_sample_rate = 22050
 vibevoice_default_speaker = 1
-# Context and features
 vibevoice_context = True
 vibevoice_context_window = 512
 vibevoice_background_music = False
 vibevoice_enable_singing = False
-# Paths
 vibevoice_model_dir = ./models/vibevoice
 vibevoice_cache_dir = ./cache/vibevoice
 vibevoice_voices_dir = ./voices
 
 [Search-Engines]
-# Search Defaults
 search_provider_default = google
 search_language_query = en
 search_language_results = en
@@ -803,27 +515,16 @@ search_result_blacklist = []
 search_result_display_type = list
 search_result_display_metadata = False
 search_result_save_to_db = True
-# How you want the results to be written, think 'style' or voice
-search_result_analysis_tone =
+search_result_analysis_tone = 
 relevance_analysis_llm = openai
 final_answer_llm = openai
-#### Search Engines #####
-# Baidu
 search_engine_api_key_baidu = 1e1b1b1b1b1b1b1b1
-#
-# Brave
 search_engine_api_key_brave_regular = <brave_api_key>
 search_engine_api_key_brave_ai = <brave_ai_api_key>
 search_engine_country_code_brave = US
-#
-# DuckDuckGo
-#
-# Googlesearch_engine_api_url_google = https://www.googleapis.com/customsearch/v1?
 search_engine_api_key_google = <google_api_key>
 search_engine_id_google = <google_search_engine_id>
-# 0 = Enable / 1 = Disabled
 enable_traditional_chinese = 0
-# Restricts search results to documents originating in a particular country.
 limit_google_search_to_country = False
 google_search_country_code = US
 google_filter_setting = 1
@@ -834,18 +535,11 @@ google_default_search_results =
 google_safe_search = "active"
 google_enable_site_search = 
 google_site_search_include = 
-google_site_search_exclude =
-# https://developers.google.com/custom-search/docs/structured_search#sort-by-attribute
+google_site_search_exclude = 
 google_sort_results_by = 
-#
-# Kagi
 search_engine_api_key_kagi = <kagi_api_key>>
-# SearX
 search_engine_searx_api = https://search.rhscz.eu/
-# Serper
-# Tavily
 search_engine_api_key_tavily = <tavily_api_key>
-# Yandex
 search_engine_api_key_yandex = 1e1b1b1b1b1b1b1b1
 search_engine_id_yandex = 1e1b1b1b1b1b1b1b1
 
@@ -858,27 +552,20 @@ web_scraper_api_retry_delay = 1
 web_scraper_retry_count = 3
 web_scraper_stealth_playwright = False
 
-
 [Logging]
 log_level = INFO
 log_file = ./Logs/tldw_app_logs.json
 log_metrics_file = ./Logs/tldw_metrics_logs.json
-#os.getenv("tldw_LOG_FILE_PATH", "tldw_app_logs.json")
-max_bytes =
-#int(os.getenv("tldw_LOG_MAX_BYTES", 10 * 1024 * 1024))  # 10 MB
+max_bytes = 
 backup_count = 5
-#int(os.getenv("tldw_LOG_BACKUP_COUNT", 5))
-
 
 [Redis]
-# Redis cache configuration
 redis_enabled = False
 redis_host = localhost
 redis_port = 6379
 redis_db = 0
 cache_ttl = 300
 
-
 [Web-Scraping]
-# Web scraping timeouts and delays
 stealth_wait_ms = 5000
+

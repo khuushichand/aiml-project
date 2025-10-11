@@ -557,8 +557,7 @@
         : [],
       customInput: typeof embeddings.customInput === 'string'
         ? embeddings.customInput
-        : (Array.isArray(embeddings.custom) ? embeddings.custom.join('
-') : ''),
+        : (Array.isArray(embeddings.custom) ? embeddings.custom.join('') : ''),
       onnx: Array.isArray(embeddings.onnx) ? [...new Set(embeddings.onnx)] : [],
     };
 
@@ -689,8 +688,7 @@
     }
     return Array.from(new Set(
       value
-        .split(/
-|,/)
+        .split(/ |,/)
         .map((entry) => entry.trim())
         .filter(Boolean),
     ));
@@ -698,8 +696,7 @@
 
   function getCustomEmbeddingInputValue() {
     ensureInstallState();
-    return state.install.embeddings.customInput || state.install.embeddings.custom.join('
-');
+    return state.install.embeddings.customInput || state.install.embeddings.custom.join('');
   }
 
   function getEmbeddingPresetOptions() {
@@ -1129,6 +1126,17 @@
     hideConfigSection();
     setLoading(true);
 
+    // Watchdog to avoid indefinite "Loading…" if the browser aborts the request
+    let initWatchdogFired = false;
+    const initWatchdog = setTimeout(() => {
+      initWatchdogFired = true;
+      setMessage('error', 'Timed out loading setup status. If this repeats, try a different browser or disable extensions, then reload.');
+      if (elements.configPath) {
+        elements.configPath.textContent = 'Error';
+      }
+      setLoading(false);
+    }, 12000);
+
     try {
       const status = await fetchJson(`${API_BASE}/status`);
       state.status = status;
@@ -1150,7 +1158,10 @@
       console.error('Setup initialisation failed', error);
       setMessage('error', `Failed to load setup data: ${error.message || error}`);
     } finally {
-      setLoading(false);
+      clearTimeout(initWatchdog);
+      if (!initWatchdogFired) {
+        setLoading(false);
+      }
     }
   }
 
@@ -2108,10 +2119,20 @@ function renderWizardSummary() {
     }
 
     setLoading(true);
+    // Watchdog for configuration snapshot
+    let cfgWatchdogFired = false;
+    const cfgWatchdog = setTimeout(() => {
+      cfgWatchdogFired = true;
+      setMessage('error', 'Timed out loading configuration snapshot. Ensure localhost access is allowed and reload.');
+      setLoading(false);
+    }, 12000);
     try {
       await loadConfig();
     } finally {
-      setLoading(false);
+      clearTimeout(cfgWatchdog);
+      if (!cfgWatchdogFired) {
+        setLoading(false);
+      }
     }
   }
 
@@ -3095,13 +3116,47 @@ function renderWizardSummary() {
     }
   }
 
-  async function fetchJson(url, options) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || response.statusText);
+  async function fetchJson(url, options = {}, retries = 2) {
+    // More resilient fetch with timeout, no-store cache, and retry on AbortError/network glitches
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs || 10000; // default 10s
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    const init = {
+      method: options.method || 'GET',
+      cache: options.cache || 'no-store',
+      credentials: options.credentials || 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        ...(options.headers || {}),
+      },
+      body: options.body,
+      signal: controller.signal,
+    };
+
+    try {
+      const response = await fetch(url, init);
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        const err = new Error(text || response.statusText);
+        err.status = response.status;
+        throw err;
+      }
+      // Try JSON first
+      return await response.json();
+    } catch (err) {
+      const message = String(err && err.message ? err.message : err || '');
+      const isAbort = err && (err.name === 'AbortError' || /AbortError/i.test(message));
+      const isTransient = isAbort || /NetworkError|TypeError: Failed to fetch/i.test(message);
+      if ((isTransient) && retries > 0) {
+        // small backoff before retry
+        await new Promise((r) => setTimeout(r, 250 * (3 - retries)));
+        return fetchJson(url, options, retries - 1);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    return response.json();
   }
 
   function toBoolean(value) {
