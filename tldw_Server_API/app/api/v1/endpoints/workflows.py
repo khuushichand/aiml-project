@@ -24,6 +24,10 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     EventResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_workflows_database,
+    get_content_backend_instance,
+)
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
@@ -41,7 +45,8 @@ router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
 
 
 def _get_db() -> WorkflowsDatabase:
-    return WorkflowsDatabase()
+    backend = get_content_backend_instance()
+    return create_workflows_database(backend=backend)
 
 
 # Rate limits and size constraints (PRD defaults)

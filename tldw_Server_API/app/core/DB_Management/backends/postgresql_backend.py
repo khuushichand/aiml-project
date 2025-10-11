@@ -203,27 +203,37 @@ class PostgreSQLBackend(DatabaseBackend):
         
         try:
             cursor = conn.cursor()
-            
+
             if params:
                 cursor.execute(query, params)
             else:
                 cursor.execute(query)
-            
-            # Fetch results if it's a SELECT query
-            if query.strip().upper().startswith("SELECT"):
+
+            statement = query.strip()
+            statement_upper = statement.upper()
+            has_description = cursor.description is not None
+
+            if has_description:
                 rows = cursor.fetchall()
-                # RealDictCursor returns dicts already
                 result_rows = [dict(row) for row in rows]
+                if not statement_upper.startswith("SELECT"):
+                    conn.commit()
             else:
                 result_rows = []
-                conn.commit()  # Commit non-SELECT queries
-            
+                if not statement_upper.startswith("SELECT"):
+                    conn.commit()
+
             execution_time = time.time() - start_time
-            
+
+            lastrowid = None
+            if result_rows:
+                first_row = result_rows[0]
+                lastrowid = first_row.get('id') if isinstance(first_row, dict) else None
+
             return QueryResult(
                 rows=result_rows,
                 rowcount=cursor.rowcount,
-                lastrowid=None,  # PostgreSQL doesn't have lastrowid like SQLite
+                lastrowid=lastrowid,
                 description=cursor.description,
                 execution_time=execution_time
             )

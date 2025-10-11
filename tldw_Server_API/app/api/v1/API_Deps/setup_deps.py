@@ -16,7 +16,9 @@ from loguru import logger
 
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
-LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "testserver"}
+# Treat these as local hostnames for the Host header check.
+# Include IPv6 localhost as well.
+LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "::1", "testserver"}
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
 
 
@@ -76,11 +78,26 @@ def _has_proxy_headers(request: Request) -> bool:
 
 
 def _host_header_is_local(request: Request) -> bool:
-    host = request.headers.get("host") or request.headers.get("Host")
-    if not host:
+    """Return True if the Host header targets a local hostname.
+
+    Handles IPv6 bracketed hosts (e.g., "[::1]:8000").
+    """
+    raw = request.headers.get("host") or request.headers.get("Host")
+    if not raw:
         return False
-    # Strip port if present
-    hostname = host.split(":", 1)[0].strip().lower()
+
+    host = raw.strip()
+
+    # IPv6 addresses in Host header are bracketed: [::1]:8000
+    if host.startswith("["):
+        end = host.find("]")
+        if end == -1:
+            return False
+        hostname = host[1:end].strip().lower()
+    else:
+        # Strip port if present (hostname:port)
+        hostname = host.split(":", 1)[0].strip().lower()
+
     return hostname in LOCAL_HOST_HEADERS
 
 

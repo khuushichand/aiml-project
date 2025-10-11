@@ -7,6 +7,7 @@ import json
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
 
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import (
     JobManager, JobType, JobStatus
 )
@@ -387,6 +388,67 @@ class TestJobProcessor:
         assert result["iterations_completed"] <= 5
         assert result["status"] == "completed"
         assert "improvement_percentage" in result
+
+    @pytest.mark.asyncio
+    async def test_process_optimization_job_backend_adapter(self, monkeypatch):
+        """Ensure backend-aware helpers are invoked when processing optimization jobs."""
+
+        class DummyBackendPromptStudioDB:
+            backend_type = BackendType.POSTGRESQL
+            client_id = "test-client"
+
+            def __init__(self) -> None:
+                self.ensure_prompt_stub = MagicMock()
+                self.get_optimization = MagicMock(
+                    return_value={
+                        "id": 42,
+                        "project_id": 99,
+                        "initial_prompt_id": 7,
+                    }
+                )
+                self.set_optimization_status = MagicMock(return_value={"status": "running"})
+                self.record_optimization_iteration = MagicMock(return_value={"id": 1})
+                self.complete_optimization = MagicMock(return_value={"status": "completed"})
+
+        backend_db = DummyBackendPromptStudioDB()
+        job_manager = MagicMock()
+        processor = JobProcessor(backend_db, job_manager)
+
+        iteration_payloads = [
+            {"iteration": 1, "prompt_id": 7, "metric": 0.6, "tokens_used": 50, "cost": 0.01},
+            {"iteration": 2, "prompt_id": 8, "metric": 0.72, "tokens_used": 55, "cost": 0.02},
+        ]
+
+        processor._run_optimization_iteration = AsyncMock(side_effect=iteration_payloads)
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+        payload = {
+            "initial_prompt_id": 7,
+            "optimizer_type": "basic",
+            "max_iterations": len(iteration_payloads),
+        }
+
+        result = await processor.process_optimization_job(payload, 42)
+
+        backend_db.set_optimization_status.assert_called_with(
+            42,
+            "running",
+            mark_started=True,
+        )
+        assert backend_db.record_optimization_iteration.call_count == len(iteration_payloads)
+        backend_db.complete_optimization.assert_called_once()
+        complete_args = backend_db.complete_optimization.call_args
+        assert complete_args.args[0] == 42
+        assert complete_args.kwargs["iterations_completed"] == len(iteration_payloads)
+        assert complete_args.kwargs["total_tokens"] == sum(item["tokens_used"] for item in iteration_payloads)
+        assert pytest.approx(complete_args.kwargs["total_cost"], rel=1e-3) == sum(
+            item["cost"] for item in iteration_payloads
+        )
+        assert backend_db.ensure_prompt_stub.call_count >= 1
+
+        assert result["optimization_id"] == 42
+        assert result["status"] == "completed"
+        assert result["iterations_completed"] == len(iteration_payloads)
 
 ########################################################################################################################
 # Test Event Broadcasting

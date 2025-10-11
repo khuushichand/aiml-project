@@ -282,41 +282,17 @@ class PromptExecutor:
     
     def _get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
         """Get prompt details from database."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM prompt_studio_prompts
-            WHERE id = ? AND deleted = 0
-        """, (prompt_id,))
-        
-        row = cursor.fetchone()
-        if row:
-            return self.db._row_to_dict(cursor, row)
-        return None
-    
+        prompt = self.db.get_prompt(prompt_id)
+        if prompt and prompt.get("deleted"):
+            return None
+        return prompt
+
     def _get_signature(self, signature_id: int) -> Optional[Dict[str, Any]]:
         """Get signature details from database."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM prompt_studio_signatures
-            WHERE id = ? AND deleted = 0
-        """, (signature_id,))
-        
-        row = cursor.fetchone()
-        if row:
-            sig = self.db._row_to_dict(cursor, row)
-            # Parse schemas
-            try:
-                sig["input_schema"] = json.loads(sig["input_schema"]) if sig["input_schema"] else []
-                sig["output_schema"] = json.loads(sig["output_schema"]) if sig["output_schema"] else []
-            except:
-                sig["input_schema"] = []
-                sig["output_schema"] = []
-            return sig
-        return None
+        signature = self.db.get_signature(signature_id)
+        if signature and signature.get("deleted"):
+            return None
+        return signature
     
     def _build_prompt(self, prompt: Dict[str, Any], signature: Optional[Dict[str, Any]],
                      inputs: Dict[str, Any]) -> str:

@@ -70,6 +70,12 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
+    convert_sqlite_placeholders_to_postgres,
+    normalise_params,
+    prepare_backend_many_statement,
+    prepare_backend_statement,
+)
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
 from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -699,21 +705,24 @@ class MediaDatabase:
         query: str,
         params: Optional[Union[Tuple, List, Dict]] = None,
     ) -> tuple[str, Optional[Union[Tuple, Dict]]]:
-        if self.backend_type != BackendType.POSTGRESQL:
-            return query, params
-        converted_query = self._convert_sqlite_placeholders_to_postgres(query)
-        prepared_params = self._normalise_params(params)
-        return converted_query, prepared_params
+        return prepare_backend_statement(
+            self.backend_type,
+            query,
+            params,
+            ensure_returning=self.backend_type == BackendType.POSTGRESQL,
+        )
 
     def _prepare_backend_many_statement(
         self,
         query: str,
         params_list: List[Union[Tuple, List, Dict]],
     ) -> tuple[str, List[Union[Tuple, Dict]]]:
-        if self.backend_type != BackendType.POSTGRESQL:
-            return query, params_list
-        converted_query = self._convert_sqlite_placeholders_to_postgres(query)
-        prepared_params = [self._normalise_params(params) for params in params_list]
+        converted_query, prepared_params = prepare_backend_many_statement(
+            self.backend_type,
+            query,
+            params_list,
+            ensure_returning=False,
+        )
         return converted_query, prepared_params
 
     def _keyword_order_expression(self, column: str) -> str:
@@ -742,70 +751,10 @@ class MediaDatabase:
         self,
         params: Optional[Any],
     ) -> Optional[Union[Tuple, Dict]]:
-        if params is None:
-            return None
-        if isinstance(params, dict):
-            return params
-        if isinstance(params, tuple):
-            return params
-        if isinstance(params, list):
-            return tuple(params)
-        return (params,)
+        return normalise_params(params)
 
     def _convert_sqlite_placeholders_to_postgres(self, query: str) -> str:
-        if "?" not in query:
-            return query
-
-        result: List[str] = []
-        in_single = False
-        in_double = False
-        i = 0
-        length = len(query)
-
-        while i < length:
-            ch = query[i]
-
-            if ch == "'" and not in_double:
-                if in_single:
-                    if i + 1 < length and query[i + 1] == "'":
-                        result.append("''")
-                        i += 2
-                        continue
-                    in_single = False
-                    result.append(ch)
-                    i += 1
-                    continue
-                else:
-                    in_single = True
-                    result.append(ch)
-                    i += 1
-                    continue
-
-            if ch == '"' and not in_single:
-                if in_double:
-                    if i + 1 < length and query[i + 1] == '"':
-                        result.append('""')
-                        i += 2
-                        continue
-                    in_double = False
-                    result.append(ch)
-                    i += 1
-                    continue
-                else:
-                    in_double = True
-                    result.append(ch)
-                    i += 1
-                    continue
-
-            if ch == "?" and not in_single and not in_double:
-                result.append("%s")
-                i += 1
-                continue
-
-            result.append(ch)
-            i += 1
-
-        return ''.join(result)
+        return convert_sqlite_placeholders_to_postgres(query)
 
     def _execute_with_connection(
         self,

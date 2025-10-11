@@ -11,6 +11,7 @@ from loguru import logger
 import jwt
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 ########################################################################################################################
 # Permission Types
@@ -531,18 +532,38 @@ class PermissionManager:
         # Get role permissions
         permissions = list(ROLE_PERMISSIONS.get(role, set()))
         
-        cursor.execute("""
-            INSERT OR REPLACE INTO prompt_studio_project_permissions (
-                project_id, user_id, role, permissions, granted_by
-            ) VALUES (?, ?, ?, ?, ?)
-        """, (
+        params = (
             project_id,
             user_id,
             role.value,
             json.dumps([p.value for p in permissions]),
-            granted_by
-        ))
-        
+            granted_by,
+        )
+
+        if getattr(self.db, "backend_type", BackendType.SQLITE) == BackendType.POSTGRESQL:
+            cursor.execute(
+                """
+                INSERT INTO prompt_studio_project_permissions (
+                    project_id, user_id, role, permissions, granted_by
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (project_id, user_id) DO UPDATE
+                    SET role = EXCLUDED.role,
+                        permissions = EXCLUDED.permissions,
+                        granted_by = EXCLUDED.granted_by,
+                        granted_at = CURRENT_TIMESTAMP
+                """,
+                params,
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO prompt_studio_project_permissions (
+                    project_id, user_id, role, permissions, granted_by
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+
         conn.commit()
         
         # Log action
@@ -669,7 +690,14 @@ class PermissionManager:
         
         row = cursor.fetchone()
         if row:
-            permissions = json.loads(row[0])
+            raw_permissions = row[0]
+            if isinstance(raw_permissions, list):
+                permissions = raw_permissions
+            else:
+                try:
+                    permissions = json.loads(raw_permissions) if raw_permissions else []
+                except (json.JSONDecodeError, TypeError):
+                    permissions = []
             return permission.value in permissions
         
         return False

@@ -102,19 +102,33 @@ class BootstrapManager:
                 FROM prompt_studio_test_runs
                 WHERE prompt_id = ? 
                 AND model_name = 'bootstrap'
-                AND json_extract(scores, '$.quality') >= ?
-                ORDER BY json_extract(scores, '$.quality') DESC
+                AND CAST(json_extract(scores, '$.quality') AS REAL) >= ?
+                ORDER BY CAST(json_extract(scores, '$.quality') AS REAL) DESC
                 LIMIT ?
             """, (prompt_id, min_score, limit))
             
             traces = []
             for row in cursor.fetchall():
+                def _load_json(raw, default):
+                    if raw is None:
+                        return default
+                    if isinstance(raw, (dict, list)):
+                        return raw
+                    try:
+                        return json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        return default
+
+                inputs = _load_json(row[2], {})
+                outputs = _load_json(row[3], {})
+                score_data = _load_json(row[4], {})
+
                 traces.append({
                     "id": row[0],
                     "test_case_id": row[1],
-                    "inputs": json.loads(row[2]),
-                    "outputs": json.loads(row[3]),
-                    "score": json.loads(row[4]).get("quality", 0)
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "score": score_data.get("quality", 0),
                 })
             
             return traces
@@ -368,9 +382,9 @@ class BootstrapManager:
                 cursor.execute("""
                     SELECT 
                         COUNT(*) as n_runs,
-                        AVG(json_extract(scores, '$.quality')) as avg_score,
-                        MIN(json_extract(scores, '$.quality')) as min_score,
-                        MAX(json_extract(scores, '$.quality')) as max_score
+                        AVG(CAST(json_extract(scores, '$.quality') AS REAL)) as avg_score,
+                        MIN(CAST(json_extract(scores, '$.quality') AS REAL)) as min_score,
+                        MAX(CAST(json_extract(scores, '$.quality') AS REAL)) as max_score
                     FROM prompt_studio_test_runs
                     WHERE prompt_id = ? AND model_name != 'bootstrap'
                 """, (prompt_id,))

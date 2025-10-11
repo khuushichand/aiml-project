@@ -85,6 +85,171 @@
             }
         </script>
     </div>
+
+    <div class="endpoint-section" id="ragSelector">
+        <h2>RAG Item Selector</h2>
+        <p>Select a category → keyword → items, then add items to your query without re-searching.</p>
+        <p style="font-size: 0.9em; color: #666;">
+            Tip: Added items are injected into the Complex RAG request as <code>include_media_ids</code> and/or
+            <code>include_note_ids</code>. Retrieval will be restricted to these items only.
+        </p>
+        <div class="form-group">
+            <label for="ragSel_category">Category:</label>
+            <select id="ragSel_category" style="min-width: 280px;"></select>
+            <button class="api-button" onclick="ragSelInitSources()">Refresh</button>
+        </div>
+        <div class="form-group">
+            <label for="ragSel_keywords">Keyword:</label>
+            <select id="ragSel_keywords" style="min-width: 280px;"></select>
+            <input id="ragSel_keyword_text" placeholder="Enter keyword (media)" style="min-width: 280px; display:none;" />
+            <div style="margin-top:6px;">
+                <button class="api-button" onclick="ragSelLoadKeywords()">Load Keywords</button>
+                <button class="api-button" onclick="ragSelLoadItems2()">Load Items</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Items:</label>
+            <div id="ragSel_items" style="max-height: 220px; overflow:auto; border:1px solid #ddd; padding:6px;"></div>
+            <button class="api-button" onclick="ragSelAddSelected()">Add Selected</button>
+        </div>
+
+        <div class="form-group">
+            <label>Selected Items:</label>
+            <div id="ragSel_selected" style="min-height: 40px; border:1px dashed #aaa; padding:6px;"></div>
+            <div style="margin-top:6px;">
+                <button class="api-button" onclick="ragSelApplyToComplex()">Apply to Complex JSON</button>
+                <button class="api-button" onclick="ragSelClear()">Clear</button>
+            </div>
+        </div>
+
+        <script>
+            const ragSelState = { media_ids: new Set(), note_ids: new Set() };
+
+            async function ragSelInitSources() {
+                const sel = document.getElementById('ragSel_category');
+                sel.innerHTML = '';
+                const opts = [
+                    { value: 'notes', label: 'Notes Keywords' },
+                    { value: 'media', label: 'Media Keywords' }
+                ];
+                opts.forEach(o => { const opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label; sel.appendChild(opt); });
+                ragSelToggleKeywordInput();
+                Toast.success('Sources loaded');
+            }
+
+            function ragSelToggleKeywordInput() {
+                const cat = document.getElementById('ragSel_category')?.value || 'notes';
+                const sel = document.getElementById('ragSel_keywords');
+                const input = document.getElementById('ragSel_keyword_text');
+                if (cat === 'notes') { sel.style.display = ''; input.style.display = 'none'; }
+                else { sel.style.display = 'none'; input.style.display = ''; }
+            }
+
+            async function ragSelLoadKeywords() {
+                const cat = document.getElementById('ragSel_category')?.value || 'notes';
+                if (cat !== 'notes') { ragSelToggleKeywordInput(); return; }
+                try {
+                    const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/?limit=500&offset=0`);
+                    const sel = document.getElementById('ragSel_keywords');
+                    sel.innerHTML = '';
+                    (resp || []).forEach(k => {
+                        const opt = document.createElement('option');
+                        opt.value = k.id; opt.textContent = k.keyword; sel.appendChild(opt);
+                    });
+                    Toast.success(`Loaded ${ (resp||[]).length } keywords`);
+                } catch (e) {
+                    Toast.error('Failed to load keywords: ' + (e?.message || e));
+                }
+            }
+
+            
+
+            function ragSelRenderSelected() {
+                const el = document.getElementById('ragSel_selected');
+                const media = Array.from(ragSelState.media_ids);
+                const notes = Array.from(ragSelState.note_ids);
+                el.textContent = `media_ids=[${media.join(', ')}]; note_ids=[${notes.join(', ')}]`;
+            }
+
+            function ragSelAddSelected() {
+                const cont = document.getElementById('ragSel_items');
+                const boxes = cont.querySelectorAll('input[type="checkbox"]:checked');
+                let added = 0;
+                boxes.forEach(b => {
+                    const src = b.getAttribute('data-source');
+                    const id = b.getAttribute('data-id');
+                    if (src === 'media_db') { ragSelState.media_ids.add(parseInt(id, 10)); added++; }
+                    else if (src === 'notes') { ragSelState.note_ids.add(String(id)); added++; }
+                });
+                ragSelRenderSelected();
+                Toast.success(`Added ${added} items`);
+            }
+
+            function ragSelClear() {
+                ragSelState.media_ids.clear();
+                ragSelState.note_ids.clear();
+                ragSelRenderSelected();
+            }
+
+            function ragSelApplyToComplex() {
+                try {
+                    const ta = document.getElementById('ragComplexSearch_payload');
+                    let obj = {};
+                    try { obj = JSON.parse(ta.value); } catch (e) { obj = {}; }
+                    const media = Array.from(ragSelState.media_ids);
+                    const notes = Array.from(ragSelState.note_ids);
+                    if (media.length) obj.include_media_ids = media;
+                    if (notes.length) obj.include_note_ids = notes;
+                    ta.value = JSON.stringify(obj, null, 2);
+                    Toast.success('Applied selected items to Complex JSON');
+                } catch (e) {
+                    Toast.error('Failed to apply: ' + (e?.message || e));
+                }
+            }
+
+            // Helper using existing endpoints to fetch items for Notes/Media
+            async function ragSelLoadItems2() {
+                const cat = document.getElementById('ragSel_category')?.value || 'notes';
+                const cont = document.getElementById('ragSel_items');
+                cont.innerHTML = '';
+                try {
+                    if (cat === 'notes') {
+                        const kid = document.getElementById('ragSel_keywords')?.value;
+                        if (!kid) { alert('Select a keyword'); return; }
+                        const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/${kid}/notes/?limit=50&offset=0`);
+                        const items = (resp?.notes || []).map(n => ({ source: 'notes', id: n.id, title: n.title }));
+                        items.forEach(item => {
+                            const div = document.createElement('div');
+                            div.style.marginBottom = '4px';
+                            div.innerHTML = `<label><input type=\"checkbox\" data-source=\"${item.source}\" data-id=\"${item.id}\"> [${item.source}] ${item.title || item.id}</label>`;
+                            cont.appendChild(div);
+                        });
+                        Toast.success(`Loaded ${items.length} notes items`);
+                    } else {
+                        const kw = (document.getElementById('ragSel_keyword_text')?.value || '').trim();
+                        if (!kw) { alert('Enter a keyword for media'); return; }
+                        const body = { query: null, fields: ["title","content"], must_have: [kw], sort_by: 'relevance' };
+                        const resp = await apiClient.makeRequest('POST', `/api/v1/media/search?page=1&results_per_page=50`, body);
+                        const items = (resp?.items || resp?.results || resp?.data || []).map(m => ({ source: 'media_db', id: m.id || m.media_id || m['id'], title: m.title || m['title'] }));
+                        items.forEach(item => {
+                            const div = document.createElement('div');
+                            div.style.marginBottom = '4px';
+                            div.innerHTML = `<label><input type=\"checkbox\" data-source=\"${item.source}\" data-id=\"${item.id}\"> [${item.source}] ${item.title || item.id}</label>`;
+                            cont.appendChild(div);
+                        });
+                        Toast.success(`Loaded ${items.length} media items for '${kw}'`);
+                    }
+                } catch (e) {
+                    Toast.error('Failed to load items: ' + (e?.message || e));
+                }
+            }
+
+            // Auto-init on tab load
+            (function(){ try { ragSelInitSources(); ragSelLoadKeywords(); } catch(e){} })();
+            document.getElementById('ragSel_category')?.addEventListener('change', () => { ragSelToggleKeywordInput(); ragSelLoadKeywords(); });
+        </script>
+    </div>
     <div class="endpoint-section" id="ragSimpleSearch">
         <h2>
             <span class="endpoint-method post">POST</span>

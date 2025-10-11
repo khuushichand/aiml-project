@@ -315,4 +315,1905 @@
         <h3>Response:</h3>
         <pre id="bioRxivPubsByDoi_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="earthrxivSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/earthrxiv - EarthArXiv Search</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="earthrxiv_term">Term:</label><input type="text" id="earthrxiv_term" placeholder="tectonics"></div>
+                <div class="form-group"><label for="earthrxiv_from_date">From Date (YYYY-MM-DD):</label><input type="text" id="earthrxiv_from_date" placeholder="2023-01-01"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="earthrxiv_page">Page:</label><input type="number" id="earthrxiv_page" value="1" min="1"></div>
+                <div class="form-group"><label for="earthrxiv_results_per_page">Results per page:</label><input type="number" id="earthrxiv_results_per_page" value="10" min="1" max="100"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('earthrxivSearch', 'GET', '/api/v1/paper-search/earthrxiv', 'query')">Search</button>
+        <h3>cURL Command:</h3>
+        <pre id="earthrxivSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="earthrxivSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf - OSF Preprints Search</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="osf_term">Term:</label><input type="text" id="osf_term" placeholder="machine learning"></div>
+                <div class="form-group">
+                    <label for="osf_provider">Provider (optional):</label>
+                    <select id="osf_provider">
+                        <option value="">(all)</option>
+                        <option value="osf">osf</option>
+                        <option value="socarxiv">socarxiv</option>
+                        <option value="eartharxiv">eartharxiv</option>
+                        <option value="psyarxiv">psyarxiv</option>
+                        <option value="engrxiv">engrxiv</option>
+                        <option value="ecsarxiv">ecsarxiv</option>
+                        <option value="edarxiv">edarxiv</option>
+                        <option value="lawarxiv">lawarxiv</option>
+                        <option value="ecoevorxiv">ecoevorxiv</option>
+                        <option value="metaarxiv">metaarxiv</option>
+                        <option value="paleorxiv">paleorxiv</option>
+                        <option value="sportrxiv">sportrxiv</option>
+                        <option value="thesiscommons">thesiscommons</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="osf_from_date">From Date (YYYY-MM-DD):</label><input type="text" id="osf_from_date" placeholder="2024-01-01"></div>
+                <div class="form-group"><label for="osf_page">Page:</label><input type="number" id="osf_page" value="1" min="1"></div>
+                <div class="form-group"><label for="osf_results_per_page">Results per page:</label><input type="number" id="osf_results_per_page" value="10" min="1" max="100"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('osfSearch', 'GET', '/api/v1/paper-search/osf', 'query')">Search</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfRaw">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf/raw - OSF Raw (JSON)</span>
+        </h2>
+        <p>Passthrough of OSF preprints list endpoint (JSON). Useful for inspection or downloading.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="osfRaw_q">q (search):</label><input type="text" id="osfRaw_q" placeholder="machine learning"></div>
+                <div class="form-group"><label for="osfRaw_provider">filter[provider]:</label><input type="text" id="osfRaw_provider" placeholder="osf"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="osfRaw_date_gte">filter[date_created][gte]:</label><input type="text" id="osfRaw_date_gte" placeholder="2024-01-01"></div>
+                <div class="form-group"><label for="osfRaw_page_size">page[size]:</label><input type="number" id="osfRaw_page_size" value="10" min="1" max="100"></div>
+                <div class="form-group"><label for="osfRaw_page_number">page[number]:</label><input type="number" id="osfRaw_page_number" value="1" min="1"></div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="osfRaw_download"> Download as file</label>
+            <input type="text" id="osfRaw_filename" placeholder="osf_raw.json" style="margin-left:10px; width: 240px;" />
+        </div>
+        <button class="api-button" onclick="makeRequest('osfRaw', 'GET', '/api/v1/paper-search/osf/raw', 'query')">Fetch Raw</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfRaw_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfRaw_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfRawById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf/raw/by-id - OSF Raw by ID</span>
+        </h2>
+        <div class="form-group"><label for="osfRawById_osf_id">OSF ID:</label><input type="text" id="osfRawById_osf_id" placeholder="abcd1"></div>
+        <div class="form-group">
+            <label><input type="checkbox" id="osfRawById_download"> Download as file</label>
+            <input type="text" id="osfRawById_filename" placeholder="osf_by_id.json" style="margin-left:10px; width: 240px;" />
+        </div>
+        <button class="api-button" onclick="makeRequest('osfRawById', 'GET', '/api/v1/paper-search/osf/raw/by-id', 'query')">Fetch Raw by ID</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfRawById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfRawById_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf/by-id - OSF Preprint by ID</span>
+        </h2>
+        <div class="form-group"><label for="osfById_osf_id">OSF ID:</label><input type="text" id="osfById_osf_id" placeholder="abcd1"></div>
+        <button class="api-button" onclick="makeRequest('osfById', 'GET', '/api/v1/paper-search/osf/by-id', 'query')">Get by ID</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfById_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf/by-doi - OSF Preprint by DOI</span>
+        </h2>
+        <div class="form-group"><label for="osfByDoi_doi">DOI:</label><input type="text" id="osfByDoi_doi" placeholder="10.31219/osf.io/xxxx"></div>
+        <button class="api-button" onclick="makeRequest('osfByDoi', 'GET', '/api/v1/paper-search/osf/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfByDoi_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="zenodoSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/zenodo - Zenodo Records Search</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="zenodo_term">Query (q):</label><input type="text" id="zenodo_term" placeholder="machine learning"></div>
+                <div class="form-group"><label for="zenodo_type">Type:</label><input type="text" id="zenodo_type" placeholder="Publication"></div>
+                <div class="form-group"><label for="zenodo_subtype">Subtype:</label><input type="text" id="zenodo_subtype" placeholder="Journal article"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="zenodo_communities">Communities:</label><input type="text" id="zenodo_communities" placeholder="user-cfa"></div>
+                <div class="form-group"><label for="zenodo_page">Page:</label><input type="number" id="zenodo_page" value="1" min="1"></div>
+                <div class="form-group"><label for="zenodo_results_per_page">Results per page:</label><input type="number" id="zenodo_results_per_page" value="10" min="1" max="100"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('zenodoSearch', 'GET', '/api/v1/paper-search/zenodo', 'query')">Search</button>
+        <h3>cURL Command:</h3>
+        <pre id="zenodoSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="zenodoSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="zenodoOai">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/zenodo/oai - Zenodo OAI-PMH</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="zenodoOai_verb">Verb:</label><input type="text" id="zenodoOai_verb" placeholder="Identify"></div>
+                <div class="form-group"><label for="zenodoOai_metadataPrefix">metadataPrefix:</label><input type="text" id="zenodoOai_metadataPrefix" placeholder="oai_dc"></div>
+                <div class="form-group"><label for="zenodoOai_identifier">identifier:</label><input type="text" id="zenodoOai_identifier" placeholder="oai:zenodo.org:123456"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="zenodoOai_from">from:</label><input type="text" id="zenodoOai_from" placeholder="YYYY-MM-DD"></div>
+                <div class="form-group"><label for="zenodoOai_until">until:</label><input type="text" id="zenodoOai_until" placeholder="YYYY-MM-DD"></div>
+                <div class="form-group"><label for="zenodoOai_set">set:</label><input type="text" id="zenodoOai_set" placeholder="user-cfa"></div>
+                <div class="form-group"><label for="zenodoOai_resumptionToken">resumptionToken:</label><input type="text" id="zenodoOai_resumptionToken"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('zenodoOai', 'GET', '/api/v1/paper-search/zenodo/oai', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="zenodoOai_download"> Download as file</label>
+            <input type="text" id="zenodoOai_filename" placeholder="zenodo_oai.xml" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="zenodoOai_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="zenodoOai_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivPublisherSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/publisher - Publisher Mapping (pubs)</span>
+        </h2>
+        <p>Search bioRxiv publisher mapping by DOI prefix (e.g., 10.15252).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_publisher_prefix">Publisher Prefix:</label>
+                    <input type="text" id="bioRxivPublisherSearch_publisher_prefix" placeholder="10.15252">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_from_date">From Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPublisherSearch_from_date" placeholder="2024-01-01">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_to_date">To Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPublisherSearch_to_date" placeholder="2024-12-31">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_recent_days">Recent Days (optional):</label>
+                    <input type="number" id="bioRxivPublisherSearch_recent_days" min="1" placeholder="e.g., 7">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_recent_count">Recent Count (optional):</label>
+                    <input type="number" id="bioRxivPublisherSearch_recent_count" min="1" placeholder="e.g., 200">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="bioRxivPublisherSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPublisherSearch_page">Page:</label>
+                    <input type="number" id="bioRxivPublisherSearch_page" value="1" min="1">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivPublisherSearch', 'GET', '/api/v1/paper-search/biorxiv/publisher', 'query')">Search Publisher</button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivPublisherSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivPublisherSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivPubSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/pub - Published Article Detail</span>
+        </h2>
+        <p>Search bioRxiv published article detail (pub) by date or recent parameters.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_from_date">From Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPubSearch_from_date" placeholder="2024-01-01">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_to_date">To Date (YYYY-MM-DD):</label>
+                    <input type="text" id="bioRxivPubSearch_to_date" placeholder="2024-12-31">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_recent_days">Recent Days (optional):</label>
+                    <input type="number" id="bioRxivPubSearch_recent_days" min="1" placeholder="e.g., 30">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_recent_count">Recent Count (optional):</label>
+                    <input type="number" id="bioRxivPubSearch_recent_count" min="1" placeholder="e.g., 100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="bioRxivPubSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivPubSearch_page">Page:</label>
+                    <input type="number" id="bioRxivPubSearch_page" value="1" min="1">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivPubSearch', 'GET', '/api/v1/paper-search/biorxiv/pub', 'query')">Search Pub</button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivPubSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivPubSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivFunderSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/funder - Search by Funder ROR</span>
+        </h2>
+        <p>Find bioRxiv/medRxiv content by funder ROR ID. Accepts optional category filter.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_server">Server:</label>
+                    <select id="bioRxivFunderSearch_server">
+                        <option value="biorxiv" selected>biorxiv</option>
+                        <option value="medrxiv">medrxiv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_ror_id">ROR ID:</label>
+                    <input type="text" id="bioRxivFunderSearch_ror_id" placeholder="02mhbdp94">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_from_date">From Date:</label>
+                    <input type="text" id="bioRxivFunderSearch_from_date" placeholder="2025-04-10">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_to_date">To Date:</label>
+                    <input type="text" id="bioRxivFunderSearch_to_date" placeholder="2025-07-10">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_category">Category (optional):</label>
+                    <input type="text" id="bioRxivFunderSearch_category" placeholder="cell_biology">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_recent_days">Recent Days (optional):</label>
+                    <input type="number" id="bioRxivFunderSearch_recent_days" min="1" placeholder="e.g., 30">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_recent_count">Recent Count (optional):</label>
+                    <input type="number" id="bioRxivFunderSearch_recent_count" min="1" placeholder="e.g., 100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="bioRxivFunderSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivFunderSearch_page">Page:</label>
+                    <input type="number" id="bioRxivFunderSearch_page" value="1" min="1">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivFunderSearch', 'GET', '/api/v1/paper-search/biorxiv/funder', 'query')">Search Funder</button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivFunderSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivFunderSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivSummary">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/reports/summary - Content Summary</span>
+        </h2>
+        <div class="form-group">
+            <label for="bioRxivSummary_interval">Interval:</label>
+            <select id="bioRxivSummary_interval">
+                <option value="m" selected>Monthly</option>
+                <option value="y">Yearly</option>
+            </select>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivSummary', 'GET', '/api/v1/paper-search/biorxiv/reports/summary', 'query')">Fetch Summary</button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivSummary_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivSummary_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivUsage">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/reports/usage - Usage Summary</span>
+        </h2>
+        <div class="form-group">
+            <label for="bioRxivUsage_interval">Interval:</label>
+            <select id="bioRxivUsage_interval">
+                <option value="m" selected>Monthly</option>
+                <option value="y">Yearly</option>
+            </select>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivUsage', 'GET', '/api/v1/paper-search/biorxiv/reports/usage', 'query')">Fetch Usage</button>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivUsage_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivUsage_response">---</pre>
+    </div>
  </div>
+
+<!-- ACM (via OpenAlex) Tab -->
+<div id="tabResearchACM" class="tab-content">
+    <div class="endpoint-section" id="acmSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/acm - Search ACM via OpenAlex</span>
+        </h2>
+        <p>Search ACM publications using OpenAlex venue filtering.</p>
+        <div class="form-group">
+            <label for="acmSearch_q">Search Query:</label>
+            <input type="text" id="acmSearch_q" placeholder="transformer" value="transformer">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="acmSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="acmSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="acmSearch_page">Page:</label>
+                    <input type="number" id="acmSearch_page" value="1" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="acmSearch_venue">Venue (optional):</label>
+                    <input type="text" id="acmSearch_venue" placeholder="ACM">
+                </div>
+                <div class="form-group">
+                    <label for="acmSearch_from_year">From Year (optional):</label>
+                    <input type="number" id="acmSearch_from_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label for="acmSearch_to_year">To Year (optional):</label>
+                    <input type="number" id="acmSearch_to_year" min="1800" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('acmSearch', 'GET', '/api/v1/paper-search/acm', 'query')">Search ACM</button>
+        <h3>cURL Command:</h3>
+        <pre id="acmSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="acmSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="acmByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/acm/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="acmByDoi_doi">DOI:</label>
+            <input type="text" id="acmByDoi_doi" placeholder="10.1145/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('acmByDoi', 'GET', '/api/v1/paper-search/acm/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="acmByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="acmByDoi_response">---</pre>
+    </div>
+</div>
+
+<!-- BioRxiv Raw Passthroughs -->
+<div id="tabResearchBioRxiv" class="tab-content">
+    <div class="endpoint-section" id="bioRxivRawDetails">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/details - Raw Details (json|xml|html)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_server">Server:</label>
+                    <select id="bioRxivRawDetails_server">
+                        <option value="biorxiv" selected>biorxiv</option>
+                        <option value="medrxiv">medrxiv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_from_date">From Date:</label>
+                    <input type="text" id="bioRxivRawDetails_from_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_to_date">To Date:</label>
+                    <input type="text" id="bioRxivRawDetails_to_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_doi">DOI (optional):</label>
+                    <input type="text" id="bioRxivRawDetails_doi" placeholder="10.1101/...">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_recent_days">Recent Days:</label>
+                    <input type="number" id="bioRxivRawDetails_recent_days" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_recent_count">Recent Count:</label>
+                    <input type="number" id="bioRxivRawDetails_recent_count" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_cursor">Cursor:</label>
+                    <input type="number" id="bioRxivRawDetails_cursor" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_category">Category:</label>
+                    <input type="text" id="bioRxivRawDetails_category" placeholder="cell_biology">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawDetails_format">Format:</label>
+                    <select id="bioRxivRawDetails_format">
+                        <option value="json" selected>json</option>
+                        <option value="xml">xml</option>
+                        <option value="html">html</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawDetails', 'GET', '/api/v1/paper-search/biorxiv/raw/details', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawDetails_download"> Download as file</label>
+            <input type="text" id="bioRxivRawDetails_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawDetails_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawDetails_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivRawPubs">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/pubs - Raw Pubs (json|csv)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_server">Server:</label>
+                    <select id="bioRxivRawPubs_server">
+                        <option value="biorxiv" selected>biorxiv</option>
+                        <option value="medrxiv">medrxiv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_from_date">From Date:</label>
+                    <input type="text" id="bioRxivRawPubs_from_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_to_date">To Date:</label>
+                    <input type="text" id="bioRxivRawPubs_to_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_doi">DOI (optional):</label>
+                    <input type="text" id="bioRxivRawPubs_doi" placeholder="10.1101/...">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_recent_days">Recent Days:</label>
+                    <input type="number" id="bioRxivRawPubs_recent_days" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_recent_count">Recent Count:</label>
+                    <input type="number" id="bioRxivRawPubs_recent_count" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_cursor">Cursor:</label>
+                    <input type="number" id="bioRxivRawPubs_cursor" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPubs_format">Format:</label>
+                    <select id="bioRxivRawPubs_format">
+                        <option value="json" selected>json</option>
+                        <option value="csv">csv</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawPubs', 'GET', '/api/v1/paper-search/biorxiv/raw/pubs', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawPubs_download"> Download as file</label>
+            <input type="text" id="bioRxivRawPubs_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawPubs_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawPubs_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivRawPub">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/pub - Raw Pub (json|csv)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawPub_from_date">From Date:</label>
+                    <input type="text" id="bioRxivRawPub_from_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPub_to_date">To Date:</label>
+                    <input type="text" id="bioRxivRawPub_to_date" placeholder="YYYY-MM-DD">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawPub_recent_days">Recent Days:</label>
+                    <input type="number" id="bioRxivRawPub_recent_days" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPub_recent_count">Recent Count:</label>
+                    <input type="number" id="bioRxivRawPub_recent_count" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPub_cursor">Cursor:</label>
+                    <input type="number" id="bioRxivRawPub_cursor" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawPub_format">Format:</label>
+                    <select id="bioRxivRawPub_format">
+                        <option value="json" selected>json</option>
+                        <option value="csv">csv</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawPub', 'GET', '/api/v1/paper-search/biorxiv/raw/pub', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawPub_download"> Download as file</label>
+            <input type="text" id="bioRxivRawPub_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawPub_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawPub_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivRawFunder">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/funder - Raw Funder (json|xml)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_server">Server:</label>
+                    <select id="bioRxivRawFunder_server">
+                        <option value="biorxiv" selected>biorxiv</option>
+                        <option value="medrxiv">medrxiv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_ror_id">ROR ID:</label>
+                    <input type="text" id="bioRxivRawFunder_ror_id" placeholder="02mhbdp94">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_from_date">From Date:</label>
+                    <input type="text" id="bioRxivRawFunder_from_date" placeholder="YYYY-MM-DD">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_to_date">To Date:</label>
+                    <input type="text" id="bioRxivRawFunder_to_date" placeholder="YYYY-MM-DD">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_recent_days">Recent Days:</label>
+                    <input type="number" id="bioRxivRawFunder_recent_days" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_recent_count">Recent Count:</label>
+                    <input type="number" id="bioRxivRawFunder_recent_count" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_cursor">Cursor:</label>
+                    <input type="number" id="bioRxivRawFunder_cursor" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_category">Category:</label>
+                    <input type="text" id="bioRxivRawFunder_category" placeholder="cell_biology">
+                </div>
+                <div class="form-group">
+                    <label for="bioRxivRawFunder_format">Format:</label>
+                    <select id="bioRxivRawFunder_format">
+                        <option value="json" selected>json</option>
+                        <option value="xml">xml</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawFunder', 'GET', '/api/v1/paper-search/biorxiv/raw/funder', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawFunder_download"> Download as file</label>
+            <input type="text" id="bioRxivRawFunder_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawFunder_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawFunder_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivRawSummary">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/reports/summary - Raw Summary (json|csv)</span>
+        </h2>
+        <div class="form-group">
+            <label for="bioRxivRawSummary_interval">Interval:</label>
+            <select id="bioRxivRawSummary_interval">
+                <option value="m" selected>Monthly</option>
+                <option value="y">Yearly</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="bioRxivRawSummary_format">Format:</label>
+            <select id="bioRxivRawSummary_format">
+                <option value="json" selected>json</option>
+                <option value="csv">csv</option>
+            </select>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawSummary', 'GET', '/api/v1/paper-search/biorxiv/raw/reports/summary', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawSummary_download"> Download as file</label>
+            <input type="text" id="bioRxivRawSummary_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawSummary_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawSummary_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="bioRxivRawUsage">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/biorxiv/raw/reports/usage - Raw Usage (json|csv)</span>
+        </h2>
+        <div class="form-group">
+            <label for="bioRxivRawUsage_interval">Interval:</label>
+            <select id="bioRxivRawUsage_interval">
+                <option value="m" selected>Monthly</option>
+                <option value="y">Yearly</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="bioRxivRawUsage_format">Format:</label>
+            <select id="bioRxivRawUsage_format">
+                <option value="json" selected>json</option>
+                <option value="csv">csv</option>
+            </select>
+        </div>
+        <button class="api-button" onclick="makeRequest('bioRxivRawUsage', 'GET', '/api/v1/paper-search/biorxiv/raw/reports/usage', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="bioRxivRawUsage_download"> Download as file</label>
+            <input type="text" id="bioRxivRawUsage_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="bioRxivRawUsage_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="bioRxivRawUsage_response">---</pre>
+    </div>
+</div>
+
+<!-- ChemRxiv Tab -->
+<div id="tabResearchChemRxiv" class="tab-content">
+    <div class="endpoint-section" id="chemrxivItems">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/items - Search Items</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="chemrxivItems_term">Term:</label>
+                    <input type="text" id="chemrxivItems_term" placeholder="catalysis">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_author">Author:</label>
+                    <input type="text" id="chemrxivItems_author">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_searchDateFrom">Date From:</label>
+                    <input type="text" id="chemrxivItems_searchDateFrom" placeholder="YYYY-MM-DD or ISO">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_searchDateTo">Date To:</label>
+                    <input type="text" id="chemrxivItems_searchDateTo" placeholder="YYYY-MM-DD or ISO">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="chemrxivItems_limit">Limit:</label>
+                    <input type="number" id="chemrxivItems_limit" value="10" min="1" max="50">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_skip">Skip:</label>
+                    <input type="number" id="chemrxivItems_skip" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_sort">Sort:</label>
+                    <select id="chemrxivItems_sort">
+                        <option value="PUBLISHED_DATE_DESC" selected>PUBLISHED_DATE_DESC</option>
+                        <option value="PUBLISHED_DATE_ASC">PUBLISHED_DATE_ASC</option>
+                        <option value="RELEVANT_DESC">RELEVANT_DESC</option>
+                        <option value="RELEVANT_ASC">RELEVANT_ASC</option>
+                        <option value="VIEWS_COUNT_DESC">VIEWS_COUNT_DESC</option>
+                        <option value="VIEWS_COUNT_ASC">VIEWS_COUNT_ASC</option>
+                        <option value="CITATION_COUNT_DESC">CITATION_COUNT_DESC</option>
+                        <option value="CITATION_COUNT_ASC">CITATION_COUNT_ASC</option>
+                        <option value="READ_COUNT_DESC">READ_COUNT_DESC</option>
+                        <option value="READ_COUNT_ASC">READ_COUNT_ASC</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivItems_searchLicense">License:</label>
+                    <input type="text" id="chemrxivItems_searchLicense" placeholder="e.g., CC BY 4.0">
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="chemrxivItems_categoryIds">Category IDs (CSV):</label>
+            <input type="text" id="chemrxivItems_categoryIds" placeholder="id1,id2,...">
+        </div>
+        <div class="form-group">
+            <label for="chemrxivItems_subjectIds">Subject IDs (CSV):</label>
+            <input type="text" id="chemrxivItems_subjectIds" placeholder="id1,id2,...">
+        </div>
+        <button class="api-button" onclick="makeRequest('chemrxivItems', 'GET', '/api/v1/paper-search/chemrxiv/items', 'query')">Search</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivItems_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivItems_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/items/by-id - Get by ID</span>
+        </h2>
+        <div class="form-group">
+            <label for="chemrxivById_itemId">Item ID:</label>
+            <input type="text" id="chemrxivById_itemId" placeholder="24-char id">
+        </div>
+        <button class="api-button" onclick="makeRequest('chemrxivById', 'GET', '/api/v1/paper-search/chemrxiv/items/by-id', 'query')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivById_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/items/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="chemrxivByDoi_doi">DOI:</label>
+            <input type="text" id="chemrxivByDoi_doi" placeholder="10.33774/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('chemrxivByDoi', 'GET', '/api/v1/paper-search/chemrxiv/items/by-doi', 'query')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivByDoi_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivCategories">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/categories - Categories</span>
+        </h2>
+        <button class="api-button" onclick="makeRequest('chemrxivCategories', 'GET', '/api/v1/paper-search/chemrxiv/categories', 'none')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivCategories_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivCategories_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivLicenses">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/licenses - Licenses</span>
+        </h2>
+        <button class="api-button" onclick="makeRequest('chemrxivLicenses', 'GET', '/api/v1/paper-search/chemrxiv/licenses', 'none')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivLicenses_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivLicenses_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivVersion">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/version - API Version</span>
+        </h2>
+        <button class="api-button" onclick="makeRequest('chemrxivVersion', 'GET', '/api/v1/paper-search/chemrxiv/version', 'none')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivVersion_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivVersion_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="chemrxivOAI">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/chemrxiv/oai - OAI-PMH (XML)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="chemrxivOAI_verb">Verb:</label>
+                    <select id="chemrxivOAI_verb">
+                        <option value="Identify" selected>Identify</option>
+                        <option value="ListMetadataFormats">ListMetadataFormats</option>
+                        <option value="GetRecord">GetRecord</option>
+                        <option value="ListRecords">ListRecords</option>
+                        <option value="ListIdentifiers">ListIdentifiers</option>
+                        <option value="ListSets">ListSets</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivOAI_identifier">Identifier:</label>
+                    <input type="text" id="chemrxivOAI_identifier">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivOAI_metadataPrefix">metadataPrefix:</label>
+                    <input type="text" id="chemrxivOAI_metadataPrefix" value="oai_dc">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="chemrxivOAI_from">From:</label>
+                    <input type="text" id="chemrxivOAI_from" placeholder="YYYY-MM-DDThh:mm:ssZ">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivOAI_until">Until:</label>
+                    <input type="text" id="chemrxivOAI_until" placeholder="YYYY-MM-DDThh:mm:ssZ">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivOAI_resumptionToken">ResumptionToken:</label>
+                    <input type="text" id="chemrxivOAI_resumptionToken">
+                </div>
+                <div class="form-group">
+                    <label for="chemrxivOAI_set">Set:</label>
+                    <input type="text" id="chemrxivOAI_set">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('chemrxivOAI', 'GET', '/api/v1/paper-search/chemrxiv/oai', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="chemrxivOAI_download"> Download as file</label>
+            <input type="text" id="chemrxivOAI_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="chemrxivOAI_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="chemrxivOAI_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="iacrConf">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/iacr/conf - IACR Conference (JSON)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="iacrConf_venue">Venue:</label>
+                    <select id="iacrConf_venue">
+                        <option value="crypto" selected>crypto</option>
+                        <option value="eurocrypt">eurocrypt</option>
+                        <option value="asiacrypt">asiacrypt</option>
+                        <option value="fse">fse</option>
+                        <option value="ches">ches</option>
+                        <option value="tcc">tcc</option>
+                        <option value="pkc">pkc</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="iacrConf_year">Year:</label>
+                    <input type="number" id="iacrConf_year" value="2017" min="1970" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('iacrConf', 'GET', '/api/v1/paper-search/iacr/conf', 'query')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="iacrConf_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="iacrConf_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="iacrConfRaw">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/iacr/conf/raw - IACR Conference Raw</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="iacrConfRaw_venue">Venue:</label>
+                    <select id="iacrConfRaw_venue">
+                        <option value="crypto" selected>crypto</option>
+                        <option value="eurocrypt">eurocrypt</option>
+                        <option value="asiacrypt">asiacrypt</option>
+                        <option value="fse">fse</option>
+                        <option value="ches">ches</option>
+                        <option value="tcc">tcc</option>
+                        <option value="pkc">pkc</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="iacrConfRaw_year">Year:</label>
+                    <input type="number" id="iacrConfRaw_year" value="2017" min="1970" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('iacrConfRaw', 'GET', '/api/v1/paper-search/iacr/conf/raw', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="iacrConfRaw_download" checked> Download as file</label>
+            <input type="text" id="iacrConfRaw_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="iacrConfRaw_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="iacrConfRaw_response">---</pre>
+    </div>
+</div>
+
+<!-- Wiley (via OpenAlex) Tab -->
+<div id="tabResearchWiley" class="tab-content">
+    <div class="endpoint-section" id="wileySearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/wiley - Search Wiley via OpenAlex</span>
+        </h2>
+        <p>Search Wiley journals using OpenAlex venue filtering.</p>
+        <div class="form-group">
+            <label for="wileySearch_q">Search Query:</label>
+            <input type="text" id="wileySearch_q" placeholder="bioinformatics" value="bioinformatics">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="wileySearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="wileySearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="wileySearch_page">Page:</label>
+                    <input type="number" id="wileySearch_page" value="1" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="wileySearch_venue">Venue (optional):</label>
+                    <input type="text" id="wileySearch_venue" placeholder="Wiley">
+                </div>
+                <div class="form-group">
+                    <label for="wileySearch_from_year">From Year (optional):</label>
+                    <input type="number" id="wileySearch_from_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label for="wileySearch_to_year">To Year (optional):</label>
+                    <input type="number" id="wileySearch_to_year" min="1800" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('wileySearch', 'GET', '/api/v1/paper-search/wiley', 'query')">Search Wiley</button>
+        <h3>cURL Command:</h3>
+        <pre id="wileySearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="wileySearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="wileyByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/wiley/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="wileyByDoi_doi">DOI:</label>
+            <input type="text" id="wileyByDoi_doi" placeholder="10.1002/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('wileyByDoi', 'GET', '/api/v1/paper-search/wiley/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="wileyByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="wileyByDoi_response">---</pre>
+    </div>
+</div>
+
+<!-- IEEE Xplore Tab -->
+<div id="tabResearchIEEE" class="tab-content">
+    <div class="endpoint-section" id="ieeeSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/ieee - Search IEEE Xplore</span>
+        </h2>
+        <p>Requires configuration of IEEE_API_KEY; otherwise returns 501.</p>
+        <div class="form-group">
+            <label for="ieeeSearch_q">Search Query:</label>
+            <input type="text" id="ieeeSearch_q" placeholder="neural" value="neural">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="ieeeSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="ieeeSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="ieeeSearch_page">Page:</label>
+                    <input type="number" id="ieeeSearch_page" value="1" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="ieeeSearch_publication_title">Publication Title (optional):</label>
+                    <input type="text" id="ieeeSearch_publication_title" placeholder="IEEE Transactions on ...">
+                </div>
+                <div class="form-group">
+                    <label for="ieeeSearch_authors">Authors (optional):</label>
+                    <input type="text" id="ieeeSearch_authors" placeholder="Lastname, Firstname">
+                </div>
+                <div class="form-group">
+                    <label for="ieeeSearch_from_year">From Year (optional):</label>
+                    <input type="number" id="ieeeSearch_from_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label for="ieeeSearch_to_year">To Year (optional):</label>
+                    <input type="number" id="ieeeSearch_to_year" min="1800" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('ieeeSearch', 'GET', '/api/v1/paper-search/ieee', 'query')">Search IEEE Xplore</button>
+        <h3>cURL Command:</h3>
+        <pre id="ieeeSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="ieeeSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="ieeeByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/ieee/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="ieeeByDoi_doi">DOI:</label>
+            <input type="text" id="ieeeByDoi_doi" placeholder="10.1109/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('ieeeByDoi', 'GET', '/api/v1/paper-search/ieee/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="ieeeByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="ieeeByDoi_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="ieeeById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/ieee/by-id - Get by Article Number</span>
+        </h2>
+        <div class="form-group">
+            <label for="ieeeById_article_number">Article Number:</label>
+            <input type="text" id="ieeeById_article_number" placeholder="1234567">
+        </div>
+        <button class="api-button" onclick="makeRequest('ieeeById', 'GET', '/api/v1/paper-search/ieee/by-id', 'query')">Get by ID</button>
+        <h3>cURL Command:</h3>
+        <pre id="ieeeById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="ieeeById_response">---</pre>
+    </div>
+</div>
+
+<!-- Springer Tab -->
+<div id="tabResearchSpringer" class="tab-content">
+    <div class="endpoint-section" id="springerSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/springer - Search Springer Nature</span>
+        </h2>
+        <p>Requires SPRINGER_NATURE_API_KEY; otherwise returns 501.</p>
+        <div class="form-group">
+            <label for="springerSearch_q">Search Query:</label>
+            <input type="text" id="springerSearch_q" placeholder="graph" value="graph">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="springerSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="springerSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="springerSearch_page">Page:</label>
+                    <input type="number" id="springerSearch_page" value="1" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="springerSearch_venue">Journal (optional):</label>
+                    <input type="text" id="springerSearch_venue" placeholder="Nature">
+                </div>
+                <div class="form-group">
+                    <label for="springerSearch_from_year">From Year (optional):</label>
+                    <input type="number" id="springerSearch_from_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label for="springerSearch_to_year">To Year (optional):</label>
+                    <input type="number" id="springerSearch_to_year" min="1800" max="2100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('springerSearch', 'GET', '/api/v1/paper-search/springer', 'query')">Search Springer</button>
+        <h3>cURL Command:</h3>
+        <pre id="springerSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="springerSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="springerByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/springer/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="springerByDoi_doi">DOI:</label>
+            <input type="text" id="springerByDoi_doi" placeholder="10.1007/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('springerByDoi', 'GET', '/api/v1/paper-search/springer/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="springerByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="springerByDoi_response">---</pre>
+    </div>
+</div>
+
+<!-- Scopus Tab -->
+<div id="tabResearchScopus" class="tab-content">
+    <div class="endpoint-section" id="scopusSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/scopus - Search Elsevier Scopus</span>
+        </h2>
+        <p>Requires ELSEVIER_API_KEY; otherwise returns 501.</p>
+        <div class="form-group">
+            <label for="scopusSearch_q">Search Query:</label>
+            <input type="text" id="scopusSearch_q" placeholder="vision" value="vision">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="scopusSearch_results_per_page">Results Per Page:</label>
+                    <input type="number" id="scopusSearch_results_per_page" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="scopusSearch_page">Page:</label>
+                    <input type="number" id="scopusSearch_page" value="1" min="1">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="scopusSearch_from_year">From Year (optional):</label>
+                    <input type="number" id="scopusSearch_from_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label for="scopusSearch_to_year">To Year (optional):</label>
+                    <input type="number" id="scopusSearch_to_year" min="1800" max="2100">
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="scopusSearch_open_access_only"> Open Access only</label>
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('scopusSearch', 'GET', '/api/v1/paper-search/scopus', 'query')">Search Scopus</button>
+        <h3>cURL Command:</h3>
+        <pre id="scopusSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="scopusSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="scopusByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/scopus/by-doi - Get by DOI</span>
+        </h2>
+        <div class="form-group">
+            <label for="scopusByDoi_doi">DOI:</label>
+            <input type="text" id="scopusByDoi_doi" placeholder="10.1016/...">
+        </div>
+        <button class="api-button" onclick="makeRequest('scopusByDoi', 'GET', '/api/v1/paper-search/scopus/by-doi', 'query')">Get by DOI</button>
+        <h3>cURL Command:</h3>
+        <pre id="scopusByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="scopusByDoi_response">---</pre>
+    </div>
+</div>
+
+<!-- OA Ingest by DOI Tab -->
+<div id="tabResearchOAIngest" class="tab-content">
+    <div class="endpoint-section" id="oaIngestDoi">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/ingest/by-doi - OA Ingest by DOI</span>
+        </h2>
+        <p>Resolve an Open Access PDF via Unpaywall and ingest it into your Media DB. Requires UNPAYWALL_EMAIL env var.</p>
+        <div class="form-group">
+            <label for="oaIngestDoi_doi">DOI <span class="required">*</span>:</label>
+            <input type="text" id="oaIngestDoi_doi" placeholder="10.48550/arXiv.1706.03762" value="10.48550/arXiv.1706.03762">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label><input type="checkbox" id="oaIngestDoi_perform_chunking" checked> Perform Chunking</label>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="oaIngestDoi_perform_analysis" checked> Perform Analysis</label>
+                </div>
+                <div class="form-group">
+                    <label for="oaIngestDoi_parser">Parser:</label>
+                    <input type="text" id="oaIngestDoi_parser" value="pymupdf4llm">
+                </div>
+                <div class="form-group">
+                    <label for="oaIngestDoi_chunk_method">Chunk Method:</label>
+                    <input type="text" id="oaIngestDoi_chunk_method" placeholder="sentences">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="oaIngestDoi_chunk_size">Chunk Size:</label>
+                    <input type="number" id="oaIngestDoi_chunk_size" value="500" min="50" max="4000">
+                </div>
+                <div class="form-group">
+                    <label for="oaIngestDoi_chunk_overlap">Chunk Overlap:</label>
+                    <input type="number" id="oaIngestDoi_chunk_overlap" value="200" min="0" max="1000">
+                </div>
+                <div class="form-group">
+                    <label for="oaIngestDoi_keywords">Keywords (CSV):</label>
+                    <input type="text" id="oaIngestDoi_keywords" placeholder="oa,ingest,doi">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('oaIngestDoi', 'POST', '/api/v1/paper-search/ingest/by-doi', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="oaIngestDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="oaIngestDoi_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="pmcFetchPdf">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/pmc-oa/fetch-pdf - PMC OA Fetch PDF</span>
+        </h2>
+        <div class="form-group">
+            <label for="pmcFetchPdf_pmcid">PMCID (numeric or with PMC prefix):</label>
+            <input type="text" id="pmcFetchPdf_pmcid" placeholder="PMC5334499">
+        </div>
+        <button class="api-button" onclick="makeRequest('pmcFetchPdf', 'GET', '/api/v1/paper-search/pmc-oa/fetch-pdf', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="pmcFetchPdf_download" checked> Download as file</label>
+            <input type="text" id="pmcFetchPdf_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="pmcFetchPdf_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="pmcFetchPdf_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="pmcIngestPdf">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/pmc-oa/ingest-pdf - PMC OA Ingest PDF</span>
+        </h2>
+        <div class="form-group">
+            <label for="pmcIngestPdf_pmcid">PMCID (numeric or with PMC prefix):</label>
+            <input type="text" id="pmcIngestPdf_pmcid" placeholder="PMC5334499">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="pmcIngestPdf_title">Title:</label><input type="text" id="pmcIngestPdf_title"></div>
+                <div class="form-group"><label for="pmcIngestPdf_author">Author:</label><input type="text" id="pmcIngestPdf_author"></div>
+                <div class="form-group"><label for="pmcIngestPdf_keywords">Keywords (CSV):</label><input type="text" id="pmcIngestPdf_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="pmcIngestPdf_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="pmcIngestPdf_parser">Parser:</label><input type="text" id="pmcIngestPdf_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="pmcIngestPdf_chunk_method">Chunk Method:</label><input type="text" id="pmcIngestPdf_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="pmcIngestPdf_chunk_size">Chunk Size:</label><input type="number" id="pmcIngestPdf_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="pmcIngestPdf_chunk_overlap">Chunk Overlap:</label><input type="number" id="pmcIngestPdf_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="pmcIngestPdf_perform_analysis"> Perform Analysis</label></div>
+                <div class="form-group"><label for="pmcIngestPdf_api_name">LLM API Name:</label><input type="text" id="pmcIngestPdf_api_name" placeholder="openai:gpt-4o-mini"></div>
+                <div class="form-group"><label for="pmcIngestPdf_custom_prompt">Custom Prompt:</label><input type="text" id="pmcIngestPdf_custom_prompt"></div>
+                <div class="form-group"><label for="pmcIngestPdf_system_prompt">System Prompt:</label><input type="text" id="pmcIngestPdf_system_prompt"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('pmcIngestPdf', 'POST', '/api/v1/paper-search/pmc-oa/ingest-pdf', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="pmcIngestPdf_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="pmcIngestPdf_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="earthArxivIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/earthrxiv/ingest - EarthArXiv Ingest by OSF ID</span>
+        </h2>
+        <div class="form-group">
+            <label for="earthArxivIngest_osf_id">OSF ID <span class="required">*</span>:</label>
+            <input type="text" id="earthArxivIngest_osf_id" placeholder="abcd1">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="earthArxivIngest_keywords">Keywords (CSV):</label><input type="text" id="earthArxivIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="earthArxivIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="earthArxivIngest_parser">Parser:</label><input type="text" id="earthArxivIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="earthArxivIngest_chunk_method">Chunk Method:</label><input type="text" id="earthArxivIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="earthArxivIngest_chunk_size">Chunk Size:</label><input type="number" id="earthArxivIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="earthArxivIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="earthArxivIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="earthArxivIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('earthArxivIngest', 'POST', '/api/v1/paper-search/earthrxiv/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="earthArxivIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="earthArxivIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="osfIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/osf/ingest - OSF Preprint Ingest by ID</span>
+        </h2>
+        <div class="form-group">
+            <label for="osfIngest_osf_id">OSF ID <span class="required">*</span>:</label>
+            <input type="text" id="osfIngest_osf_id" placeholder="abcd1">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="osfIngest_keywords">Keywords (CSV):</label><input type="text" id="osfIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="osfIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="osfIngest_parser">Parser:</label><input type="text" id="osfIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="osfIngest_chunk_method">Chunk Method:</label><input type="text" id="osfIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="osfIngest_chunk_size">Chunk Size:</label><input type="number" id="osfIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="osfIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="osfIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="osfIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('osfIngest', 'POST', '/api/v1/paper-search/osf/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="osfIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="osfIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="zenodoIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/zenodo/ingest - Zenodo Ingest by Record ID</span>
+        </h2>
+        <p>Downloads a PDF file from a Zenodo record if available and ingests it into your Media DB.</p>
+        <div class="form-group">
+            <label for="zenodoIngest_record_id">Record ID <span class="required">*</span>:</label>
+            <input type="text" id="zenodoIngest_record_id" placeholder="8435696">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="zenodoIngest_keywords">Keywords (CSV):</label><input type="text" id="zenodoIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="zenodoIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="zenodoIngest_parser">Parser:</label><input type="text" id="zenodoIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="zenodoIngest_chunk_method">Chunk Method:</label><input type="text" id="zenodoIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="zenodoIngest_chunk_size">Chunk Size:</label><input type="number" id="zenodoIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="zenodoIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="zenodoIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="zenodoIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('zenodoIngest', 'POST', '/api/v1/paper-search/zenodo/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="zenodoIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="zenodoIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="vixraById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/vixra/by-id - viXra By ID</span>
+        </h2>
+        <div class="form-group">
+            <label for="vixraById_vid">viXra ID <span class="required">*</span>:</label>
+            <input type="text" id="vixraById_vid" placeholder="1901.0001">
+        </div>
+        <button class="api-button" onclick="makeRequest('vixraById', 'GET', '/api/v1/paper-search/vixra/by-id', 'query')">Lookup</button>
+        <h3>cURL Command:</h3>
+        <pre id="vixraById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="vixraById_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="vixraIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/vixra/ingest - viXra Ingest by ID</span>
+        </h2>
+        <div class="form-group">
+            <label for="vixraIngest_vid">viXra ID <span class="required">*</span>:</label>
+            <input type="text" id="vixraIngest_vid" placeholder="1901.0001">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="vixraIngest_keywords">Keywords (CSV):</label><input type="text" id="vixraIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="vixraIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="vixraIngest_parser">Parser:</label><input type="text" id="vixraIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="vixraIngest_chunk_method">Chunk Method:</label><input type="text" id="vixraIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="vixraIngest_chunk_size">Chunk Size:</label><input type="number" id="vixraIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="vixraIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="vixraIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="vixraIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('vixraIngest', 'POST', '/api/v1/paper-search/vixra/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="vixraIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="vixraIngest_response">---</pre>
+    </div>
+
+    <!-- Figshare Search -->
+    <div class="endpoint-section" id="figshareSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/figshare - Figshare Search</span>
+        </h2>
+        <p>Search Figshare public records. Use free text or advanced <code>search_for</code> (e.g., <code>:title: frog</code>).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="figshareSearch_q">Query:</label><input type="text" id="figshareSearch_q" placeholder=":title: frog"></div>
+                <div class="form-group"><label for="figshareSearch_search_for">search_for:</label><input type="text" id="figshareSearch_search_for" placeholder=":title: frog"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="figshareSearch_order">Order:</label><input type="text" id="figshareSearch_order" placeholder="published_date"></div>
+                <div class="form-group"><label for="figshareSearch_order_direction">Order Direction:</label><input type="text" id="figshareSearch_order_direction" value="desc"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="figshareSearch_results_per_page">Results Per Page:</label><input type="number" id="figshareSearch_results_per_page" value="10" min="1" max="1000"></div>
+                <div class="form-group"><label for="figshareSearch_page">Page:</label><input type="number" id="figshareSearch_page" value="1" min="1"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('figshareSearch', 'GET', '/api/v1/paper-search/figshare', 'query')">Search Figshare</button>
+        <h3>cURL Command:</h3>
+        <pre id="figshareSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="figshareSearch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="figshareById">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/figshare/by-id - Figshare By Article ID</span>
+        </h2>
+        <div class="form-group"><label for="figshareById_article_id">Article ID:</label><input type="text" id="figshareById_article_id" placeholder="5616445"></div>
+        <button class="api-button" onclick="makeRequest('figshareById', 'GET', '/api/v1/paper-search/figshare/by-id', 'query')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="figshareById_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="figshareById_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="figshareByDoi">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/figshare/by-doi - Figshare By DOI (best-effort)</span>
+        </h2>
+        <div class="form-group"><label for="figshareByDoi_doi">DOI:</label><input type="text" id="figshareByDoi_doi" placeholder="10.6084/m9.figshare.5616445"></div>
+        <button class="api-button" onclick="makeRequest('figshareByDoi', 'GET', '/api/v1/paper-search/figshare/by-doi', 'query')">Fetch</button>
+        <h3>cURL Command:</h3>
+        <pre id="figshareByDoi_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="figshareByDoi_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="figshareOAI">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/figshare/oai - Figshare OAI-PMH Raw (XML)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="figshareOAI_verb">Verb:</label><input type="text" id="figshareOAI_verb" value="Identify"></div>
+                <div class="form-group"><label for="figshareOAI_identifier">Identifier:</label><input type="text" id="figshareOAI_identifier"></div>
+                <div class="form-group"><label for="figshareOAI_metadataPrefix">metadataPrefix:</label><input type="text" id="figshareOAI_metadataPrefix" placeholder="oai_dc"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="figshareOAI_from">From (ISO):</label><input type="text" id="figshareOAI_from" placeholder="2021-01-01T00:00:00Z"></div>
+                <div class="form-group"><label for="figshareOAI_until">Until (ISO):</label><input type="text" id="figshareOAI_until" placeholder="2025-01-01T00:00:00Z"></div>
+                <div class="form-group"><label for="figshareOAI_set">Set:</label><input type="text" id="figshareOAI_set" placeholder="user-xyz"></div>
+                <div class="form-group"><label for="figshareOAI_resumptionToken">resumptionToken:</label><input type="text" id="figshareOAI_resumptionToken"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('figshareOAI', 'GET', '/api/v1/paper-search/figshare/oai', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="figshareOAI_download"> Download as file</label>
+            <input type="text" id="figshareOAI_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="figshareOAI_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="figshareOAI_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="figshareIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/figshare/ingest - Figshare Ingest by Article ID</span>
+        </h2>
+        <div class="form-group"><label for="figshareIngest_article_id">Article ID <span class="required">*</span>:</label><input type="text" id="figshareIngest_article_id" placeholder="5616409"></div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="figshareIngest_keywords">Keywords (CSV):</label><input type="text" id="figshareIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="figshareIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="figshareIngest_parser">Parser:</label><input type="text" id="figshareIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="figshareIngest_chunk_method">Chunk Method:</label><input type="text" id="figshareIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="figshareIngest_chunk_size">Chunk Size:</label><input type="number" id="figshareIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="figshareIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="figshareIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="figshareIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('figshareIngest', 'POST', '/api/v1/paper-search/figshare/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="figshareIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="figshareIngest_response">---</pre>
+    </div>
+
+    <!-- HAL Search -->
+    <div class="endpoint-section" id="halSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/hal - HAL Search</span>
+        </h2>
+        <p>Search HAL using Solr-like queries (e.g., <code>title_t:japon</code>).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="halSearch_q">Query (q):</label><input type="text" id="halSearch_q" value="*:*"></div>
+                <div class="form-group"><label for="halSearch_fl">Fields (fl):</label><input type="text" id="halSearch_fl" placeholder="docid,title_s,authFullName_s"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="halSearch_fq">Filter (fq):</label><input type="text" id="halSearch_fq" placeholder="doiId_s:[\"\" TO *]"></div>
+                <div class="form-group"><label for="halSearch_sort">Sort:</label><input type="text" id="halSearch_sort" placeholder="docid asc"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="halSearch_results_per_page">Results Per Page:</label><input type="number" id="halSearch_results_per_page" value="10" min="1" max="1000"></div>
+                <div class="form-group"><label for="halSearch_page">Page:</label><input type="number" id="halSearch_page" value="1" min="1"></div>
+                <div class="form-group"><label for="halSearch_scope">Scope (portal/collection):</label><input type="text" id="halSearch_scope" placeholder="tel or FRANCE-GRILLES"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('halSearch', 'GET', '/api/v1/paper-search/hal', 'query')">Search HAL</button>
+        <h3>cURL Command:</h3>
+        <pre id="halSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="halSearch_response">---</pre>
+    </div>
+
+    <!-- HAL Raw -->
+    <div class="endpoint-section" id="halRaw">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/hal/raw - HAL Raw (download supported)</span>
+        </h2>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="halRaw_q">Query (q):</label><input type="text" id="halRaw_q" value="*:*"></div>
+                <div class="form-group"><label for="halRaw_wt">wt:</label>
+                    <select id="halRaw_wt">
+                        <option value="json">json</option>
+                        <option value="xml">xml</option>
+                        <option value="xml-tei">xml-tei</option>
+                        <option value="csv">csv</option>
+                        <option value="bibtex">bibtex</option>
+                        <option value="endnote">endnote</option>
+                        <option value="atom">atom</option>
+                        <option value="rss">rss</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="halRaw_fl">Fields (fl):</label><input type="text" id="halRaw_fl" placeholder="docid,title_s"></div>
+                <div class="form-group"><label for="halRaw_fq">Filter (fq):</label><input type="text" id="halRaw_fq"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="halRaw_rows">Rows:</label><input type="number" id="halRaw_rows" value="10" min="0" max="10000"></div>
+                <div class="form-group"><label for="halRaw_start">Start:</label><input type="number" id="halRaw_start" value="0" min="0"></div>
+                <div class="form-group"><label for="halRaw_sort">Sort:</label><input type="text" id="halRaw_sort" placeholder="docid asc"></div>
+                <div class="form-group"><label for="halRaw_scope">Scope (portal/collection):</label><input type="text" id="halRaw_scope" placeholder="tel or FRANCE-GRILLES"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('halRaw', 'GET', '/api/v1/paper-search/hal/raw', 'query')">Fetch</button>
+        <div class="form-group">
+            <label><input type="checkbox" id="halRaw_download"> Download as file</label>
+            <input type="text" id="halRaw_filename" placeholder="filename (optional)" style="margin-left:10px; width: 240px;" />
+        </div>
+        <h3>cURL Command:</h3>
+        <pre id="halRaw_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="halRaw_response">---</pre>
+    </div>
+
+    <!-- HAL Ingest -->
+    <div class="endpoint-section" id="halIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/hal/ingest - HAL Ingest by docid</span>
+        </h2>
+        <div class="form-group"><label for="halIngest_docid">docid <span class="required">*</span>:</label><input type="text" id="halIngest_docid" placeholder="e.g., 123456"></div>
+        <div class="form-group"><label for="halIngest_scope">Scope (portal/collection):</label><input type="text" id="halIngest_scope" placeholder="tel or FRANCE-GRILLES"></div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="halIngest_keywords">Keywords (CSV):</label><input type="text" id="halIngest_keywords"></div>
+                <div class="form-group"><label><input type="checkbox" id="halIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="halIngest_parser">Parser:</label><input type="text" id="halIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="halIngest_chunk_method">Chunk Method:</label><input type="text" id="halIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="halIngest_chunk_size">Chunk Size:</label><input type="number" id="halIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="halIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="halIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="halIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('halIngest', 'POST', '/api/v1/paper-search/hal/ingest', 'query')">Ingest</button>
+        <h3>cURL Command:</h3>
+        <pre id="halIngest_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="halIngest_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="vixraSearch">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/paper-search/vixra/search - viXra Search (best-effort)</span>
+        </h2>
+        <div class="form-group">
+            <label for="vixraSearch_term">Term <span class="required">*</span>:</label>
+            <input type="text" id="vixraSearch_term" placeholder="quantum">
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label for="vixraSearch_page">Page:</label><input type="number" id="vixraSearch_page" value="1" min="1"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="vixraSearch_results_per_page">Results per page:</label><input type="number" id="vixraSearch_results_per_page" value="10" min="1" max="50"></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="makeRequest('vixraSearch', 'GET', '/api/v1/paper-search/vixra/search', 'query')">Search</button>
+        <h3>cURL Command:</h3>
+        <pre id="vixraSearch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="vixraSearch_response">---</pre>
+    </div>
+    <div class="endpoint-section" id="oaIngestBatch">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/ingest/batch - Batch Ingest (DOI or PDF URL)</span>
+        </h2>
+        <p>Paste DOIs (one per line) or a JSON array of items with fields { doi, pdf_url, title, author, keywords }.</p>
+        <div class="form-group">
+            <label for="oaIngestBatch_payload">Input:</label>
+            <textarea id="oaIngestBatch_payload" rows="8" placeholder="10.48550/arXiv.1706.03762\n10.1038/nature14539\nPMC5334499\n{ \"arxiv_id\": \"1706.03762\" }\n{ \"pmcid\": \"PMC5334499\" }"></textarea>
+        </div>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group"><label><input type="checkbox" id="oaIngestBatch_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="oaIngestBatch_parser">Parser:</label><input type="text" id="oaIngestBatch_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="oaIngestBatch_chunk_method">Chunk Method:</label><input type="text" id="oaIngestBatch_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="oaIngestBatch_chunk_size">Chunk Size:</label><input type="number" id="oaIngestBatch_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="oaIngestBatch_chunk_overlap">Chunk Overlap:</label><input type="number" id="oaIngestBatch_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="oaIngestBatch_perform_analysis"> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="oaIngestBatchSubmit()">Ingest Batch</button>
+        <h3>cURL Command:</h3>
+        <pre id="oaIngestBatch_curl">---</pre>
+        <h3>Response:</h3>
+        <pre id="oaIngestBatch_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="pmcBatchIngest">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/paper-search/pmc-oa/ingest-pdf (batch) - PMC Batch Ingest by PMCID</span>
+        </h2>
+        <p>Collect PMCID-based items from search results (e.g., PMC OA Query) via “➕ Add to PMC Batch”, then ingest all. Each item is ingested by calling <code>/api/v1/paper-search/pmc-oa/ingest-pdf</code>.</p>
+        <div class="columns">
+            <div class="column">
+                <label for="pmcBatchIngest_payload">Input (PMCID list or JSON array with objects containing <code>pmcid</code>):</label>
+                <textarea id="pmcBatchIngest_payload" rows="8" placeholder="PMC5334499\nPMC1234567\n[ { \"pmcid\": \"PMC5334499\", \"title\": \"Optional\" } ]"></textarea>
+                <div class="form-group"><label><input type="checkbox" id="pmcBatchIngest_perform_chunking" checked> Perform Chunking</label></div>
+                <div class="form-group"><label for="pmcBatchIngest_parser">Parser:</label><input type="text" id="pmcBatchIngest_parser" value="pymupdf4llm"></div>
+                <div class="form-group"><label for="pmcBatchIngest_chunk_method">Chunk Method:</label><input type="text" id="pmcBatchIngest_chunk_method" placeholder="sentences"></div>
+            </div>
+            <div class="column">
+                <div class="form-group"><label for="pmcBatchIngest_chunk_size">Chunk Size:</label><input type="number" id="pmcBatchIngest_chunk_size" value="500" min="50" max="4000"></div>
+                <div class="form-group"><label for="pmcBatchIngest_chunk_overlap">Chunk Overlap:</label><input type="number" id="pmcBatchIngest_chunk_overlap" value="200" min="0" max="1000"></div>
+                <div class="form-group"><label><input type="checkbox" id="pmcBatchIngest_perform_analysis" checked> Perform Analysis</label></div>
+            </div>
+        </div>
+        <button class="api-button" onclick="pmcBatchIngestSubmit()">Ingest PMC Batch</button>
+        <h3>cURL Command:</h3>
+        <pre id="pmcBatchIngest_curl"># Multiple calls will be made to /api/v1/paper-search/pmc-oa/ingest-pdf (one per PMCID)</pre>
+        <h3>Response:</h3>
+        <pre id="pmcBatchIngest_response">---</pre>
+    </div>
+</div>
+
+<script>
+async function oaIngestBatchSubmit() {
+    const input = (document.getElementById('oaIngestBatch_payload')?.value || '').trim();
+    if (!input) { alert('Provide DOIs or JSON'); return; }
+    let items = [];
+    if (input.startsWith('[') || input.startsWith('{')) {
+        try { const data = JSON.parse(input); items = Array.isArray(data) ? data : [data]; }
+        catch (e) { alert('Invalid JSON'); return; }
+    } else {
+        const lines = input.split('\n').map(s => s.trim()).filter(Boolean);
+        const arxivRe = /^(\d{4}\.\d{4,5}|[a-z\-]+\/\d{7})(v\d+)?$/i;
+        const pmcRe = /^PMC?\d+$/i;
+        items = lines.map(s => {
+            if (pmcRe.test(s)) {
+                const pmcid = s.toUpperCase().startsWith('PMC') ? s.toUpperCase() : `PMC${s}`;
+                return { pmcid };
+            }
+            if (arxivRe.test(s)) {
+                return { arxiv_id: s };
+            }
+            // default assume DOI
+            return { doi: s };
+        });
+    }
+    const payload = {
+        items,
+        perform_chunking: document.getElementById('oaIngestBatch_perform_chunking').checked,
+        parser: (document.getElementById('oaIngestBatch_parser')?.value || 'pymupdf4llm') || 'pymupdf4llm',
+        chunk_method: (document.getElementById('oaIngestBatch_chunk_method')?.value || '') || null,
+        chunk_size: parseInt(document.getElementById('oaIngestBatch_chunk_size')?.value || '500', 10),
+        chunk_overlap: parseInt(document.getElementById('oaIngestBatch_chunk_overlap')?.value || '200', 10),
+        perform_analysis: document.getElementById('oaIngestBatch_perform_analysis').checked
+    };
+    // Display cURL
+    const curl = apiClient.generateCurl('POST', '/api/v1/paper-search/ingest/batch', { body: payload });
+    const curlEl = document.getElementById('oaIngestBatch_curl');
+    if (curlEl) curlEl.textContent = curl;
+    // Post
+    try {
+        const res = await apiClient.post('/api/v1/paper-search/ingest/batch', payload);
+        const respEl = document.getElementById('oaIngestBatch_response');
+        if (respEl) {
+            const viewer = new JSONViewer(respEl, res, { expanded: 2, theme: webUI.theme, enableCopy: true, enableCollapse: true });
+        }
+    } catch (e) {
+        const respEl = document.getElementById('oaIngestBatch_response');
+        if (respEl) respEl.textContent = `Error: ${e?.message || e}`;
+        Toast.error(`Batch ingest failed: ${e?.message || e}`);
+    }
+}
+
+async function pmcBatchIngestSubmit() {
+    const input = (document.getElementById('pmcBatchIngest_payload')?.value || '').trim();
+    if (!input) { alert('Provide PMCIDs or JSON'); return; }
+    let items = [];
+    if (input.startsWith('[') || input.startsWith('{')) {
+        try { const data = JSON.parse(input); items = Array.isArray(data) ? data : [data]; }
+        catch (e) { alert('Invalid JSON'); return; }
+    } else {
+        const lines = input.split('\n').map(s => s.trim()).filter(Boolean);
+        items = lines.map(p => ({ pmcid: p }));
+    }
+    // Normalize PMCIDs
+    items = items.map(it => {
+        const raw = String(it.pmcid || it.PMCID || '').trim();
+        const pmcid = raw.toUpperCase().startsWith('PMC') ? raw.toUpperCase() : (raw ? `PMC${raw}` : '');
+        return { pmcid, title: it.title || undefined, author: it.author || undefined, keywords: it.keywords || undefined };
+    }).filter(it => !!it.pmcid);
+
+    const paramsCommon = {
+        perform_chunking: document.getElementById('pmcBatchIngest_perform_chunking').checked,
+        parser: (document.getElementById('pmcBatchIngest_parser')?.value || 'pymupdf4llm') || 'pymupdf4llm',
+        chunk_method: (document.getElementById('pmcBatchIngest_chunk_method')?.value || '') || null,
+        chunk_size: parseInt(document.getElementById('pmcBatchIngest_chunk_size')?.value || '500', 10),
+        chunk_overlap: parseInt(document.getElementById('pmcBatchIngest_chunk_overlap')?.value || '200', 10),
+        perform_analysis: document.getElementById('pmcBatchIngest_perform_analysis').checked
+    };
+
+    // Show a representative cURL for the first item
+    const first = items[0];
+    const curl = apiClient.generateCurl('POST', '/api/v1/paper-search/pmc-oa/ingest-pdf', { query: { pmcid: first.pmcid, title: first.title, author: first.author, keywords: (first.keywords || []).join(',') }, body: paramsCommon });
+    const curlEl = document.getElementById('pmcBatchIngest_curl');
+    if (curlEl) curlEl.textContent = curl + '\n# ... repeated for remaining items';
+
+    const results = [];
+    for (const it of items) {
+        const q = { pmcid: it.pmcid };
+        if (it.title) q.title = it.title;
+        if (it.author) q.author = it.author;
+        if (Array.isArray(it.keywords) && it.keywords.length) q.keywords = it.keywords.join(',');
+        try {
+            const res = await apiClient.post('/api/v1/paper-search/pmc-oa/ingest-pdf', paramsCommon, { query: q });
+            results.push({ pmcid: it.pmcid, success: true, result: res });
+        } catch (e) {
+            results.push({ pmcid: it.pmcid, success: false, error: e?.message || String(e) });
+        }
+    }
+
+    const summary = {
+        count: items.length,
+        succeeded: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        results
+    };
+    const respEl = document.getElementById('pmcBatchIngest_response');
+    if (respEl) {
+        const viewer = new JSONViewer(respEl, summary, { expanded: 2, theme: webUI.theme, enableCopy: true, enableCollapse: true });
+    }
+}
+</script>

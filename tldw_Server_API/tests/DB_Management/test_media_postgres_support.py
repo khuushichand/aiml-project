@@ -67,7 +67,11 @@ def test_rebuild_claims_fts_sqlite_populates_index(tmp_path: Path) -> None:
         rows = cursor.fetchall()
         assert rows
         first = rows[0]
-        claim_text = first[0] if isinstance(first, tuple) else first.get("claim_text")
+        if isinstance(first, tuple):
+            claim_text = first[0]
+        else:
+            mapping = first if isinstance(first, dict) else dict(first)
+            claim_text = mapping.get("claim_text")
         assert claim_text == "Confidence in backend migrations"
     finally:
         db.close_connection()
@@ -98,7 +102,7 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
         return MagicMock()
 
     db._execute_with_connection = MagicMock(side_effect=record)  # type: ignore[attr-defined]
-    db._fetchone_with_connection = MagicMock(return_value({"total": 4}))  # type: ignore[attr-defined]
+    db._fetchone_with_connection = MagicMock(return_value={"total": 4})  # type: ignore[attr-defined]
 
     result = db.rebuild_claims_fts()
 
@@ -110,7 +114,10 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
         connection=conn,
     )
     assert executed[0][0].startswith("UPDATE claims ")
-    assert executed[1][0] == "SELECT COUNT(*) AS total FROM claims WHERE deleted = 0"
+    db._fetchone_with_connection.assert_called_once_with(
+        conn,
+        "SELECT COUNT(*) AS total FROM claims WHERE deleted = 0",
+    )
 
 
 def test_postgres_migrations_include_v6() -> None:
@@ -124,6 +131,8 @@ def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
     db.backend = MagicMock()
 
     conn = object()
+    db.backend.escape_identifier.side_effect = lambda value: f'"{value}"'
+
     db._postgres_migrate_to_v6(conn)
 
     create_call = db.backend.execute.call_args_list[0]

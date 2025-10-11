@@ -183,25 +183,16 @@ INSTRUCTIONS:
             # Parse response
             system_prompt, user_prompt, instructions = self._parse_generation_response(response)
             
-            # Create prompt in database
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO prompt_studio_prompts (
-                    uuid, project_id, signature_id, name, system_prompt, 
-                    user_prompt, client_id
-                ) VALUES (
-                    lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?
-                )
-            """, (
-                project_id, signature_id, f"Generated: {task_description[:50]}",
-                system_prompt, user_prompt, self.client_id
-            ))
-            
-            prompt_id = cursor.lastrowid
-            conn.commit()
-            
+            record = self.db.create_prompt(
+                project_id=project_id,
+                name=f"Generated: {task_description[:50]}",
+                signature_id=signature_id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                client_id=self.client_id,
+            )
+
+            prompt_id = record.get("id")
             logger.info(f"Generated prompt {prompt_id} for project {project_id}")
             
             return {
@@ -244,27 +235,17 @@ INSTRUCTIONS:
             for key, value in variables.items():
                 user_prompt = user_prompt.replace(f"{{{key}}}", value)
             
-            # Create prompt in database
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO prompt_studio_prompts (
-                    uuid, project_id, signature_id, name, system_prompt,
-                    user_prompt, client_id
-                ) VALUES (
-                    lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?
-                )
-            """, (
-                project_id, signature_id, f"From template: {template_name}",
-                system_prompt, user_prompt, self.client_id
-            ))
-            
-            prompt_id = cursor.lastrowid
-            conn.commit()
-            
+            record = self.db.create_prompt(
+                project_id=project_id,
+                name=f"From template: {template_name}",
+                signature_id=signature_id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                client_id=self.client_id,
+            )
+
             return {
-                "id": prompt_id,
+                "id": record.get("id"),
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "template_used": template_name

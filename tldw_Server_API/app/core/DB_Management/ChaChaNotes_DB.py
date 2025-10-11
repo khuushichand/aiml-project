@@ -60,6 +60,13 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
+    normalise_params,
+    prepare_backend_many_statement,
+    prepare_backend_statement,
+    replace_insert_or_ignore,
+    transform_sqlite_query_for_postgres,
+)
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
@@ -1485,110 +1492,43 @@ UPDATE db_schema_version
         query: str,
         params: Optional[Union[Tuple, List, Dict]] = None,
     ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
-        if self.backend_type != BackendType.POSTGRESQL:
-            return query, params
-        transformed_query = self._transform_query_for_backend(query)
-        converted_query = self._convert_sqlite_placeholders_to_postgres(transformed_query)
-        prepared_params = self._normalise_params(params)
-        return converted_query, prepared_params
+        return prepare_backend_statement(
+            self.backend_type,
+            query,
+            params,
+            transformer=self._transform_query_for_backend
+            if self.backend_type == BackendType.POSTGRESQL
+            else None,
+            ensure_returning=self.backend_type == BackendType.POSTGRESQL,
+        )
 
     def _prepare_backend_many_statement(
         self,
         query: str,
         params_list: List[Union[Tuple, List, Dict]],
     ) -> Tuple[str, List[Union[Tuple, Dict]]]:
-        if self.backend_type != BackendType.POSTGRESQL:
-            return query, params_list
-        transformed_query = self._transform_query_for_backend(query)
-        converted_query = self._convert_sqlite_placeholders_to_postgres(transformed_query)
-        prepared_params = [self._normalise_params(params) for params in params_list]
+        converted_query, prepared_params = prepare_backend_many_statement(
+            self.backend_type,
+            query,
+            params_list,
+            transformer=self._transform_query_for_backend
+            if self.backend_type == BackendType.POSTGRESQL
+            else None,
+            ensure_returning=False,
+        )
         return converted_query, prepared_params
 
     def _normalise_params(
         self,
         params: Optional[Union[List, Tuple, Dict, Any]],
     ) -> Optional[Union[Tuple, Dict]]:
-        if params is None:
-            return None
-        if isinstance(params, dict):
-            return params
-        if isinstance(params, tuple):
-            return params
-        if isinstance(params, list):
-            return tuple(params)
-        return (params,)
+        return normalise_params(params)
 
     def _transform_query_for_backend(self, query: str) -> str:
         if self.backend_type != BackendType.POSTGRESQL:
             return query
-        transformed = self._replace_insert_or_ignore(query)
-        transformed = self._replace_collate_nocase(transformed)
-        return transformed
+        return transform_sqlite_query_for_postgres(query)
 
-    def _replace_insert_or_ignore(self, query: str) -> str:
-        if 'INSERT OR IGNORE' not in query.upper():
-            return query
-        pattern = re.compile(r'INSERT\s+OR\s+IGNORE\s+INTO', re.IGNORECASE)
-        replaced = pattern.sub('INSERT INTO', query)
-        stripped = replaced.rstrip()
-        suffix = ''
-        if stripped.endswith(';'):
-            stripped = stripped[:-1]
-            suffix = ';'
-        if 'ON CONFLICT' in stripped.upper():
-            return stripped + suffix
-        return f"{stripped} ON CONFLICT DO NOTHING{suffix}"
-
-    def _replace_collate_nocase(self, query: str) -> str:
-        return re.sub(r'COLLATE\s+NOCASE', '', query, flags=re.IGNORECASE)
-
-    def _convert_sqlite_placeholders_to_postgres(self, query: str) -> str:
-        if '?' not in query:
-            return query
-        result: List[str] = []
-        in_single = False
-        in_double = False
-        i = 0
-        length = len(query)
-        while i < length:
-            ch = query[i]
-            if ch == "'" and not in_double:
-                if in_single:
-                    if i + 1 < length and query[i + 1] == "'":
-                        result.append("''")
-                        i += 2
-                        continue
-                    in_single = False
-                    result.append(ch)
-                    i += 1
-                    continue
-                else:
-                    in_single = True
-                    result.append(ch)
-                    i += 1
-                    continue
-            if ch == '"' and not in_single:
-                if in_double:
-                    if i + 1 < length and query[i + 1] == '"':
-                        result.append('""')
-                        i += 2
-                        continue
-                    in_double = False
-                    result.append(ch)
-                    i += 1
-                    continue
-                else:
-                    in_double = True
-                    result.append(ch)
-                    i += 1
-                    continue
-            if ch == '?' and not in_single and not in_double:
-                result.append('%s')
-                i += 1
-                continue
-            result.append(ch)
-            i += 1
-        return ''.join(result)
 
     def _open_new_connection(self):
         try:
@@ -2431,7 +2371,7 @@ UPDATE db_schema_version
         stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*0', r'WHERE \1 = FALSE', stmt, flags=re.IGNORECASE)
         stmt = re.sub(r'WHERE\s+([A-Za-z_]+)\s*=\s*1', r'WHERE \1 = TRUE', stmt, flags=re.IGNORECASE)
 
-        stmt = self._replace_insert_or_ignore(stmt)
+        stmt = replace_insert_or_ignore(stmt)
 
         if not stmt.endswith(';'):
             stmt = f"{stmt};"

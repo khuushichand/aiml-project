@@ -1,10 +1,8 @@
 # test_case_manager.py
 # Test case management for Prompt Studio
 
-import json
-import sqlite3
 import uuid
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from dataclasses import dataclass, field
 from loguru import logger
@@ -102,80 +100,21 @@ class TestCaseManager:
             raise InputError("Test case name cannot be empty")
         
         try:
-            import time
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-
-            # Check for duplicate name within the same project (soft-deleted excluded)
-            try:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM prompt_studio_test_cases
-                    WHERE project_id = ? AND name = ? AND deleted = 0
-                    """,
-                    (project_id, name)
-                )
-                row = cursor.fetchone()
-                existing_count = row[0] if row else 0
-                if existing_count and existing_count > 0:
-                    raise ConflictError(f"Test case with name '{name}' already exists")
-            except sqlite3.Error as e:
-                raise DatabaseError(f"Failed to validate test case uniqueness: {e}")
-
-            # Generate UUID
-            test_case_uuid = str(uuid.uuid4())
-
-            # Convert tags to string
-            tags_str = ",".join(tags) if tags else None
-
-            # Insert test case with retry on locked DB
-            max_retries = 5
-            base_delay = 0.05
-            last_err = None
-            for attempt in range(max_retries):
-                try:
-                    cursor.execute(
-                        """
-                        INSERT INTO prompt_studio_test_cases (
-                            uuid, project_id, signature_id, name, description,
-                            inputs, expected_outputs, tags, is_golden, client_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            test_case_uuid,
-                            project_id,
-                            signature_id,
-                            name,
-                            description,
-                            json.dumps(inputs),
-                            json.dumps(expected_outputs) if expected_outputs else None,
-                            tags_str,
-                            int(is_golden),
-                            self.client_id,
-                        ),
-                    )
-                    break
-                except sqlite3.OperationalError as e:
-                    last_err = e
-                    if "database is locked" in str(e) and attempt < max_retries - 1:
-                        time.sleep(base_delay * (2 ** attempt))
-                        continue
-                    raise
-
-            test_case_id = cursor.lastrowid
-            conn.commit()
-            
-            logger.info(f"Created test case: {name or 'Unnamed'} (ID: {test_case_id})")
-            
-            return self.get_test_case(test_case_id)
-            
-        except sqlite3.IntegrityError as e:
-            raise ConflictError(f"Failed to create test case: {e}")
-        except ConflictError:
-            # Propagate explicit conflict errors (e.g., duplicate name)
+            return self.db.create_test_case(
+                project_id,
+                name.strip(),
+                inputs=inputs,
+                description=description,
+                expected_outputs=expected_outputs,
+                tags=tags,
+                is_golden=is_golden,
+                signature_id=signature_id,
+                client_id=self.client_id,
+            )
+        except (ConflictError, InputError):
             raise
-        except Exception as e:
-            raise DatabaseError(f"Failed to create test case: {e}")
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to create test case: {exc}") from exc
     
     def get_test_case(self, test_case_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         """
@@ -188,154 +127,29 @@ class TestCaseManager:
         Returns:
             Test case record or None
         """
-        import time
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        query = """
-            SELECT * FROM prompt_studio_test_cases
-            WHERE id = ?
-        """
-        
-        if not include_deleted:
-            query += " AND deleted = 0"
-        
-        cursor.execute(query, (test_case_id,))
-        row = cursor.fetchone()
-        
-        if row:
-            test_case = self.db._row_to_dict(cursor, row)
-            # Normalize tags to a list
-            if test_case is not None:
-                tags_val = test_case.get("tags") if isinstance(test_case, dict) else None
-                if isinstance(tags_val, str):
-                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
-                elif tags_val is None:
-                    test_case["tags"] = []
-                # If already a list, leave as-is
-            return test_case
-        return None
+        return self.db.get_test_case(test_case_id, include_deleted=include_deleted)
     
     def list_test_cases(self, project_id: int, signature_id: Optional[int] = None,
                        is_golden: Optional[bool] = None, tags: Optional[List[str]] = None,
                        search: Optional[str] = None, include_deleted: bool = False,
                        page: int = 1, per_page: int = 20,
                        return_pagination: bool = False) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """
-        List test cases with filtering.
-        
-        Args:
-            project_id: Project ID
-            signature_id: Filter by signature
-            is_golden: Filter by golden status
-            tags: Filter by tags
-            search: Search in name and description
-            include_deleted: Include soft-deleted test cases
-            page: Page number
-            per_page: Items per page
-            
-        Returns:
-            Dictionary with test cases and pagination
-        """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build query
-        conditions = ["project_id = ?"]
-        params = [project_id]
-        
-        if not include_deleted:
-            conditions.append("deleted = 0")
-        
-        if signature_id is not None:
-            conditions.append("signature_id = ?")
-            params.append(signature_id)
-        
-        if is_golden is not None:
-            conditions.append("is_golden = ?")
-            params.append(int(is_golden))
-        
-        if tags:
-            tag_conditions = []
-            for tag in tags:
-                tag_conditions.append("tags LIKE ?")
-                params.append(f"%{tag}%")
-            conditions.append(f"({' OR '.join(tag_conditions)})")
-        
-        where_clause = " WHERE " + " AND ".join(conditions)
-        
-        # Add search if provided
-        if search:
-            where_clause += " AND (name LIKE ? OR description LIKE ?)"
-            params.extend([f"%{search}%", f"%{search}%"])
-        
-        # Count total
-        count_query = f"SELECT COUNT(*) FROM prompt_studio_test_cases{where_clause}"
-        cursor.execute(count_query, params)
-        total = cursor.fetchone()[0]
-        
-        # Get test cases with pagination
-        offset = (page - 1) * per_page
-        query = f"""
-            SELECT * FROM prompt_studio_test_cases
-            {where_clause}
-            ORDER BY is_golden DESC, created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([per_page, offset])
-        
-        # Retry on locked DB
-        max_retries = 5
-        base_delay = 0.05
-        last_err = None
-        for attempt in range(max_retries):
-            try:
-                cursor.execute(query, params)
-                break
-            except sqlite3.OperationalError as e:
-                last_err = e
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    time.sleep(base_delay * (2 ** attempt))
-                    continue
-                raise
-        test_cases = []
-        for row in cursor.fetchall():
-            test_case = self.db._row_to_dict(cursor, row)
-            if isinstance(test_case, dict):
-                # Normalize/augment tags
-                tags_val = test_case.get("tags")
-                if isinstance(tags_val, str):
-                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
-                elif tags_val is None:
-                    # If tags not present in dict, attempt from row index 7 if available
-                    try:
-                        raw_tags = row[7]
-                        if isinstance(raw_tags, str):
-                            test_case["tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
-                        else:
-                            test_case["tags"] = []
-                    except Exception:
-                        test_case["tags"] = []
-                # Ensure is_golden carried over even if _row_to_dict mock omits it
-                if "is_golden" not in test_case:
-                    try:
-                        test_case["is_golden"] = row[8]
-                    except Exception:
-                        pass
-            test_cases.append(test_case)
+        """Delegate to the database layer for filtered test case retrieval."""
 
-        if return_pagination:
-            return {
-                "test_cases": test_cases,
-                "pagination": {
-                    "page": page,
-                    "per_page": per_page,
-                    "total": total,
-                    "total_pages": (total + per_page - 1) // per_page
-                }
-            }
-        # Default to returning just the list (matches unit tests expectations)
-        return test_cases
+        try:
+            return self.db.list_test_cases(
+                project_id,
+                signature_id=signature_id,
+                is_golden=is_golden,
+                tags=tags,
+                search=search,
+                include_deleted=include_deleted,
+                page=page,
+                per_page=per_page,
+                return_pagination=return_pagination,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to list test cases: {exc}") from exc
     
     def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -348,51 +162,12 @@ class TestCaseManager:
         Returns:
             Updated test case record
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build update query
-        allowed_fields = ["name", "description", "inputs", "expected_outputs", 
-                         "actual_outputs", "tags", "is_golden"]
-        set_clauses = []
-        params = []
-        
-        for field in allowed_fields:
-            if field in updates:
-                set_clauses.append(f"{field} = ?")
-                value = updates[field]
-                
-                # Handle special fields
-                if field in ["inputs", "expected_outputs", "actual_outputs"] and value is not None:
-                    value = json.dumps(value)
-                elif field == "tags" and isinstance(value, list):
-                    value = ",".join(value)
-                elif field == "is_golden":
-                    value = int(value)
-                
-                params.append(value)
-        
-        if not set_clauses:
-            return self.get_test_case(test_case_id)
-        
-        # Add updated_at
-        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
-        params.append(test_case_id)
-        
-        query = f"""
-            UPDATE prompt_studio_test_cases
-            SET {', '.join(set_clauses)}
-            WHERE id = ? AND deleted = 0
-        """
-        
-        cursor.execute(query, params)
-        
-        if cursor.rowcount == 0:
-            raise InputError(f"Test case {test_case_id} not found or already deleted")
-        
-        conn.commit()
-        
-        return self.get_test_case(test_case_id)
+        try:
+            return self.db.update_test_case(test_case_id, updates)
+        except (ConflictError, InputError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to update test case {test_case_id}: {exc}") from exc
     
     def delete_test_case(self, test_case_id: int, hard_delete: bool = False) -> bool:
         """
@@ -405,40 +180,10 @@ class TestCaseManager:
         Returns:
             True if deleted
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        import time
-        max_retries = 5
-        base_delay = 0.05
-        last_err = None
-        for attempt in range(max_retries):
-            try:
-                if hard_delete:
-                    cursor.execute("DELETE FROM prompt_studio_test_cases WHERE id = ?", (test_case_id,))
-                else:
-                    cursor.execute(
-                        """
-                        UPDATE prompt_studio_test_cases
-                        SET deleted = 1, deleted_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND deleted = 0
-                        """,
-                        (test_case_id,),
-                    )
-                break
-            except sqlite3.OperationalError as e:
-                last_err = e
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    time.sleep(base_delay * (2 ** attempt))
-                    continue
-                raise
-        
-        success = cursor.rowcount > 0
-        if success:
-            conn.commit()
-            logger.info(f"{'Hard' if hard_delete else 'Soft'} deleted test case {test_case_id}")
-        
-        return success
+        try:
+            return self.db.delete_test_case(test_case_id, hard_delete=hard_delete)
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc
     
     ####################################################################################################################
     # Bulk Operations
@@ -447,7 +192,7 @@ class TestCaseManager:
                               signature_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Create multiple test cases at once.
-        
+
         Args:
             project_id: Project ID
             test_cases: List of test case data
@@ -456,60 +201,15 @@ class TestCaseManager:
         Returns:
             List of created test case records
         """
-        created_cases = []
-
         try:
-            import time
-            with self.db.transaction() as conn:
-                cur = conn.cursor()
-                max_retries = 5
-                base_delay = 0.05
-                for test_case_data in test_cases:
-                    test_case_uuid = str(uuid.uuid4())
-                    tags_str = ",".join(test_case_data.get("tags") or []) if test_case_data.get("tags") else None
-                    params = (
-                        test_case_uuid,
-                        project_id,
-                        signature_id or test_case_data.get("signature_id"),
-                        test_case_data.get("name"),
-                        test_case_data.get("description"),
-                        json.dumps(test_case_data["inputs"]),
-                        json.dumps(test_case_data.get("expected_outputs")) if test_case_data.get("expected_outputs") else None,
-                        tags_str,
-                        int(test_case_data.get("is_golden", False)),
-                        self.client_id,
-                    )
-                    last_err = None
-                    for attempt in range(max_retries):
-                        try:
-                            cur.execute(
-                                """
-                                INSERT INTO prompt_studio_test_cases (
-                                    uuid, project_id, signature_id, name, description,
-                                    inputs, expected_outputs, tags, is_golden, client_id
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                params,
-                            )
-                            break
-                        except sqlite3.OperationalError as e:
-                            last_err = e
-                            if "database is locked" in str(e) and attempt < max_retries - 1:
-                                time.sleep(base_delay * (2 ** attempt))
-                                continue
-                            raise
-                    new_id = cur.lastrowid
-                    conn.commit()
-                    created = self.get_test_case(new_id)
-                    if created:
-                        created_cases.append(created)
-
-            logger.info(f"Created {len(created_cases)} test cases in bulk")
-            return created_cases
-
-        except Exception as e:
-            logger.error(f"Failed to create test cases in bulk: {e}")
-            raise DatabaseError(f"Bulk creation failed: {e}")
+            return self.db.create_bulk_test_cases(
+                project_id,
+                test_cases,
+                signature_id=signature_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to create test cases in bulk: {exc}")
+            raise DatabaseError(f"Bulk creation failed: {exc}") from exc
     
     ####################################################################################################################
     # Search and Filter
@@ -526,45 +226,10 @@ class TestCaseManager:
         Returns:
             List of matching test cases
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        # Use FTS for search
-        cursor.execute("""
-            SELECT tc.*
-            FROM prompt_studio_test_cases tc
-            JOIN prompt_studio_test_cases_fts fts ON tc.id = fts.rowid
-            WHERE tc.project_id = ? 
-                AND tc.deleted = 0
-                AND fts.prompt_studio_test_cases_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """, (project_id, query, limit))
-        
-        results = []
-        for row in cursor.fetchall():
-            test_case = self.db._row_to_dict(cursor, row)
-            if isinstance(test_case, dict):
-                tags_val = test_case.get("tags")
-                if isinstance(tags_val, str):
-                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
-                elif tags_val is None:
-                    try:
-                        raw_tags = row[7]
-                        if isinstance(raw_tags, str):
-                            test_case["tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
-                        else:
-                            test_case["tags"] = []
-                    except Exception:
-                        test_case["tags"] = []
-                if "is_golden" not in test_case:
-                    try:
-                        test_case["is_golden"] = row[8]
-                    except Exception:
-                        pass
-            results.append(test_case)
-        
-            return results
+        try:
+            return self.db.search_test_cases(project_id, query, limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to search test cases: {exc}") from exc
 
     # Compatibility method used in integration tests via patching
     async def run_batch_tests(self,
@@ -620,39 +285,10 @@ class TestCaseManager:
         Returns:
             List of test cases
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM prompt_studio_test_cases
-            WHERE signature_id = ? AND deleted = 0
-            ORDER BY is_golden DESC, created_at DESC
-        """, (signature_id,))
-        
-        test_cases = []
-        for row in cursor.fetchall():
-            test_case = self.db._row_to_dict(cursor, row)
-            if isinstance(test_case, dict):
-                tags_val = test_case.get("tags")
-                if isinstance(tags_val, str):
-                    test_case["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
-                elif tags_val is None:
-                    try:
-                        raw_tags = row[7]
-                        if isinstance(raw_tags, str):
-                            test_case["tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
-                        else:
-                            test_case["tags"] = []
-                    except Exception:
-                        test_case["tags"] = []
-                if "is_golden" not in test_case:
-                    try:
-                        test_case["is_golden"] = row[8]
-                    except Exception:
-                        pass
-            test_cases.append(test_case)
-        
-        return test_cases
+        try:
+            return self.db.get_test_cases_by_signature(signature_id)
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to fetch test cases for signature {signature_id}: {exc}") from exc
     
     ####################################################################################################################
     # Statistics
@@ -667,61 +303,7 @@ class TestCaseManager:
         Returns:
             Statistics dictionary
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        stats = {}
-        
-        # Total test cases
-        cursor.execute("""
-            SELECT COUNT(*) FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0
-        """, (project_id,))
-        stats["total"] = cursor.fetchone()[0]
-        
-        # Golden test cases
-        cursor.execute("""
-            SELECT COUNT(*) FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0 AND is_golden = 1
-        """, (project_id,))
-        stats["golden"] = cursor.fetchone()[0]
-        
-        # Generated test cases
-        cursor.execute("""
-            SELECT COUNT(*) FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0 AND is_generated = 1
-        """, (project_id,))
-        stats["generated"] = cursor.fetchone()[0]
-        
-        # Test cases with expected outputs
-        cursor.execute("""
-            SELECT COUNT(*) FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0 AND expected_outputs IS NOT NULL
-        """, (project_id,))
-        stats["with_expected"] = cursor.fetchone()[0]
-        
-        # Test cases by signature
-        cursor.execute("""
-            SELECT signature_id, COUNT(*) as count
-            FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0 AND signature_id IS NOT NULL
-            GROUP BY signature_id
-        """, (project_id,))
-        stats["by_signature"] = {row[0]: row[1] for row in cursor.fetchall()}
-        
-        # Most used tags
-        cursor.execute("""
-            SELECT tags FROM prompt_studio_test_cases
-            WHERE project_id = ? AND deleted = 0 AND tags IS NOT NULL
-        """, (project_id,))
-        
-        tag_counts = {}
-        for row in cursor.fetchall():
-            tags = row[0].split(",")
-            for tag in tags:
-                tag = tag.strip()
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
-        stats["top_tags"] = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        return stats
+        try:
+            return self.db.get_test_case_stats(project_id)
+        except Exception as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to compute test case statistics: {exc}") from exc

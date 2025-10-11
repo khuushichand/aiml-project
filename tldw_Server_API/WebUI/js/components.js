@@ -363,6 +363,49 @@ class JSONViewer {
             }
             html += '</div>';
         });
+
+        // Inject quick action: Add to Batch, when object looks like a paper item
+        try {
+            const batchItem = this.detectBatchItem(obj);
+            const pmcItem = this.detectPmcBatchItem(obj);
+            const zenodoItem = this.detectZenodoIngestItem(obj);
+            const vixraItem = this.detectVixraIngestItem(obj);
+            const figshareItem = this.detectFigshareIngestItem(obj);
+            const halItem = this.detectHalIngestItem(obj);
+            const osfItem = this.detectOsfIngestItem(obj);
+            if (batchItem || pmcItem || zenodoItem || vixraItem || figshareItem || halItem || osfItem) {
+                html += `<div class="json-item">`;
+                if (batchItem) {
+                    const payload = encodeURIComponent(JSON.stringify(batchItem));
+                    html += `<button class="btn btn-sm" onclick="addSearchItemToBatchFromPayload(this)" data-payload="${payload}">➕ Add to Batch</button>`;
+                }
+                if (pmcItem) {
+                    const payloadPmc = encodeURIComponent(JSON.stringify(pmcItem));
+                    html += ` <button class="btn btn-sm" onclick="addPmcItemToBatchFromPayload(this)" data-payload="${payloadPmc}">➕ Add to PMC Batch</button>`;
+                }
+                if (zenodoItem) {
+                    const payloadZen = encodeURIComponent(JSON.stringify(zenodoItem));
+                    html += ` <button class="btn btn-sm" onclick="ingestZenodoFromPayload(this)" data-payload="${payloadZen}">🚀 Ingest (Zenodo)</button>`;
+                }
+                if (vixraItem) {
+                    const payloadVix = encodeURIComponent(JSON.stringify(vixraItem));
+                    html += ` <button class="btn btn-sm" onclick="ingestVixraFromPayload(this)" data-payload="${payloadVix}">🚀 Ingest (viXra)</button>`;
+                }
+                if (figshareItem) {
+                    const payloadFig = encodeURIComponent(JSON.stringify(figshareItem));
+                    html += ` <button class="btn btn-sm" onclick="ingestFigshareFromPayload(this)" data-payload="${payloadFig}">🚀 Ingest (Figshare)</button>`;
+                }
+                if (halItem) {
+                    const payloadHal = encodeURIComponent(JSON.stringify(halItem));
+                    html += ` <button class="btn btn-sm" onclick="ingestHalFromPayload(this)" data-payload="${payloadHal}">🚀 Ingest (HAL)</button>`;
+                }
+                if (osfItem) {
+                    const payloadOsf = encodeURIComponent(JSON.stringify(osfItem));
+                    html += ` <button class="btn btn-sm" onclick="ingestOsfFromPayload(this)" data-payload="${payloadOsf}">🚀 Ingest (OSF)</button>`;
+                }
+                html += `</div>`;
+            }
+        } catch (e) { /* noop */ }
         
         html += '</div>';
         html += '<span class="json-bracket">}</span>';
@@ -389,13 +432,350 @@ class JSONViewer {
             };
         });
     }
+
+    detectBatchItem(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+        // Known fields
+        let doi = obj.doi || (obj.externalIds && obj.externalIds.DOI) || null;
+        let pdf_url = obj.pdf_url || null;
+        // Semantic Scholar shape
+        if (!pdf_url && obj.openAccessPdf && obj.openAccessPdf.url) {
+            pdf_url = obj.openAccessPdf.url;
+        }
+        // PubMed/PMC shapes: infer PDF from PMCID or links if present
+        let pmcid = obj.pmcid || obj.PMCID || obj.pmcId || (obj.pmc_url && String(obj.pmc_url).match(/PMC\d+/)?.[0]) || null;
+        if (!pdf_url && pmcid) {
+            const id = String(pmcid).toUpperCase().startsWith('PMC') ? String(pmcid).toUpperCase() : `PMC${pmcid}`;
+            pdf_url = `https://www.ncbi.nlm.nih.gov/pmc/articles/${id}/pdf`;
+        }
+        if (!pdf_url && Array.isArray(obj.links)) {
+            const link = obj.links.find(lk => (lk?.format||'').toLowerCase()==='pdf' || (lk?.href||'').toLowerCase().endsWith('.pdf'));
+            if (link && link.href) pdf_url = link.href;
+        }
+        // arXiv shapes: arxiv_id or DOI 10.48550/arXiv.X
+        const arxivIdFromObj = obj.arxiv_id || obj.arXiv || obj.ArXiv || (typeof obj.id === 'string' && /arxiv[:\s]?/i.test(obj.id) ? obj.id.replace(/.*arxiv[:\s]?/i, '') : null);
+        const arxivIdFromDoi = (typeof doi === 'string' && /10\.48550\/arXiv\./i.test(doi)) ? doi.split('arXiv.')[1] : null;
+        const arxIdRaw = (arxivIdFromObj || arxivIdFromDoi || '').trim();
+        const arxMatch = arxIdRaw && arxIdRaw.match(/^(\d{4}\.\d{4,5}|[a-z\-]+\/\d{7})(v\d+)?$/i);
+        if (!pdf_url && arxMatch) {
+            const coreId = arxMatch[1];
+            pdf_url = `https://arxiv.org/pdf/${coreId}.pdf`;
+            // If DOI missing but we can synthesize from arXiv pattern, keep doi null; ingest_batch handles pdf_url-only
+        }
+        // Title / authors
+        let title = obj.title || null;
+        let author = null;
+        if (typeof obj.authors === 'string') author = obj.authors;
+        else if (Array.isArray(obj.authors)) author = obj.authors.map(a => a.name || a).filter(Boolean).join(', ');
+
+        if (!doi && !pdf_url) return null;
+        return { doi, pdf_url, title, author };
+    }
+
+    // Detect PMC batch-able item (prefer PMCID to go through PMC-optimized ingest)
+    detectPmcBatchItem(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+        let pmcid = obj.pmcid || obj.PMCID || obj.pmcId || (obj.pmc_url && String(obj.pmc_url).match(/PMC\d+/)?.[0]) || null;
+        // Also handle PMC OA record shape where id is PMCxxxxx
+        if (!pmcid && typeof obj.id === 'string' && /^PMC\d+$/i.test(obj.id)) {
+            pmcid = obj.id;
+        }
+        if (!pmcid) return null;
+        const id = String(pmcid).toUpperCase().startsWith('PMC') ? String(pmcid).toUpperCase() : `PMC${pmcid}`;
+        let title = obj.title || null;
+        let author = null;
+        if (typeof obj.authors === 'string') author = obj.authors;
+        else if (Array.isArray(obj.authors)) author = obj.authors.map(a => a.name || a).filter(Boolean).join(', ');
+        return { pmcid: id, title, author };
+    }
+
+    // Detect Zenodo record for quick ingest
+    detectZenodoIngestItem(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return null;
+            const provider = (obj.provider || '').toLowerCase();
+            const url = obj.url || '';
+            const id = obj.id || obj.record_id || null;
+            if ((!provider && !url) || !id) return null;
+            const looksZenodo = provider === 'zenodo' || /zenodo\.org/i.test(String(url));
+            if (!looksZenodo) return null;
+            return { record_id: String(id), title: obj.title || undefined };
+        } catch {
+            return null;
+        }
+    }
+
+    // Detect viXra record for quick ingest
+    detectVixraIngestItem(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return null;
+            const provider = (obj.provider || '').toLowerCase();
+            const url = obj.url || '';
+            const id = obj.id || null; // viXra ID
+            if ((!provider && !url) || !id) return null;
+            const looksVixra = provider === 'vixra' || /vixra\.org/i.test(String(url));
+            if (!looksVixra) return null;
+            return { vid: String(id), title: obj.title || undefined };
+        } catch {
+            return null;
+        }
+    }
+
+    // Detect Figshare record for quick ingest
+    detectFigshareIngestItem(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return null;
+            const provider = (obj.provider || '').toLowerCase();
+            const url = obj.url || '';
+            const id = obj.id || null; // Figshare article ID
+            if ((!provider && !url) || !id) return null;
+            const looksFig = provider === 'figshare' || /figshare\.com/i.test(String(url));
+            if (!looksFig) return null;
+            return { article_id: String(id), title: obj.title || undefined };
+        } catch {
+            return null;
+        }
+    }
+
+    // Detect HAL record for quick ingest
+    detectHalIngestItem(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return null;
+            const provider = (obj.provider || '').toLowerCase();
+            const id = obj.id || null; // HAL docid
+            const url = obj.url || '';
+            if ((!provider && !url) || !id) return null;
+            const looksHal = provider === 'hal' || /archives-ouvertes\.fr|hal\./i.test(String(url));
+            if (!looksHal) return null;
+            return { docid: String(id), title: obj.title || undefined };
+        } catch {
+            return null;
+        }
+    }
+
+    // Detect OSF preprint for quick ingest
+    detectOsfIngestItem(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return null;
+            const provider = (obj.provider || '').toLowerCase();
+            const url = obj.url || '';
+            const id = obj.id || obj.osf_id || null; // OSF preprint id
+            if ((!provider && !url) || !id) return null;
+            const looksOsf = provider === 'osf' || /osf\.io\//i.test(String(url));
+            if (!looksOsf) return null;
+            return { osf_id: String(id), title: obj.title || undefined };
+        } catch {
+            return null;
+        }
+    }
 }
 
 // Initialize global instances
 const Toast = new ToastManager();
 const Loading = new LoadingIndicator();
 
+// Batch helpers for search results
+function addSearchItemToBatch(item) {
+    try {
+        const ta = document.getElementById('oaIngestBatch_payload');
+        if (!ta) { Toast.warning('Open OA Ingest Batch panel to collect selections.'); return; }
+        let arr = [];
+        const current = (ta.value || '').trim();
+        if (current.startsWith('[')) {
+            try { arr = JSON.parse(current); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+        }
+        if (!current) arr = [];
+        if (!Array.isArray(arr)) arr = [];
+        arr.push(item);
+        ta.value = JSON.stringify(arr, null, 2);
+        Toast.success('Added to batch');
+    } catch (e) {
+        console.error('addSearchItemToBatch failed', e);
+        alert('Failed to add to batch: ' + (e?.message || e));
+    }
+}
+
+function addSearchItemToBatchFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        addSearchItemToBatch(item);
+    } catch (e) {
+        console.error('addSearchItemToBatchFromPayload failed', e);
+        alert('Failed to add to batch');
+    }
+}
+
+// PMC batch helpers
+function addPmcItemToBatch(item) {
+    try {
+        const ta = document.getElementById('pmcBatchIngest_payload');
+        if (!ta) { Toast.warning('Open PMC Batch Ingest panel to collect selections.'); return; }
+        let arr = [];
+        const current = (ta.value || '').trim();
+        if (current.startsWith('[')) {
+            try { arr = JSON.parse(current); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+        }
+        if (!current) arr = [];
+        if (!Array.isArray(arr)) arr = [];
+        // Normalize to minimal { pmcid, title?, author? }
+        const pmcid = String(item.pmcid || item.PMCID || '').trim();
+        if (!pmcid) { Toast.error('Invalid PMCID payload'); return; }
+        arr.push({ pmcid, title: item.title || undefined, author: item.author || undefined, keywords: item.keywords || undefined });
+        ta.value = JSON.stringify(arr, null, 2);
+        Toast.success('Added to PMC batch');
+    } catch (e) {
+        console.error('addPmcItemToBatch failed', e);
+        alert('Failed to add to PMC batch: ' + (e?.message || e));
+    }
+}
+
+function addPmcItemToBatchFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        addPmcItemToBatch(item);
+    } catch (e) {
+        console.error('addPmcItemToBatchFromPayload failed', e);
+        alert('Failed to add to PMC batch');
+    }
+}
+
+// Quick ingest for Zenodo
+async function ingestZenodoFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        const record_id = item.record_id;
+        if (!record_id) { Toast.error('Missing Zenodo record_id'); return; }
+        // Use defaults; advanced users can use the panel to customize
+        const body = {
+            perform_chunking: true,
+            parser: 'pymupdf4llm',
+            chunk_method: null,
+            chunk_size: 500,
+            chunk_overlap: 200,
+            perform_analysis: true
+        };
+        const res = await apiClient.post('/api/v1/paper-search/zenodo/ingest', body, { query: { record_id } });
+        Toast.success(`Zenodo ingested: media_id ${res?.media_id ?? ''}`);
+    } catch (e) {
+        console.error('ingestZenodoFromPayload failed', e);
+        Toast.error('Zenodo ingest failed');
+    }
+}
+
+// Quick ingest for viXra
+async function ingestVixraFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        const vid = item.vid;
+        if (!vid) { Toast.error('Missing viXra ID'); return; }
+        const body = {
+            perform_chunking: true,
+            parser: 'pymupdf4llm',
+            chunk_method: null,
+            chunk_size: 500,
+            chunk_overlap: 200,
+            perform_analysis: true
+        };
+        const res = await apiClient.post('/api/v1/paper-search/vixra/ingest', body, { query: { vid } });
+        Toast.success(`viXra ingested: media_id ${res?.media_id ?? ''}`);
+    } catch (e) {
+        console.error('ingestVixraFromPayload failed', e);
+        Toast.error('viXra ingest failed');
+    }
+}
+
+// Quick ingest for Figshare
+async function ingestFigshareFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        const article_id = item.article_id;
+        if (!article_id) { Toast.error('Missing Figshare article_id'); return; }
+        const body = {
+            perform_chunking: true,
+            parser: 'pymupdf4llm',
+            chunk_method: null,
+            chunk_size: 500,
+            chunk_overlap: 200,
+            perform_analysis: true
+        };
+        const res = await apiClient.post('/api/v1/paper-search/figshare/ingest', body, { query: { article_id } });
+        Toast.success(`Figshare ingested: media_id ${res?.media_id ?? ''}`);
+    } catch (e) {
+        console.error('ingestFigshareFromPayload failed', e);
+        Toast.error('Figshare ingest failed');
+    }
+}
+
+// Quick ingest for HAL
+async function ingestHalFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        const docid = item.docid;
+        if (!docid) { Toast.error('Missing HAL docid'); return; }
+        const body = {
+            perform_chunking: true,
+            parser: 'pymupdf4llm',
+            chunk_method: null,
+            chunk_size: 500,
+            chunk_overlap: 200,
+            perform_analysis: true
+        };
+        const res = await apiClient.post('/api/v1/paper-search/hal/ingest', body, { query: { docid } });
+        Toast.success(`HAL ingested: media_id ${res?.media_id ?? ''}`);
+    } catch (e) {
+        console.error('ingestHalFromPayload failed', e);
+        Toast.error('HAL ingest failed');
+    }
+}
+
+// Quick ingest for OSF
+async function ingestOsfFromPayload(el) {
+    try {
+        const payloadStr = el?.dataset?.payload || '';
+        if (!payloadStr) return;
+        const item = JSON.parse(decodeURIComponent(payloadStr));
+        const osf_id = item.osf_id;
+        if (!osf_id) { Toast.error('Missing OSF ID'); return; }
+        const body = {
+            perform_chunking: true,
+            parser: 'pymupdf4llm',
+            chunk_method: null,
+            chunk_size: 500,
+            chunk_overlap: 200,
+            perform_analysis: true
+        };
+        const res = await apiClient.post('/api/v1/paper-search/osf/ingest', body, { query: { osf_id } });
+        Toast.success(`OSF ingested: media_id ${res?.media_id ?? ''}`);
+    } catch (e) {
+        console.error('ingestOsfFromPayload failed', e);
+        Toast.error('OSF ingest failed');
+    }
+}
+
+// expose globals
+window.addSearchItemToBatch = addSearchItemToBatch;
+window.addSearchItemToBatchFromPayload = addSearchItemToBatchFromPayload;
+window.addPmcItemToBatch = addPmcItemToBatch;
+window.addPmcItemToBatchFromPayload = addPmcItemToBatchFromPayload;
+window.ingestZenodoFromPayload = ingestZenodoFromPayload;
+window.ingestVixraFromPayload = ingestVixraFromPayload;
+window.ingestFigshareFromPayload = ingestFigshareFromPayload;
+window.ingestHalFromPayload = ingestHalFromPayload;
+window.ingestOsfFromPayload = ingestOsfFromPayload;
+
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { ToastManager, LoadingIndicator, Modal, JSONViewer, Toast, Loading };
+    module.exports = { ToastManager, LoadingIndicator, Modal, JSONViewer, Toast, Loading, addSearchItemToBatch, addSearchItemToBatchFromPayload, addPmcItemToBatch, addPmcItemToBatchFromPayload, ingestZenodoFromPayload, ingestVixraFromPayload, ingestFigshareFromPayload, ingestHalFromPayload, ingestOsfFromPayload };
 }

@@ -162,6 +162,14 @@ async def get_capabilities(request: Request):
     settings = get_settings()
 
     # High-level features supported by the pipeline
+    import os as _os
+    # Resolve environment-defaults for VLM
+    vlm_defaults = {
+        "VLM_TABLE_MODEL_NAME": _os.getenv("VLM_TABLE_MODEL_NAME", "microsoft/table-transformer-detection"),
+        "VLM_TABLE_REVISION": _os.getenv("VLM_TABLE_REVISION", None),
+        "VLM_TABLE_THRESHOLD": _os.getenv("VLM_TABLE_THRESHOLD", "0.9"),
+    }
+
     features = {
         "query_expansion": {
             "supported": True,
@@ -215,6 +223,24 @@ async def get_capabilities(request: Request):
         "table_processing": {
             "supported": True,
             "methods": ["markdown", "html", "hybrid"]
+        },
+        "vlm_late_chunking": {
+            "supported": True,
+            "backends": ["docling", "hf_table_transformer"],
+            "parameters": [
+                "enable_vlm_late_chunking",
+                "vlm_backend",
+                "vlm_detect_tables_only",
+                "vlm_max_pages",
+                "vlm_late_chunk_top_k_docs"
+            ],
+            "env": [
+                "VLM_TABLE_MODEL_NAME",
+                "VLM_TABLE_REVISION",
+                "VLM_TABLE_THRESHOLD"
+            ],
+            "defaults": vlm_defaults,
+            "note": "Env defaults reflect current process environment; Table Transformer threshold is 0.9 by default."
         },
         "enhanced_chunking": {
             "supported": True,
@@ -411,6 +437,8 @@ async def unified_search_endpoint(
             
             # Filtering
             keyword_filter=request.keyword_filter,
+            include_media_ids=request.include_media_ids,
+            include_note_ids=request.include_note_ids,
             
             # Security
             enable_security_filter=request.enable_security_filter,
@@ -422,6 +450,12 @@ async def unified_search_endpoint(
             # Document processing
             enable_table_processing=request.enable_table_processing,
             table_method=request.table_method,
+            # VLM late chunking
+            enable_vlm_late_chunking=request.enable_vlm_late_chunking,
+            vlm_backend=request.vlm_backend,
+            vlm_detect_tables_only=request.vlm_detect_tables_only,
+            vlm_max_pages=request.vlm_max_pages,
+            vlm_late_chunk_top_k_docs=request.vlm_late_chunk_top_k_docs,
             
             # Chunking
             chunk_type_filter=request.chunk_type_filter,
@@ -801,59 +835,75 @@ async def list_features():
     """
     List all available features in the unified pipeline.
     """
-    return {
-        "features": {
-            "query_expansion": {
+    features_out = {
+        "query_expansion": {
                 "description": "Expand queries with synonyms, acronyms, domain terms, and entities",
                 "parameters": ["expand_query", "expansion_strategies", "spell_check"]
-            },
-            "caching": {
+        },
+        "caching": {
                 "description": "Semantic caching with adaptive thresholds",
                 "parameters": ["enable_cache", "cache_threshold", "adaptive_cache"]
-            },
-            "security": {
+        },
+        "security": {
                 "description": "PII detection, content filtering, and access control",
                 "parameters": ["enable_security_filter", "detect_pii", "redact_pii", "sensitivity_level"]
-            },
-            "citations": {
+        },
+        "citations": {
                 "description": "Generate citations in various formats",
                 "parameters": ["enable_citations", "citation_style", "include_page_numbers"]
-            },
-            "generation": {
+        },
+        "generation": {
                 "description": "Generate answers from retrieved context",
                 "parameters": ["enable_generation", "generation_model", "generation_prompt"]
-            },
-            "reranking": {
+        },
+        "reranking": {
                 "description": "Rerank documents for better relevance",
                 "parameters": ["enable_reranking", "reranking_strategy", "rerank_top_k"]
-            },
-            "feedback": {
+        },
+        "feedback": {
                 "description": "Collect and apply user feedback",
                 "parameters": ["collect_feedback", "feedback_user_id", "apply_feedback_boost"]
-            },
-            "monitoring": {
+        },
+        "monitoring": {
                 "description": "Performance monitoring and observability",
                 "parameters": ["enable_monitoring", "enable_observability", "trace_id"]
-            },
-            "table_processing": {
+        },
+        "table_processing": {
                 "description": "Extract and process tables from documents",
                 "parameters": ["enable_table_processing", "table_method"]
-            },
-            "enhanced_chunking": {
+        },
+        "vlm_late_chunking": {
+                "description": "Add VLM-derived hints (tables/images) as late chunks from PDFs",
+                "parameters": [
+                    "enable_vlm_late_chunking",
+                    "vlm_backend",
+                    "vlm_detect_tables_only",
+                    "vlm_max_pages",
+                    "vlm_late_chunk_top_k_docs"
+                ]
+        },
+        "enhanced_chunking": {
                 "description": "Advanced document chunking with parent context",
                 "parameters": ["enable_enhanced_chunking", "chunk_type_filter", "enable_parent_expansion"]
-            },
-            "batch_processing": {
+        },
+        "batch_processing": {
                 "description": "Process multiple queries concurrently",
                 "parameters": ["enable_batch", "batch_queries", "batch_concurrent"]
-            },
-            "resilience": {
+        },
+        "resilience": {
                 "description": "Fault tolerance with retries and circuit breakers",
                 "parameters": ["enable_resilience", "retry_attempts", "circuit_breaker"]
-            }
-        },
-        "total_features": 12,
-        "total_parameters": 50
+        }
+    }
+
+    # Compute totals dynamically
+    total_features = len(features_out)
+    total_parameters = sum(len(v.get("parameters", [])) for v in features_out.values())
+
+    return {
+        "features": features_out,
+        "total_features": total_features,
+        "total_parameters": total_parameters
     }
 
 

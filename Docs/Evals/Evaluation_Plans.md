@@ -14,6 +14,9 @@
 ----------------------------------------------------------------------------------------------------------------
 https://review.firstround.com/figma-ai-eval-process/
 https://arxiv.org/pdf/2502.17601
+https://github.com/SalesforceAIResearch/UniDoc-Bench
+https://github.com/AkariAsai/ScholarQABench
+
 https://github.com/t3dotgg/SnitchBench
 https://arxiv.org/abs/2503.10357
 https://github.com/IAAR-Shanghai/CRUD_RAG

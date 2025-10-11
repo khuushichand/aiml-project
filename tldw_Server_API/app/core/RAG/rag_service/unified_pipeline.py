@@ -209,6 +209,8 @@ async def unified_rag_pipeline(
     
     # ========== FILTERING ==========
     keyword_filter: List[str] = None,  # Filter by these keywords
+    include_media_ids: Optional[List[int]] = None,
+    include_note_ids: Optional[List[str]] = None,
     
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = False,
@@ -220,6 +222,13 @@ async def unified_rag_pipeline(
     # ========== DOCUMENT PROCESSING ==========
     enable_table_processing: bool = False,
     table_method: Literal["markdown", "html", "hybrid"] = "markdown",
+
+    # ========== VLM LATE CHUNKING ==========
+    enable_vlm_late_chunking: bool = False,
+    vlm_backend: Optional[str] = None,
+    vlm_detect_tables_only: bool = True,
+    vlm_max_pages: Optional[int] = None,
+    vlm_late_chunk_top_k_docs: int = 3,
     
     # ========== CHUNKING & CONTEXT ==========
     enable_enhanced_chunking: bool = False,
@@ -711,13 +720,20 @@ async def unified_rag_pipeline(
                     rh = getattr(retriever, 'retrieve_hybrid', None)
                     hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
                     if search_mode == "hybrid" and hybrid_supported:
-                        documents = await rh(query=query, alpha=hybrid_alpha, index_namespace=index_namespace)
+                        documents = await rh(
+                            query=query,
+                            alpha=hybrid_alpha,
+                            index_namespace=index_namespace,
+                            allowed_media_ids=include_media_ids,
+                        )
                     else:
                         documents = await retriever.retrieve(
                             query=query,
                             sources=data_sources,
                             config=config,
-                            index_namespace=index_namespace
+                            index_namespace=index_namespace,
+                            allowed_media_ids=include_media_ids,
+                            allowed_note_ids=include_note_ids,
                         )
                         
                     # Optionally run HyDE-enhanced media retrieval and merge
@@ -914,7 +930,131 @@ async def unified_rag_pipeline(
                 result.errors.append("Table processing module not available")
                 logger.warning("Table processing requested but module not available")
         
-        # No retrieval-time chunking in unified pipeline
+        # ========== VLM LATE CHUNKING (Optional) ==========
+        if enable_vlm_late_chunking and result.documents:
+            vlm_start = time.time()
+            try:
+                try:
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
+                        get_backend as _get_vlm_backend,
+                    )
+                except Exception:
+                    _get_vlm_backend = lambda name=None: None  # type: ignore
+
+                # Pick backend
+                backend = _get_vlm_backend(vlm_backend if vlm_backend not in (None, "auto") else None)
+                if backend is None:
+                    result.errors.append("VLM requested but no backend available")
+                else:
+                    # Operate on top-k documents to bound cost
+                    # Allow media_db and notes_db sources when a local PDF path is present
+                    allowed_sources = {"media_db", "notes_db"}
+                    selected_docs = [
+                        d for d in result.documents
+                        if (d.metadata or {}).get("source") in allowed_sources and (d.metadata or {}).get("url")
+                    ]
+                    selected_docs = selected_docs[: max(1, int(vlm_late_chunk_top_k_docs or 1))]
+
+                    added: List[Document] = []
+                    for doc in selected_docs:
+                        url = (doc.metadata or {}).get("url")
+                        page_limit = vlm_max_pages
+                        if not url:
+                            continue
+                        # Resolve PDF path: strictly require local file path (no remote URLs)
+                        pdf_path = None
+                        cleanup_tmp = False
+                        try:
+                            from pathlib import Path
+                            p = Path(str(url))
+                            if p.exists() and p.suffix.lower() == ".pdf":
+                                pdf_path = str(p)
+                            else:
+                                # Unsupported: not a local PDF path
+                                continue
+                        except Exception:
+                            continue
+
+                        # Use document-level VLM when available
+                        try:
+                            detections = []
+                            if hasattr(backend, "process_pdf"):
+                                res = backend.process_pdf(pdf_path, max_pages=page_limit)
+                                by_page = []
+                                if isinstance(getattr(res, "extra", None), dict):
+                                    by_page = res.extra.get("by_page") or []
+                                if by_page:
+                                    for entry in by_page:
+                                        page_no = entry.get("page")
+                                        for d in (entry.get("detections") or []):
+                                            label = str(d.get("label"))
+                                            if vlm_detect_tables_only and label.lower() != "table":
+                                                continue
+                                            detections.append({
+                                                "label": label,
+                                                "score": float(d.get("score", 0.0)),
+                                                "bbox": d.get("bbox") or [0.0, 0.0, 0.0, 0.0],
+                                                "page": page_no,
+                                            })
+                            else:
+                                # Per-page image mode
+                                try:
+                                    import pymupdf
+                                    with pymupdf.open(pdf_path) as _doc:
+                                        total_pages = len(_doc)
+                                        max_pages = min(page_limit or total_pages, total_pages)
+                                        for i, page in enumerate(_doc, start=1):
+                                            if i > max_pages:
+                                                break
+                                            pix = page.get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0), alpha=False)
+                                            img_bytes = pix.tobytes("png")
+                                            res = backend.process_image(img_bytes, context={"page": i, "pdf_path": pdf_path})
+                                            for det in (getattr(res, "detections", []) or []):
+                                                label = str(getattr(det, "label", ""))
+                                                if vlm_detect_tables_only and label.lower() != "table":
+                                                    continue
+                                                detections.append({
+                                                    "label": label,
+                                                    "score": float(getattr(det, "score", 0.0)),
+                                                    "bbox": list(getattr(det, "bbox", [0.0, 0.0, 0.0, 0.0])),
+                                                    "page": i,
+                                                })
+                                except Exception:
+                                    continue
+
+                            # Convert detections into lightweight Documents for reranking/search
+                            for idx, d in enumerate(detections[:100]):  # bound new docs per source
+                                label = d.get("label", "vlm")
+                                score = d.get("score", 0.0)
+                                bbox = d.get("bbox")
+                                page_no = d.get("page")
+                                chunk_text = f"Detected {label} ({score:.2f}) on page {page_no} at {bbox}"
+                                added.append(
+                                    Document(
+                                        id=f"vlm:{doc.id}:{idx}",
+                                        content=chunk_text,
+                                        source=doc.source,
+                                        metadata={
+                                            **(doc.metadata or {}),
+                                            "chunk_type": ("table" if str(label).lower() == "table" else "vlm"),
+                                            "page": page_no,
+                                            "bbox": bbox,
+                                            "derived_from": doc.id,
+                                        },
+                                        score=float(getattr(doc, "score", 0.0)),
+                                    )
+                                )
+                        finally:
+                            # No temp cleanup needed; remote URLs are not supported
+                            pass
+                    if added:
+                        # Extend document list for downstream processing/reranking
+                        result.documents.extend(added)
+                result.timings["vlm_late_chunking"] = time.time() - vlm_start
+            except Exception as e:
+                result.errors.append(f"VLM late-chunking failed: {e}")
+                logger.warning(f"VLM late-chunking failed: {e}")
+
 
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":

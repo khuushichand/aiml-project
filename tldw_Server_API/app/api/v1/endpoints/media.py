@@ -6011,31 +6011,31 @@ async def process_pdfs_endpoint(
 
         logger.debug(f"ENDPOINT: #1 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
         # --- Call process_pdf_task for each input ---
-        tasks = []
         for original_ref, file_bytes in pdf_inputs_to_process:
-             # --- Pass chunk options correctly ---
-             chunk_opts_for_task = {
-                 'method': form_data.chunk_method if form_data.chunk_method else 'sentences', # Use enum value or default
-                 'max_size': form_data.chunk_size,
-                 'overlap': form_data.chunk_overlap
-             }
-             logger.debug(
-                 f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'")
-             # Create the async task
+            # --- Pass chunk options correctly ---
+            chunk_opts_for_task = {
+                "method": form_data.chunk_method if form_data.chunk_method else "sentences",  # Use enum value or default
+                "max_size": form_data.chunk_size,
+                "overlap": form_data.chunk_overlap,
+            }
+            logger.debug(
+                f"ENDPOINT: #2 Passing to task -> api_name='{form_data.api_name}', api_provider='{form_data.api_provider}'"
+            )
+            # Create the async task
             task = asyncio.create_task(
                 pdf_lib.process_pdf_task(
                     file_bytes=file_bytes,
-                    filename=original_ref, # Use original ref as filename hint
+                    filename=original_ref,  # Use original ref as filename hint
                     parser=str(form_data.pdf_parsing_engine) or "pymupdf4llm",
                     # Pass options from form
                     title_override=form_data.title,
                     author_override=form_data.author,
-                    keywords=form_data.keywords, # Pass list
+                    keywords=form_data.keywords,  # Pass list
                     perform_chunking=form_data.perform_chunking or None,
                     # Pass individual chunk params from form model
-                    chunk_method=chunk_opts_for_task['method'],
-                    max_chunk_size=chunk_opts_for_task['max_size'],
-                    chunk_overlap=chunk_opts_for_task['overlap'],
+                    chunk_method=chunk_opts_for_task["method"],
+                    max_chunk_size=chunk_opts_for_task["max_size"],
+                    chunk_overlap=chunk_opts_for_task["overlap"],
                     perform_analysis=form_data.perform_analysis,
                     api_name=form_data.api_name,
                     # api_key removed - retrieved from server config
@@ -6049,7 +6049,7 @@ async def process_pdfs_endpoint(
                     vlm_max_pages=vlm_max_pages,
                 )
             )
-             tasks_with_refs.append((original_ref, task))
+            tasks_with_refs.append((original_ref, task))
 
         # Gather results from processing tasks
         gathered_results = await asyncio.gather(*[task for _, task in tasks_with_refs], return_exceptions=True)

@@ -18,7 +18,6 @@ Security
 """
 
 from typing import List, Optional, Dict, Any
-import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from loguru import logger
 
@@ -151,107 +150,53 @@ async def create_prompt(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
-        
+
         if prompt_data.user_prompt and len(prompt_data.user_prompt) > security_config.max_prompt_length:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
-        
+
         # Ensure write access to the project
         await require_project_write_access(prompt_data.project_id, user_context=user_context, db=db)
 
-        # Create prompt in database
-        conn = db.get_connection()
-        import time
-        import uuid
-        import json
-        cursor = conn.cursor()
-        prompt_uuid = str(uuid.uuid4())
-
-        few_shot_json = None
+        few_shot_payload = None
         if prompt_data.few_shot_examples:
-            few_shot_json = json.dumps([ex.dict() for ex in prompt_data.few_shot_examples])
-        modules_json = None
+            few_shot_payload = [ex.model_dump() if hasattr(ex, "model_dump") else ex.dict() for ex in prompt_data.few_shot_examples]
+
+        modules_payload = None
         if prompt_data.modules_config:
-            modules_json = json.dumps([mod.dict() for mod in prompt_data.modules_config])
+            modules_payload = [mod.model_dump() if hasattr(mod, "model_dump") else mod.dict() for mod in prompt_data.modules_config]
 
-        # Retry on transient database locks
-        max_retries = 5
-        base_delay = 0.05
-        last_err = None
-        for attempt in range(max_retries):
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO prompt_studio_prompts (
-                        uuid, project_id, signature_id, version_number, name,
-                        system_prompt, user_prompt, few_shot_examples, modules_config,
-                        parent_version_id, change_description, client_id
-                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        prompt_uuid,
-                        prompt_data.project_id,
-                        prompt_data.signature_id,
-                        prompt_data.name,
-                        prompt_data.system_prompt,
-                        prompt_data.user_prompt,
-                        few_shot_json,
-                        modules_json,
-                        prompt_data.parent_version_id,
-                        prompt_data.change_description,
-                        user_context["client_id"],
-                    ),
-                )
-                prompt_id = cursor.lastrowid
-                conn.commit()
-                break
-            except sqlite3.OperationalError as e:
-                last_err = e
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    time.sleep(base_delay * (2 ** attempt))
-                    continue
-                raise
+        prompt_record = db.create_prompt(
+            project_id=prompt_data.project_id,
+            name=prompt_data.name,
+            signature_id=prompt_data.signature_id,
+            version_number=1,
+            system_prompt=prompt_data.system_prompt,
+            user_prompt=prompt_data.user_prompt,
+            few_shot_examples=few_shot_payload,
+            modules_config=modules_payload,
+            parent_version_id=prompt_data.parent_version_id,
+            change_description=prompt_data.change_description,
+            client_id=user_context.get("client_id"),
+        )
 
-        if last_err and 'prompt_id' not in locals():
-            raise last_err
-        
-        # Get created prompt
-        prompt = db.get_prompt(prompt_id)
-        
+        if not prompt_record:
+            raise DatabaseError("Prompt creation returned empty record")
+
         logger.info(f"User {user_context['user_id']} created prompt: {prompt_data.name}")
-        
+
         return StandardResponse(
             success=True,
-            data=PromptResponse(**prompt)
+            data=PromptResponse(**prompt_record)
         )
-        
-    except sqlite3.IntegrityError as e:
-        if "UNIQUE" in str(e):
-            # Compatibility with tests: return existing prompt as if created
-            try:
-                conn = db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT * FROM prompt_studio_prompts
-                    WHERE project_id = ? AND name = ? AND deleted = 0
-                    ORDER BY id DESC LIMIT 1
-                    """,
-                    (prompt_data.project_id, prompt_data.name)
-                )
-                row = cursor.fetchone()
-                if row:
-                    prompt = db._row_to_dict(cursor, row)
-                    return StandardResponse(success=True, data=PromptResponse(**prompt))
-            except Exception:
-                pass
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Prompt with this name already exists in the project"
-            )
-        raise DatabaseError(f"Failed to create prompt: {e}")
+
+    except ConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Prompt with this name already exists in the project"
+        )
     except DatabaseError as e:
         logger.error(f"Database error creating prompt: {e}")
         raise HTTPException(
@@ -313,46 +258,18 @@ async def list_prompts(
         Paginated list of prompts
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build query
-        base_query = """
-            FROM prompt_studio_prompts 
-            WHERE project_id = ?
-        """
-        
-        params = [project_id]
-        
-        if not include_deleted:
-            base_query += " AND deleted = 0"
-        
-        # Count total
-        count_query = f"SELECT COUNT(*) {base_query}"
-        cursor.execute(count_query, params)
-        total = cursor.fetchone()[0]
-        
-        # Get prompts with pagination
-        offset = (page - 1) * per_page
-        query = f"""
-            SELECT * {base_query}
-            ORDER BY updated_at DESC, version_number DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([per_page, offset])
-        
-        cursor.execute(query, params)
-        prompts = [db._row_to_dict(cursor, row) for row in cursor.fetchall()]
-        
+        result = db.list_prompts(
+            project_id,
+            page=page,
+            per_page=per_page,
+            include_deleted=include_deleted,
+        )
+        prompts = [PromptResponse(**prompt) for prompt in result.get("prompts", [])]
+
         return ListResponse(
             success=True,
-            data=[PromptResponse(**p) for p in prompts],
-            metadata={
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": (total + per_page - 1) // per_page
-            }
+            data=prompts,
+            metadata=result.get("pagination", {}),
         )
         
     except DatabaseError as e:
@@ -360,6 +277,11 @@ async def list_prompts(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list prompts"
+        )
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 # Simple alias that mirrors the canonical list response shape
@@ -412,28 +334,13 @@ async def get_prompt(
         Prompt details
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get prompt with project check
-        cursor.execute("""
-            SELECT p.*, proj.user_id as project_user_id
-            FROM prompt_studio_prompts p
-            JOIN prompt_studio_projects proj ON p.project_id = proj.id
-            WHERE p.id = ? AND p.deleted = 0
-        """, (prompt_id,))
-        
-        row = cursor.fetchone()
-        if not row:
+        prompt = db.get_prompt_with_project(prompt_id)
+        if not prompt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Prompt {prompt_id} not found"
             )
-        
-        prompt = db._row_to_dict(cursor, row)
-        
-        # Check access
-        if prompt["project_user_id"] != user_context["user_id"] and not user_context["is_admin"]:
+        if prompt.get("project_user_id") != user_context["user_id"] and not user_context["is_admin"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this prompt"
@@ -452,6 +359,11 @@ async def get_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get prompt"
+        )
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 @router.put(
@@ -534,78 +446,45 @@ async def update_prompt(
                 detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
         
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get current prompt
-        cursor.execute("""
-            SELECT p.*, proj.user_id as project_user_id
-            FROM prompt_studio_prompts p
-            JOIN prompt_studio_projects proj ON p.project_id = proj.id
-            WHERE p.id = ? AND p.deleted = 0
-        """, (prompt_id,))
-        
-        current_prompt = db._row_to_dict(cursor, cursor.fetchone())
-        
+        current_prompt = db.get_prompt_with_project(prompt_id)
         if not current_prompt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Prompt {prompt_id} not found"
             )
-        
-        # Check access
-        if current_prompt["project_user_id"] != user_context["user_id"] and not user_context["is_admin"]:
+        if current_prompt.get("project_user_id") != user_context["user_id"] and not user_context["is_admin"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this prompt"
             )
-        
+
         # Create new version
-        import uuid
-        import json
-        
-        new_uuid = str(uuid.uuid4())
-        new_version = current_prompt["version_number"] + 1
-        
-        # Merge updates with current values
-        new_name = updates.name or current_prompt["name"]
-        new_system = updates.system_prompt if updates.system_prompt is not None else current_prompt["system_prompt"]
-        new_user = updates.user_prompt if updates.user_prompt is not None else current_prompt["user_prompt"]
-        
-        new_examples = None
+        few_shot_payload = None
         if updates.few_shot_examples is not None:
-            new_examples = json.dumps([ex.dict() for ex in updates.few_shot_examples])
-        else:
-            new_examples = json.dumps(current_prompt["few_shot_examples"]) if current_prompt["few_shot_examples"] else None
-        
-        new_modules = None
+            few_shot_payload = [ex.model_dump() if hasattr(ex, "model_dump") else ex.dict() for ex in updates.few_shot_examples]
+
+        modules_payload = None
         if updates.modules_config is not None:
-            new_modules = json.dumps([mod.dict() for mod in updates.modules_config])
-        else:
-            new_modules = json.dumps(current_prompt["modules_config"]) if current_prompt["modules_config"] else None
-        
-        # Insert new version
-        cursor.execute("""
-            INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, version_number, name,
-                system_prompt, user_prompt, few_shot_examples, modules_config,
-                parent_version_id, change_description, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            new_uuid, current_prompt["project_id"], current_prompt["signature_id"],
-            new_version, new_name, new_system, new_user, new_examples, new_modules,
-            prompt_id, updates.change_description, user_context["client_id"]
-        ))
-        
-        new_prompt_id = cursor.lastrowid
-        conn.commit()
-        
-        # Get new version
-        cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (new_prompt_id,))
-        new_prompt = db._row_to_dict(cursor, cursor.fetchone())
-        
-        logger.info(f"User {user_context['user_id']} created version {new_version} of prompt {prompt_id}")
-        
+            modules_payload = [mod.model_dump() if hasattr(mod, "model_dump") else mod.dict() for mod in updates.modules_config]
+
+        new_prompt = db.create_prompt_version(
+            prompt_id,
+            change_description=updates.change_description,
+            name=updates.name,
+            system_prompt=updates.system_prompt,
+            user_prompt=updates.user_prompt,
+            few_shot_examples=few_shot_payload,
+            modules_config=modules_payload,
+            client_id=user_context.get("client_id"),
+        )
+
+        logger.info(
+            "User %s created version %s of prompt %s",
+            user_context["user_id"],
+            new_prompt.get("version_number"),
+            prompt_id,
+        )
+
         return StandardResponse(
             success=True,
             data=PromptResponse(**new_prompt)
@@ -616,6 +495,11 @@ async def update_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update prompt"
+        )
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 @router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
@@ -637,41 +521,20 @@ async def get_prompt_history(
         List of prompt versions
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get prompt to find its name and project
-        cursor.execute("""
-            SELECT name, project_id FROM prompt_studio_prompts 
-            WHERE id = ? AND deleted = 0
-        """, (prompt_id,))
-        
-        prompt_info = cursor.fetchone()
-        if not prompt_info:
+        prompt = db.get_prompt(prompt_id)
+        if not prompt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Prompt {prompt_id} not found"
             )
-        
-        name, project_id = prompt_info
-        
-        # Check access
+        project_id = prompt["project_id"]
         await require_project_access(project_id, user_context=user_context, db=db)
-        
-        # Get all versions of this prompt
-        cursor.execute("""
-            SELECT id, uuid, version_number, name, change_description, 
-                   created_at, parent_version_id
-            FROM prompt_studio_prompts
-            WHERE project_id = ? AND name = ? AND deleted = 0
-            ORDER BY version_number DESC
-        """, (project_id, name))
-        
+
         versions = [
-            PromptVersion(**db._row_to_dict(cursor, row))
-            for row in cursor.fetchall()
+            PromptVersion(**version)
+            for version in db.list_prompt_versions(project_id, prompt["name"])
         ]
-        
+
         return StandardResponse(
             success=True,
             data=versions
@@ -682,6 +545,11 @@ async def get_prompt_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get prompt history"
+        )
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 @router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse, openapi_extra={
@@ -706,79 +574,28 @@ async def revert_prompt(
         New prompt version details
     """
     try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get current prompt info
-        cursor.execute("""
-            SELECT name, project_id FROM prompt_studio_prompts 
-            WHERE id = ? AND deleted = 0
-        """, (prompt_id,))
-        
-        current_info = cursor.fetchone()
-        if not current_info:
+        current_prompt = db.get_prompt(prompt_id)
+        if not current_prompt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Prompt {prompt_id} not found"
             )
-        
-        name, project_id = current_info
-        
-        # Check access
+        project_id = current_prompt["project_id"]
         await require_project_write_access(project_id, user_context=user_context, db=db)
-        
-        # Find the version to revert to
-        cursor.execute("""
-            SELECT * FROM prompt_studio_prompts
-            WHERE project_id = ? AND name = ? AND version_number = ? AND deleted = 0
-        """, (project_id, name, version))
-        
-        target_version = db._row_to_dict(cursor, cursor.fetchone())
-        
-        if not target_version:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Version {version} not found for this prompt"
-            )
-        
-        # Get max version number
-        cursor.execute("""
-            SELECT MAX(version_number) FROM prompt_studio_prompts
-            WHERE project_id = ? AND name = ?
-        """, (project_id, name))
-        
-        max_version = cursor.fetchone()[0] or 0
-        new_version = max_version + 1
-        
-        # Create new version from target
-        import uuid
-        import json
-        
-        new_uuid = str(uuid.uuid4())
-        
-        cursor.execute("""
-            INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, version_number, name,
-                system_prompt, user_prompt, few_shot_examples, modules_config,
-                parent_version_id, change_description, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            new_uuid, project_id, target_version["signature_id"], new_version, name,
-            target_version["system_prompt"], target_version["user_prompt"],
-            json.dumps(target_version["few_shot_examples"]) if target_version["few_shot_examples"] else None,
-            json.dumps(target_version["modules_config"]) if target_version["modules_config"] else None,
-            prompt_id, f"Reverted to version {version}", user_context["client_id"]
-        ))
-        
-        new_prompt_id = cursor.lastrowid
-        conn.commit()
-        
-        # Get new version
-        cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (new_prompt_id,))
-        new_prompt = db._row_to_dict(cursor, cursor.fetchone())
-        
-        logger.info(f"User {user_context['user_id']} reverted prompt {prompt_id} to version {version}")
-        
+
+        new_prompt = db.revert_prompt_to_version(
+            prompt_id,
+            version,
+            client_id=user_context.get("client_id"),
+        )
+
+        logger.info(
+            "User %s reverted prompt %s to version %s",
+            user_context["user_id"],
+            prompt_id,
+            version,
+        )
+
         return StandardResponse(
             success=True,
             data=PromptResponse(**new_prompt)
@@ -789,4 +606,9 @@ async def revert_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revert prompt"
+        )
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )

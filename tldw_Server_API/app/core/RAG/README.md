@@ -473,6 +473,29 @@ results = await unified_batch_pipeline(
 - `enable_table_processing: bool` - Process table content
 - `enable_parent_expansion: bool` - Include parent document context
 
+#### VLM Late Chunking (Optional)
+
+VLM (Vision-Language) late chunking augments retrieved results with compact, VLM-derived hints from PDFs at retrieval time. This is separate from OCR and can be turned on per request.
+
+- `enable_vlm_late_chunking: bool` — enable/disable
+- `vlm_backend: str | null` — `docling` for PDF-structural detection, or `hf_table_transformer` for per-page table detection
+- `vlm_detect_tables_only: bool` — if true, only keep `table` detections; otherwise include images/figures as `vlm`
+- `vlm_max_pages: int | null` — analyze up to this many pages per PDF
+- `vlm_late_chunk_top_k_docs: int` — apply to top-k retrieved media_db documents (default: 3)
+
+The created hints are appended as additional documents with `metadata.chunk_type` set to `table` (for tables) or `vlm` (for other labels). Combine with `chunk_type_filter` to include/exclude these:
+
+```json
+{
+  "enable_vlm_late_chunking": true,
+  "vlm_backend": "docling",
+  "vlm_detect_tables_only": false,
+  "chunk_type_filter": ["text", "table", "vlm"]
+}
+```
+
+Backends are shared with ingestion; list available backends via `GET /api/v1/vlm/backends`.
+
 ### Citations
 - `enable_citations: bool` - Generate citations
 - `citation_style: str` - Format ("apa", "mla", "chicago", "harvard", "ieee")

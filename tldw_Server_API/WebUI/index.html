@@ -596,6 +596,27 @@
                 <button class="sub-tab-button" data-content-id="tabResearchBioRxiv" data-load-group="research" role="tab">
                     BioRxiv/MedRxiv
                 </button>
+                <button class="sub-tab-button" data-content-id="tabResearchACM" data-load-group="research" role="tab">
+                    ACM (OpenAlex)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchWiley" data-load-group="research" role="tab">
+                    Wiley (OpenAlex)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchIEEE" data-load-group="research" role="tab">
+                    IEEE Xplore
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchSpringer" data-load-group="research" role="tab">
+                    Springer
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchScopus" data-load-group="research" role="tab">
+                    Scopus
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchOAIngest" data-load-group="research" role="tab">
+                    OA Ingest (DOI)
+                </button>
+                <button class="sub-tab-button" data-content-id="tabResearchChemRxiv" data-load-group="research" role="tab">
+                    ChemRxiv
+                </button>
             </div>
         </div>
 
@@ -1056,7 +1077,41 @@
                     curlEl.textContent = curlCommand;
                 }
 
-                // Make the request
+                // Quick download toggle for raw CSV/XML endpoints
+                const dlToggle = document.getElementById(endpointId + '_download');
+                if (dlToggle && dlToggle.checked) {
+                    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+                    const url = new URL(`${baseUrl}${processedPath}`);
+                    Object.keys(query || {}).forEach(k => {
+                        const v = query[k];
+                        if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, v);
+                    });
+                    const headers = {};
+                    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+                    if (token) headers['X-API-KEY'] = token;
+                    const resp = await fetch(url.toString(), { method, headers });
+                    if (!resp.ok) {
+                        const text = await resp.text();
+                        throw new Error(`HTTP ${resp.status}: ${text}`);
+                    }
+                    const blob = await resp.blob();
+                    const ct = resp.headers.get('content-type') || '';
+                    const ext = ct.includes('xml') ? 'xml' : ct.includes('csv') ? 'csv' : ct.includes('html') ? 'html' : 'json';
+                    const fnameEl = document.getElementById(endpointId + '_filename');
+                    const filename = ((fnameEl && fnameEl.value) ? fnameEl.value : endpointId) + '.' + ext;
+                    const a = document.createElement('a');
+                    const href = URL.createObjectURL(blob);
+                    a.href = href;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(href);
+                    responseArea.textContent = `(Downloaded ${filename})`;
+                    return;
+                }
+
+                // Make the request normally
                 const response = await apiClient.makeRequest(method, processedPath, { body, query });
 
                 // Display response

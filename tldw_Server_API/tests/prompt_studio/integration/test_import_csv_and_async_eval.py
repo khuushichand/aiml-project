@@ -1,46 +1,15 @@
-"""
-Integration tests for Prompt Studio CSV import and async evaluation polling.
-"""
+"""Integration tests for Prompt Studio CSV import and async evaluation polling."""
 
 import time
-import pytest
-from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+import pytest
 
 
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture()
-def client_with_user(tmp_path, monkeypatch):
-    # Isolate user DB base dir to tmp to avoid cross-test locks
-    from tldw_Server_API.app.core import config as cfg
-    monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
-
-    async def override_active_user():
-        return {
-            "id": 1,
-            "username": "tester",
-            "email": "t@e.com",
-            "is_active": True,
-            "is_verified": True,
-            "is_admin": True,
-            "permissions": ["all"],
-        }
-    app.dependency_overrides[get_current_active_user] = override_active_user
-    # Provide X-API-KEY header to satisfy single-user mode auth in integration context
-    settings = get_settings()
-    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-    with TestClient(app, headers=headers) as client:
-        yield client
-    app.dependency_overrides.clear()
-
-
-def test_import_test_cases_csv_string(client_with_user: TestClient):
-    client = client_with_user
+def test_import_test_cases_csv_string(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create project
     cp = client.post(
@@ -57,7 +26,7 @@ def test_import_test_cases_csv_string(client_with_user: TestClient):
         assert match is not None
         pid = match["id"]
     else:
-        assert False, cp.text
+        assert False, f"{backend_label}: {cp.text}"
 
     # Compose CSV string with input/expected fields
     csv_data = (
@@ -74,7 +43,7 @@ def test_import_test_cases_csv_string(client_with_user: TestClient):
     }
     r = client.post("/api/v1/prompt-studio/test-cases/import", json=payload)
     # Some environments may not have schema fully wired; allow 500 but prefer success
-    assert r.status_code in (200, 500), r.text
+    assert r.status_code in (200, 500), f"{backend_label}: {r.text}"
     if r.status_code == 200:
         body = r.json()
         assert body.get("success") is True
@@ -82,8 +51,8 @@ def test_import_test_cases_csv_string(client_with_user: TestClient):
         assert body.get("data", {}).get("imported", 0) >= 0
 
 
-def test_async_evaluation_with_status_polling(client_with_user: TestClient):
-    client = client_with_user
+def test_async_evaluation_with_status_polling(prompt_studio_dual_backend_client):
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create project and prompt
     proj = client.post(
@@ -101,7 +70,7 @@ def test_async_evaluation_with_status_polling(client_with_user: TestClient):
         assert match is not None, "Async Proj should exist after 409"
         pid = match["id"]
     else:
-        assert False, proj.text
+        assert False, f"{backend_label}: {proj.text}"
 
     pr = client.post(
         "/api/v1/prompt-studio/prompts/create",
@@ -112,7 +81,7 @@ def test_async_evaluation_with_status_polling(client_with_user: TestClient):
             "user_prompt": "Answer: {q}",
         },
     )
-    assert pr.status_code in (200, 201), pr.text
+    assert pr.status_code in (200, 201), f"{backend_label}: {pr.text}"
     prompt_id = pr.json()["data"]["id"]
 
     # Create a test case
@@ -129,7 +98,7 @@ def test_async_evaluation_with_status_polling(client_with_user: TestClient):
             "signature_id": None,
         },
     )
-    assert tc.status_code in (200, 201), tc.text
+    assert tc.status_code in (200, 201), f"{backend_label}: {tc.text}"
     tc_id = tc.json()["data"]["id"]
 
     # Create evaluation with run_async=True
@@ -145,7 +114,7 @@ def test_async_evaluation_with_status_polling(client_with_user: TestClient):
             "run_async": True,
         },
     )
-    assert ev.status_code in (200, 201), ev.text
+    assert ev.status_code in (200, 201), f"{backend_label}: {ev.text}"
     eval_obj = ev.json()
     assert "id" in eval_obj and eval_obj.get("status") in ("pending", "running", "completed")
 

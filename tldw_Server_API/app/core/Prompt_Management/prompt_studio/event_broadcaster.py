@@ -8,7 +8,10 @@ from datetime import datetime
 from enum import Enum
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
+    PromptStudioDatabase,
+    DatabaseError,
+)
 
 ########################################################################################################################
 # Event Types
@@ -420,23 +423,18 @@ class EventBroadcaster:
         
         try:
             if job_type == "evaluation":
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_evaluations WHERE id = ?",
-                    (entity_id,)
-                )
-            elif job_type == "optimization":
-                cursor.execute(
-                    "SELECT project_id FROM prompt_studio_optimizations WHERE id = ?",
-                    (entity_id,)
-                )
-            else:
-                return None
-            
-            row = cursor.fetchone()
-            return row[0] if row else None
-            
-        except Exception as e:
-            logger.error(f"Error getting project for job: {e}")
+                evaluation = self.db.get_evaluation(entity_id)
+                return evaluation.get("project_id") if evaluation else None
+            if job_type == "optimization":
+                optimization = self.db.get_optimization(entity_id)
+                return optimization.get("project_id") if optimization else None
+            return None
+
+        except DatabaseError as exc:
+            logger.error(f"Database error resolving project for job {entity_id}: {exc}")
+            return None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"Error getting project for job: {exc}")
             return None
     
     async def _log_event(self, event_type: EventType, data: Dict[str, Any],

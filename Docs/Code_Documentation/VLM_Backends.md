@@ -45,9 +45,12 @@ List available backends:
 - Model control via environment variables:
   - `VLM_TABLE_MODEL_NAME` (default: `microsoft/table-transformer-detection`)
   - `VLM_TABLE_REVISION` (optional)
+- Inference threshold:
+  - `VLM_TABLE_THRESHOLD` (default: `0.9`)
 - Notes:
   - Operates per-page by rendering a medium-resolution bitmap and running detection.
   - Emits `label=table` detections with bounding boxes.
+  - Uses `model.config.id2label` when provided to map class IDs to text labels.
 
 ### 2) Docling (PDF structural VLM)
 
@@ -105,4 +108,3 @@ Detected image (0.75) on page 3 at [x0, y0, x1, y1]
 - `GET /api/v1/vlm/backends` shows which backends are importable and available.
 - If a backend is not listed as available, verify its Python packages are installed and importable in the server environment.
 - For HF Table Transformer, confirm GPU/CPU torch installation matches your environment.
-

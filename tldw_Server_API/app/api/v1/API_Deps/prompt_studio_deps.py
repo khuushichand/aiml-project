@@ -16,6 +16,10 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError, SchemaError, InputError, ConflictError
 )
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_prompt_studio_database,
+    get_content_backend_instance,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
@@ -74,19 +78,42 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
         PromptStudioDatabase instance
     """
     db_path = _get_prompt_studio_db_path_for_user(user_id)
-    cache_key = str(db_path)
+    backend = get_content_backend_instance()
+
+    backend_signature = "sqlite"
+    if backend is not None:
+        backend_cfg = getattr(backend, "config", None)
+        if backend_cfg is not None:
+            backend_signature = (
+                backend.backend_type.value
+                + ":"
+                + (
+                    backend_cfg.connection_string
+                    or backend_cfg.sqlite_path
+                    or backend_cfg.pg_database
+                    or "default"
+                )
+            )
+        else:
+            backend_signature = f"{backend.backend_type.value}:{id(backend)}"
+
+    cache_key = (str(db_path), backend_signature)
     
     with _db_lock:
         # Check cache first
         if cache_key in _db_instances_cache:
-            logger.debug(f"Using cached PromptStudioDatabase for user {user_id}")
+            logger.debug("Using cached PromptStudioDatabase for user %s", user_id)
             return _db_instances_cache[cache_key]
         
         # Create new instance
         try:
-            db_instance = PromptStudioDatabase(db_path, client_id)
+            db_instance = create_prompt_studio_database(
+                client_id,
+                db_path=db_path,
+                backend=backend,
+            )
             _db_instances_cache[cache_key] = db_instance
-            logger.info(f"Created new PromptStudioDatabase instance for user {user_id}")
+            logger.info("Created new PromptStudioDatabase instance for user %s", user_id)
             return db_instance
         except Exception as e:
             logger.error(f"Failed to create PromptStudioDatabase for user {user_id}: {e}")

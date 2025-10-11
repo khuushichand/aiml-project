@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
     load_content_db_settings,
     get_content_backend,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
     import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
@@ -48,9 +48,11 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     mark_media_as_processed as sqlite_mark_media_as_processed,
     ingest_article_to_db_new as sqlite_ingest_article_to_db, \
     get_unprocessed_media as sqlite_get_unprocessed_media,\
-    )
+)
 # ChaChaNotes database
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 #
 # End of imports
 ############################################################################################################
@@ -71,6 +73,7 @@ single_user_db_path: str = content_db_settings.sqlite_path or './Databases/serve
 single_user_backup_path: str = content_db_settings.backup_path or 'database_backups'
 single_user_backup_dir: Union[str, bytes] = os.environ.get('DB_BACKUP_DIR', single_user_backup_path)
 single_user_chacha_path: str = single_user_config.get('Database', 'chacha_path', fallback='Databases/ChaChaNotes.db')
+single_user_workflows_path: str = single_user_config.get('Database', 'workflows_path', fallback='Databases/workflows.db')
 
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
@@ -117,6 +120,48 @@ def create_chacha_database(
         client_id=client_id,
         backend=backend_to_use,
         config=cfg,
+    )
+
+
+def create_prompt_studio_database(
+    client_id: str,
+    *,
+    db_path: Union[str, Path],
+    backend: Optional[DatabaseBackend] = None,
+    config: Optional[configparser.ConfigParser] = None,
+) -> PromptStudioDatabase:
+    """Factory for Prompt Studio databases with backend-aware wiring."""
+
+    target_path = Path(db_path)
+    backend_to_use = backend or _CONTENT_DB_BACKEND
+    cfg = config or single_user_config
+
+    return PromptStudioDatabase(
+        db_path=str(target_path),
+        client_id=client_id,
+        backend=backend_to_use,
+        config=cfg,
+    )
+
+
+def create_workflows_database(
+    *,
+    db_path: Union[str, Path, None] = None,
+    backend: Optional[DatabaseBackend] = None,
+) -> WorkflowsDatabase:
+    """Factory for Workflow database instances with backend-aware wiring."""
+
+    target_path = Path(db_path) if db_path else Path(single_user_workflows_path)
+    backend_to_use = backend or _CONTENT_DB_BACKEND
+
+    # Only pass backend through when it is a PostgreSQL adapter; SQLite continues to
+    # rely on the local file connection for compatibility with existing tests.
+    if backend_to_use and backend_to_use.backend_type != BackendType.POSTGRESQL:
+        backend_to_use = None
+
+    return WorkflowsDatabase(
+        db_path=str(target_path),
+        backend=backend_to_use,
     )
 
 

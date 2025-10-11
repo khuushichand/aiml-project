@@ -155,6 +155,18 @@ class UnifiedRAGRequest(BaseModel):
         example=["python", "api"]
     )
     
+    # Explicit selection of items per source
+    include_media_ids: Optional[List[int]] = Field(
+        default=None,
+        description="Restrict search to these Media DB item IDs",
+        example=[1, 2, 3]
+    )
+    include_note_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Restrict search to these Note IDs (ChaChaNotes UUIDs)",
+        example=["a1b2c3-uuid", "d4e5f6-uuid"]
+    )
+    
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = Field(
         default=False,
@@ -197,6 +209,37 @@ class UnifiedRAGRequest(BaseModel):
         default="markdown",
         description="Table serialization method",
         example="markdown"
+    )
+
+    # ========== VLM LATE CHUNKING ==========
+    enable_vlm_late_chunking: bool = Field(
+        default=False,
+        description="Enable late VLM chunking on retrieved documents (media_db PDFs)",
+        example=False
+    )
+    vlm_backend: Optional[str] = Field(
+        default=None,
+        description="VLM backend name (e.g., 'hf_table_transformer', 'docling')",
+        example="hf_table_transformer"
+    )
+    vlm_detect_tables_only: bool = Field(
+        default=True,
+        description="When true, keep only table detections; otherwise include images/figures as 'vlm'",
+        example=True
+    )
+    vlm_max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Max pages per document to process with VLM",
+        example=3
+    )
+    vlm_late_chunk_top_k_docs: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Number of top retrieved documents to apply VLM late-chunking to",
+        example=3
     )
     
     # ========== CHUNKING & CONTEXT ==========
@@ -737,6 +780,12 @@ class UnifiedBatchRequest(BaseModel):
     # Document Processing
     enable_table_processing: bool = Field(default=False)
     table_method: Literal["markdown", "html", "hybrid"] = Field(default="markdown")
+    # VLM late chunking
+    enable_vlm_late_chunking: bool = Field(default=False)
+    vlm_backend: Optional[str] = Field(default=None)
+    vlm_detect_tables_only: bool = Field(default=True)
+    vlm_max_pages: Optional[int] = Field(default=None, ge=1, le=1000)
+    vlm_late_chunk_top_k_docs: int = Field(default=3, ge=1, le=50)
     
     # Chunking & Context
     enable_enhanced_chunking: bool = Field(default=False)

@@ -97,30 +97,27 @@ save_video_transcripts = True
 save_character_chats = False
 save_rag_chats = False
 
-
 [Prompts]
 prompt_sample = "What is the meaning of life?"
 video_summarize_prompt = "Above is the transcript of a video. Please read through the transcript carefully. Identify the main topics that are discussed over the course of the transcript. Then, summarize the key points about each main topic in bullet points. The bullet points should cover the key information conveyed about each topic in the video, but should be much shorter than the full transcript. Please output your bullet point summary inside <bulletpoints> tags. Do not repeat yourself while writing the summary."
-
 
 [Database]
 # NOTE: This section configures the CONTENT/MEDIA databases (not AuthNZ).
 # AuthNZ/User DB is configured via the `DATABASE_URL` environment variable and supports PostgreSQL
 # (recommended for multi-user) and SQLite (dev/local). This section below controls the media/notes/characters/chat DBs.
 #
-# Content DB backend type: supported values are 'sqlite', 'postgresql', 'elasticsearch'.
+# Content DB backend type: supported values are 'sqlite', 'postgresql' & 'elasticsearch'(WIP).
 # Set to 'postgresql' to store all content (media + notes/characters) in a PostgreSQL instance.
 type = sqlite
-
 # SQLite configuration
 sqlite_path = Databases/server_media_summary.db
 sqlite_wal_mode = true
 sqlite_foreign_keys = true
-
+#
 # Backups
 backup_path = ./tldw_DB_Backups/
 # Path to the backup location for the database. If the path does not exist, the backup will not be created.
-
+#
 # PostgreSQL configuration (used when type = postgresql)
 pg_connection_string =
 pg_host = localhost
@@ -132,32 +129,29 @@ pg_sslmode = prefer
 pg_pool_size = 20
 pg_max_overflow = 40
 pg_pool_timeout = 30.0
-
-# Elasticsearch Configuration (Alternative search backend)
+#
+# elasticsearch options
 elasticsearch_host = localhost
 elasticsearch_port = 9200
-# Additionally you can use elasticsearch as the database type, just replace `sqlite` with `elasticsearch` for `type` and provide the `elasticsearch_host` and `elasticsearch_port` of your configured ES instance.
 chroma_db_path = Databases/chroma_db
 prompts_db_path = Databases/prompts.db
 rag_qa_db_path = Databases/RAG_QA_Chat.db
 character_db_path = Databases/chatDB.db
 
-
 [Chunking]
 # Chunking Defaults
 `chunking_method` = words
-# 'method' Can be 'words' / 'sentences' / 'paragraphs' / 'semantic' / 'tokens'
+# 'method' Can be 'words' / 'sentences' / 'paragraphs' / 'semantic' / 'tokens' / 'json' + more, see docs
 chunk_max_size = 400
 chunk_overlap = 200
-adaptive_chunking = false
 # Use ntlk+punkt to split text into sentences and then ID average sentence length and set that as the chunk size
+adaptive_chunking = false
 chunking_multi_level = false
 language = english
 # Contextual Retrieval Settings
 enable_contextual_retrieval = false
-# When enabled, adds LLM-generated context to chunks for better retrieval
 context_window_size = 500
-# Size of context window around chunks (in characters). The [Embeddings] section can
+# When enabled, adds LLM-generated context to chunks for better retrieval
 # override this or force full-document context by default.
 include_parent_context = false
 # Include parent document context when retrieving chunks
@@ -245,13 +239,13 @@ video_chunking_multi_level = false
 video_language = english
 chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
 
-
 [AuthNZ]
 # Optional: configure authentication and AuthNZ DB via config.txt.
 # Environment variables still take precedence.
 #
 # Authentication mode: single_user (API key) or multi_user (JWT)
 auth_mode = single_user
+# FIXME
 # AuthNZ database can be configured in two ways (environment still wins):
 #   A) Provide a full URL (recommended):
 #      database_url = sqlite:///./Databases/users.db
@@ -274,10 +268,12 @@ database_url = sqlite:///./Databases/users.db
 # Registration controls
 enable_registration = true
 require_registration_code = false
+#
 # Rate limits (Auth endpoints)
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10
+#
 # Token lifetimes
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
@@ -286,8 +282,8 @@ refresh_token_expire_days = 7
 
 
 [Embeddings]
-embedding_provider = openai
-embedding_model = text-embedding-3-small
+embedding_provider = huggingface
+embedding_model = Qwen/Qwen3-Embedding-0.6B
 onnx_model_path = ./App_Function_Libraries/models/onnx_models/
 model_dir = ./App_Function_Libraries/models/embedding_models
 embedding_api_url = http://localhost:8080/v1/embeddings
@@ -296,6 +292,7 @@ chunk_size = 400
 overlap = 200
 # 'embedding_provider' Can be 'openai', 'local', or 'huggingface'
 # `embedding_model` Set to the model name you want to use for embeddings. For OpenAI, this can be 'text-embedding-3-small', or 'text-embedding-3-large'.
+#
 # Contextual Chunking Settings
 enable_contextual_chunking = false
 # When enabled, uses LLM to add contextual information to each chunk before embedding
@@ -311,7 +308,6 @@ context_strategy = auto
 #   outline_window -> always use per-chunk window and prepend a one-time document outline
 context_token_budget = 6000
 # Approximate token budget used by 'auto' strategy (heuristic len(text)/4)
-
 # Note: The prompts used for contextualization and outline generation are stored in
 #       tldw_Server_API/Config_Files/Prompts/embeddings.prompts.yaml (or .md). You can
 #       edit them without changing code.
@@ -323,7 +319,7 @@ CLAIM_EXTRACTOR_MODE = heuristic
 CLAIMS_MAX_PER_CHUNK = 3
 CLAIMS_EMBED = false
 CLAIMS_EMBED_MODEL_ID = ""
-
+#
 # Claims extraction via LLM: choose a provider for local or remote use
 # Set CLAIM_EXTRACTOR_MODE to 'llm' or directly to a provider name below
 # Supported providers include: openai, anthropic, cohere, google, groq, huggingface,
@@ -333,10 +329,10 @@ CLAIMS_EMBED_MODEL_ID = ""
 CLAIMS_LLM_PROVIDER = ollama
 # Optional temperature for the LLM claim extractor (float)
 CLAIMS_LLM_TEMPERATURE = 0.1
+CLAIMS_LLM_MODEL =
 # Optional specific model override for claims extraction (per provider)
 # Examples: openai: gpt-4o-mini, google: gemini-2.0-pro-exp, llama.cpp: your-model
-CLAIMS_LLM_MODEL = 
-
+#
 # Background claims rebuild worker (default off)
 CLAIMS_REBUILD_ENABLED = false
 CLAIMS_REBUILD_INTERVAL_SEC = 3600
@@ -350,8 +346,7 @@ contextual_chunk_method = situate_context
 # huggingface: model = dunzhang/stella_en_400M_v5
 # Trusted Model Definitions
 trusted_hf_remote_code_models = NovaSearch/stella_en_400M_v5, BAAI/bge
-
-
+#
 # Resource Management Settings
 max_models_in_memory = 3
 # Maximum number of embedding models to keep loaded in memory simultaneously
@@ -360,7 +355,6 @@ max_model_memory_gb = 8
 model_lru_ttl_seconds = 3600
 # Time to keep unused models in memory before eviction (in seconds, default 1 hour)
 
-
 [RAG]
 # RAG (Retrieval-Augmented Generation) Settings
 vector_store_type = chromadb
@@ -368,24 +362,22 @@ vector_store_type = chromadb
 enable_parent_expansion = false
 # When enabled, expands retrieved chunks with parent document context
 parent_expansion_size = 500
-# Size of parent context to include (in characters)
 include_sibling_chunks = false
 # Number of sibling chunks to include on each side of a selected chunk
 sibling_window = 1
-
 # Include the full parent document for each selected chunk if it is below a token threshold
 include_parent_document = false
 # Approximate token threshold for including parent documents (len(text)/4 heuristic)
 parent_max_tokens = 1200
-
+#
 # Default LLM to use for lightweight RAG tasks (query expansion, gap analysis)
 default_llm_provider = openai
 default_llm_model = gpt-4o-mini
-
+#
 # HyDE defaults (provider/model used to generate hypothetical answers)
 hyde_provider = openai
 hyde_model = gpt-4o-mini
-
+#
 # Enable enhanced chunking in unified pipeline (sentence-based)
 # Include adjacent chunks from the same document for continuity
 # Performance Settings
@@ -393,24 +385,41 @@ semantic_cache_enabled = true
 # Enable semantic caching for faster repeated queries
 cache_similarity_threshold = 0.85
 # Similarity threshold for cache hits (0-1)
+#
 # Reranking Settings
 enable_reranking = true
 # Enable document reranking for better relevance
 rerank_top_k = 10
 # Number of documents to keep after reranking
-
+#
 # LLM-Based Reranking (LLM_SCORING)
 # Configure the provider and model to use if you select reranking strategy 'llm_scoring'.
 # If no model is set here, the pipeline will automatically fall back to 'flashrank'.
 llm_reranker_provider = openai
-llm_reranker_model =
-
+llm_reranker_model = 
+; llama.cpp (GGUF) reranker options (optional)
+; If set, enable_reranking with reranking_strategy=llama_cpp will use these
+llama_reranker_binary = llama-embedding
+llama_reranker_model = 
+llama_reranker_ngl = 0
+llama_reranker_separator = <#sep#>
+llama_reranker_output = json+
+llama_reranker_pooling = last
+llama_reranker_normalize = -1
+llama_reranker_max_doc_chars = 2000
+; Template/prefix handling for instruct-style embedding models (auto|bge|jina|none)
+llama_reranker_template_mode = auto
+; Optional explicit prefixes (for BGE-style instruct)
+; llama_reranker_query_prefix = query: 
+; llama_reranker_doc_prefix = passage: 
+; Transformers cross-encoder reranker default model (e.g., BAAI/bge-reranker-v2-m3)
+transformers_reranker_model = 
 
 [API]
 # Note: All API keys have been moved to .env file for security
 # See .env.template for configuration instructions
 anthropic_model = claude-opus-4-20250514
-# Model Options: claude-sonnet-4-20250514, claude-3-7-sonnet-20250219, claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-5-sonnet-20240620, claude-3-haiku-20240307, claude-3-opus-20240229, claude-3-sonnet-20240229, claude-2.1, claude-2.0
+# Model Options: fixme
 anthropic_streaming = True
 anthropic_temperature = 0.7
 anthropic_top_p = 0.95
@@ -450,7 +459,7 @@ qwen_api_retry_delay = 1
 qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 #
 # Available Model Options:
-google_model = gemini-2.5-flash-preview-05-20
+google_model = gemini-2.5-flash
 # Model Options: gemini-2.5-pro-preview-05-06, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro
 google_streaming = True
 google_temperature = 0.7
@@ -466,9 +475,10 @@ groq_temperature = 0.7
 groq_max_tokens = 4096
 groq_api_timeout = 90
 groq_api_retry = 3
-groq_api_retry_delay = 1
 #
 # Set to true if targeting router.huggingface.co
+groq_api_retry_delay = 1
+
 huggingface_use_router_url_format = false
 # Default router base
 huggingface_router_base_url = https://router.huggingface.co/hf-inference/models
@@ -501,7 +511,6 @@ openai_api_timeout = 90
 openai_api_retry = 3
 openai_api_retry_delay = 1
 model_for_summarization = gpt-4o
-#
 openrouter_model = openai/gpt-4o-mini
 # Sample Model options:  anthropic/claude-3.7-sonnet, google/gemini-2.0-flash-001, google/gemini-2.5-pro-preview, google/gemini-2.5-flash-preview, deepseek/deepseek-chat-v3-0324:free, deepseek/deepseek-chat-v3-0324, openai/gpt-4.1, anthropic/claude-sonnet-4, deepseek/deepseek-r1:free, anthropic/claude-3.7-sonnet:thinking, google/gemini-flash-1.5-8b, mistralai/mistral-nemo, google/gemini-2.5-flash-preview-05-20
 openrouter_max_tokens = 4096
@@ -519,7 +528,6 @@ custom_openai_api_max_tokens = 4096
 custom_openai_api_timeout = 90
 custom_openai_api__api_retry = 3
 custom_openai_api__api_retry_delay = 1
-
 #
 # Custom OpenAI-compatible endpoint #2 (set API key in .env)
 custom_openai2_api_model = <model_name_here>
@@ -531,7 +539,6 @@ custom_openai2_api_max_tokens = 4096
 custom_openai2_api_timeout = 90
 custom_openai2_api_api_retry = 3
 custom_openai2_api_api_retry_delay = 1
-
 #
 default_api = openai
 default_api_for_tasks = anthropic
@@ -582,7 +589,7 @@ tabby_api_retry = 3
 tabby_api_retry_delay = 1
 #
 vllm_api_IP = http://127.0.0.1:8000/v1/chat/completions
-vllm_model =
+vllm_model = 
 vllm_streaming = False
 vllm_temperature = 0.7
 vllm_top_p = 0.9
@@ -608,7 +615,7 @@ aphrodite_streaming = False
 aphrodite_temperature = 0.7
 aphrodite_top_p = 0.9
 aphrodite_min_p = 0.05
-aphrodite_model =
+aphrodite_model = 
 aprhodite_max_tokens = 4096
 aphrodite_api_timeout = 90
 aphrodite_api_retry = 3
@@ -623,7 +630,6 @@ temperature = 0.7
 top_p = 0.9
 min_p = 0.05
 # https://artefact2.github.io/llm-sampling/
-
 
 [STT-Settings]
 # Speech-to-Text Settings
@@ -641,11 +647,9 @@ nemo_overlap_duration = 15
 # Overlap between chunks in seconds for context
 streaming_fallback_to_whisper = false
 # If true, automatically fall back to Whisper when requested streaming STT model is unavailable
-
 # MLX optimal settings (for Apple Silicon)
 mlx_chunk_duration = 30.0
 mlx_overlap_duration = 5.0
-
 # Buffered transcription for long audio
 buffered_chunk_duration = 20.0
 buffered_total_buffer = 25.0
@@ -666,13 +670,13 @@ buffered_merge_algo = lcs
 # verify_ssl = true
 # response_format = json
 # temperature = 0.0
-# language = 
-# prompt = 
+# language =
+# prompt =
 
 # Additional provider example for a local server:
 # [external_providers.local]
 # base_url = http://localhost:8080/v1/audio/transcriptions
-# api_key = 
+# api_key =
 # model = local-whisper
 # timeout = 60
 # max_retries = 2
@@ -698,14 +702,14 @@ default_openai_tts_streaming = False
 #
 # ElevenLabs TTS Settings
 default_eleven_tts_voice = pNInz6obpgDQGcFmaJgB
-default_eleven_tts_model =
-default_eleven_tts_language_code =
-default_eleven_tts_voice_stability =
-default_eleven_tts_voice_similiarity_boost =
-default_eleven_tts_voice_style =
-default_eleven_tts_voice_use_speaker_boost =
-default_eleven_tts_voice_pronunciation_dictionary_locators_dict_id =
-default_eleven_tts_voice_pronunciation_dictionary_locators_version_id =
+default_eleven_tts_model = 
+default_eleven_tts_language_code = 
+default_eleven_tts_voice_stability = 
+default_eleven_tts_voice_similiarity_boost = 
+default_eleven_tts_voice_style = 
+default_eleven_tts_voice_use_speaker_boost = 
+default_eleven_tts_voice_pronunciation_dictionary_locators_dict_id = 
+default_eleven_tts_voice_pronunciation_dictionary_locators_version_id = 
 default_eleven_tts_speed = 1
 # Output options: 'mp3_22050_32', 'mp3_44100_32', 'mp3_44100_64', 'mp3_44100_96', 'mp3_44100_128', 'mp3_44100_192', 'pcm_16000', 'pcm_22050', 'pcm_24000', 'pcm_44100', 'ulaw_8000'
 default_eleven_tts_output_format = mp3_44100_128
@@ -783,7 +787,6 @@ vibevoice_model_dir = ./models/vibevoice
 vibevoice_cache_dir = ./cache/vibevoice
 vibevoice_voices_dir = ./voices
 
-
 [Search-Engines]
 # Search Defaults
 search_provider_default = google
@@ -808,11 +811,6 @@ final_answer_llm = openai
 # Baidu
 search_engine_api_key_baidu = 1e1b1b1b1b1b1b1b1
 #
-# Bing
-search_engine_api_url_bing = https://api.bing.microsoft.com/v7.0/search
-search_engine_api_key_bing = <bing_api_key>
-search_engine_country_code_bing = en
-#
 # Brave
 search_engine_api_key_brave_regular = <brave_api_key>
 search_engine_api_key_brave_ai = <brave_ai_api_key>
@@ -820,8 +818,7 @@ search_engine_country_code_brave = US
 #
 # DuckDuckGo
 #
-# Google
-search_engine_api_url_google = https://www.googleapis.com/customsearch/v1?
+# Googlesearch_engine_api_url_google = https://www.googleapis.com/customsearch/v1?
 search_engine_api_key_google = <google_api_key>
 search_engine_id_google = <google_search_engine_id>
 # 0 = Enable / 1 = Disabled
@@ -832,14 +829,14 @@ google_search_country_code = US
 google_filter_setting = 1
 google_user_geolocation = US
 google_ui_language = en
-google_limit_search_results_to_language =
-google_default_search_results =
+google_limit_search_results_to_language = 
+google_default_search_results = 
 google_safe_search = "active"
-google_enable_site_search =
-google_site_search_include =
+google_enable_site_search = 
+google_site_search_include = 
 google_site_search_exclude =
 # https://developers.google.com/custom-search/docs/structured_search#sort-by-attribute
-google_sort_results_by =
+google_sort_results_by = 
 #
 # Kagi
 search_engine_api_key_kagi = <kagi_api_key>>
@@ -853,13 +850,14 @@ search_engine_api_key_yandex = 1e1b1b1b1b1b1b1b1
 search_engine_id_yandex = 1e1b1b1b1b1b1b1b1
 
 [Web-Scraper]
-web_scraper_api_key =
-web_scraper_api_url =
+web_scraper_api_key = 
+web_scraper_api_url = 
 web_scraper_api_timeout = 90
 web_scraper_api_retry = 3
 web_scraper_api_retry_delay = 1
 web_scraper_retry_count = 3
 web_scraper_stealth_playwright = False
+
 
 [Logging]
 log_level = INFO
@@ -872,51 +870,6 @@ backup_count = 5
 #int(os.getenv("tldw_LOG_BACKUP_COUNT", 5))
 
 
-#[Comments]
-#OpenAI Models:
-#    gpt-4o
-#    gpt-4o-2024-08-06
-#    gpt-4o-mini
-#    o1-preview
-#    o1-mini
-#    text-embedding-3-large
-#    text-embedding-3-small
-#
-#Anthropic Models:
-#    claude-3-5-sonnet-20241022
-#    claude-3-5-sonnet-20240620
-#    claude-3-5-haiku-20241022
-#    claude-3-opus-20240229
-#
-#Cohere Models:
-#    command-r-plus-08-2024
-#    command-r-plus-04-2024
-#    command-r-08-2024
-#    command-r-03-2024
-#
-#DeepSeek Models:
-#    deepseek-chat
-#
-#Groq Models:
-#    f
-#Mistral Models:
-#    mistral-large-latest
-#    open-mistral-nemo
-#    codestral-latest
-#    mistral-embed
-#    open-mistral-7b
-#    open-mixtral-8x7b
-#    open-mixtral-8x22b
-#    open-codestral-mamba
-# Google's Models (11/15/2024): https://ai.google.dev/gemini-api/docs/models/gemini
-#   gemini-1.5-pro
-#   gemini-1.5-pro-2
-#   LearnLM
-#   gemini-1.5-flash
-#   gemini-1.5-flash-8b
-#   aqa
-#   text-embedding-004
-
 [Redis]
 # Redis cache configuration
 redis_enabled = False
@@ -924,6 +877,7 @@ redis_host = localhost
 redis_port = 6379
 redis_db = 0
 cache_ttl = 300
+
 
 [Web-Scraping]
 # Web scraping timeouts and delays

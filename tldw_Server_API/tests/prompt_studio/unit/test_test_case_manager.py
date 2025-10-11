@@ -68,29 +68,20 @@ class TestTestCaseManager:
     def mock_db(self):
         """Create a mock database."""
         mock = Mock()
-        # Setup a proper mock connection and cursor
-        mock_cursor = Mock()
-        mock_cursor.description = [('id',), ('name',), ('inputs',), ('expected_outputs',), ('tags',), ('is_golden',)]
-        mock_conn = Mock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock.get_connection.return_value = mock_conn
         mock.client_id = "test-client"
-        
-        # Mock row_to_dict to return proper dictionary
-        def row_to_dict(row, cursor):
-            if row:
-                return {
-                    'id': 1,
-                    'name': 'Test Case',
-                    'inputs': '{"input": "test"}',
-                    'expected_outputs': '{"output": "test"}',
-                    'tags': 'tag1,tag2',
-                    'is_golden': 0,
-                    'description': 'Test description',
-                    'metadata': '{}'
-                }
-            return None
-        mock.row_to_dict = row_to_dict
+        mock.get_connection = Mock()
+
+        # Default method stubs
+        mock.create_test_case = Mock()
+        mock.get_test_case = Mock(return_value=None)
+        mock.list_test_cases = Mock(return_value=[])
+        mock.update_test_case = Mock()
+        mock.delete_test_case = Mock(return_value=True)
+        mock.create_bulk_test_cases = Mock(return_value=[])
+        mock.search_test_cases = Mock(return_value=[])
+        mock.get_test_cases_by_signature = Mock(return_value=[])
+        mock.get_test_case_stats = Mock(return_value={})
+        mock.get_golden_test_cases = Mock(return_value=[])
         return mock
     
     @pytest.fixture
@@ -107,36 +98,40 @@ class TestTestCaseManager:
     
     def test_create_test_case(self, manager, mock_db):
         """Test creating a test case."""
-        mock_db.get_connection.return_value.cursor.return_value.lastrowid = 1
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = None
-        
-        # Mock the get_test_case method to return a TestCase object
-        created_test = TestCase(
-            id="1",
+        mock_db.create_test_case.return_value = {
+            "id": 1,
+            "name": "New Test",
+            "description": "Test description",
+            "inputs": {"input": "data"},
+            "expected_outputs": {"output": "expected"},
+            "tags": [],
+        }
+
+        test_case = manager.create_test_case(
+            project_id=1,
             name="New Test",
             description="Test description",
             inputs={"input": "data"},
             expected_outputs={"output": "expected"}
         )
-        
-        with patch.object(manager, 'get_test_case', return_value=created_test):
-            test_case = manager.create_test_case(
-                project_id=1,
-                name="New Test",
-                description="Test description",
-                inputs={"input": "data"},
-                expected_outputs={"output": "expected"}
-            )
-            
-            assert test_case.name == "New Test"
-            assert test_case.inputs == {"input": "data"}
-            assert mock_db.get_connection.called
+
+        mock_db.create_test_case.assert_called_once_with(
+            1,
+            "New Test",
+            inputs={"input": "data"},
+            description="Test description",
+            expected_outputs={"output": "expected"},
+            tags=None,
+            is_golden=False,
+            signature_id=None,
+            client_id=manager.client_id,
+        )
+        assert test_case["name"] == "New Test"
     
     def test_create_duplicate_test_case(self, manager, mock_db):
         """Test creating duplicate test case raises error."""
-        # Mock that a test case with same name exists
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = (1,)
-        
+        mock_db.create_test_case.side_effect = ConflictError("duplicate")
+
         with pytest.raises(ConflictError):
             manager.create_test_case(
                 project_id=1,
@@ -148,12 +143,6 @@ class TestTestCaseManager:
     
     def test_get_test_case(self, manager, mock_db):
         """Test getting a test case."""
-        # Mock row as tuple (how sqlite returns it)
-        mock_row = (1, "test-uuid", 1, "Test Case", "Description", 
-                   '{"input": "value"}', '{"output": "result"}', 
-                   'tag1', 1, '{}', None, None, None, None)
-        
-        # Mock the dict conversion
         mock_test_case = {
             "id": 1,
             "uuid": "test-uuid",
@@ -167,116 +156,108 @@ class TestTestCaseManager:
             "metadata": {}
         }
         
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = mock_row
-        mock_db._row_to_dict.return_value = mock_test_case
+        mock_db.get_test_case.return_value = mock_test_case
         
         test_case = manager.get_test_case(1)
         
         assert test_case is not None
         assert test_case["name"] == "Test Case"
-        assert mock_db.get_connection.called
+        mock_db.get_test_case.assert_called_once_with(1, include_deleted=False)
     
     def test_get_nonexistent_test_case(self, manager, mock_db):
         """Test getting non-existent test case returns None."""
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = None
-        
+        mock_db.get_test_case.return_value = None
         test_case = manager.get_test_case(999)
         assert test_case is None
     
     def test_list_test_cases(self, manager, mock_db):
         """Test listing test cases for a project."""
-        # Mock rows as tuples (how sqlite returns them)
-        mock_rows = [
-            (1, "uuid-1", 1, "Test 1", "Desc 1", '{}', '{}', '', 0, '{}', None, None, None, None),
-            (2, "uuid-2", 1, "Test 2", "Desc 2", '{}', '{}', '', 1, '{}', None, None, None, None)
+        mock_db.list_test_cases.return_value = [
+            {"id": 1, "name": "Test 1", "is_golden": 0},
+            {"id": 2, "name": "Test 2", "is_golden": 1},
         ]
-        mock_db.get_connection.return_value.cursor.return_value.fetchall.return_value = mock_rows
-        
-        # Mock count query
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = (2,)
-        
-        # Mock the dict conversion
-        def mock_row_to_dict(cursor, row):
-            # Return a dict based on row index
-            if row[0] == 1:
-                return {"id": 1, "name": "Test 1", "tags": None}
-            else:
-                return {"id": 2, "name": "Test 2", "tags": None}
-        
-        mock_db._row_to_dict.side_effect = mock_row_to_dict
-        
+
         test_cases = manager.list_test_cases(project_id=1)
-        
+
+        mock_db.list_test_cases.assert_called_once_with(
+            1,
+            signature_id=None,
+            is_golden=None,
+            tags=None,
+            search=None,
+            include_deleted=False,
+            page=1,
+            per_page=20,
+            return_pagination=False,
+        )
         assert len(test_cases) == 2
         assert test_cases[0]["name"] == "Test 1"
-        assert test_cases[1]["name"] == "Test 2"
         assert test_cases[1]["is_golden"] == 1
+
+        mock_db.list_test_cases.reset_mock()
     
     def test_list_golden_test_cases(self, manager, mock_db):
         """Test listing only golden test cases."""
-        # Mock row as tuple
-        mock_rows = [
-            (1, "uuid-1", 1, "Golden 1", "Desc", '{}', '{}', '', 1, '{}', None, None, None, None)
+        mock_db.list_test_cases.return_value = [
+            {"id": 1, "name": "Golden 1", "is_golden": 1}
         ]
-        mock_db.get_connection.return_value.cursor.return_value.fetchall.return_value = mock_rows
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = (1,)
-        mock_db._row_to_dict.return_value = {"id": 1, "name": "Golden 1", "is_golden": 1, "tags": None}
-        
+
         golden_cases = manager.list_test_cases(project_id=1, is_golden=True)
-        
+
+        mock_db.list_test_cases.assert_called_with(
+            1,
+            signature_id=None,
+            is_golden=True,
+            tags=None,
+            search=None,
+            include_deleted=False,
+            page=1,
+            per_page=20,
+            return_pagination=False,
+        )
         assert len(golden_cases) == 1
         assert golden_cases[0]["is_golden"] == 1
     
     def test_update_test_case(self, manager, mock_db):
         """Test updating a test case."""
-        # Mock existing test case
-        mock_row = {
+        mock_db.update_test_case.return_value = {
             "id": 1,
-            "uuid": "uuid-1",
-            "project_id": 1,
-            "name": "Old Name",
-            "description": "Old Desc"
+            "name": "New Name",
+            "description": "New Description",
         }
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = mock_row
-        mock_db.row_to_dict.return_value = mock_row
-        
-        # Mock the actual update_test_case method since it has a different signature
-        with patch.object(manager, 'update_test_case', return_value=True):
-            updated = manager.update_test_case(
-                test_case_id=1,
-                updates={"name": "New Name", "description": "New Description"}
-            )
-            
-            assert updated is True
+
+        updated = manager.update_test_case(
+            test_case_id=1,
+            updates={"name": "New Name", "description": "New Description"}
+        )
+
+        mock_db.update_test_case.assert_called_once_with(1, {"name": "New Name", "description": "New Description"})
+        assert updated["name"] == "New Name"
     
     def test_update_nonexistent_test_case(self, manager, mock_db):
         """Test updating non-existent test case."""
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = None
-        
-        # Mock the update_test_case method
-        with patch.object(manager, 'update_test_case', return_value=False):
-            updated = manager.update_test_case(
+        mock_db.update_test_case.side_effect = InputError("not found")
+
+        with pytest.raises(InputError):
+            manager.update_test_case(
                 test_case_id=999,
                 updates={"name": "New Name"}
             )
-            
-            assert updated is False
     
     def test_delete_test_case(self, manager, mock_db):
         """Test deleting a test case."""
-        mock_db.get_connection.return_value.cursor.return_value.rowcount = 1
-        
+        mock_db.delete_test_case.return_value = True
+
         deleted = manager.delete_test_case(1)
-        
+
+        mock_db.delete_test_case.assert_called_once_with(1, hard_delete=False)
         assert deleted is True
-        assert mock_db.get_connection.called
     
     def test_delete_nonexistent_test_case(self, manager, mock_db):
         """Test deleting non-existent test case."""
-        mock_db.get_connection.return_value.cursor.return_value.rowcount = 0
-        
+        mock_db.delete_test_case.return_value = False
+
         deleted = manager.delete_test_case(999)
-        
         assert deleted is False
     
     def test_run_test_case(self, manager, mock_db):
@@ -444,9 +425,6 @@ class TestTestCaseManager:
             }
         ])
         
-        mock_db.get_connection.return_value.cursor.return_value.fetchone.return_value = None
-        mock_db.get_connection.return_value.cursor.return_value.lastrowid = 1
-        
         # Mock the import_test_cases method
         imported_cases = [
             TestCase(name="Imported1", inputs={"a": 1}, expected_outputs={"b": 2}, tags=["import"]),
@@ -589,12 +567,6 @@ class TestTestCaseManager:
     
     def test_load_test_results(self, manager, mock_db):
         """Test loading test results from database."""
-        mock_rows = [
-            (1, 'run-123', 'test-1', '{"y": 2}', 1, 1.0, None, '{}'),
-            (2, 'run-123', 'test-2', '{"y": 4}', 0, 1.5, 'Error', '{}'),
-        ]
-        mock_db.get_connection.return_value.cursor.return_value.fetchall.return_value = mock_rows
-        
         # Mock the load_results method
         manager.load_results = Mock(return_value=[
             TestResult("test-1", {"y": 2}, True, 1.0),
@@ -617,12 +589,13 @@ class TestErrorHandling:
     def manager(self):
         """Create manager with mock database."""
         mock_db = Mock()
+        mock_db.create_test_case = Mock()
         return TestCaseManager(mock_db)
-    
+
     def test_database_error_handling(self, manager):
         """Test handling database errors."""
-        manager.db.get_connection.side_effect = DatabaseError("Connection failed")
-        
+        manager.db.create_test_case.side_effect = DatabaseError("Connection failed")
+
         with pytest.raises(DatabaseError):
             manager.create_test_case(
                 project_id=1,

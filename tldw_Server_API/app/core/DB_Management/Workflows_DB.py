@@ -17,12 +17,328 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from .backends.base import (
+    BackendType,
+    DatabaseBackend,
+    DatabaseError as BackendDatabaseError,
+    QueryResult,
+)
+from .backends.query_utils import (
+    prepare_backend_many_statement,
+    prepare_backend_statement,
+)
+
 
 DEFAULT_DB_PATH = Path("Databases") / "workflows.db"
 
 
+WORKFLOWS_POSTGRES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS workflows (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    owner_id TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'private',
+    description TEXT,
+    tags TEXT,
+    definition_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (tenant_id, name, version)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workflow_id INTEGER,
+    status TEXT NOT NULL,
+    status_reason TEXT,
+    user_id TEXT NOT NULL,
+    inputs_json TEXT NOT NULL,
+    outputs_json TEXT,
+    error TEXT,
+    duration_ms INTEGER,
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    definition_version INTEGER,
+    definition_snapshot_json TEXT,
+    idempotency_key TEXT,
+    session_id TEXT,
+    tokens_input INTEGER,
+    tokens_output INTEGER,
+    cost_usd DOUBLE PRECISION,
+    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_step_runs (
+    step_run_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    name TEXT,
+    type TEXT,
+    status TEXT,
+    attempt INTEGER DEFAULT 0,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    inputs_json TEXT,
+    outputs_json TEXT,
+    error TEXT,
+    decision TEXT,
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+    review_comment TEXT,
+    locked_by TEXT,
+    locked_at TIMESTAMPTZ,
+    lock_expires_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ,
+    pid INTEGER,
+    pgid INTEGER,
+    workdir TEXT,
+    stdout_path TEXT,
+    stderr_path TEXT,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_events (
+    event_id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    step_run_id TEXT,
+    event_seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    step_run_id TEXT,
+    type TEXT,
+    uri TEXT,
+    size_bytes BIGINT,
+    mime_type TEXT,
+    checksum_sha256 TEXT,
+    encryption TEXT,
+    owned_by TEXT,
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
+CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
+"""
+
+
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+
+class WorkflowRowAdapter:
+    """Row wrapper that mimics sqlite3.Row semantics for backend results."""
+
+    __slots__ = ("_mapping", "_columns")
+
+    def __init__(self, mapping: Dict[str, Any], columns: Tuple[str, ...]):
+        self._mapping = mapping
+        self._columns = columns
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            column = self._columns[key]
+            return self._mapping.get(column)
+        return self._mapping.get(key)
+
+    def __iter__(self):
+        return iter(self.items())
+
+    def items(self):
+        for column in self._columns:
+            yield column, self._mapping.get(column)
+
+    def keys(self) -> Tuple[str, ...]:
+        return self._columns
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._mapping.get(key, default)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self._mapping)
+
+
+class WorkflowsBackendCursorAdapter:
+    """Adapter that provides sqlite-like fetch methods for backend QueryResult."""
+
+    def __init__(self, result: QueryResult):
+        self._result = result
+        self._rows = self._build_rows(result)
+        self._index = 0
+        self.description = result.description or []
+
+    def _build_rows(self, result: QueryResult) -> List[WorkflowRowAdapter]:
+        rows: List[WorkflowRowAdapter] = []
+        columns: Tuple[str, ...] = tuple()
+        if result.description:
+            columns = tuple(desc[0] for desc in result.description if desc)
+        for mapping in result.rows:
+            mapping_dict = dict(mapping)
+            if not columns:
+                columns = tuple(mapping_dict.keys())
+            rows.append(WorkflowRowAdapter(mapping_dict, columns))
+        return rows
+
+    def fetchone(self) -> Optional[WorkflowRowAdapter]:
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchall(self) -> List[WorkflowRowAdapter]:
+        if self._index >= len(self._rows):
+            return []
+        rows = self._rows[self._index :]
+        self._index = len(self._rows)
+        return rows
+
+    def fetchmany(self, size: Optional[int] = None) -> List[WorkflowRowAdapter]:
+        if size is None or size <= 0:
+            size = len(self._rows) - self._index
+        rows = self._rows[self._index : self._index + size]
+        self._index += len(rows)
+        return rows
+
+    def close(self) -> None:
+        self._rows = []
+        self._index = 0
+
+
+class WorkflowsBackendCursor:
+    """Cursor wrapper that routes SQL through a DatabaseBackend."""
+
+    def __init__(self, db: 'WorkflowsDatabase'):
+        self._db = db
+        self._adapter: Optional[WorkflowsBackendCursorAdapter] = None
+        self.rowcount: int = -1
+        self.lastrowid: Optional[int] = None
+        self.description = None
+
+    def _requires_returning(self, query: str) -> bool:
+        stripped = query.lstrip().upper()
+        return stripped.startswith("INSERT")
+
+    def execute(self, query: str, params: Optional[Any] = None):
+        backend = self._db.backend
+        if backend is None:
+            raise RuntimeError("Backend cursor cannot execute without a backend instance")
+
+        ensure_returning = self._requires_returning(query)
+        prepared_query, prepared_params = prepare_backend_statement(
+            backend.backend_type,
+            query,
+            params,
+            apply_default_transform=True,
+            ensure_returning=ensure_returning,
+        )
+
+        conn = None
+        try:
+            conn = backend.get_pool().get_connection()
+            result = backend.execute(prepared_query, prepared_params, connection=conn)
+        finally:
+            if conn is not None:
+                backend.get_pool().return_connection(conn)
+
+        self._adapter = WorkflowsBackendCursorAdapter(result)
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+        return self
+
+    def executemany(self, query: str, params_list: List[Any]):
+        backend = self._db.backend
+        if backend is None:
+            raise RuntimeError("Backend cursor cannot execute without a backend instance")
+
+        prepared_query, prepared_params_list = prepare_backend_many_statement(
+            backend.backend_type,
+            query,
+            params_list,
+            apply_default_transform=True,
+        )
+
+        conn = None
+        try:
+            conn = backend.get_pool().get_connection()
+            result = backend.execute_many(prepared_query, prepared_params_list, connection=conn)
+        finally:
+            if conn is not None:
+                backend.get_pool().return_connection(conn)
+
+        self._adapter = WorkflowsBackendCursorAdapter(result)
+        self.rowcount = result.rowcount
+        self.lastrowid = result.lastrowid
+        self.description = result.description
+        return self
+
+    def fetchone(self):
+        if not self._adapter:
+            return None
+        return self._adapter.fetchone()
+
+    def fetchall(self):
+        if not self._adapter:
+            return []
+        return self._adapter.fetchall()
+
+    def fetchmany(self, size: Optional[int] = None):
+        if not self._adapter:
+            return []
+        return self._adapter.fetchmany(size)
+
+    def close(self) -> None:
+        if self._adapter:
+            self._adapter.close()
+        self._adapter = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self.description = None
+
+
+class WorkflowsBackendConnection:
+    """Connection shim exposing sqlite-style helpers for backend usage."""
+
+    def __init__(self, db: 'WorkflowsDatabase') -> None:
+        self._db = db
+        self.row_factory = None  # compatibility shim
+
+    def cursor(self) -> WorkflowsBackendCursor:
+        return WorkflowsBackendCursor(self._db)
+
+    def execute(self, query: str, params: Optional[Any] = None):
+        cursor = self.cursor()
+        return cursor.execute(query, params)
+
+    def executemany(self, query: str, params_list: List[Any]):
+        cursor = self.cursor()
+        return cursor.executemany(query, params_list)
+
+    def commit(self) -> None:  # pragma: no cover - compatibility
+        return None
+
+    def rollback(self) -> None:  # pragma: no cover - compatibility
+        return None
+
+    def close(self) -> None:  # pragma: no cover - compatibility
+        return None
 
 
 @dataclass
@@ -68,25 +384,42 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    """Lightweight SQLite adapter for workflows data."""
+    """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
-        # Honor DATABASE_URL_WORKFLOWS when pointing to SQLite; Postgres reserved for future
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        *,
+        backend: Optional[DatabaseBackend] = None,
+    ) -> None:
+        self.backend: Optional[DatabaseBackend] = None
+        self.backend_type: BackendType = BackendType.SQLITE
+
+        if backend and backend.backend_type == BackendType.POSTGRESQL:
+            self.backend = backend
+            self.backend_type = backend.backend_type
+            self.db_path = str(db_path or DEFAULT_DB_PATH)
+            self._conn = WorkflowsBackendConnection(self)
+            self._create_schema_backend()
+            logger.debug("Workflows DB initialized using %s backend", self.backend_type.value)
+            return
+
+        # Fallback to SQLite path (default behaviour)
         url = os.getenv("DATABASE_URL_WORKFLOWS", "").strip()
         if not db_path and url:
             if url.startswith("sqlite://"):
-                # sqlite:///./Databases/workflows.db or sqlite:////abs/path
                 path = url.split("sqlite://", 1)[1]
-                # Trim leading slashes for relative path formats
                 if path.startswith("/") and not path.startswith("//"):
-                    # keep absolute
                     resolved = path
                 else:
                     resolved = path.lstrip("/")
                 db_path = resolved or str(DEFAULT_DB_PATH)
             else:
-                # Unsupported driver for now
-                logger.warning("DATABASE_URL_WORKFLOWS is set but non-SQLite backends are not yet supported; falling back to SQLite")
+                logger.warning(
+                    "DATABASE_URL_WORKFLOWS=%s is not a supported SQLite URI; falling back to default path",
+                    url,
+                )
+
         self.db_path = str(db_path or DEFAULT_DB_PATH)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -101,6 +434,15 @@ class WorkflowsDatabase:
             self._conn.execute("PRAGMA synchronous=NORMAL;")
         except Exception as e:
             logger.warning(f"Failed to enable WAL on workflows DB: {e}")
+
+    def _create_schema_backend(self) -> None:
+        if not self.backend:
+            return
+        try:
+            self.backend.create_tables(WORKFLOWS_POSTGRES_SCHEMA)
+        except BackendDatabaseError as exc:
+            logger.error("Failed to initialise workflows schema on backend: %s", exc)
+            raise
 
     def _create_schema(self) -> None:
         cur = self._conn.cursor()

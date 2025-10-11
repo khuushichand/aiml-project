@@ -222,11 +222,11 @@ class MediaDBRetriever(BaseRetriever):
             # Branch on FTS level when FTS search is enabled
             try:
                 if self.config.use_fts and getattr(self.config, 'fts_level', 'media') == 'chunk':
-                    return self._retrieve_chunk_fts(query, media_type)
+                    return self._retrieve_chunk_fts(query, media_type, **kwargs)
             except Exception:
                 # Fall back gracefully to media-level
                 pass
-            return self._retrieve_via_backend(query, media_type)
+            return self._retrieve_via_backend(query, media_type, **kwargs)
 
         documents = []
 
@@ -291,7 +291,7 @@ class MediaDBRetriever(BaseRetriever):
         
         return documents
 
-    def _retrieve_chunk_fts(self, query: str, media_type: Optional[str]) -> List[Document]:
+    def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
         """Retrieve chunk-level matches using FTS5 over UnvectorizedMediaChunks.
 
         Requires SQLite backend. Creates the virtual table on demand (no-op if exists).
@@ -338,6 +338,13 @@ class MediaDBRetriever(BaseRetriever):
         if media_type:
             sql += " AND m.type = ?"
             params.append(media_type)
+
+        # Optional restriction to specific media IDs
+        allowed_media_ids = kwargs.get("allowed_media_ids")
+        if allowed_media_ids and isinstance(allowed_media_ids, (list, tuple)):
+            placeholders = ",".join(["?"] * len(allowed_media_ids))
+            sql += f" AND m.id IN ({placeholders})"
+            params.extend(list(allowed_media_ids))
 
         # Optional date filter against Media.ingestion_date
         if self.config.date_filter:
@@ -403,7 +410,7 @@ class MediaDBRetriever(BaseRetriever):
 
         return docs
 
-    def _retrieve_via_backend(self, query: str, media_type: Optional[str]) -> List[Document]:
+    def _retrieve_via_backend(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
         if self.media_db is None:
             return []
         date_range = None
@@ -413,11 +420,13 @@ class MediaDBRetriever(BaseRetriever):
         media_types = [media_type] if media_type else None
         sort_by = 'relevance' if self.config.use_fts else 'last_modified_desc'
         try:
+            allowed_media_ids = kwargs.get("allowed_media_ids")
             results, _total = self.media_db.search_media_db(
                 search_query=query,
                 search_fields=['title', 'content'],
                 media_types=media_types,
                 date_range=date_range,
+                media_ids_filter=list(allowed_media_ids) if allowed_media_ids else None,
                 sort_by=sort_by,
                 results_per_page=self.config.max_results,
                 page=1,
@@ -586,7 +595,16 @@ class MediaDBRetriever(BaseRetriever):
             
             # Convert to Document format
             documents = []
+            allowed_media_ids = kwargs.get("allowed_media_ids")
+            allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
             for result in results:
+                doc_media_id = result.metadata.get("media_id", result.id)
+                try:
+                    doc_media_id_int = int(str(doc_media_id))
+                except Exception:
+                    doc_media_id_int = None
+                if allowed_set is not None and (doc_media_id_int is None or doc_media_id_int not in allowed_set):
+                    continue
                 doc = Document(
                     id=result.metadata.get("media_id", result.id),
                     content=result.content,
@@ -761,7 +779,13 @@ class NotesDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """Retrieve from notes database."""
         if self.chacha_db is not None and not self.config.tags_filter:
-            return self._retrieve_via_chacha(query, notebook_id)
+            docs = self._retrieve_via_chacha(query, notebook_id)
+            # Optional restriction to specific note IDs
+            allowed_note_ids = kwargs.get("allowed_note_ids")
+            if allowed_note_ids and isinstance(allowed_note_ids, (list, tuple)):
+                allowed_set = set(str(x) for x in allowed_note_ids)
+                docs = [d for d in docs if str(d.id).replace("note_", "") in allowed_set]
+            return docs
 
         documents = []
 
@@ -1261,6 +1285,9 @@ class MultiDatabaseRetriever:
         sources: Optional[List[DataSource]] = None,
         config: Optional[RetrievalConfig] = None,
         index_namespace: Optional[str] = None,
+        # Optional per-source restrictions
+        allowed_media_ids: Optional[List[int]] = None,
+        allowed_note_ids: Optional[List[str]] = None,
     ) -> List[Document]:
         """
         Retrieve documents from one or more configured data sources.
@@ -1310,23 +1337,37 @@ class MultiDatabaseRetriever:
                 and getattr(config, "use_fts", False)
                 and hasattr(retr, "retrieve_hybrid")
             ):
-                tasks.append(retr.retrieve_hybrid(query=query, index_namespace=index_namespace))
+                tasks.append(retr.retrieve_hybrid(
+                    query=query,
+                    index_namespace=index_namespace,
+                    allowed_media_ids=allowed_media_ids,
+                ))
             elif (
                 isinstance(retr, MediaDBRetriever)
                 and config is not None
                 and getattr(config, "use_vector", False)
                 and hasattr(retr, "_retrieve_vector")
             ):
-                tasks.append(retr._retrieve_vector(query, index_namespace=index_namespace))
+                tasks.append(retr._retrieve_vector(
+                    query,
+                    index_namespace=index_namespace,
+                    allowed_media_ids=allowed_media_ids,
+                ))
             elif (
                 isinstance(retr, MediaDBRetriever)
                 and config is not None
                 and getattr(config, "use_fts", True)
                 and hasattr(retr, "_retrieve_fts")
             ):
-                tasks.append(retr._retrieve_fts(query))
+                tasks.append(retr._retrieve_fts(query, allowed_media_ids=allowed_media_ids))
             else:
-                tasks.append(retr.retrieve(query))
+                # Generic retrieve; pass through allowed IDs where applicable
+                if isinstance(retr, NotesDBRetriever):
+                    tasks.append(retr.retrieve(query, allowed_note_ids=allowed_note_ids))
+                elif isinstance(retr, MediaDBRetriever):
+                    tasks.append(retr.retrieve(query, allowed_media_ids=allowed_media_ids))
+                else:
+                    tasks.append(retr.retrieve(query))
 
         # Execute all retrievals concurrently
         if tasks:
