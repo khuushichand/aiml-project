@@ -140,13 +140,21 @@
                     <input id="vec_values" placeholder='[0.1, 0.2, ...]' style="margin-top:8px;">
                 </div>
                 <button class="api-button" onclick="vsUpsertVector()">Upsert Vector</button>
-                <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button class="api-button" onclick="vsListVectors()">List Vectors</button>
                     <label for="vs_limit" style="margin-left:8px;">Page Size:</label>
                     <input id="vs_limit" type="number" value="50" min="1" max="1000" style="width:80px;">
                     <button class="api-button" onclick="vsPrevPage()">Prev</button>
                     <button class="api-button" onclick="vsNextPage()">Next</button>
                     <span id="vs_page_info" style="color: var(--color-text-muted);"></span>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_filter">Filter (JSON):</label>
+                    <input id="vs_filter" placeholder='{"$and":[{"genre":"a"},{"score":{"$gte":0.8}}]}' style="min-width:360px; flex:1;">
+                    <label for="vs_order_by">Order By:</label>
+                    <input id="vs_order_by" placeholder='id or metadata.score' style="width:200px;">
+                    <label for="vs_order_dir">Dir:</label>
+                    <select id="vs_order_dir"><option>asc</option><option>desc</option></select>
                 </div>
                 <button class="api-button" onclick="vsQuery()">Query</button>
                 <div class="form-group" style="margin-top:12px;">
@@ -164,6 +172,35 @@
                 <h4>Result</h4>
                 <pre id="vs_result">---</pre>
                 <div id="vs_vector_list"></div>
+            </div>
+        </div>
+        <hr>
+        <h3>Admin (Index & Tuning)</h3>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_admin_id">Store ID:</label>
+                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;">
+                    <button class="api-button" onclick="vsAdminIndexInfo()">Index Info</button>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                    <label for="vs_ef_search">ef_search:</label>
+                    <input id="vs_ef_search" type="number" value="64" min="1" style="width:120px;">
+                    <button class="api-button" onclick="vsAdminSetEfSearch()">Set ef_search</button>
+                </div>
+                <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label for="vs_index_type">Index Type:</label>
+                    <select id="vs_index_type"><option>hnsw</option><option>ivfflat</option><option>drop</option></select>
+                    <label for="vs_index_metric">Metric:</label>
+                    <select id="vs_index_metric"><option>cosine</option><option>euclidean</option><option>ip</option></select>
+                    <label for="vs_index_m">M:</label>
+                    <input id="vs_index_m" type="number" value="16" min="2" style="width:100px;">
+                    <label for="vs_index_efc">ef_construction:</label>
+                    <input id="vs_index_efc" type="number" value="200" min="1" style="width:120px;">
+                    <label for="vs_index_lists">lists (IVF):</label>
+                    <input id="vs_index_lists" type="number" value="100" min="1" style="width:100px;">
+                    <button class="api-button" onclick="vsAdminRebuildIndex()">Rebuild Index</button>
+                </div>
             </div>
         </div>
     </div>
@@ -258,7 +295,16 @@ async function vsListVectors(){
   if(!id){ alert('Enter vector store id'); return; }
   const limit = parseInt(document.getElementById('vs_limit').value || '50');
   const offset = window.__vs_offset || 0;
-  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, { limit, offset });
+  const query = { limit, offset };
+  const filterText = (document.getElementById('vs_filter')?.value || '').trim();
+  if (filterText){
+    try { JSON.parse(filterText); query.filter = filterText; } catch(e){ alert('Invalid filter JSON'); return; }
+  }
+  const orderBy = (document.getElementById('vs_order_by')?.value || '').trim();
+  const orderDir = (document.getElementById('vs_order_dir')?.value || 'asc').trim();
+  if (orderBy){ query.order_by = orderBy; }
+  if (orderDir){ query.order_dir = orderDir; }
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/vectors`, query);
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
   renderVectorList(res.data || []);
   const pageInfo = document.getElementById('vs_page_info');
@@ -276,6 +322,31 @@ async function vsQuery(){
   if (q === null) return;
   const body = { query: q, top_k: 5 };
   const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/query`, body);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsAdminIndexInfo(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  if (!id){ alert('Enter store id'); return; }
+  const res = await apiClient.get(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/index_info`);
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsAdminSetEfSearch(){
+  const value = parseInt(document.getElementById('vs_ef_search')?.value || '64');
+  const res = await apiClient.post('/api/v1/vector_stores/admin/hnsw_ef_search', { ef_search: value });
+  document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
+}
+
+async function vsAdminRebuildIndex(){
+  const id = (document.getElementById('vs_admin_id')?.value || document.getElementById('vs_id')?.value || '').trim();
+  if (!id){ alert('Enter store id'); return; }
+  const index_type = (document.getElementById('vs_index_type')?.value || 'hnsw');
+  const metric = (document.getElementById('vs_index_metric')?.value || 'cosine');
+  const m = parseInt(document.getElementById('vs_index_m')?.value || '16');
+  const ef_construction = parseInt(document.getElementById('vs_index_efc')?.value || '200');
+  const lists = parseInt(document.getElementById('vs_index_lists')?.value || '100');
+  const res = await apiClient.post(`/api/v1/vector_stores/${encodeURIComponent(id)}/admin/rebuild_index`, { index_type, metric, m, ef_construction, lists });
   document.getElementById('vs_result').textContent = JSON.stringify(res, null, 2);
 }
 

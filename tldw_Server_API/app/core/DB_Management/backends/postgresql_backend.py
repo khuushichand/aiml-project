@@ -66,7 +66,8 @@ class PostgreSQLConnectionPool(ConnectionPool):
             'user': config.pg_user or 'tldw_user',
             'password': config.pg_password or '',
             'sslmode': config.pg_sslmode or 'prefer',
-            'connect_timeout': config.connect_timeout or 10
+            'connect_timeout': config.connect_timeout or 10,
+            'cursor_factory': psycopg2.extras.RealDictCursor,
         }
         
         # Create connection pool
@@ -215,7 +216,14 @@ class PostgreSQLBackend(DatabaseBackend):
 
             if has_description:
                 rows = cursor.fetchall()
-                result_rows = [dict(row) for row in rows]
+                if rows and not isinstance(rows[0], dict):
+                    column_names = [col[0] for col in cursor.description or []]
+                    result_rows = [
+                        {column_names[idx]: value for idx, value in enumerate(row)}
+                        for row in rows
+                    ]
+                else:
+                    result_rows = [dict(row) for row in rows]
                 if not statement_upper.startswith("SELECT"):
                     conn.commit()
             else:
@@ -376,15 +384,20 @@ class PostgreSQLBackend(DatabaseBackend):
             """)
             
             # Create update function for tsvector
-            columns_concat = " || ' ' || ".join([
-                f"coalesce({self.escape_identifier(col)}, '')" 
+            # Build columns concat for both contexts
+            columns_concat_set = " || ' ' || ".join([
+                f"coalesce({self.escape_identifier(col)}, '')"
+                for col in columns
+            ])
+            columns_concat_new = " || ' ' || ".join([
+                f"coalesce(NEW.{self.escape_identifier(col)}, '')"
                 for col in columns
             ])
             
             cursor.execute(f"""
                 UPDATE {self.escape_identifier(source_table)}
                 SET {self.escape_identifier(fts_column)} = 
-                    to_tsvector('english', {columns_concat})
+                    to_tsvector('english', {columns_concat_set})
             """)
             
             # Create GIN index for fast searching
@@ -404,7 +417,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 RETURNS trigger AS $$
                 BEGIN
                     NEW.{self.escape_identifier(fts_column)} := 
-                        to_tsvector('english', {columns_concat});
+                        to_tsvector('english', {columns_concat_new});
                     RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql

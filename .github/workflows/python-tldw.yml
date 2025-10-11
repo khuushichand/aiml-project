@@ -238,6 +238,7 @@ jobs:
     name: PostgreSQL Backend Tests
     runs-on: ubuntu-latest
     needs: unit-tests
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -259,6 +260,11 @@ jobs:
       POSTGRES_TEST_DB: tldw_content
       POSTGRES_TEST_USER: tldw
       POSTGRES_TEST_PASSWORD: tldw
+      # Keep Prompt Studio heavy tests at moderate defaults in CI
+      TLDW_PS_STRESS: "0"
+      TLDW_PS_TC_COUNT: "250"
+      TLDW_PS_ITERATIONS: "5"
+      TLDW_PS_OPT_COUNT: "3"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -306,6 +312,75 @@ jobs:
         with:
           name: test-results-postgres
           path: postgres-tests.xml
+
+  postgres-heavy-ps-tests:
+    name: PostgreSQL Prompt Studio Heavy Tests
+    runs-on: ubuntu-latest
+    needs: postgres-tests
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw
+      POSTGRES_TEST_PASSWORD: tldw
+      # Moderate defaults; adjust as needed
+      TLDW_PS_STRESS: "0"
+      TLDW_PS_TC_COUNT: "250"
+      TLDW_PS_ITERATIONS: "5"
+      TLDW_PS_OPT_COUNT: "3"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install pytest-xdist
+          pip install -e ".[dev]"
+
+      - name: Run Prompt Studio heavy tests (Postgres)
+        run: |
+          pytest -v -n auto \
+            tldw_Server_API/tests/prompt_studio/integration/test_optimizations_dual_backend_heavy.py \
+            --junit-xml=postgres-heavy-ps-tests.xml
+
+      - name: Upload heavy PS test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-postgres-heavy-ps
+          path: postgres-heavy-ps-tests.xml
 
   # Job 4: External API Tests (only on main branch or manual trigger)
   external-api-tests:
@@ -584,3 +659,35 @@ jobs:
         run: |
           echo "Test results processed"
           # Here you could update a badge in README or create a gist
+
+  pgvector-live-tests:
+    name: PGVector Live Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ secrets.PG_TEST_DSN != '' }}
+    env:
+      PYTHONPATH: ./tldw_Server_API
+      PG_TEST_DSN: ${{ secrets.PG_TEST_DSN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install email-validator
+          pip install -e ".[dev]"
+          pip install "psycopg[binary,pool]"
+
+      - name: Run pg_integration tests
+        run: |
+          pytest -v -m "pg_integration" --timeout=600

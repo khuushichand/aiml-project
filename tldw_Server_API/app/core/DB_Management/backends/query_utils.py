@@ -20,7 +20,10 @@ def normalise_params(params: ParamsType) -> Optional[Union[Tuple[Any, ...], Dict
     if params is None:
         return None
     if isinstance(params, dict):
-        return params
+        # Preserve insertion order (Python 3.7+) so callers constructing
+        # dictionaries inline with positional placeholders continue to work.
+        # psycopg2 expects sequences for `%s` placeholders, so coerce here.
+        return tuple(params.values())
     if isinstance(params, tuple):
         return params
     if isinstance(params, list):

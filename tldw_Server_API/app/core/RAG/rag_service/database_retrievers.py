@@ -22,6 +22,7 @@ from loguru import logger
 import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
 from .types import Document, DataSource
 from .vector_stores import VectorStoreFactory, VectorStoreConfig, VectorStoreType
@@ -294,47 +295,66 @@ class MediaDBRetriever(BaseRetriever):
     def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
         """Retrieve chunk-level matches using FTS5 over UnvectorizedMediaChunks.
 
-        Requires SQLite backend. Creates the virtual table on demand (no-op if exists).
+        For SQLite: uses virtual table `unvectorized_chunks_fts`.
+        For Postgres: uses tsvector column on `unvectorized_media_chunks` (created via backend).
         """
         if self.media_db is None:
             return []
 
-        # Ensure FTS virtual table exists; rebuild if empty to prime content
-        try:
-            ensure = getattr(self.media_db, 'ensure_chunk_fts', None)
-            if callable(ensure):
-                self.media_db.ensure_chunk_fts()
-            # Optionally prime FTS if empty (cheap count)
-            check = getattr(self.media_db, 'maybe_rebuild_chunk_fts_if_empty', None)
-            if callable(check):
-                self.media_db.maybe_rebuild_chunk_fts_if_empty()
-        except Exception as exc:
-            logger.debug(f"Chunk FTS ensure/rebuild skipped: {exc}")
+        backend_type = getattr(self.media_db, 'backend_type', None)
+        if backend_type == BackendType.SQLITE:
+            # Ensure FTS virtual table exists; rebuild if empty to prime content
+            try:
+                ensure = getattr(self.media_db, 'ensure_chunk_fts', None)
+                if callable(ensure):
+                    self.media_db.ensure_chunk_fts()
+                # Optionally prime FTS if empty (cheap count)
+                check = getattr(self.media_db, 'maybe_rebuild_chunk_fts_if_empty', None)
+                if callable(check):
+                    self.media_db.maybe_rebuild_chunk_fts_if_empty()
+            except Exception as exc:
+                logger.debug(f"Chunk FTS ensure/rebuild skipped: {exc}")
 
-        # Build FTS query and SQL
-        fts_query = self._build_fts_query(query)
-
-        sql = """
-            SELECT 
-                u.uuid AS chunk_uuid,
-                u.id   AS chunk_rowid,
-                u.media_id,
-                u.chunk_text,
-                u.start_char,
-                u.end_char,
-                u.chunk_type,
-                u.chunk_index,
-                m.title,
-                m.type AS media_type,
-                m.url,
-                bm25(unvectorized_chunks_fts) AS rank
-            FROM unvectorized_chunks_fts
-            JOIN UnvectorizedMediaChunks u ON unvectorized_chunks_fts.rowid = u.id
-            JOIN Media m ON u.media_id = m.id
-            WHERE unvectorized_chunks_fts MATCH ?
-              AND m.deleted = 0 AND m.is_trash = 0 AND u.deleted = 0
-        """
-        params: List[Any] = [fts_query]
+        params: List[Any] = []
+        if backend_type == BackendType.SQLITE:
+            # Build SQLite FTS query and SQL
+            fts_query = self._build_fts_query(query)
+            sql = """
+                SELECT 
+                    u.uuid AS chunk_uuid,
+                    u.id   AS chunk_rowid,
+                    u.media_id,
+                    u.chunk_text,
+                    u.start_char,
+                    u.end_char,
+                    u.chunk_type,
+                    u.chunk_index,
+                    m.title,
+                    m.type AS media_type,
+                    m.url,
+                    bm25(unvectorized_chunks_fts) AS rank
+                FROM unvectorized_chunks_fts
+                JOIN UnvectorizedMediaChunks u ON unvectorized_chunks_fts.rowid = u.id
+                JOIN Media m ON u.media_id = m.id
+                WHERE unvectorized_chunks_fts MATCH ?
+                  AND m.deleted = 0 AND m.is_trash = 0 AND u.deleted = 0
+            """
+            params.append(fts_query)
+        else:
+            # Postgres tsquery path over generated tsvector column
+            tsquery = FTSQueryTranslator.normalize_query(query, 'postgresql')
+            sql = (
+                "SELECT "
+                " u.uuid AS chunk_uuid, u.id AS chunk_rowid, u.media_id, u.chunk_text,"
+                " u.start_char, u.end_char, u.chunk_type, u.chunk_index,"
+                " m.title, m.type AS media_type, m.url,"
+                " ts_rank(u.unvectorized_chunks_fts_tsv, to_tsquery('english', ?)) AS rank"
+                " FROM unvectorizedmediachunks u"
+                " JOIN media m ON u.media_id = m.id"
+                " WHERE m.deleted = 0 AND m.is_trash = 0 AND u.deleted = 0"
+                "   AND u.unvectorized_chunks_fts_tsv @@ to_tsquery('english', ?)"
+            )
+            params.extend([tsquery, tsquery])
         if media_type:
             sql += " AND m.type = ?"
             params.append(media_type)

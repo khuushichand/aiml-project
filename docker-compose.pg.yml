@@ -1,0 +1,50 @@
+# Optional Postgres 18 + pgvector + pgbouncer stack for local dev
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: tldw-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tldw
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - pgnet
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: tldw-pgbouncer
+    depends_on:
+      - postgres
+    environment:
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_USERNAME=postgres
+      - POSTGRESQL_PASSWORD=postgres
+      - POSTGRESQL_DATABASE=tldw
+      - PGBOUNCER_PORT=6432
+      - PGBOUNCER_POOL_MODE=session
+      - PGBOUNCER_MAX_CLIENT_CONN=200
+      - PGBOUNCER_DEFAULT_POOL_SIZE=20
+    ports:
+      - "6432:6432"
+    networks:
+      - pgnet
+
+volumes:
+  pg_data:
+
+networks:
+  pgnet:
+    driver: bridge
+

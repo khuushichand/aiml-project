@@ -1,26 +1,32 @@
-# storage_worker.py
-# Worker for storing embeddings in ChromaDB and updating SQL database
+"""
+Storage worker that writes embeddings to the configured vector store adapter
+(Chroma by default; PGVector or others via settings) and updates job state.
+"""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from loguru import logger
 
-# Database functions - to be implemented when needed
-# Currently commenting out as these functions don't exist yet
-from ..ChromaDB_Library import ChromaDBManager
 from ..queue_schemas import (
     JobStatus,
     StorageMessage,
 )
 from .base_worker import BaseWorker, WorkerConfig
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
+    VectorStoreAdapter,
+    VectorStoreConfig,
+    VectorStoreType,
+)
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
+from tldw_Server_API.app.core.config import settings
 
 
 class StorageWorker(BaseWorker):
-    """Worker that stores embeddings in ChromaDB and updates database"""
-    
+    """Worker that stores embeddings in the selected vector store and updates database"""
+
     def __init__(self, config: WorkerConfig):
         super().__init__(config)
-        self.chroma_manager = ChromaDBManager()
+        self._adapter_cache: Dict[str, VectorStoreAdapter] = {}
     
     def _parse_message(self, data: Dict[str, Any]) -> StorageMessage:
         """Parse raw message data into StorageMessage"""
@@ -36,17 +42,23 @@ class StorageWorker(BaseWorker):
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.STORING)
             
-            # Get or create ChromaDB collection for user
-            collection = await self._get_or_create_collection(
-                message.user_id,
-                message.collection_name
+            # Resolve adapter and ensure collection
+            embedding_dim = self._infer_embedding_dim(message.embeddings)
+            adapter = await self._get_adapter_for_user(message.user_id, embedding_dim)
+            await adapter.create_collection(
+                message.collection_name,
+                metadata={
+                    "owner": str(message.user_id),
+                    "embedding_dimension": embedding_dim,
+                    "source": "embeddings_pipeline",
+                },
             )
             
             # Prepare data for ChromaDB
-            ids = []
-            embeddings = []
-            documents = []
-            metadatas = []
+            ids: List[str] = []
+            embeddings: List[List[float]] = []
+            documents: List[str] = []
+            metadatas: List[Dict[str, Any]] = []
             
             for embedding_data in message.embeddings:
                 ids.append(embedding_data.chunk_id)
@@ -64,12 +76,12 @@ class StorageWorker(BaseWorker):
             for i in range(0, len(ids), batch_size):
                 batch_end = min(i + batch_size, len(ids))
                 
-                await self._store_batch(
-                    collection,
-                    ids[i:batch_end],
-                    embeddings[i:batch_end],
-                    documents[i:batch_end],
-                    metadatas[i:batch_end]
+                await adapter.upsert_vectors(
+                    collection_name=message.collection_name,
+                    ids=ids[i:batch_end],
+                    vectors=embeddings[i:batch_end],
+                    documents=documents[i:batch_end],
+                    metadatas=metadatas[i:batch_end],
                 )
                 
                 # Update progress
@@ -92,38 +104,48 @@ class StorageWorker(BaseWorker):
         """Storage is the final stage, no next stage"""
         pass
     
-    async def _get_or_create_collection(self, user_id: str, collection_name: str):
-        """Get or create ChromaDB collection for user"""
-        import asyncio
-        
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            self.chroma_manager.get_or_create_collection,
-            user_id,
-            collection_name
-        )
-    
-    async def _store_batch(
-        self,
-        collection,
-        ids: list,
-        embeddings: list,
-        documents: list,
-        metadatas: list
-    ):
-        """Store a batch of embeddings in ChromaDB"""
-        import asyncio
-        
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            collection.add,
-            ids,
-            embeddings,
-            metadatas,
-            documents
-        )
+    async def _get_adapter_for_user(self, user_id: str, embedding_dim: int) -> VectorStoreAdapter:
+        """Return an initialized adapter for a given user and dimension (cached)."""
+        cache_key = f"{user_id}:{embedding_dim}"
+        if cache_key in self._adapter_cache:
+            return self._adapter_cache[cache_key]
+
+        base = VectorStoreFactory.create_from_settings(settings, user_id=str(user_id))
+        if base is not None and getattr(base, 'config', None) is not None:
+            cfg = VectorStoreConfig(
+                store_type=base.config.store_type,  # type: ignore[attr-defined]
+                connection_params=base.config.connection_params,  # type: ignore[attr-defined]
+                embedding_dim=int(embedding_dim),
+                distance_metric=getattr(base.config, 'distance_metric', 'cosine'),  # type: ignore[attr-defined]
+                collection_prefix=getattr(base.config, 'collection_prefix', 'unified'),  # type: ignore[attr-defined]
+                user_id=str(user_id),
+            )
+            adapter = VectorStoreFactory.create_adapter(cfg, initialize=False)
+        else:
+            # Fallback to Chroma default
+            cfg = VectorStoreConfig(
+                store_type=VectorStoreType.CHROMADB,
+                connection_params={"use_default": True},
+                embedding_dim=int(embedding_dim),
+                user_id=str(user_id),
+            )
+            adapter = VectorStoreFactory.create_adapter(cfg, initialize=False)
+
+        await adapter.initialize()
+        self._adapter_cache[cache_key] = adapter
+        return adapter
+
+    def _infer_embedding_dim(self, embeddings: List[Any]) -> int:
+        """Infer embedding dimension from the first item, with safe fallbacks."""
+        try:
+            if embeddings and getattr(embeddings[0], 'dimensions', None):
+                return int(embeddings[0].dimensions)
+            if embeddings and getattr(embeddings[0], 'embedding', None):
+                vec = embeddings[0].embedding
+                return int(len(vec)) if hasattr(vec, '__len__') else int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
+        except Exception:
+            pass
+        return int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
     
     async def _update_database(self, media_id: int, total_chunks: int):
         """Update SQL database with vector processing status"""

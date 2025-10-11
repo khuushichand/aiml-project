@@ -15,9 +15,11 @@ import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
-    VectorStoreConfig, VectorStoreType,
+    VectorStoreAdapter,
+    VectorStoreConfig,
+    VectorStoreType,
 )
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 import pathlib
@@ -215,14 +217,34 @@ class QueryRequest(BaseModel):
     filter: Optional[Dict[str, Any]] = Field(None, description="Metadata filter expression.")
 
 
-def _adapter_for_user(user: User, embedding_dim: int) -> ChromaDBAdapter:
-    cfg = VectorStoreConfig(
+def _adapter_for_user(user: User, embedding_dim: int) -> VectorStoreAdapter:
+    """Create a vector store adapter for the user via the factory.
+
+    Defaults to ChromaDB if no vector store type is configured. Embedding
+    dimension is taken from the endpoint input to ensure consistency per store.
+    """
+    uid = str(getattr(user, 'id', settings.get("SINGLE_USER_FIXED_ID", "1")))
+    # Use factory to resolve store type and connection params from settings
+    base = VectorStoreFactory.create_from_settings(settings, user_id=uid)
+    # Derive config using resolved store type/params, but with the requested dim
+    if base is not None and getattr(base, 'config', None) is not None:
+        cfg = VectorStoreConfig(
+            store_type=base.config.store_type,  # type: ignore[attr-defined]
+            connection_params=base.config.connection_params,  # type: ignore[attr-defined]
+            embedding_dim=int(embedding_dim),
+            distance_metric=getattr(base.config, 'distance_metric', 'cosine'),  # type: ignore[attr-defined]
+            collection_prefix=getattr(base.config, 'collection_prefix', 'unified'),  # type: ignore[attr-defined]
+            user_id=uid,
+        )
+        return VectorStoreFactory.create_adapter(cfg, initialize=False)
+    # Fallback to local Chroma configuration
+    chroma_cfg = VectorStoreConfig(
         store_type=VectorStoreType.CHROMADB,
         connection_params={"use_default": True},
-        embedding_dim=embedding_dim,
-        user_id=str(getattr(user, 'id', settings.get("SINGLE_USER_FIXED_ID", "1")))
+        embedding_dim=int(embedding_dim),
+        user_id=uid,
     )
-    return ChromaDBAdapter(cfg)
+    return VectorStoreFactory.create_adapter(chroma_cfg, initialize=False)
 
 
 def _vs_id() -> str:
@@ -232,7 +254,7 @@ def _vs_id() -> str:
 def _now_ts() -> int:
     return int(time.time())
 
-async def _get_adapter_for_user(user: User, embedding_dim: int) -> ChromaDBAdapter:
+async def _get_adapter_for_user(user: User, embedding_dim: int) -> VectorStoreAdapter:
     """Obtain adapter; supports both sync and async monkeypatched factories in tests."""
     maybe = _adapter_for_user(user, embedding_dim)
     if asyncio.iscoroutine(maybe):
@@ -349,6 +371,7 @@ async def create_vector_store(
 async def list_vector_stores(
     current_user: User = Depends(get_request_user)
 ):
+    """List vector stores for the current user."""
     # Prefer meta DB for performance and trusted names
     uid = str(getattr(current_user,'id','1'))
     stores = []
@@ -722,6 +745,13 @@ class DuplicateStoreRequest(BaseModel):
     new_name: str = Field(..., description="Name for the duplicated store")
     dimensions: Optional[int] = None
 
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {"new_name": "CopyOfStore", "dimensions": 1536}
+            ]
+        }
+
 
 @router.post("/vector_stores/{store_id}/duplicate")
 async def duplicate_vector_store(
@@ -757,32 +787,60 @@ async def duplicate_vector_store(
     dest_id = dest_vs.id
 
     # Copy in batches
-    source_collection = adapter.manager.get_or_create_collection(store_id)
-    total = 0
-    try:
-        total = source_collection.count()
-    except Exception:
-        pass
     offset = 0
     step = 1000
     upserted = 0
+    total = 0
+    # Prefer adapter helper that returns vectors (works for PG + Chroma)
+    dup_fn = getattr(adapter, 'list_vectors_with_embeddings_paginated', None)
     while True:
-        data = source_collection.get(limit=step, offset=offset, include=["embeddings", "documents", "metadatas"]) 
-        if not data or not data.get('ids'):
-            break
-        emb_list = data.get('embeddings', [])
-        # Normalize to plain Python lists
-        try:
-            if hasattr(emb_list, 'tolist'):
-                emb_list = emb_list.tolist()
-        except Exception:
-            pass
-        doc_list = data.get('documents', [])
-        meta_list_existing = data.get('metadatas', [])
-        ids_list = data.get('ids', [])
-        if len(emb_list) == 0:
-            break
-        emb_dim = len(emb_list[0]) if len(emb_list) > 0 and len(emb_list[0]) else dim
+        ids_list: List[str] = []
+        emb_list: List[List[float]] = []
+        doc_list: List[str] = []
+        meta_list_existing: List[Dict[str, Any]] = []
+        if callable(dup_fn):
+            try:
+                res = await dup_fn(store_id, step, offset, None)  # type: ignore[misc]
+                total = int(res.get('total', total))
+                items = res.get('items', [])
+                if not items:
+                    break
+                for it in items:
+                    ids_list.append(str(it.get('id')))
+                    vec = it.get('vector') or []
+                    # Validate vector length and type
+                    if not isinstance(vec, list):
+                        vec = []
+                    emb_list.append(vec)
+                    doc_list.append(it.get('content') or '')
+                    meta_list_existing.append(it.get('metadata') or {})
+            except Exception as e:
+                # Fallback to Chroma collection path on error
+                dup_fn = None
+                continue
+        if not callable(dup_fn):
+            # Fallback: Chroma path
+            source_collection = adapter.manager.get_or_create_collection(store_id)  # type: ignore[attr-defined]
+            try:
+                total = int(source_collection.count())
+            except Exception:
+                total = total or 0
+            data = source_collection.get(limit=step, offset=offset, include=["embeddings", "documents", "metadatas"])  # type: ignore[attr-defined]
+            if not data or not data.get('ids'):
+                break
+            ids_list = list(data.get('ids') or [])
+            emb_list = list(data.get('embeddings') or [])
+            try:
+                if hasattr(emb_list, 'tolist'):
+                    emb_list = emb_list.tolist()
+            except Exception:
+                pass
+            doc_list = list(data.get('documents') or [])
+            meta_list_existing = list(data.get('metadatas') or [])
+            if len(emb_list) == 0:
+                break
+        # Adjust adapter dimension if needed for this batch
+        emb_dim = len(emb_list[0]) if emb_list and emb_list[0] else dim
         if emb_dim != adapter.config.embedding_dim:
             adapter = await _get_adapter_for_user(current_user, embedding_dim=emb_dim)
             await adapter.initialize()
@@ -795,31 +853,162 @@ async def duplicate_vector_store(
     return { 'source_id': store_id, 'destination_id': dest_id, 'upserted': upserted, 'estimated_total': total }
 
 
+class HNSWEfSearchRequest(BaseModel):
+    ef_search: int = Field(..., gt=0, description="hnsw.ef_search value to set for this session")
+
+
+@router.get("/vector_stores/{store_id}/admin/index_info")
+async def get_index_info(
+    store_id: str = Path(...),
+    current_user: User = Depends(get_request_user)
+):
+    adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
+    await adapter.initialize()
+    get_fn = getattr(adapter, 'get_index_info', None)
+    if callable(get_fn):
+        info = await get_fn(store_id)  # type: ignore[misc]
+        return info
+    # Fallback: return basic stats
+    stats = await adapter.get_collection_stats(store_id)
+    return {
+        'backend': 'unknown',
+        'dimension': stats.get('dimension', 1536),
+        'count': stats.get('count', 0)
+    }
+
+
+@router.post("/vector_stores/admin/hnsw_ef_search")
+async def set_hnsw_ef_search(
+    payload: HNSWEfSearchRequest = Body(...),
+    current_user: User = Depends(get_request_user)
+):
+    adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
+    await adapter.initialize()
+    set_fn = getattr(adapter, 'set_ef_search', None)
+    if callable(set_fn):
+        value = set_fn(payload.ef_search)  # type: ignore[misc]
+        return { 'ef_search': value, 'note': 'applies to current session/adapter only' }
+    return { 'ef_search': payload.ef_search, 'note': 'no-op for this backend' }
+
+
+class RebuildIndexRequest(BaseModel):
+    index_type: str = Field(..., pattern="^(?i)(hnsw|ivfflat|drop)$")
+    metric: Optional[str] = Field(None, pattern="^(?i)(cosine|euclidean|ip)$")
+    m: Optional[int] = Field(16, ge=2, description="HNSW M parameter")
+    ef_construction: Optional[int] = Field(200, ge=1, description="HNSW ef_construction")
+    lists: Optional[int] = Field(100, ge=1, description="IVFFLAT lists")
+
+
+@router.post("/vector_stores/{store_id}/admin/rebuild_index")
+async def rebuild_index(
+    store_id: str = Path(...),
+    payload: RebuildIndexRequest = Body(...),
+    current_user: User = Depends(get_request_user)
+):
+    adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
+    await adapter.initialize()
+    rebuild_fn = getattr(adapter, 'rebuild_index', None)
+    if not callable(rebuild_fn):
+        raise HTTPException(status_code=400, detail="Index rebuild not supported for this backend")
+    try:
+        info = await rebuild_fn(  # type: ignore[misc]
+            store_id,
+            index_type=payload.index_type,
+            metric=payload.metric,
+            m=payload.m or 16,
+            ef_construction=payload.ef_construction or 200,
+            lists=payload.lists or 100,
+        )
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Index rebuild failed: {e}")
+
+
 @router.get("/vector_stores/{store_id}/vectors")
 async def list_vectors(
     store_id: str = Path(...),
     limit: int = Query(50, gt=1, le=1000),
     offset: int = Query(0, ge=0),
+    filter: Optional[str] = Query(
+        None,
+        description="Optional JSON metadata filter",
+        examples={
+            "simple": {"summary": "Simple equality", "value": "{\"genre\":\"a\"}"},
+            "and_numeric": {"summary": "AND with numeric", "value": "{\"$and\":[{\"genre\":\"a\"},{\"score\":{\"$gte\":0.8}}]}"}
+        }
+    ),
+    order_by: Optional[str] = Query(
+        "id",
+        description="Order field: 'id' or 'metadata.<key>'",
+        examples={"metadata": {"summary": "Order by metadata.score desc", "value": "metadata.score"}}
+    ),
+    order_dir: str = Query(
+        "asc",
+        pattern="^(?i)(asc|desc)$",
+        examples={"desc": {"summary": "Descending", "value": "desc"}}
+    ),
     current_user: User = Depends(get_request_user)
 ):
+    """List vectors in a store with pagination and optional filters/ordering."""
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
-    collection = adapter.manager.get_or_create_collection(store_id)
-    total = 0
-    try:
-        total = collection.count()
-    except Exception:
-        pass
-    # Chroma get() returns ids implicitly; do not include 'ids'
-    data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"])  # chroma supports offset
     items: List[VectorItem] = []
-    if data and data.get("ids"):
-        for i, vid in enumerate(data["ids"]):
-            items.append(VectorItem(
-                id=vid,
-                metadata=(data.get("metadatas") or [{}])[i] if data.get("metadatas") else {},
-                content=(data.get("documents") or [""])[i] if data.get("documents") else ""
-            ))
+    total: int = 0
+    meta_filter: Optional[Dict[str, Any]] = None
+    if filter:
+        try:
+            import json as _json
+            parsed = _json.loads(filter)
+            if not isinstance(parsed, dict):
+                raise ValueError("filter must be a JSON object")
+            meta_filter = parsed
+        except Exception as e:
+            raise HTTPException(status_code=400, detail={"error":"invalid_filter","message":str(e)})
+    if order_by and (order_by != 'id' and not order_by.startswith('metadata.')):
+        raise HTTPException(status_code=400, detail={"error":"invalid_order_by","message":"order_by must be 'id' or 'metadata.<key>'"})
+    # Prefer adapter-provided pagination helper when available (PG, future stores)
+    list_fn = getattr(adapter, 'list_vectors_paginated', None)
+    if callable(list_fn):
+        try:
+            if meta_filter is not None:
+                result = await list_fn(store_id, limit=int(limit), offset=int(offset), filter=meta_filter, order_by=order_by, order_dir=order_dir)  # type: ignore[misc]
+            else:
+                result = await list_fn(store_id, limit=int(limit), offset=int(offset), order_by=order_by, order_dir=order_dir)  # type: ignore[misc]
+            total = int(result.get('total', 0))
+            for row in result.get('items', []):
+                items.append(VectorItem(
+                    id=str(row.get('id')),
+                    metadata=row.get('metadata') or {},
+                    content=row.get('content') or "",
+                ))
+        except Exception as e:
+            logger.warning(f"Adapter list_vectors_paginated failed; falling back to Chroma path: {e}")
+    if not items and total == 0:
+        # Fallback to Chroma collection semantics
+        try:
+            collection = adapter.manager.get_or_create_collection(store_id)  # type: ignore[attr-defined]
+            try:
+                total = int(collection.count())
+            except Exception:
+                total = 0
+            try:
+                data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"], where=meta_filter)  # type: ignore[attr-defined]
+            except Exception:
+                data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"])  # type: ignore[attr-defined]
+            if data and data.get("ids"):
+                for i, vid in enumerate(data["ids"]):
+                    items.append(VectorItem(
+                        id=vid,
+                        metadata=(data.get("metadatas") or [{}])[i] if data.get("metadatas") else {},
+                        content=(data.get("documents") or [""])[i] if data.get("documents") else ""
+                    ))
+            # Client-side sort for Chroma fallback if requested on metadata
+            if order_by and order_by != 'id':
+                key = order_by.split('.', 1)[1] if order_by.startswith('metadata.') else order_by
+                reverse = str(order_dir).lower() == 'desc'
+                items.sort(key=lambda x: (x.metadata or {}).get(key, ''), reverse=reverse)
+        except Exception as e:
+            logger.error(f"Vector listing failed: {e}")
     next_offset = None
     returned = len(items)
     if returned == limit and (offset + returned) < total:
@@ -855,19 +1044,24 @@ async def delete_vector(
 
     adapter = await _get_adapter_for_user(current_user, embedding_dim=1536)
     await adapter.initialize()
-    # Verify the vector exists before deletion
-    try:
-        # Use get-only access to avoid accidental creation
-        collection = adapter.manager.client.get_collection(name=store_id)
-        data = collection.get(ids=[vector_id], include=[])
-        ids_found = set(data.get('ids') or []) if isinstance(data, dict) else set()
-        if vector_id not in ids_found:
+    # Verify existence using adapter if possible; otherwise best-effort fallback
+    get_fn = getattr(adapter, 'get_vector', None)
+    if callable(get_fn):
+        vec = await get_fn(store_id, vector_id)  # type: ignore[misc]
+        if not vec:
             raise HTTPException(status_code=404, detail="Vector not found")
-    except HTTPException:
-        raise
-    except Exception:
-        # If collection get fails unexpectedly, report not found
-        raise HTTPException(status_code=404, detail="Vector not found")
+    else:
+        try:
+            collection = adapter.manager.client.get_collection(name=store_id)  # type: ignore[attr-defined]
+            data = collection.get(ids=[vector_id], include=[])
+            ids_found = set(data.get('ids') or []) if isinstance(data, dict) else set()
+            if vector_id not in ids_found:
+                raise HTTPException(status_code=404, detail="Vector not found")
+        except HTTPException:
+            raise
+        except Exception:
+            # If collection get fails unexpectedly, report not found
+            raise HTTPException(status_code=404, detail="Vector not found")
     await adapter.delete_vectors(store_id, ids=[vector_id])
     return {"id": vector_id, "deleted": True}
 

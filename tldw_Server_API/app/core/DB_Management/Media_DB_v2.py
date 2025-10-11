@@ -709,7 +709,8 @@ class MediaDatabase:
             self.backend_type,
             query,
             params,
-            ensure_returning=self.backend_type == BackendType.POSTGRESQL,
+            apply_default_transform=True,
+            ensure_returning=False,
         )
 
     def _prepare_backend_many_statement(
@@ -721,6 +722,7 @@ class MediaDatabase:
             self.backend_type,
             query,
             params_list,
+            apply_default_transform=True,
             ensure_returning=False,
         )
         return converted_query, prepared_params
@@ -1544,9 +1546,10 @@ class MediaDatabase:
 
         backend = self.backend
         ident = backend.escape_identifier
+        # Use lower-case identifiers for PostgreSQL to avoid case-sensitive quoted names
         backend.execute(
             (
-                f"ALTER TABLE {ident('DocumentVersions')} "
+                f"ALTER TABLE {ident('documentversions')} "
                 f"ADD COLUMN IF NOT EXISTS {ident('safe_metadata')} TEXT"
             ),
             connection=conn,
@@ -1560,8 +1563,8 @@ class MediaDatabase:
 
         backend.execute(
             (
-                f"CREATE TABLE IF NOT EXISTS {ident('DocumentVersionIdentifiers')} ("
-                f"{ident('dv_id')} BIGINT PRIMARY KEY REFERENCES {ident('DocumentVersions')}({ident('id')}) ON DELETE CASCADE,"
+                f"CREATE TABLE IF NOT EXISTS {ident('documentversionidentifiers')} ("
+                f"{ident('dv_id')} BIGINT PRIMARY KEY REFERENCES {ident('documentversions')}({ident('id')}) ON DELETE CASCADE,"
                 f"{ident('doi')} TEXT,"
                 f"{ident('pmid')} TEXT,"
                 f"{ident('pmcid')} TEXT,"
@@ -1584,7 +1587,7 @@ class MediaDatabase:
             backend.execute(
                 (
                     f"CREATE INDEX IF NOT EXISTS {ident(index_name)} "
-                    f"ON {ident('DocumentVersionIdentifiers')} ({ident(column)})"
+                    f"ON {ident('documentversionidentifiers')} ({ident(column)})"
                 ),
                 connection=conn,
             )
@@ -1593,11 +1596,6 @@ class MediaDatabase:
         """Ensure schema_version table reflects the supplied version."""
 
         backend = self.backend
-        backend.execute(
-            "INSERT INTO schema_version (version) VALUES (%s) ON CONFLICT DO NOTHING",
-            (version,),
-            connection=conn,
-        )
         backend.execute(
             "UPDATE schema_version SET version = %s",
             (version,),
@@ -1700,6 +1698,16 @@ class MediaDatabase:
             columns=['claim_text'],
             connection=conn,
         )
+        # Chunk-level FTS on UnvectorizedMediaChunks
+        try:
+            backend.create_fts_table(
+                table_name='unvectorized_chunks_fts',
+                source_table='unvectorizedmediachunks',
+                columns=['chunk_text'],
+                connection=conn,
+            )
+        except Exception as e:
+            logging.warning(f"Failed to ensure Postgres chunk-level FTS: {e}")
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -1743,7 +1751,6 @@ class MediaDatabase:
                 str(c.get("last_modified", now)),
                 int(c.get("version", 1)),
                 str(c.get("client_id", self.client_id)),
-                int(c.get("deleted", 0)),
                 c.get("prev_version"),
                 c.get("merge_parent_uuid"),
             ))
@@ -1753,8 +1760,8 @@ class MediaDatabase:
                 INSERT INTO Claims (
                     media_id, chunk_index, span_start, span_end, claim_text, confidence,
                     extractor, extractor_version, chunk_hash, uuid, last_modified,
-                    version, client_id, deleted, prev_version, merge_parent_uuid
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    version, client_id, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
                 commit=False,
@@ -2027,18 +2034,42 @@ class MediaDatabase:
             payload = payload.copy()  # Avoid modifying the original dict
             if 'vector_embedding' in payload:
                 del payload['vector_embedding']
-            #  Add other fields to exclude if necessary
+            # Normalise non-JSON-native types (e.g., datetimes) to strings
+            for k, v in list(payload.items()):
+                try:
+                    from datetime import datetime
+                    if isinstance(v, datetime):
+                        payload[k] = v.isoformat()
+                except Exception:
+                    pass
 
         payload_json = json.dumps(payload, separators=(',', ':')) if payload else None  # Compact JSON
 
         try:
-            conn.execute("""
-                INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (entity, entity_uuid, operation, current_time, client_id, version, payload_json))  # Pass current_time
-            logging.debug(f"Logged sync event: {entity} {entity_uuid} {operation} v{version} at {current_time}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to insert sync log event for {entity} {entity_uuid}: {e}", exc_info=True)
+            if self.backend_type == BackendType.SQLITE:
+                conn.execute(
+                    """
+                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (entity, entity_uuid, operation, current_time, client_id, version, payload_json),
+                )
+            else:
+                self._execute_with_connection(
+                    conn,
+                    """
+                    INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (entity, entity_uuid, operation, current_time, client_id, version, payload_json),
+                )
+            logging.debug(
+                f"Logged sync event: {entity} {entity_uuid} {operation} v{version} at {current_time}"
+            )
+        except Exception as e:
+            logging.error(
+                f"Failed to insert sync log event for {entity} {entity_uuid}: {e}", exc_info=True
+            )
             raise DatabaseError(f"Failed to log sync event: {e}") from e
 
     # --- NEW: Internal FTS Helper Methods ---
@@ -2828,9 +2859,10 @@ class MediaDatabase:
                     new_uuid = self._generate_uuid()
                     new_version = 1
                     logger.info(f"Adding new keyword '{keyword}' UUID {new_uuid}")
+                    # Omit 'deleted' to rely on DEFAULT (FALSE) across backends
                     insert_sql = (
-                        "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id, deleted) "
-                        "VALUES (?, ?, ?, ?, ?, 0)"
+                        "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id) "
+                        "VALUES (?, ?, ?, ?, ?)"
                     )
                     if self.backend_type == BackendType.POSTGRESQL:
                         insert_sql += " RETURNING id"
@@ -3299,6 +3331,7 @@ class MediaDatabase:
         # ------------------------------------------------------------------
         def _media_payload(uuid_: str, version_: int, *, chunk_status: str) -> Dict[str, Any]:
             """Return a dict suitable for INSERT/UPDATE parameters and for sync logging."""
+            bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
             return {
                 "url": url,
                 "title": title,
@@ -3308,15 +3341,16 @@ class MediaDatabase:
                 "ingestion_date": ingestion_date,
                 "transcription_model": transcription_model,
                 "content_hash": content_hash,
-                "is_trash": 0,
+                "is_trash": bool_false,
                 "trash_date": None,
                 "chunking_status": chunk_status,
+                # Keep vector_processing as integer for both backends (schema uses INTEGER)
                 "vector_processing": 0,
                 "uuid": uuid_,
                 "last_modified": now,
                 "version": version_,
                 "client_id": client_id,
-                "deleted": 0,
+                "deleted": bool_false,
             }
 
         def _persist_chunks(cnx: sqlite3.Connection, media_id: int) -> None:
@@ -3337,6 +3371,7 @@ class MediaDatabase:
                     continue
 
                 chunk_uuid = self._generate_uuid()
+                bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
                 cnx.execute(
                     """INSERT INTO UnvectorizedMediaChunks (media_id, chunk_text, chunk_index, start_char, end_char,
                                                             chunk_type, creation_date, last_modified_orig, is_processed,
@@ -3347,7 +3382,7 @@ class MediaDatabase:
                         media_id, ch["text"], idx, ch.get("start_char"), ch.get("end_char"), ch.get("chunk_type"),
                         created, created, False,
                         json.dumps(ch.get("metadata")) if isinstance(ch.get("metadata"), dict) else None,
-                        chunk_uuid, created, 1, client_id, 0, None, None,
+                        chunk_uuid, created, 1, client_id, bool_false, None, None,
                     ),
                 )
                 self._log_sync_event(
@@ -3355,7 +3390,7 @@ class MediaDatabase:
                     {
                         **ch, "media_id": media_id, "uuid": chunk_uuid, "chunk_index": idx,
                         "creation_date": created, "last_modified": created, "version": 1,
-                        "client_id": client_id, "deleted": 0,
+                        "client_id": client_id, "deleted": bool_false,
                     },
                 )
 
@@ -3658,8 +3693,8 @@ class MediaDatabase:
                 insert_sql = """
                     INSERT INTO DocumentVersions (
                         media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
-                        uuid, last_modified, version, client_id, deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        uuid, last_modified, version, client_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 insert_params = (
                     insert_data['media_id'],
@@ -3673,7 +3708,6 @@ class MediaDatabase:
                     insert_data['last_modified'],
                     insert_data['version'],
                     insert_data['client_id'],
-                    insert_data['deleted'],
                 )
                 if self.backend_type == BackendType.POSTGRESQL:
                     insert_sql += " RETURNING id"
@@ -3684,8 +3718,8 @@ class MediaDatabase:
                     insert_sql = """
                         INSERT INTO DocumentVersions (
                             media_id, version_number, content, prompt, analysis_content, created_at,
-                            uuid, last_modified, version, client_id, deleted
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            uuid, last_modified, version, client_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     insert_params = (
                         insert_data['media_id'],
@@ -3698,7 +3732,6 @@ class MediaDatabase:
                         insert_data['last_modified'],
                         insert_data['version'],
                         insert_data['client_id'],
-                        insert_data['deleted'],
                     )
                     insert_data['safe_metadata'] = None
                     if self.backend_type == BackendType.POSTGRESQL:

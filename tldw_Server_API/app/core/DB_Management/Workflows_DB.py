@@ -508,6 +508,32 @@ class WorkflowsDatabase:
             return row.to_dict()
         return dict(row)
 
+    # ------------------------------------------------------------------
+    # Lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Release database resources for both SQLite and backend modes."""
+        if self._using_backend():
+            if self.backend is not None:
+                try:
+                    pool = self.backend.get_pool()
+                except Exception:  # noqa: BLE001 - defensive
+                    return
+                if hasattr(pool, "close_all"):
+                    pool.close_all()
+            return
+
+        if hasattr(self, "_conn") and self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
+
+    def close_connection(self) -> None:
+        """Backward-compatible alias expected by older callers/tests."""
+        self.close()
+
     def _enable_wal(self) -> None:
         try:
             self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -838,6 +864,9 @@ class WorkflowsDatabase:
         is_active: bool = True,
     ) -> int:
         now = _utcnow_iso()
+        # For PostgreSQL backend, pass actual booleans for boolean columns;
+        # SQLite accepts ints, but psycopg will map Python bool to BOOL.
+        is_active_param = bool(is_active)
         params = (
             tenant_id,
             name,
@@ -849,7 +878,7 @@ class WorkflowsDatabase:
             json.dumps(definition),
             now,
             now,
-            1 if is_active else 0,
+            is_active_param,
         )
 
         if self._using_backend():
@@ -1047,7 +1076,7 @@ class WorkflowsDatabase:
 
     # ---------- Run control ----------
     def set_cancel_requested(self, run_id: str, cancel: bool = True) -> None:
-        params = (1 if cancel else 0, run_id)
+        params = (bool(cancel), run_id)
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 self._execute_backend(
@@ -1088,8 +1117,10 @@ class WorkflowsDatabase:
     ) -> int:
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                # PostgreSQL does not allow FOR UPDATE with aggregates; rely on
+                # transactional isolation here to compute next sequence safely.
                 seq_result = self._execute_backend(
-                    "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ? FOR UPDATE",
+                    "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ?",
                     (run_id,),
                     connection=conn,
                 )

@@ -121,8 +121,20 @@ class PromptStudioRowAdapter:
 
     def __getitem__(self, key: Union[int, str]) -> Any:
         if isinstance(key, int):
-            column = self._columns[key]
-            return self._mapping.get(column)
+            # Prefer named lookup when column metadata is a simple string
+            try:
+                col = self._columns[key]
+                if isinstance(col, str) and isinstance(self._mapping, dict):
+                    return self._mapping.get(col)
+            except Exception:
+                pass
+            # Fallback: positional access over mapping values
+            if isinstance(self._mapping, dict):
+                try:
+                    return list(self._mapping.values())[key]
+                except Exception:
+                    return None
+            return None
         return self._mapping.get(key)
 
     def __iter__(self):
@@ -601,6 +613,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         statements: List[str] = []
         buffer: List[str] = []
         in_block_comment = False
+        in_trigger_block = False
 
         for raw_line in sql.splitlines():
             stripped = raw_line.strip()
@@ -626,6 +639,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             if upper.startswith('PRAGMA'):
                 continue
 
+            if in_trigger_block:
+                # Skip lines belonging to a trigger block until semicolon
+                if ';' in stripped:
+                    in_trigger_block = False
+                continue
+
             if 'CREATE VIRTUAL TABLE' in upper:
                 # handled by backend FTS helpers
                 continue
@@ -634,6 +653,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 continue
 
             if upper.startswith('DROP TRIGGER') or upper.startswith('CREATE TRIGGER'):
+                # Skip entire trigger block (SQLite syntax not supported in Postgres)
+                in_trigger_block = True
                 continue
 
             buffer.append(raw_line)
@@ -686,6 +707,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         stmt = re.sub(r'(\bis_generated\b\s+)INTEGER\s+DEFAULT\s+0', r'\1BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
         stmt = re.sub(r'(\bis_builtin\b\s+)BOOLEAN\s+DEFAULT\s+0', r'\1BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
 
+        # Handle BOOLEAN defaults regardless of NOT NULL placement
+        # e.g., "BOOLEAN NOT NULL DEFAULT 0" or "BOOLEAN DEFAULT 0 NOT NULL"
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+0', 'BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+1', 'BOOLEAN NOT NULL DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+0\s+NOT\s+NULL', 'BOOLEAN NOT NULL DEFAULT FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+1\s+NOT\s+NULL', 'BOOLEAN NOT NULL DEFAULT TRUE', stmt, flags=re.IGNORECASE)
+        # Simple form without NOT NULL
         stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+0', 'BOOLEAN DEFAULT FALSE', stmt, flags=re.IGNORECASE)
         stmt = re.sub(r'BOOLEAN\s+DEFAULT\s+1', 'BOOLEAN DEFAULT TRUE', stmt, flags=re.IGNORECASE)
 
@@ -694,6 +722,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         stmt = replace_collate_nocase(stmt)
         stmt = replace_insert_or_ignore(stmt)
+        # Normalize boolean comparisons in indexes/constraints (e.g., WHERE deleted = 0)
+        stmt = re.sub(r'\bdeleted\s*=\s*0\b', 'deleted = FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'\bdeleted\s*=\s*1\b', 'deleted = TRUE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'\bis_builtin\s*=\s*0\b', 'is_builtin = FALSE', stmt, flags=re.IGNORECASE)
+        stmt = re.sub(r'\bis_builtin\s*=\s*1\b', 'is_builtin = TRUE', stmt, flags=re.IGNORECASE)
 
         if not stmt.endswith(';'):
             stmt = f"{stmt};"
@@ -764,9 +797,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         json.dumps(payload, separators=(',', ':')) if payload else None,
                     ),
                 )
-        except BackendDatabaseError:
-            # sync_log table optional; swallow errors silently as in sqlite implementation
-            logger.debug("Prompt Studio sync_log not available; skipping event for %s/%s", entity, entity_uuid)
+        except Exception:
+            # sync_log is optional across backends; swallow any logging failures
+            logger.debug(
+                "Prompt Studio sync_log not available; skipping event for %s/%s",
+                entity,
+                entity_uuid,
+            )
 
     # --- Core API ---
     def create_project(
@@ -2678,7 +2715,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         if is_golden is not None:
             conditions.append("is_golden = ?")
-            params.append(int(bool(is_golden)))
+            params.append(bool(is_golden) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_golden)))
 
         if tags:
             tag_conditions = []
@@ -2720,8 +2757,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             json.dumps(expected_outputs) if expected_outputs is not None else None,
             json.dumps(actual_outputs) if actual_outputs is not None else None,
             _serialise_tags(tags),
-            int(bool(is_golden)),
-            int(bool(is_generated)),
+            bool(is_golden) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_golden)),
+            bool(is_generated) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_generated)),
             client_id or self.client_id,
         )
 
@@ -3082,6 +3119,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         """
         # Initialize parent class
         super().__init__(db_path, client_id)
+        # Mark backend type for helper branches reused from backend-aware implementation
+        self.backend_type = BackendType.SQLITE
         
         # Create a write lock for serializing write operations
         self._write_lock = threading.RLock()
@@ -5467,8 +5506,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             json.dumps(expected_outputs) if expected_outputs else None,
             json.dumps(actual_outputs) if actual_outputs else None,
             tags_str,
-            int(bool(is_golden)),
-            int(bool(is_generated)),
+            bool(is_golden) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_golden)),
+            bool(is_generated) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_generated)),
             client_id or self.client_id,
         )
 
@@ -5558,7 +5597,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         if is_golden is not None:
             conditions.append("is_golden = ?")
-            params.append(int(bool(is_golden)))
+            params.append(bool(is_golden) if self.backend_type == BackendType.POSTGRESQL else int(bool(is_golden)))
 
         if tags:
             tag_conditions = []

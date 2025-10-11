@@ -2018,6 +2018,12 @@ def load_and_log_configs():
                     'password': config_parser_object.get('RAG', 'pgvector_password', fallback=os.getenv('PGVECTOR_PASSWORD', '')),
                     'sslmode': config_parser_object.get('RAG', 'pgvector_sslmode', fallback=os.getenv('PGVECTOR_SSLMODE', 'prefer')),
                     'dsn': config_parser_object.get('RAG', 'pgvector_dsn', fallback=os.getenv('PGVECTOR_DSN', '')) or None,
+                    # Pool configuration (psycopg_pool)
+                    'pool_min_size': config_parser_object.getint('RAG', 'pgvector_pool_min_size', fallback=int(os.getenv('PGVECTOR_POOL_MIN_SIZE', '1'))),
+                    'pool_max_size': config_parser_object.getint('RAG', 'pgvector_pool_max_size', fallback=int(os.getenv('PGVECTOR_POOL_MAX_SIZE', '5'))),
+                    'pool_size': config_parser_object.getint('RAG', 'pgvector_pool_size', fallback=int(os.getenv('PGVECTOR_POOL_SIZE', '5'))),
+                    # HNSW tuning
+                    'hnsw_ef_search': config_parser_object.getint('RAG', 'pgvector_hnsw_ef_search', fallback=int(os.getenv('PGVECTOR_HNSW_EF_SEARCH', '64'))),
                 }
             return_dict['RAG'] = rag_section
         except Exception:

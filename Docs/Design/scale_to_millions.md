@@ -164,6 +164,16 @@ Validation:
   - Analyze tables after bulk loads; rebuild HNSW offline during low-traffic windows if needed
 - Observability: slow query log; `pg_stat_statements`; metrics via exporters; application tracing of retrieval steps.
 
+### PG Pooling & HNSW Tuning (App-Level)
+
+- Config keys under `[RAG]` for `vector_store_type=pgvector`:
+  - `pgvector_pool_min_size` (default 1), `pgvector_pool_max_size` (default 5), `pgvector_pool_size` (alias)
+  - `pgvector_hnsw_ef_search` (default 64; higher = better recall, higher latency)
+- Recommended values:
+  - Up to 1M chunks: pool_min=1, pool_max=5–10, ef_search=64–128
+  - 1–10M chunks: pool_min=2–4, pool_max=10–20, ef_search=128–256
+  - >10M chunks: consider partitioning; pool_max 20–50, ef_search 128–256; add read replicas if needed
+
 ## 10) Configuration & Interfaces
 
 - Modes:
@@ -224,4 +234,3 @@ LIMIT 50;
 ```
 
 - Merge/re-rank in app layer (preferred for flexibility) or via SQL CTEs if needed.
-

@@ -109,8 +109,9 @@ def migrate_workflows_sqlite_to_postgres(
 
     backend = DatabaseBackendFactory.create_backend(postgres_config)
     try:
-        pg_db = WorkflowsDatabase(db_path=':memory:', backend=backend)
-        pg_db.close_connection()
+        # Initialise the PostgreSQL schema using the workflows adapter.
+        # Do NOT close the backend pool here; we still need it for copying rows.
+        _ = WorkflowsDatabase(db_path=':memory:', backend=backend)
 
         with backend.transaction() as pg_conn:
             for table in ('workflow_artifacts', 'workflow_events', 'workflow_step_runs', 'workflow_runs', 'workflows'):
@@ -118,8 +119,20 @@ def migrate_workflows_sqlite_to_postgres(
 
         cursor = sqlite_conn.execute("SELECT * FROM workflows")
         with backend.transaction() as pg_conn:
+            insert_order = [
+                'tenant_id', 'name', 'version', 'owner_id', 'visibility', 'description', 'tags',
+                'definition_json', 'created_at', 'updated_at', 'is_active', 'id'
+            ]
             while rows := cursor.fetchmany(batch_size):
-                params = [tuple(row[col] for col in row.keys()) for row in rows]
+                params = []
+                for row in rows:
+                    values = []
+                    for col in insert_order:
+                        val = row[col]
+                        if col == 'is_active' and val is not None:
+                            val = bool(val)
+                        values.append(val)
+                    params.append(tuple(values))
                 backend.execute_many(
                     (
                         'INSERT INTO workflows ('
@@ -143,8 +156,34 @@ def migrate_workflows_sqlite_to_postgres(
             select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'
             cursor = sqlite_conn.execute(select_sql)
             with backend.transaction() as pg_conn:
+                # Discover boolean columns for coercion
+                try:
+                    pg_cols_info = backend.get_table_info(name, connection=pg_conn)
+                    bool_cols = {
+                        (row.get('name') or '').lower()
+                        for row in pg_cols_info
+                        if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
+                    }
+                except Exception:
+                    bool_cols = set()
                 while rows := cursor.fetchmany(batch_size):
-                    params = [tuple(row[col] for col in columns) for row in rows]
+                    params = []
+                    for row in rows:
+                        vals = []
+                        for col in columns:
+                            v = row[col]
+                            if col.lower() in bool_cols and v is not None:
+                                if isinstance(v, bool):
+                                    vals.append(v)
+                                elif isinstance(v, (int,)):
+                                    vals.append(bool(v))
+                                elif isinstance(v, str) and v.strip().lower() in {'0','1','t','f','true','false'}:
+                                    vals.append(v.strip().lower() in {'1','t','true'})
+                                else:
+                                    vals.append(bool(v))
+                            else:
+                                vals.append(v)
+                        params.append(tuple(vals))
                     placeholders = ', '.join(['%s'] * len(columns))
                     backend.execute_many(
                         (
@@ -287,16 +326,46 @@ def _copy_table(
         f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
     )
 
+    # Discover boolean columns on the target table for type coercion
+    try:
+        pg_columns_info = backend.get_table_info(meta.name, connection=pg_conn)
+        boolean_columns = {
+            (row.get('name') or '').lower()
+            for row in pg_columns_info
+            if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
+        }
+    except Exception:
+        boolean_columns = set()
+
     cursor = sqlite_conn.execute(select_sql)
     total = 0
     while True:
         rows = cursor.fetchmany(batch_size)
         if not rows:
             break
-        params = [
-            tuple(row[col] for col in meta.columns)
-            for row in rows
-        ]
+        converted_params: List[Tuple] = []
+        for row in rows:
+            values: List = []
+            for col in meta.columns:
+                val = row[col]
+                if col.lower() in boolean_columns and val is not None:
+                    try:
+                        if isinstance(val, bool):
+                            coerced = val
+                        elif isinstance(val, (int,)):
+                            coerced = bool(val)
+                        elif isinstance(val, str) and val.strip() in {'0', '1', 't', 'f', 'true', 'false'}:
+                            low = val.strip().lower()
+                            coerced = True if low in {'1', 't', 'true'} else False
+                        else:
+                            coerced = bool(val)
+                        values.append(coerced)
+                    except Exception:
+                        values.append(val)
+                else:
+                    values.append(val)
+            converted_params.append(tuple(values))
+        params = converted_params
         backend.execute_many(insert_sql, params, connection=pg_conn)
         total += len(params)
     logger.info('Copied %s rows into %s', total, meta.name)

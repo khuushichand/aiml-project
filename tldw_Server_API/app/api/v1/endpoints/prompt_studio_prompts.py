@@ -185,7 +185,11 @@ async def create_prompt(
         if not prompt_record:
             raise DatabaseError("Prompt creation returned empty record")
 
-        logger.info(f"User {user_context['user_id']} created prompt: {prompt_data.name}")
+        logger.info(f"User {user_context['user_id']} created prompt: {prompt_data.name} (project_id={prompt_data.project_id})")
+        try:
+            logger.info("Created prompt record: %s", prompt_record)
+        except Exception:
+            pass
 
         return StandardResponse(
             success=True,
