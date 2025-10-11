@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import Unif
 from tldw_Server_API.app.core.Evaluations.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
+from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations_migrations
 
 
@@ -224,23 +224,7 @@ def mock_rate_limiter(monkeypatch):
         mock_check_evaluation_rate_limit
     )
     
-    # Mock the rate limit check in evals endpoint too
-    monkeypatch.setattr(
-        "tldw_Server_API.app.api.v1.endpoints.evals.check_evaluation_rate_limit",
-        mock_check_evaluation_rate_limit
-    )
-    
-    # Mock slowapi rate limiter if it's being used
-    try:
-        from slowapi import Limiter
-        mock_slowapi_limiter = Mock(spec=Limiter)
-        mock_slowapi_limiter.limit = Mock(return_value=lambda f: f)
-        monkeypatch.setattr(
-            "tldw_Server_API.app.api.v1.endpoints.evals_openai.limiter",
-            mock_slowapi_limiter
-        )
-    except ImportError:
-        pass  # slowapi not installed in test environment
+    # Legacy evals and evals_openai endpoints removed; no additional patching required
     
     return mock_limiter
 

@@ -20,7 +20,6 @@ import asyncio
 import threading
 
 # Import connection pool
-from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
 
 
 class AuditEventType(Enum):
@@ -104,9 +103,8 @@ class AuditLogger:
             db_path: Path to audit database (defaults to evaluations.db)
         """
         if db_path is None:
-            db_dir = Path(__file__).parent.parent.parent.parent / "Databases"
-            db_dir.mkdir(parents=True, exist_ok=True)
-            db_path = db_dir / "evaluations.db"
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+            db_path = _DP.get_evaluations_db_path(_DP.get_single_user_id())
         
         self.db_path = str(db_path)
         self._lock = threading.RLock()
@@ -114,7 +112,7 @@ class AuditLogger:
     
     def _init_database(self):
         """Initialize audit logging tables."""
-        with get_connection() as conn:
+        with self.get_connection() as conn:
             # Audit events table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS audit_events (
@@ -160,10 +158,16 @@ class AuditLogger:
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections."""
-        with get_connection() as pooled_conn:
-            pooled_conn.connection.row_factory = sqlite3.Row
-            yield pooled_conn.connection
+        """Context manager for database connections bound to this logger's DB path."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     
     def log_event(
         self,

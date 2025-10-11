@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluation
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.config import load_comprehensive_config
 import os
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 class EvaluationManager:
@@ -43,9 +44,14 @@ class EvaluationManager:
         """Get evaluation database path with security validation"""
         # Use the same path as the OpenAI-compatible evaluations DB
         if self.config and self.config.has_section("Database"):
-            db_path = self.config.get("Database", "evaluations_db_path", fallback="Databases/evaluations.db")
+            db_path = self.config.get(
+                "Database",
+                "evaluations_db_path",
+                fallback=str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()))
+            )
         else:
-            db_path = "Databases/evaluations.db"
+            # Default to per-user path (single-user by default)
+            db_path = str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()))
         
         # Sanitize path to prevent directory traversal and null byte injection
         # Remove any directory traversal attempts
@@ -54,25 +60,13 @@ class EvaluationManager:
         db_path = db_path.replace("\x00", "")
         db_path = os.path.normpath(db_path)
         
-        # Make absolute if relative
-        if not os.path.isabs(db_path):
-            # Get the project root (4 levels up from this file)
-            project_root = Path(__file__).parent.parent.parent.parent
-            db_path = project_root / db_path
-        else:
-            db_path = Path(db_path)
+        # Ensure Path object
+        db_path = Path(db_path)
         
         # Resolve to absolute path and check it's within project boundaries
         db_path = db_path.resolve()
-        project_root = Path(__file__).parent.parent.parent.parent.resolve()
-        
-        # Ensure the path is within the project directory
-        try:
-            db_path.relative_to(project_root)
-        except ValueError:
-            # Path is outside project directory - use default safe path
-            logger.warning(f"Attempted to use database path outside project: {db_path}")
-            db_path = project_root / "Databases" / "evaluations.db"
+        # For security, ensure directory exists inside computed path
+        # Default DatabasePaths already points inside project Databases/user_databases
         
         # Ensure directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)

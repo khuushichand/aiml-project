@@ -23,6 +23,7 @@ from loguru import logger
 
 # Import database components
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 # Import evaluation engines
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
@@ -33,6 +34,7 @@ from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metri
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Evaluations.audit_logger import AuditLogger, AuditEventType
+from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
 
 
 class EvaluationType(str, Enum):
@@ -61,7 +63,7 @@ class UnifiedEvaluationService:
     
     def __init__(
         self,
-        db_path: str = "Databases/evaluations.db",
+        db_path: str = str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id())),
         *,
         enable_webhooks: bool = True,
         enable_caching: bool = True
@@ -104,8 +106,15 @@ class UnifiedEvaluationService:
             )
         )
         
-        # Initialize audit logger
-        self.audit_logger = AuditLogger()
+        # Initialize audit logger bound to this DB
+        self.audit_logger = AuditLogger(db_path=db_path)
+
+        # Initialize per-service webhook manager bound to this DB
+        try:
+            from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
+            self.webhook_manager = WebhookManager(db_path=db_path)
+        except Exception:
+            self.webhook_manager = None
         
         logger.info("Unified Evaluation Service initialized")
 
@@ -436,9 +445,9 @@ class UnifiedEvaluationService:
             )
             
             # Send completion webhook
-            if eval_config.get("webhook_url") and self.enable_webhooks:
+            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
                 run = self.db.get_run(run_id)
-                await webhook_manager.send_webhook(
+                await self.webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_COMPLETED,
                     evaluation_id=run_id,
@@ -456,8 +465,8 @@ class UnifiedEvaluationService:
             self.db.update_run_status(run_id, "failed", error_message=str(e))
             
             # Send failure webhook
-            if eval_config.get("webhook_url") and self.enable_webhooks:
-                await webhook_manager.send_webhook(
+            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                await self.webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_FAILED,
                     evaluation_id=run_id,
@@ -1400,6 +1409,8 @@ class UnifiedEvaluationService:
 
 # Singleton instance
 _service_instance = None
+_service_instances_by_user = {}
+_service_instances_lock = None
 
 
 def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEvaluationService:
@@ -1415,8 +1426,26 @@ def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEval
     global _service_instance
     
     if _service_instance is None:
-        _service_instance = UnifiedEvaluationService(
-            db_path or "Databases/evaluations.db"
-        )
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        _default_path = str(_DP.get_evaluations_db_path(_DP.get_single_user_id()))
+        _service_instance = UnifiedEvaluationService(db_path or _default_path)
     
     return _service_instance
+
+
+def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationService:
+    """Get or create a per-user unified evaluation service bound to that user's DB."""
+    # Lazy init lock to avoid import-time issues
+    global _service_instances_lock
+    if _service_instances_lock is None:
+        import threading as _threading
+        _service_instances_lock = _threading.Lock()
+
+    with _service_instances_lock:
+        svc = _service_instances_by_user.get(user_id)
+        if svc is not None:
+            return svc
+        db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
+        svc = UnifiedEvaluationService(db_path=db_path)
+        _service_instances_by_user[user_id] = svc
+        return svc

@@ -2779,7 +2779,49 @@ function renderWizardSummary() {
     hint.className = 'field-hint';
     hint.textContent = hintText || fallbackHint;
     wrapper.appendChild(hint);
+
+    // Provide quick "Copy .env snippet" for likely credential fields
+    try {
+      if (shouldShowEnvSnippet(sectionName, field)) {
+        const actions = document.createElement('div');
+        actions.className = 'field-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn subtle';
+        copyBtn.textContent = 'Copy .env snippet';
+        copyBtn.addEventListener('click', async () => {
+          const snippet = buildEnvSnippet(field);
+          try {
+            await navigator.clipboard.writeText(snippet);
+            setMessage('info', `Copied snippet for ${field.key} to clipboard`);
+          } catch (e) {
+            setMessage('error', 'Failed to copy to clipboard');
+          }
+        });
+        actions.appendChild(copyBtn);
+        wrapper.appendChild(actions);
+      }
+    } catch (e) { /* no-op */ }
     return wrapper;
+  }
+
+  function likelyCredentialKey(key) {
+    const k = String(key || '').toUpperCase();
+    return /API_KEY|TOKEN|SECRET|CLIENT_SECRET|ACCESS_TOKEN|BEARER/i.test(k);
+  }
+
+  function shouldShowEnvSnippet(sectionName, field) {
+    if (!sectionName || !field) return false;
+    const inApiSection = String(sectionName).toLowerCase() === 'api';
+    const looksSecret = !!field.is_secret || likelyCredentialKey(field.key);
+    const isPlaceholder = !!field.placeholder || !String(field.value || '').trim();
+    return inApiSection && looksSecret && isPlaceholder;
+  }
+
+  function buildEnvSnippet(field) {
+    const key = String(field.key || 'KEY').toUpperCase();
+    // Do not include actual values to avoid leaking secrets
+    return `# Add to your .env file\n${key}=<your_value_here>`;
   }
 
   function createInputForField(field) {

@@ -298,11 +298,11 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_single_user_auth(self, mock_settings):
         """Test single-user authentication without hardcoded keys."""
-        from tldw_Server_API.app.api.v1.endpoints.evals_openai import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
         
-        with patch('tldw_Server_API.app.api.v1.endpoints.evals_openai.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
             
             # Test with valid API key
@@ -321,15 +321,15 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_multi_user_jwt_auth(self, mock_settings):
         """Test multi-user JWT authentication."""
-        from tldw_Server_API.app.api.v1.endpoints.evals_openai import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
         
         mock_settings.AUTH_MODE = "multi_user"
         
-        with patch('tldw_Server_API.app.api.v1.endpoints.evals_openai.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
             
-            with patch('tldw_Server_API.app.api.v1.endpoints.evals_openai.JWTService') as MockJWTService:
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_unified.JWTService') as MockJWTService:
                 mock_jwt = Mock()
                 mock_jwt.decode_access_token.return_value = {
                     'sub': '123',
@@ -344,41 +344,8 @@ class TestAuthentication:
 
 
 class TestRateLimiting:
-    """Test rate limiting configuration."""
-    
-    def test_rate_limit_configuration(self):
-        """Test that rate limits are properly configured from settings."""
-        from tldw_Server_API.app.api.v1.endpoints.evals_openai import (
-            rate_limit_per_minute, burst_limit
-        )
-        
-        # Should have sensible defaults even without settings
-        assert rate_limit_per_minute > 0
-        assert burst_limit > 0
-    
-    def test_rate_limit_key_function(self):
-        """Test rate limit key generation."""
-        from tldw_Server_API.app.api.v1.endpoints.evals_openai import get_rate_limit_key
-        from fastapi import Request
-        
-        # Test with user ID
-        request = Mock(spec=Request)
-        request.state = Mock()
-        request.state.user_id = "123"
-        request.client = Mock()
-        request.client.host = "127.0.0.1"
-        
-        key = get_rate_limit_key(request)
-        assert key == "user_123"
-        
-        # Test without user ID (falls back to IP)
-        request = Mock(spec=Request)
-        request.state = Mock(spec=[])  # No user_id attribute
-        request.client = Mock()
-        request.client.host = "192.168.1.1"
-        
-        key = get_rate_limit_key(request)
-        assert "192.168.1.1" in key
+    """Legacy rate-limiting tests removed; unified endpoints handle limits internally."""
+    pass
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management import migration_tools
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -106,6 +107,67 @@ def sqlite_media_db(tmp_path: Path) -> Path:
     return db_path
 
 
+@pytest.fixture()
+def sqlite_workflows_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "workflows_source.db"
+    wf_db = WorkflowsDatabase(str(db_path))
+
+    definition_id = wf_db.create_definition(
+        tenant_id="tenant-wf",
+        name="Workflow Migration",
+        version=1,
+        owner_id="owner-wf",
+        visibility="private",
+        description="Migrated definition",
+        tags=["wf"],
+        definition={"name": "Workflow Migration", "version": 1, "steps": []},
+    )
+
+    run_id = "wf-run-source"
+    wf_db.create_run(
+        run_id=run_id,
+        tenant_id="tenant-wf",
+        user_id="runner",
+        inputs={},
+        workflow_id=definition_id,
+        definition_version=1,
+        definition_snapshot={"name": "Workflow Migration", "version": 1, "steps": []},
+        idempotency_key="wf-idem",
+        session_id="wf-session",
+    )
+
+    wf_db.append_event(
+        tenant_id="tenant-wf",
+        run_id=run_id,
+        event_type="run_created",
+        payload={"source": "sqlite"},
+    )
+    wf_db.create_step_run(
+        step_run_id="wf-step",
+        run_id=run_id,
+        step_id="step-1",
+        name="Step",
+        step_type="prompt",
+        inputs={"config": {"prompt": "Hi"}},
+    )
+    wf_db.complete_step_run(
+        step_run_id="wf-step",
+        status="succeeded",
+        outputs={"response": "Hi"},
+    )
+    wf_db.add_artifact(
+        artifact_id="wf-artifact",
+        tenant_id="tenant-wf",
+        run_id=run_id,
+        step_run_id="wf-step",
+        type="text",
+        uri="s3://bucket/wf.txt",
+        metadata={"origin": "sqlite"},
+    )
+    wf_db.close_connection()
+    return db_path
+
+
 def _reset_postgres_database(config: DatabaseConfig) -> None:
     assert psycopg2 is not None
     conn = psycopg2.connect(
@@ -180,3 +242,63 @@ def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_co
         conn.close()
 
     assert migrated_claim == "Claim copied via migration"
+
+
+def _postgres_workflow_counts(config: DatabaseConfig) -> tuple[int, int, int, int]:
+    assert psycopg2 is not None
+    conn = psycopg2.connect(
+        host=config.pg_host,
+        port=config.pg_port,
+        database=config.pg_database,
+        user=config.pg_user,
+        password=config.pg_password,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM workflows")
+            defs = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM workflow_runs")
+            runs = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM workflow_events")
+            events = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM workflow_artifacts")
+            artifacts = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return defs, runs, events, artifacts
+
+
+def _sqlite_workflow_counts(path: Path) -> tuple[int, int, int, int]:
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        defs = conn.execute("SELECT COUNT(*) FROM workflows").fetchone()[0]
+        runs = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
+        events = conn.execute("SELECT COUNT(*) FROM workflow_events").fetchone()[0]
+        artifacts = conn.execute("SELECT COUNT(*) FROM workflow_artifacts").fetchone()[0]
+    finally:
+        conn.close()
+    return defs, runs, events, artifacts
+
+
+@pytest.mark.integration
+def test_migration_cli_transfers_workflow_rows(sqlite_workflows_db: Path, postgres_config: DatabaseConfig) -> None:
+    _reset_postgres_database(postgres_config)
+
+    backend = DatabaseBackendFactory.create_backend(postgres_config)
+    wf_db = WorkflowsDatabase(db_path=':memory:', backend=backend)
+    wf_db.close_connection()
+
+    migration_tools.migrate_workflows_sqlite_to_postgres(
+        sqlite_workflows_db,
+        postgres_config,
+        batch_size=32,
+    )
+
+    sqlite_counts = _sqlite_workflow_counts(sqlite_workflows_db)
+    pg_counts = _postgres_workflow_counts(postgres_config)
+
+    assert sqlite_counts == pg_counts
+
+    defs, runs, _, _ = pg_counts
+    assert defs > 0 and runs > 0

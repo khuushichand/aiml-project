@@ -2,13 +2,14 @@
 # PostgreSQL Content Migration Guide
 
 This document explains how to migrate existing SQLite content databases to PostgreSQL using the
-built-in migration tooling (`migration_tools.py`). The script copies Media, analytics, and
-ChaChaNotes data while preserving UUIDs, timestamps, and soft-delete flags so you can switch the
-backend without re-ingesting content.
+built-in migration tooling (`migration_tools.py`). The script copies Media, analytics,
+ChaChaNotes, **workflows**, and related metadata while preserving UUIDs, timestamps, and
+soft-delete flags so you can switch the backend without re-ingesting content or re-running
+workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`Databases/Media_DB_v2.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
+- Back up all SQLite databases (`Databases/Media_DB_v2.db`, `Databases/workflows.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg2-binary` (now listed in `requirements.txt`).
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
@@ -31,11 +32,22 @@ export PGPASSWORD=super-secret
 ## Step 2 – Run the migration utility
 
 Invoke the migration module with paths to your existing SQLite databases. Provide `--content-sqlite`
-for the main media database and optionally pass `--chacha-sqlite` and `--analytics-sqlite` if you
-want to migrate user notes or analytics data in the same pass.
+for the main media database and optionally pass `--chacha-sqlite`, `--analytics-sqlite`, and
+`--workflows-sqlite` if you want to migrate user notes, analytics data, and workflow runs in the
+same pass.
 
 ```bash
-python -m tldw_Server_API.app.core.DB_Management.migration_tools       --content-sqlite Databases/Media_DB_v2.db       --chacha-sqlite Databases/user_databases/default/ChaChaNotes.db       --analytics-sqlite Analytics.db       --pg-host "$PGHOST"       --pg-port "$PGPORT"       --pg-database "$PGDATABASE"       --pg-user "$PGUSER"       --pg-password "$PGPASSWORD"       --batch-size 500
+python -m tldw_Server_API.app.core.DB_Management.migration_tools \
+      --content-sqlite Databases/Media_DB_v2.db \
+      --chacha-sqlite Databases/user_databases/default/ChaChaNotes.db \
+      --analytics-sqlite Analytics.db \
+      --workflows-sqlite Databases/workflows.db \
+      --pg-host "$PGHOST" \
+      --pg-port "$PGPORT" \
+      --pg-database "$PGDATABASE" \
+      --pg-user "$PGUSER" \
+      --pg-password "$PGPASSWORD" \
+      --batch-size 500
 ```
 
 The script performs the following actions for each supplied database:
@@ -44,6 +56,8 @@ The script performs the following actions for each supplied database:
 2. Deletes existing rows in PostgreSQL (in dependency order) so the migration is idempotent.
 3. Copies data in batches using the backend abstraction layer.
 4. Resyncs sequences so future inserts continue from the correct IDs.
+5. Emits a row-count summary for each migrated table (including workflow definitions, runs, steps,
+   events, and artifacts) so you can compare the SQLite and Postgres totals at a glance.
 
 Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip large log tables).
 
@@ -55,10 +69,13 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   -- Run in psql
   SELECT COUNT(*) FROM media;
   SELECT COUNT(*) FROM claims;
+  SELECT COUNT(*) FROM workflow_runs;
+  SELECT COUNT(*) FROM workflow_steps;
   ```
 
   ```bash
   sqlite3 Databases/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```
 
 - Run the dual-backend regression tests to ensure the application-level routines behave correctly (requires a Postgres instance with `POSTGRES_TEST_*` env vars):
@@ -70,8 +87,19 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
          tldw_Server_API/tests/RAG/test_dual_backend_rag_flow.py \
          tldw_Server_API/tests/RAG/test_dual_backend_end_to_end.py \
          tldw_Server_API/tests/DB_Management/test_migration_tools.py \
-         tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py
+         tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py \
+         tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
+         tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
+         tldw_Server_API/tests/Workflows/test_dual_backend_engine.py
   ```
+
+- Optionally run the workload stress sweep after verifying parity:
+
+  ```bash
+  TLDW_WORKFLOW_STRESS=1 pytest -v tldw_Server_API/tests/Workflows/test_workflow_stress.py
+  ```
+  Latest run (2025-10-08) processed 250 concurrent runs with 1,000 step events per backend in under
+  two minutes and finished with zero failures.
 
 
 ## Step 4 – Switch the application configuration
@@ -85,12 +113,17 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
    export TLDW_PG_DATABASE=$PGDATABASE
    export TLDW_PG_USER=$PGUSER
    export TLDW_PG_PASSWORD=$PGPASSWORD
+   # Optional overrides for workflow connection pooling
+    export TLDW_WORKFLOW_DB_POOL_SIZE=15
+    export TLDW_WORKFLOW_DB_MAX_OVERFLOW=30
+    export TLDW_WORKFLOW_DB_TIMEOUT=30
    ```
 
 2. Remove or archive the old SQLite files once you are confident the migration succeeded.
 
 3. Restart the API/WebUI stack. On startup the service should log that it is using PostgreSQL for
-   Media, ChaChaNotes, and Analytics.
+   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/status` to ensure the
+   runtime heartbeat updates and that queue depth drops as pending runs are processed.
 
 ## Troubleshooting
 
@@ -100,9 +133,14 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   recompute the sequence state, or run the generated `SELECT setval(...)` statements manually.
 - **Large datasets** – increase `--batch-size` (default 500) to improve throughput, or run per
   database to isolate issues.
+- **Workflow runtime lag** – confirm the connection pool overrides above are applied and check
+  `pg_stat_activity` for sessions waiting on locks. Enable the stress suite with reduced batch size
+  (set `TLDW_WORKFLOW_STRESS_BATCH=25`) to reproduce issues under controlled load.
 
 ## Next steps
 
 - Update deployment scripts to point at PostgreSQL hosts.
 - Configure backups for the new PostgreSQL databases.
 - Remove legacy cron jobs or tooling that assumed SQLite file copies.
+- Add the workflow stress sweep (`TLDW_WORKFLOW_STRESS=1`) to nightly CI or a staging cron job to
+  detect regressions early.

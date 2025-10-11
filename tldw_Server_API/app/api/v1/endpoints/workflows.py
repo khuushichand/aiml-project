@@ -33,7 +33,6 @@ from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
-from tldw_Server_API.app.core.Workflows.engine import WorkflowEngine
 
 
 def _utcnow_iso() -> str:

@@ -128,9 +128,11 @@ def _find_main_config() -> Optional[Path]:
 
 def _apply_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     """Apply default configuration values."""
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
     defaults = {
         'database': {
-            'path': str(Path(__file__).parent.parent.parent / "Databases" / "evaluations.db"),
+            # Default to per-user evaluations DB (single-user ID)
+            'path': str(_DP.get_evaluations_db_path(_DP.get_single_user_id())),
             'connection': {
                 'pool_size': 10,
                 'max_overflow': 20,

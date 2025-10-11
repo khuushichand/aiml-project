@@ -311,6 +311,16 @@ class WebUI {
                 }
                 this.checkApiStatus();
             });
+            // Copy base URL button
+            const copyBtn = document.getElementById('copyBaseUrlBtn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async () => {
+                    const success = await Utils.copyToClipboard(baseUrlInput.value || '');
+                    if (typeof Toast !== 'undefined' && Toast) {
+                        success ? Toast.success('Copied base URL') : Toast.error('Failed to copy');
+                    }
+                });
+            }
         }
 
         if (apiKeyInput) {
@@ -332,6 +342,20 @@ class WebUI {
                     Toast.success('API token updated');
                 }
             });
+
+            // Toggle visibility button
+            const toggleBtn = document.getElementById('toggleApiKeyVisibility');
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', () => {
+                    if (apiKeyInput.type === 'password') {
+                        apiKeyInput.type = 'text';
+                        toggleBtn.textContent = 'Hide';
+                    } else {
+                        apiKeyInput.type = 'password';
+                        toggleBtn.textContent = 'Show';
+                    }
+                });
+            }
         }
 
         // Multi-user API key preference toggle

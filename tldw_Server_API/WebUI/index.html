@@ -789,13 +789,16 @@
                         <div class="column">
                             <div class="form-group">
                                 <label for="baseUrl">API Base URL:</label>
-                                <input 
-                                    type="url" 
-                                    id="baseUrl" 
-                                    value="http://localhost:8000"
-                                    placeholder="http://localhost:8000"
-                                    aria-describedby="baseUrl-help"
-                                >
+                                <div class="input-with-action">
+                                    <input 
+                                        type="url" 
+                                        id="baseUrl" 
+                                        value="http://localhost:8000"
+                                        placeholder="http://localhost:8000"
+                                        aria-describedby="baseUrl-help"
+                                    >
+                                    <button id="copyBaseUrlBtn" type="button" class="btn btn-secondary btn-sm" title="Copy base URL">Copy</button>
+                                </div>
                                 <small id="baseUrl-help">The base URL for all API requests</small>
                             </div>
                         </div>
@@ -803,14 +806,17 @@
                         <div class="column">
                             <div class="form-group">
                                 <label for="apiKeyInput">API Token:</label>
-                                <input 
-                                    type="password" 
-                                    id="apiKeyInput" 
-                                    value=""
-                                    placeholder="Enter your API token"
-                                    aria-describedby="apiKey-help"
-                                >
-                                <small id="apiKey-help">Sent in the 'Token' header for authenticated requests. Contact your administrator for an API token.</small>
+                                <div class="input-with-action">
+                                    <input 
+                                        type="password" 
+                                        id="apiKeyInput" 
+                                        value=""
+                                        placeholder="Enter your API token"
+                                        aria-describedby="apiKey-help"
+                                    >
+                                    <button id="toggleApiKeyVisibility" type="button" class="btn btn-secondary btn-sm" title="Show/Hide token">Show</button>
+                                </div>
+                                <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
                             </div>
                         </div>
                     </div>
@@ -1072,7 +1078,9 @@
                 }
 
                 // Generate and display cURL command
-                const curlCommand = apiClient.generateCurl(method, processedPath, { body, query });
+                const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+                    ? apiClient.generateCurlV2(method, processedPath, { body, query })
+                    : apiClient.generateCurl(method, processedPath, { body, query }));
                 if (curlEl) {
                     curlEl.textContent = curlCommand;
                 }

@@ -176,9 +176,13 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
     
     # Rate limiting service health
     try:
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
-        # Simple health check - try to get user stats
-        test_stats = user_rate_limiter.get_user_stats('health_check_user')
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        # Use per-user limiter bound to single-user ID for health checks
+        _uid = _DP.get_single_user_id()
+        _limiter = get_user_rate_limiter_for_user(_uid)
+        # Simple health check - try to get user stats in that DB
+        test_stats = _limiter.get_user_stats('health_check_user')
         health_data['components']['rate_limiting'] = {
             'status': 'ok',
             'message': 'Rate limiting service operational'

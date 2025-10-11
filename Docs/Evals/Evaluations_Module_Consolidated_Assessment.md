@@ -76,16 +76,16 @@
    - Schema conflicts fixed with separate tables
 
 7. **Database Configuration** - FIXED ✅ (2025-08-16)
-   - Correct path: `Databases/evaluations.db`
+   - Default path: per-user under `Databases/user_databases/<user_id>/evaluations/evaluations.db`
    - Separated OpenAI and internal evaluation tables
    - No more schema conflicts
 
 ### ❌ **ACTUAL REMAINING ISSUES** (Verified)
 
 1. **Rate Limiting** - ✅ IMPLEMENTED (Incorrectly marked as missing)
-   - Found in `/app/api/v1/endpoints/evals.py` lines 54-99
+   - Enforced in `/app/api/v1/endpoints/evaluations_unified.py`
    - Uses `RateLimiter` class with per-endpoint configuration
-   - Also uses slowapi in `evals_openai.py` lines 57-68
+   - 
 
 2. **Health Checks** - ✅ IMPLEMENTED (Incorrectly marked as missing)
    - `/evaluations` endpoint at `health.py:320`
@@ -395,7 +395,7 @@ With the critical fixes applied, the module is now ready for staging deployment.
 - `/app/core/Evaluations/response_quality_evaluator.py`
 - `/app/core/Evaluations/ms_g_eval.py`
 - `/app/core/Evaluations/eval_runner.py`
-- `/app/api/v1/endpoints/evals.py` - 405 lines
+- Legacy endpoints removed; see `/app/api/v1/endpoints/evaluations_unified.py`
 - 7 test files with 80 total tests
 
 ### B. Test Execution Results (VERIFIED 2025-08-16)
@@ -409,7 +409,7 @@ test_circuit_breaker.py: 13/13 passed (100%)
 test_rag_evaluator_embeddings.py: 9/9 passed (100%)
 test_evaluation_integration.py: 6/8 passed (75%)
 test_error_scenarios.py: 14/20 passed (70%)
-test_evals_openai.py: 0/34 passed (0% - route registration issue)
+Legacy OpenAI compatibility test file removed in favor of unified endpoints
 
 # Test categories:
 Unit tests: Working well
@@ -422,7 +422,7 @@ OpenAI API tests: Complete failure (routing issue)
 2. Circuit breakers fully implemented (329 lines) ✅
 3. Error propagation ENHANCED (20 raise statements, NOT 6) ✅
 4. No hardcoded credentials found ✅
-5. Rate limiting IMPLEMENTED (evals.py:54-99, evals_openai.py:57-68) ✅
+5. Rate limiting IMPLEMENTED via unified router dependencies ✅
 6. Health checks EXIST (health.py:320) ✅
 7. Database migrations PARTIALLY WORKING (fails in dev mode) ⚠️
 8. Documentation COMPREHENSIVE (127+ docstrings, user guides) ✅

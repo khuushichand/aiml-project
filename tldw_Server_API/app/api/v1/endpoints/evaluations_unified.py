@@ -48,9 +48,11 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 
 # Import unified service
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
-    get_unified_evaluation_service,
+    get_unified_evaluation_service_for_user,
     UnifiedEvaluationService
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager, WebhookEvent
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
 
 # Import auth and rate limiting
@@ -61,7 +63,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_l
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 # Import additional services
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter
+from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestCreateRequest,
@@ -88,19 +90,24 @@ router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 # Security
 security = HTTPBearer(auto_error=False)
 
-# Lazy evaluation service initialization 
-_evaluation_service = None
+_webhook_managers: dict = {}
+_wm_lock = None
 
-def get_evaluation_service():
-    """Get evaluation service with lazy initialization"""
-    global _evaluation_service
-    if _evaluation_service is None:
-        _evaluation_service = get_unified_evaluation_service()
-    return _evaluation_service
+def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
+    global _wm_lock
+    if _wm_lock is None:
+        import threading as _threading
+        _wm_lock = _threading.Lock()
+    with _wm_lock:
+        mgr = _webhook_managers.get(user_id)
+        if mgr is None:
+            db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
+            mgr = WebhookManager(db_path=db_path)
+            _webhook_managers[user_id] = mgr
+        return mgr
 
-def get_db():
-    svc = get_evaluation_service()
-    # Unified service exposes EvaluationsDatabase at svc.db
+def get_db_for_user(user_id: int):
+    svc = get_unified_evaluation_service_for_user(user_id)
     return getattr(svc, 'db', None)
 
 
@@ -322,6 +329,7 @@ async def create_embeddings_abtest(
     payload: EmbeddingsABTestCreateRequest,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
     """Create an embeddings A/B test (stub).
 
@@ -329,7 +337,7 @@ async def create_embeddings_abtest(
     orchestration will be added in implementation phases per plan.
     """
     # Simple test_id generation
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
     # Persist test, arms, and queries
     test_id = db.create_abtest(name=payload.name, config=payload.config.model_dump(), created_by=user_ctx)
@@ -365,7 +373,7 @@ async def run_embeddings_abtest(
     """
     # Admin gating for heavy runs
     require_admin(current_user)
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
     # Launch background job
     asyncio.create_task(run_abtest_full(db, payload.config, test_id, str(current_user.id), media_db))
@@ -378,8 +386,9 @@ async def get_embeddings_abtest_status(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     row = svc.db.get_abtest(test_id)
     if not row:
         raise HTTPException(status_code=404, detail="abtest not found")
@@ -430,8 +439,9 @@ async def get_embeddings_abtest_results(
     page_size: int = Query(50, ge=1, le=500),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size)
     # Build summary
     row = svc.db.get_abtest(test_id)
@@ -471,8 +481,9 @@ async def get_embeddings_abtest_significance(
     metric: str = Query("ndcg"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     _ = svc.db.get_abtest(test_id) or (_ for _ in ()).throw(HTTPException(404, "abtest not found"))
     return compute_significance(svc.db, test_id, metric=metric)
 
@@ -482,12 +493,13 @@ async def stream_embeddings_abtest_events(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
     """SSE stream of progress and updates for an A/B test."""
     from fastapi.responses import StreamingResponse
     import asyncio as _aio
     import json as _json
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
 
     async def event_generator():
         last_payload = None
@@ -518,6 +530,7 @@ async def delete_embeddings_abtest(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
     """Cancel/cleanup an embeddings A/B test (stub)."""
     logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
@@ -534,7 +547,7 @@ async def export_embeddings_abtest(
 ):
     """Export AB test results (JSON or CSV). Admin-only."""
     require_admin(current_user)
-    svc = get_evaluation_service()
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
     if format == 'json':
         return {"test_id": test_id, "total": total, "results": rows}
@@ -559,7 +572,8 @@ async def export_embeddings_abtest(
 )
 async def create_evaluation(
     eval_request: CreateEvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Create a new evaluation definition (OpenAI-compatible).
@@ -567,7 +581,8 @@ async def create_evaluation(
     This endpoint creates an evaluation that can be run multiple times with different models.
     """
     try:
-        evaluation = await get_evaluation_service().create_evaluation(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        evaluation = await svc.create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
             eval_type=eval_request.eval_type,
@@ -594,11 +609,13 @@ async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     eval_type: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """List evaluations with pagination"""
     try:
-        evaluations, has_more = await get_evaluation_service().list_evaluations(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        evaluations, has_more = await svc.list_evaluations(
             limit=limit,
             after=after,
             eval_type=eval_type
@@ -628,11 +645,13 @@ async def list_evaluations(
 
 @router.get("/rate-limits", response_model=RateLimitStatusResponse)
 async def get_rate_limit_status(
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Get current rate limit status for the authenticated user"""
     try:
-        summary = await user_rate_limiter.get_usage_summary(user_id)
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        summary = await limiter.get_usage_summary(user_id)
         
         # Convert the nested structure to flat structure expected by RateLimitStatusResponse
         from datetime import datetime, timezone, timedelta
@@ -846,11 +865,13 @@ async def cleanup_ephemeral_collections(user_id: str = Depends(verify_api_key)):
 @router.post("/datasets", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def create_dataset(
     dataset_request: CreateDatasetRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Create a new dataset"""
     try:
-        dataset_id = await get_evaluation_service().create_dataset(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        dataset_id = await svc.create_dataset(
             name=dataset_request.name,
             description=dataset_request.description,
             samples=[s.dict() for s in dataset_request.samples],
@@ -858,7 +879,7 @@ async def create_dataset(
             created_by=user_id
         )
         
-        dataset = await get_evaluation_service().get_dataset(dataset_id)
+        dataset = await svc.get_dataset(dataset_id)
         if not dataset:
             raise ValueError("Failed to retrieve created dataset")
         
@@ -877,11 +898,13 @@ async def create_dataset(
 async def list_datasets(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """List datasets with pagination"""
     try:
-        datasets, has_more = await get_evaluation_service().list_datasets(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        datasets, has_more = await svc.list_datasets(
             limit=limit,
             after=after
         )
@@ -909,11 +932,13 @@ async def list_datasets(
 @router.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Get dataset by ID"""
     try:
-        dataset = await get_evaluation_service().get_dataset(dataset_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        dataset = await svc.get_dataset(dataset_id)
         if not dataset:
             raise create_error_response(
                 message=f"Dataset {dataset_id} not found",
@@ -938,11 +963,13 @@ async def get_dataset(
 @router.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dataset(
     dataset_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Delete a dataset"""
     try:
-        success = await get_evaluation_service().delete_dataset(dataset_id, deleted_by=user_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        success = await svc.delete_dataset(dataset_id, deleted_by=user_id)
         if not success:
             raise create_error_response(
                 message=f"Dataset {dataset_id} not found",
@@ -968,7 +995,11 @@ async def delete_dataset(
 async def health_check():
     """Check evaluation service health"""
     try:
-        health = await get_evaluation_service().health_check()
+        # Default to single-user instance for health when no auth context
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        uid = _DP.get_single_user_id()
+        svc = get_unified_evaluation_service_for_user(uid)
+        health = await svc.health_check()
         return HealthCheckResponse(**health)
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -984,7 +1015,10 @@ async def health_check():
 async def get_metrics(request: Request):
     """Get Prometheus metrics"""
     try:
-        metrics_summary = await get_evaluation_service().get_metrics_summary()
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        uid = _DP.get_single_user_id()
+        svc = get_unified_evaluation_service_for_user(uid)
+        metrics_summary = await svc.get_metrics_summary()
         
         # Handle failure from service so error message is never exposed
         if "error" in metrics_summary:
@@ -1028,12 +1062,14 @@ async def get_metrics(request: Request):
 @router.post("/webhooks", response_model=WebhookRegistrationResponse)
 async def register_webhook(
     request: WebhookRegistrationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Register a webhook for evaluation notifications"""
     try:
         # Import webhook manager lazily to avoid heavy imports during OpenAPI generation
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, webhook_manager
+        # Already imported WebhookEvent at top; get per-user manager
+        wm = _get_webhook_manager_for_user(current_user.id)
         
         # Convert string event types to WebhookEvent enums
         events = []
@@ -1052,7 +1088,7 @@ async def register_webhook(
                     events.append(webhook_event)
                     break
         
-        result = await webhook_manager.register_webhook(
+        result = await wm.register_webhook(
             user_id=user_id,
             url=str(request.url),
             events=events,
@@ -1071,12 +1107,13 @@ async def register_webhook(
 
 @router.get("/webhooks", response_model=List[WebhookStatusResponse])
 async def list_webhooks(
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """List all registered webhooks for the authenticated user"""
     try:
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        webhooks = await webhook_manager.get_webhook_status(user_id)
+        wm = _get_webhook_manager_for_user(current_user.id)
+        webhooks = await wm.get_webhook_status(user_id)
         return [WebhookStatusResponse(**w) for w in webhooks]
         
     except Exception as e:
@@ -1090,20 +1127,21 @@ async def list_webhooks(
 @router.delete("/webhooks")
 async def unregister_webhook(
     url: str = Query(..., description="Webhook URL to unregister"),
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Unregister a webhook"""
     try:
         # Validate URL safety to avoid internal host targeting
         from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
         from tldw_Server_API.app.core.Metrics import get_metrics_registry
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
+        wm = _get_webhook_manager_for_user(current_user.id)
         try:
             assert_url_safe(url)
         except HTTPException as he:
             get_metrics_registry().increment("security_ssrf_block_total", 1)
             raise he
-        success = await webhook_manager.unregister_webhook(user_id, url)
+        success = await wm.unregister_webhook(user_id, url)
         
         if not success:
             raise HTTPException(
@@ -1126,12 +1164,13 @@ async def unregister_webhook(
 @router.post("/webhooks/test", response_model=WebhookTestResponse)
 async def test_webhook(
     request: WebhookTestRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Send a test webhook to verify endpoint configuration"""
     try:
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        result = await webhook_manager.test_webhook(user_id, str(request.url))
+        wm = _get_webhook_manager_for_user(current_user.id)
+        result = await wm.test_webhook(user_id, str(request.url))
         return WebhookTestResponse(**result)
         
     except Exception as e:
@@ -1145,11 +1184,13 @@ async def test_webhook(
 @router.get("/{eval_id}", response_model=EvaluationResponse)
 async def get_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Get evaluation by ID"""
     try:
-        evaluation = await get_evaluation_service().get_evaluation(eval_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        evaluation = await svc.get_evaluation(eval_id)
         if not evaluation:
             raise create_error_response(
                 message=f"Evaluation {eval_id} not found",
@@ -1175,7 +1216,8 @@ async def get_evaluation(
 async def update_evaluation(
     eval_id: str,
     update_request: UpdateEvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Update evaluation definition"""
     try:
@@ -1186,7 +1228,8 @@ async def update_evaluation(
                 error_type="invalid_request_error"
             )
         
-        success = await get_evaluation_service().update_evaluation(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        success = await svc.update_evaluation(
             eval_id, updates, updated_by=user_id
         )
         
@@ -1198,7 +1241,7 @@ async def update_evaluation(
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
-        evaluation = await get_evaluation_service().get_evaluation(eval_id)
+        evaluation = await svc.get_evaluation(eval_id)
         return EvaluationResponse(**evaluation)
         
     except HTTPException:
@@ -1215,11 +1258,13 @@ async def update_evaluation(
 @router.delete("/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Delete an evaluation"""
     try:
-        success = await get_evaluation_service().delete_evaluation(eval_id, deleted_by=user_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        success = await svc.delete_evaluation(eval_id, deleted_by=user_id)
         if not success:
             raise create_error_response(
                 message=f"Evaluation {eval_id} not found",
@@ -1247,11 +1292,13 @@ async def create_run(
     run_request: CreateRunRequest,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(verify_api_key),
-    _: None = Depends(check_evaluation_rate_limit)
+    _: None = Depends(check_evaluation_rate_limit),
+    current_user: User = Depends(get_request_user),
 ):
     """Create and start an evaluation run"""
     try:
-        run = await get_evaluation_service().create_run(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        run = await svc.create_run(
             eval_id=eval_id,
             target_model=run_request.target_model,
             config=run_request.config.dict() if run_request.config else None,
@@ -1284,11 +1331,13 @@ async def list_runs(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """List runs for an evaluation"""
     try:
-        runs, has_more = await get_evaluation_service().list_runs(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        runs, has_more = await svc.list_runs(
             eval_id=eval_id,
             status=status,
             limit=limit,
@@ -1320,7 +1369,8 @@ async def list_runs(
 @router.post("/geval", response_model=GEvalResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_geval(
     request: GEvalRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Evaluate a summary using G-Eval metrics.
@@ -1341,10 +1391,10 @@ async def evaluate_geval(
         import os as _os
         import asyncio as _asyncio
         import time as _time
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+        wm = _get_webhook_manager_for_user(current_user.id)
         start_event_id = f"geval_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1354,7 +1404,7 @@ async def evaluate_geval(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1363,8 +1413,8 @@ async def evaluate_geval(
                     "api_name": request.api_name
                 }
             ))
-
-        result = await get_evaluation_service().evaluate_geval(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        result = await svc.evaluate_geval(
             source_text=request.source_text,
             summary=request.summary,
             metrics=request.metrics,
@@ -1416,7 +1466,7 @@ async def evaluate_geval(
         
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1427,7 +1477,7 @@ async def evaluate_geval(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1457,7 +1507,8 @@ async def evaluate_geval(
 @router.post("/rag", response_model=RAGEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_rag(
     request: RAGEvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Evaluate RAG system performance.
@@ -1477,11 +1528,11 @@ async def evaluate_rag(
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+        wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"rag_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1491,7 +1542,7 @@ async def evaluate_rag(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1500,8 +1551,8 @@ async def evaluate_rag(
                     "api_name": request.api_name
                 }
             ))
-
-        result = await get_evaluation_service().evaluate_rag(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        result = await svc.evaluate_rag(
             query=request.query,
             contexts=request.retrieved_contexts,
             response=request.generated_response,
@@ -1524,7 +1575,7 @@ async def evaluate_rag(
         
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1535,7 +1586,7 @@ async def evaluate_rag(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1566,7 +1617,8 @@ async def evaluate_rag(
 @router.post("/response-quality", response_model=ResponseQualityResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_response_quality(
     request: ResponseQualityRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Evaluate the quality of a generated response.
@@ -1586,11 +1638,11 @@ async def evaluate_response_quality(
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+        wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"response_quality_{int(_time.time())}_{effective_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1600,7 +1652,7 @@ async def evaluate_response_quality(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
@@ -1610,7 +1662,8 @@ async def evaluate_response_quality(
                 }
             ))
 
-        result = await get_evaluation_service().evaluate_response_quality(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        result = await svc.evaluate_response_quality(
             prompt=request.prompt,
             response=request.response,
             expected_format=request.expected_format,
@@ -1651,7 +1704,7 @@ async def evaluate_response_quality(
 
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-            await webhook_manager.send_webhook(
+            await wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1662,7 +1715,7 @@ async def evaluate_response_quality(
                 }
             )
         else:
-            _asyncio.create_task(webhook_manager.send_webhook(
+            _asyncio.create_task(wm.send_webhook(
                 user_id=effective_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
@@ -1692,14 +1745,16 @@ async def evaluate_response_quality(
 @router.post("/propositions", response_model=PropositionEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_propositions_endpoint(
     request: PropositionEvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Evaluate proposition extraction quality.
     Computes precision/recall/F1 with semantic or Jaccard matching and density metrics.
     """
     try:
-        result = await get_evaluation_service().evaluate_propositions(
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        result = await svc.evaluate_propositions(
             extracted=request.extracted,
             reference=request.reference,
             method=request.method or 'semantic',
@@ -1744,11 +1799,13 @@ async def evaluate_propositions_endpoint(
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Get run status and details"""
     try:
-        run = await get_evaluation_service().get_run(run_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        run = await svc.get_run(run_id)
         if not run:
             raise create_error_response(
                 message=f"Run {run_id} not found",
@@ -1773,11 +1830,13 @@ async def get_run(
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Cancel a running evaluation"""
     try:
-        success = await get_evaluation_service().cancel_run(run_id, cancelled_by=user_id)
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        success = await svc.cancel_run(run_id, cancelled_by=user_id)
         
         if success:
             return {"status": "cancelled", "id": run_id}
@@ -1804,7 +1863,8 @@ async def cancel_run(
 @router.post("/batch", response_model=BatchEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def batch_evaluate(
     request: BatchEvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Run multiple evaluations in batch.
@@ -1814,7 +1874,7 @@ async def batch_evaluate(
     # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         start_time = time.time()
-        service = get_evaluation_service()
+        service = get_unified_evaluation_service_for_user(current_user.id)
         
         results = []
         failed_count = 0
@@ -2000,7 +2060,7 @@ async def evaluate_ocr_endpoint(
     PDF-based OCR execution can be added in future if needed.
     """
     try:
-        service = get_evaluation_service()
+        service = get_unified_evaluation_service_for_user(current_user.id)
         result = await service.evaluate_ocr(
             items=[i.model_dump() for i in request.items],
             metrics=request.metrics,
@@ -2032,6 +2092,7 @@ async def evaluate_ocr_pdf_endpoint(
     ocr_mode: str = Form("fallback", description="OCR mode: 'always' or 'fallback'"),
     ocr_min_page_text_chars: int = Form(40, description="Threshold for per-page OCR fallback"),
     user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Evaluate OCR by running OCR on uploaded PDFs and comparing to provided ground-truths."""
     try:
@@ -2078,7 +2139,7 @@ async def evaluate_ocr_pdf_endpoint(
             "ocr_min_page_text_chars": int(ocr_min_page_text_chars),
         }
 
-        service = get_evaluation_service()
+        service = get_unified_evaluation_service_for_user(current_user.id)
         thresholds = None
         if thresholds_json:
             try:
@@ -2108,7 +2169,8 @@ async def evaluate_ocr_pdf_endpoint(
 @router.post("/history", response_model=EvaluationHistoryResponse)
 async def get_evaluation_history(
     request: EvaluationHistoryRequest,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """
     Retrieve evaluation history for a user.
@@ -2116,7 +2178,7 @@ async def get_evaluation_history(
     Supports filtering by date range, evaluation type, and pagination.
     """
     try:
-        service = get_evaluation_service()
+        service = get_unified_evaluation_service_for_user(current_user.id)
         
         # Get evaluations from database
         evaluations = await service.get_evaluation_history(

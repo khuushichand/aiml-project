@@ -12,6 +12,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tupl
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,94 @@ def migrate_sqlite_to_postgres(
     finally:
         sqlite_conn.close()
     logger.info('Completed migration of %s database from %s', label, sqlite_path)
+
+
+def migrate_workflows_sqlite_to_postgres(
+    sqlite_path: Path | str,
+    postgres_config: DatabaseConfig,
+    *,
+    batch_size: int = 500,
+) -> None:
+    """Copy workflows SQLite database contents into PostgreSQL."""
+
+    sqlite_path = Path(sqlite_path)
+    if not sqlite_path.exists():
+        raise FileNotFoundError(f'Workflows SQLite database not found: {sqlite_path}')
+
+    logger.info('Starting migration of workflows database from %s', sqlite_path)
+    sqlite_conn = sqlite3.connect(str(sqlite_path))
+    sqlite_conn.row_factory = sqlite3.Row
+
+    backend = DatabaseBackendFactory.create_backend(postgres_config)
+    try:
+        pg_db = WorkflowsDatabase(db_path=':memory:', backend=backend)
+        pg_db.close_connection()
+
+        with backend.transaction() as pg_conn:
+            for table in ('workflow_artifacts', 'workflow_events', 'workflow_step_runs', 'workflow_runs', 'workflows'):
+                backend.execute(f'DELETE FROM {table}', connection=pg_conn)
+
+        cursor = sqlite_conn.execute("SELECT * FROM workflows")
+        with backend.transaction() as pg_conn:
+            while rows := cursor.fetchmany(batch_size):
+                params = [tuple(row[col] for col in row.keys()) for row in rows]
+                backend.execute_many(
+                    (
+                        'INSERT INTO workflows ('
+                        'tenant_id, name, version, owner_id, visibility, description, tags, definition_json, '
+                        'created_at, updated_at, is_active, id'
+                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) '
+                        'ON CONFLICT (id) DO NOTHING'
+                    ),
+                    params,
+                    connection=pg_conn,
+                )
+
+        for table in (
+            ('workflow_runs', 'run_id'),
+            ('workflow_step_runs', 'step_run_id'),
+            ('workflow_events', 'event_id'),
+            ('workflow_artifacts', 'artifact_id'),
+        ):
+            name, pk = table
+            columns = [col['name'] for col in sqlite_conn.execute(f'PRAGMA table_info("{name}")')]
+            select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'
+            cursor = sqlite_conn.execute(select_sql)
+            with backend.transaction() as pg_conn:
+                while rows := cursor.fetchmany(batch_size):
+                    params = [tuple(row[col] for col in columns) for row in rows]
+                    placeholders = ', '.join(['%s'] * len(columns))
+                    backend.execute_many(
+                        (
+                            f'INSERT INTO {name} ({", ".join(columns)}) '
+                            f'VALUES ({placeholders}) ON CONFLICT ({pk}) DO NOTHING'
+                        ),
+                        params,
+                        connection=pg_conn,
+                    )
+
+        with backend.transaction() as pg_conn:
+            result_runs = backend.execute(
+                'SELECT COUNT(*) AS cnt FROM workflow_runs',
+                connection=pg_conn,
+            )
+            result_defs = backend.execute(
+                'SELECT COUNT(*) AS cnt FROM workflows',
+                connection=pg_conn,
+            )
+        run_count = int(result_runs.scalar or 0)
+        def_count = int(result_defs.scalar or 0)
+        logger.info(
+            'Completed migration of workflows database (%s definitions, %s runs)',
+            def_count,
+            run_count,
+        )
+    finally:
+        try:
+            backend.get_pool().close_all()
+        except Exception:
+            pass
+        sqlite_conn.close()
 
 
 def _introspect_sqlite_schema(
@@ -260,6 +349,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
     parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')
     parser.add_argument('--analytics-sqlite', help='Path to Analytics.db to migrate (optional)')
+    parser.add_argument('--workflows-sqlite', help='Path to workflows.db to migrate (optional)')
     parser.add_argument('--pg-host', default='localhost')
     parser.add_argument('--pg-port', default=5432, type=int)
     parser.add_argument('--pg-database', default='tldw_content')
@@ -277,7 +367,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
     targets = list(_iter_migration_targets(args))
-    if not targets:
+    if args.workflows_sqlite:
+        workflow_path = Path(args.workflows_sqlite)
+        if not workflow_path.exists():
+            parser.error(f'Workflows SQLite database not found: {workflow_path}')
+    if not targets and not args.workflows_sqlite:
         parser.error('At least one SQLite database path must be provided')
 
     config = _build_postgres_config_from_args(args)
@@ -288,6 +382,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             batch_size=args.batch_size,
             skip_tables=args.skip_table,
             label=label,
+        )
+
+    if args.workflows_sqlite:
+        migrate_workflows_sqlite_to_postgres(
+            Path(args.workflows_sqlite),
+            config,
+            batch_size=args.batch_size,
         )
     return 0
 

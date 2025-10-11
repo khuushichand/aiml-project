@@ -348,10 +348,13 @@ async def lifespan(app: FastAPI):
         import os as _os
         import asyncio as _asyncio
         from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EvalsDB
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DBP
         from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory as _VSF
         from tldw_Server_API.app.core.config import settings as _app_settings
 
-        _db_path = str(Path("Databases") / "evaluations.db")
+        # Use per-user evaluations DB for cleanup; default to single-user ID
+        _single_uid = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+        _db_path = str(_DBP.get_evaluations_db_path(_single_uid))
         # Read settings
         _enabled = bool(_app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
         _interval_sec = int(_app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))

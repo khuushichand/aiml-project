@@ -552,6 +552,68 @@ class APIClient {
         return curl;
     }
 
+    // Generate cURL command (auth-aware)
+    generateCurlV2(method, path, options = {}) {
+        const { body = null, query = {}, headers = {} } = options;
+
+        // Build URL with query parameters
+        const url = new URL(`${this.baseUrl}${path}`);
+        Object.keys(query).forEach(key => {
+            if (query[key] !== undefined && query[key] !== null && query[key] !== '') {
+                url.searchParams.append(key, query[key]);
+            }
+        });
+
+        let curl = `curl -X ${method} "${url.toString()}"`;
+
+        // Add headers
+        curl += ` \\
+  -H "Accept: application/json"`;
+
+        // Auth header mirrors request behavior
+        if (this.token) {
+            if (this.authMode === 'single-user' || (this.authMode === 'multi-user' && this.preferApiKeyInMultiUser)) {
+                curl += ` \\
+  -H "X-API-KEY: ${this.token}"`;
+            } else if (this.authMode === 'multi-user') {
+                curl += ` \\
+  -H "Authorization: Bearer ${this.token}"`;
+            } else {
+                // Unknown mode — default to API key header
+                curl += ` \\
+  -H "X-API-KEY: ${this.token}"`;
+            }
+        }
+        
+        Object.keys(headers).forEach(key => {
+            curl += ` \\
+  -H "${key}: ${headers[key]}"`;
+        });
+
+        // Add body
+        if (body) {
+            if (body instanceof FormData) {
+                for (let [k, value] of body.entries()) {
+                    if (value instanceof File) {
+                        curl += ` \\
+  -F "${k}=@${value.name}"`;
+                    } else {
+                        curl += ` \\
+  -F "${k}=${value}"`;
+                    }
+                }
+            } else {
+                curl += ` \\
+  -H "Content-Type: application/json"`;
+                const bodyStr = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+                curl += ` \\
+  -d '${Utils.escapeCurlData(bodyStr)}'`;
+            }
+        }
+
+        return curl;
+    }
+
     // Check API health/status
     async checkHealth() {
         try {

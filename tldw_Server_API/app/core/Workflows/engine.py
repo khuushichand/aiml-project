@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover - safety
         return None
 
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.Workflows.adapters import (
     run_prompt_adapter,
     run_rag_search_adapter,
@@ -68,8 +69,15 @@ class WorkflowEngine:
     """
 
     def __init__(self, db: Optional[WorkflowsDatabase] = None, config: Optional[EngineConfig] = None):
-        self.db = db or WorkflowsDatabase()
+        self.db = self._resolve_database(db)
         self.config = config or EngineConfig()
+
+    @staticmethod
+    def _resolve_database(db: Optional[WorkflowsDatabase]) -> WorkflowsDatabase:
+        if db is not None:
+            return db
+        backend = get_content_backend_instance()
+        return create_workflows_database(backend=backend)
 
     async def _wait_if_paused(self, run_id: str, step_run_id: Optional[str] = None) -> None:
         """Cooperatively wait while run is paused; break if cancel is requested."""

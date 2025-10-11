@@ -123,6 +123,12 @@ def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
         locked_by="tester",
         lock_ttl_seconds=30,
     )
+    db.update_step_subprocess(
+        step_run_id=step_run_id,
+        pid=123,
+        workdir="/tmp/workdir",
+        stdout_path="stdout.log",
+    )
     db.complete_step_run(
         step_run_id=step_run_id,
         status="succeeded",
@@ -144,6 +150,14 @@ def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
 
     artifacts = db.list_artifacts_for_run(run_id)
     assert artifacts and artifacts[0]["type"] == "text"
+    artifact = db.get_artifact(f"artifact-{backend_label}")
+    assert artifact is not None and artifact["artifact_id"] == f"artifact-{backend_label}"
+
+    orphans = db.find_orphan_step_runs(_now_iso())
+    assert isinstance(orphans, list)
+
+    subprocesses = db.find_running_subprocesses_for_run(run_id)
+    assert isinstance(subprocesses, list)
 
     # Cleanup flag should succeed without raising
     assert db.soft_delete_definition(workflow_id) is True

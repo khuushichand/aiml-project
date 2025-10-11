@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -27,6 +27,12 @@ from .backends.query_utils import (
     prepare_backend_many_statement,
     prepare_backend_statement,
 )
+
+
+class WorkflowsSchemaError(RuntimeError):
+    """Raised when workflow schema initialization or migration fails."""
+
+    pass
 
 
 DEFAULT_DB_PATH = Path("Databases") / "workflows.db"
@@ -384,6 +390,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
+    _CURRENT_SCHEMA_VERSION = 1
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -400,7 +407,7 @@ class WorkflowsDatabase:
             self.backend_type = backend.backend_type
             self.db_path = str(db_path or DEFAULT_DB_PATH)
             self._conn = WorkflowsBackendConnection(self)
-            self._create_schema_backend()
+            self._initialize_schema_backend()
             logger.debug("Workflows DB initialized using %s backend", self.backend_type.value)
             return
 
@@ -428,6 +435,79 @@ class WorkflowsDatabase:
         self._create_schema()
         logger.debug(f"Workflows DB initialized at {self.db_path}")
 
+    # ------------------------------------------------------------------
+    # Backend helpers
+    # ------------------------------------------------------------------
+
+    def _using_backend(self) -> bool:
+        return self.backend is not None and self.backend_type == BackendType.POSTGRESQL
+
+    def _execute_backend(
+        self,
+        query: str,
+        params: Optional[Any] = None,
+        *,
+        connection: Any = None,
+        ensure_returning: bool = False,
+    ) -> QueryResult:
+        if not self.backend:
+            raise RuntimeError("Backend execution requested without configured backend")
+
+        prepared_query, prepared_params = prepare_backend_statement(
+            self.backend.backend_type,
+            query,
+            params,
+            apply_default_transform=True,
+            ensure_returning=ensure_returning,
+        )
+        return self.backend.execute(
+            prepared_query,
+            prepared_params,
+            connection=connection,
+        )
+
+    def _execute_backend_many(
+        self,
+        query: str,
+        params_list: Sequence[Any],
+        *,
+        connection: Any = None,
+    ) -> QueryResult:
+        if not self.backend:
+            raise RuntimeError("Backend execution requested without configured backend")
+
+        prepared_query, prepared_params_list = prepare_backend_many_statement(
+            self.backend.backend_type,
+            query,
+            params_list,
+            apply_default_transform=True,
+        )
+        return self.backend.execute_many(
+            prepared_query,
+            prepared_params_list,
+            connection=connection,
+        )
+
+    @staticmethod
+    def _rows_from_result(result: QueryResult) -> List[WorkflowRowAdapter]:
+        adapter = WorkflowsBackendCursorAdapter(result)
+        rows = adapter.fetchall()
+        adapter.close()
+        return rows
+
+    @staticmethod
+    def _row_from_result(result: QueryResult) -> Optional[WorkflowRowAdapter]:
+        adapter = WorkflowsBackendCursorAdapter(result)
+        row = adapter.fetchone()
+        adapter.close()
+        return row
+
+    @staticmethod
+    def _row_to_dict(row: Any) -> Dict[str, Any]:
+        if isinstance(row, WorkflowRowAdapter):
+            return row.to_dict()
+        return dict(row)
+
     def _enable_wal(self) -> None:
         try:
             self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -435,13 +515,163 @@ class WorkflowsDatabase:
         except Exception as e:
             logger.warning(f"Failed to enable WAL on workflows DB: {e}")
 
-    def _create_schema_backend(self) -> None:
+    def _get_backend_schema_version(self, conn) -> int:
+        if not self.backend:
+            return 0
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        backend.execute(
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_schema_version')} (version INTEGER NOT NULL)",
+            connection=conn,
+        )
+
+        result = backend.execute(
+            f"SELECT version FROM {ident('workflow_schema_version')} LIMIT 1",
+            connection=conn,
+        )
+        if not result.rows:
+            backend.execute(
+                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",
+                (0,),
+                connection=conn,
+            )
+            return 0
+        return int(result.scalar or 0)
+
+    def _set_backend_schema_version(self, conn, version: int) -> None:
         if not self.backend:
             return
+
+        backend = self.backend
+        ident = backend.escape_identifier
+        result = backend.execute(
+            f"UPDATE {ident('workflow_schema_version')} SET version = %s",
+            (int(version),),
+            connection=conn,
+        )
+        if result.rowcount == 0:
+            backend.execute(
+                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",
+                (int(version),),
+                connection=conn,
+            )
+
+    def _run_backend_migrations(self, conn, current_version: int, target_version: int) -> int:
+        if not self.backend:
+            return current_version
+
+        migrations = self._get_backend_migrations()
+        applied_version = current_version
+
+        for version in sorted(migrations.keys()):
+            if applied_version < version <= target_version:
+                migrations[version](conn)
+                self._set_backend_schema_version(conn, version)
+                applied_version = version
+
+        if applied_version < target_version:
+            raise WorkflowsSchemaError(
+                f"Incomplete migration path for workflows backend schema (reached {applied_version}, expected {target_version})."
+            )
+
+        return applied_version
+
+    def _get_backend_migrations(self):
+        return {
+            1: self._backend_migrate_to_v1,
+        }
+
+    def _backend_migrate_to_v1(self, conn) -> None:
+        if not self.backend:
+            return
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        column_additions = [
+            ("workflow_runs", "cancel_requested", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("workflow_runs", "tokens_input", "INTEGER"),
+            ("workflow_runs", "tokens_output", "INTEGER"),
+            ("workflow_runs", "cost_usd", "DOUBLE PRECISION"),
+            ("workflow_step_runs", "pid", "INTEGER"),
+            ("workflow_step_runs", "pgid", "INTEGER"),
+            ("workflow_step_runs", "workdir", "TEXT"),
+            ("workflow_step_runs", "stdout_path", "TEXT"),
+            ("workflow_step_runs", "stderr_path", "TEXT"),
+        ]
+
+        for table, column, column_type in column_additions:
+            backend.execute(
+                f"ALTER TABLE {ident(table)} ADD COLUMN IF NOT EXISTS {ident(column)} {column_type}",
+                connection=conn,
+            )
+
+        backend.execute(
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_artifacts')} ("
+            f"artifact_id TEXT PRIMARY KEY,"
+            f"tenant_id TEXT NOT NULL,"
+            f"run_id TEXT NOT NULL,"
+            f"step_run_id TEXT,"
+            f"type TEXT,"
+            f"uri TEXT,"
+            f"size_bytes BIGINT,"
+            f"mime_type TEXT,"
+            f"checksum_sha256 TEXT,"
+            f"encryption TEXT,"
+            f"owned_by TEXT,"
+            f"metadata_json TEXT,"
+            f"created_at TIMESTAMPTZ NOT NULL,"
+            f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')})"
+            ")",
+            connection=conn,
+        )
+
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS {ident('idx_workflows_owner')} ON {ident('workflows')} ({ident('owner_id')})",
+            connection=conn,
+        )
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status')} ON {ident('workflow_runs')} ({ident('status')})",
+            connection=conn,
+        )
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS {ident('idx_events_run_seq')} ON {ident('workflow_events')} ({ident('run_id')}, {ident('event_seq')})",
+            connection=conn,
+        )
+
+    def _initialize_schema_backend(self) -> None:
+        if not self.backend:
+            return
+
+        backend = self.backend
+        target_version = self._CURRENT_SCHEMA_VERSION
+
         try:
-            self.backend.create_tables(WORKFLOWS_POSTGRES_SCHEMA)
+            with backend.transaction() as conn:
+                backend.create_tables(WORKFLOWS_POSTGRES_SCHEMA, connection=conn)
+                current_version = self._get_backend_schema_version(conn)
+
+                if current_version > target_version:
+                    raise WorkflowsSchemaError(
+                        "Workflows schema version is newer than supported by this release."
+                    )
+
+                applied_version = current_version
+
+                if applied_version < target_version:
+                    applied_version = self._run_backend_migrations(conn, applied_version, target_version)
+
+                if applied_version != target_version:
+                    self._set_backend_schema_version(conn, target_version)
+        except WorkflowsSchemaError:
+            raise
         except BackendDatabaseError as exc:
             logger.error("Failed to initialise workflows schema on backend: %s", exc)
+            raise
+        except Exception as exc:
+            logger.error("Unexpected error while initialising workflows schema: %s", exc)
             raise
 
     def _create_schema(self) -> None:
@@ -607,33 +837,64 @@ class WorkflowsDatabase:
         definition: Dict[str, Any],
         is_active: bool = True,
     ) -> int:
-        cur = self._conn.cursor()
         now = _utcnow_iso()
+        params = (
+            tenant_id,
+            name,
+            version,
+            owner_id,
+            visibility,
+            description,
+            json.dumps(tags or []),
+            json.dumps(definition),
+            now,
+            now,
+            1 if is_active else 0,
+        )
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(
+                    """
+                    INSERT INTO workflows(tenant_id, name, version, owner_id, visibility, description, tags, definition_json, created_at, updated_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                    connection=conn,
+                    ensure_returning=True,
+                )
+            row = self._row_from_result(result)
+            if row:
+                return int(row["id"])
+            if result.lastrowid is not None:
+                return int(result.lastrowid)
+            raise WorkflowsSchemaError("Failed to retrieve workflow id after insert")
+
+        cur = self._conn.cursor()
         cur.execute(
             """
             INSERT INTO workflows(tenant_id, name, version, owner_id, visibility, description, tags, definition_json, created_at, updated_at, is_active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                tenant_id,
-                name,
-                version,
-                owner_id,
-                visibility,
-                description,
-                json.dumps(tags or []),
-                json.dumps(definition),
-                now,
-                now,
-                1 if is_active else 0,
-            ),
+            params,
         )
         self._conn.commit()
         return int(cur.lastrowid)
 
     def get_definition(self, workflow_id: int) -> Optional[WorkflowDefinition]:
-        cur = self._conn.cursor()
-        row = cur.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(
+                    "SELECT * FROM workflows WHERE id = ?",
+                    (workflow_id,),
+                    connection=conn,
+                )
+            row = self._row_from_result(result)
+            if not row:
+                return None
+            return WorkflowDefinition(**row.to_dict())
+
+        row = self._conn.cursor().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         if not row:
             return None
         return WorkflowDefinition(**dict(row))
@@ -652,12 +913,28 @@ class WorkflowsDatabase:
         if not include_inactive:
             sql += " AND is_active = 1"
         sql += " ORDER BY name, version DESC"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, tuple(params), connection=conn)
+            rows = self._rows_from_result(result)
+            return [WorkflowDefinition(**row.to_dict()) for row in rows]
+
         rows = self._conn.cursor().execute(sql, params).fetchall()
         return [WorkflowDefinition(**dict(r)) for r in rows]
 
     def soft_delete_definition(self, workflow_id: int) -> bool:
+        params = (_utcnow_iso(), workflow_id)
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(
+                    "UPDATE workflows SET is_active = 0, updated_at = ? WHERE id = ?",
+                    params,
+                    connection=conn,
+                )
+            return result.rowcount > 0
+
         cur = self._conn.cursor()
-        cur.execute("UPDATE workflows SET is_active = 0, updated_at = ? WHERE id = ?", (_utcnow_iso(), workflow_id))
+        cur.execute("UPDATE workflows SET is_active = 0, updated_at = ? WHERE id = ?", params)
         self._conn.commit()
         return cur.rowcount > 0
 
@@ -674,30 +951,46 @@ class WorkflowsDatabase:
         idempotency_key: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            run_id,
+            tenant_id,
+            workflow_id,
+            user_id,
+            json.dumps(inputs or {}),
+            _utcnow_iso(),
+            definition_version,
+            json.dumps(definition_snapshot) if definition_snapshot else None,
+            idempotency_key,
+            session_id,
+        )
+
+        query = """
             INSERT INTO workflow_runs(
                 run_id, tenant_id, workflow_id, status, status_reason, user_id, inputs_json, outputs_json,
                 error, duration_ms, created_at, started_at, ended_at, definition_version, definition_snapshot_json,
                 idempotency_key, session_id
             ) VALUES (?, ?, ?, 'queued', NULL, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                tenant_id,
-                workflow_id,
-                user_id,
-                json.dumps(inputs or {}),
-                _utcnow_iso(),
-                definition_version,
-                json.dumps(definition_snapshot) if definition_snapshot else None,
-                idempotency_key,
-                session_id,
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def get_run(self, run_id: str) -> Optional[WorkflowRun]:
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(
+                    "SELECT * FROM workflow_runs WHERE run_id = ?",
+                    (run_id,),
+                    connection=conn,
+                )
+            row = self._row_from_result(result)
+            return WorkflowRun(**row.to_dict()) if row else None
+
         row = self._conn.cursor().execute("SELECT * FROM workflow_runs WHERE run_id = ?", (run_id,)).fetchone()
         return WorkflowRun(**dict(row)) if row else None
 
@@ -715,8 +1008,21 @@ class WorkflowsDatabase:
         tokens_output: Optional[int] = None,
         cost_usd: Optional[float] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            status,
+            status_reason,
+            json.dumps(outputs) if outputs is not None else None,
+            error,
+            started_at,
+            ended_at,
+            duration_ms,
+            tokens_input,
+            tokens_output,
+            cost_usd,
+            run_id,
+        )
+
+        query = """
             UPDATE workflow_runs
             SET status = ?, status_reason = ?, outputs_json = ?, error = ?,
                 started_at = COALESCE(?, started_at), ended_at = COALESCE(?, ended_at),
@@ -725,22 +1031,14 @@ class WorkflowsDatabase:
                 tokens_output = COALESCE(?, tokens_output),
                 cost_usd = COALESCE(?, cost_usd)
             WHERE run_id = ?
-            """,
-            (
-                status,
-                status_reason,
-                json.dumps(outputs) if outputs is not None else None,
-                error,
-                started_at,
-                ended_at,
-                duration_ms,
-                tokens_input,
-                tokens_output,
-                cost_usd,
-                run_id,
-            ),
-        )
-        self._conn.commit()
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+        else:
+            self._conn.execute(query, params)
+            self._conn.commit()
         try:
             from loguru import logger as _logger
             _logger.debug(f"WorkflowsDB: run {run_id} -> status={status}")
@@ -749,13 +1047,30 @@ class WorkflowsDatabase:
 
     # ---------- Run control ----------
     def set_cancel_requested(self, run_id: str, cancel: bool = True) -> None:
-        self._conn.execute(
-            "UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?",
-            (1 if cancel else 0, run_id),
-        )
+        params = (1 if cancel else 0, run_id)
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(
+                    "UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?",
+                    params,
+                    connection=conn,
+                )
+            return
+
+        self._conn.execute("UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?", params)
         self._conn.commit()
 
     def is_cancel_requested(self, run_id: str) -> bool:
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(
+                    "SELECT cancel_requested FROM workflow_runs WHERE run_id = ?",
+                    (run_id,),
+                    connection=conn,
+                )
+            row = self._row_from_result(result)
+            return bool(row[0]) if row else False
+
         row = self._conn.cursor().execute(
             "SELECT cancel_requested FROM workflow_runs WHERE run_id = ?",
             (run_id,),
@@ -771,6 +1086,34 @@ class WorkflowsDatabase:
         payload: Optional[Dict[str, Any]] = None,
         step_run_id: Optional[str] = None,
     ) -> int:
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                seq_result = self._execute_backend(
+                    "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ? FOR UPDATE",
+                    (run_id,),
+                    connection=conn,
+                )
+                row = self._row_from_result(seq_result)
+                max_seq = int(row["max_seq"]) if row else 0
+                next_seq = max_seq + 1
+                self._execute_backend(
+                    """
+                    INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tenant_id,
+                        run_id,
+                        step_run_id,
+                        next_seq,
+                        event_type,
+                        json.dumps(payload or {}),
+                        _utcnow_iso(),
+                    ),
+                    connection=conn,
+                )
+                return next_seq
+
         cur = self._conn.cursor()
         row = cur.execute(
             "SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM workflow_events WHERE run_id = ?",
@@ -803,15 +1146,21 @@ class WorkflowsDatabase:
             params.append(int(since))
         sql += " ORDER BY event_seq ASC LIMIT ?"
         params.append(int(limit))
-        rows = self._conn.cursor().execute(sql, params).fetchall()
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, tuple(params), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(sql, params).fetchall()
+
         out: List[Dict[str, Any]] = []
         for r in rows:
-            d = dict(r)
+            data = self._row_to_dict(r)
             try:
-                d["payload_json"] = json.loads(d.get("payload_json") or "{}")
+                data["payload_json"] = json.loads(data.get("payload_json") or "{}")
             except Exception:
                 pass
-            out.append(d)
+            out.append(data)
         return out
 
     # ---------- Step Runs ----------
@@ -826,23 +1175,29 @@ class WorkflowsDatabase:
         status: str = "running",
         inputs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            step_run_id,
+            run_id,
+            step_id,
+            name,
+            step_type,
+            status,
+            _utcnow_iso(),
+            json.dumps(inputs or {}),
+        )
+
+        query = """
             INSERT INTO workflow_step_runs(
                 step_run_id, run_id, step_id, name, type, status, started_at, inputs_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                step_run_id,
-                run_id,
-                step_id,
-                name,
-                step_type,
-                status,
-                _utcnow_iso(),
-                json.dumps(inputs or {}),
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def complete_step_run(
@@ -853,42 +1208,69 @@ class WorkflowsDatabase:
         outputs: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            status,
+            _utcnow_iso(),
+            json.dumps(outputs or {}),
+            error,
+            step_run_id,
+        )
+        query = """
             UPDATE workflow_step_runs
             SET status = ?, ended_at = ?, outputs_json = ?, error = ?
             WHERE step_run_id = ?
-            """,
-            (
-                status,
-                _utcnow_iso(),
-                json.dumps(outputs or {}),
-                error,
-                step_run_id,
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""
+        params = (int(attempt), step_run_id)
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(
+                    "UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?",
+                    params,
+                    connection=conn,
+                )
+            return
+
         self._conn.execute(
             "UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?",
-            (int(attempt), step_run_id),
+            params,
         )
         self._conn.commit()
 
     def get_last_failed_step_id(self, run_id: str) -> Optional[str]:
-        row = self._conn.cursor().execute(
-            "SELECT step_id FROM workflow_step_runs WHERE run_id = ? AND status = 'failed' ORDER BY ended_at DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
+        query = (
+            "SELECT step_id FROM workflow_step_runs WHERE run_id = ? AND status = 'failed' "
+            "ORDER BY ended_at DESC LIMIT 1"
+        )
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, (run_id,), connection=conn)
+            row = self._row_from_result(result)
+            return row[0] if row else None
+
+        row = self._conn.cursor().execute(query, (run_id,)).fetchone()
         return row[0] if row else None
 
     def get_run_by_idempotency(self, tenant_id: str, user_id: str, idempotency_key: str) -> Optional[WorkflowRun]:
-        row = self._conn.cursor().execute(
-            "SELECT * FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND idempotency_key = ?",
-            (tenant_id, user_id, idempotency_key),
-        ).fetchone()
+        params = (tenant_id, user_id, idempotency_key)
+        query = "SELECT * FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND idempotency_key = ?"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, params, connection=conn)
+            row = self._row_from_result(result)
+            return WorkflowRun(**row.to_dict()) if row else None
+
+        row = self._conn.cursor().execute(query, params).fetchone()
         return WorkflowRun(**dict(row)) if row else None
 
     def update_step_lock_and_heartbeat(
@@ -903,20 +1285,25 @@ class WorkflowsDatabase:
         lock_expires_at = None
         if lock_ttl_seconds is not None:
             lock_expires_at = (now + __import__("datetime").timedelta(seconds=lock_ttl_seconds)).isoformat()
-        self._conn.execute(
-            """
+        params = (
+            locked_by,
+            locked_at,
+            lock_expires_at,
+            locked_at,
+            step_run_id,
+        )
+        query = """
             UPDATE workflow_step_runs
             SET locked_by = COALESCE(?, locked_by), locked_at = ?, lock_expires_at = COALESCE(?, lock_expires_at), heartbeat_at = ?
             WHERE step_run_id = ?
-            """,
-            (
-                locked_by,
-                locked_at,
-                lock_expires_at,
-                locked_at,
-                step_run_id,
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
         try:
             from loguru import logger as _logger
@@ -928,8 +1315,13 @@ class WorkflowsDatabase:
         sql = (
             "SELECT * FROM workflow_step_runs WHERE status = 'running' AND (heartbeat_at IS NULL OR heartbeat_at < ?)"
         )
-        rows = self._conn.cursor().execute(sql, (cutoff_iso,)).fetchall()
-        return [dict(r) for r in rows]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, (cutoff_iso,), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(sql, (cutoff_iso,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
 
     # ---------- Subprocess tracking ----------
     def update_step_subprocess(
@@ -942,22 +1334,27 @@ class WorkflowsDatabase:
         stdout_path: Optional[str] = None,
         stderr_path: Optional[str] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            pid,
+            pgid,
+            workdir,
+            stdout_path,
+            stderr_path,
+            step_run_id,
+        )
+        query = """
             UPDATE workflow_step_runs
             SET pid = COALESCE(?, pid), pgid = COALESCE(?, pgid), workdir = COALESCE(?, workdir),
                 stdout_path = COALESCE(?, stdout_path), stderr_path = COALESCE(?, stderr_path)
             WHERE step_run_id = ?
-            """,
-            (
-                pid,
-                pgid,
-                workdir,
-                stdout_path,
-                stderr_path,
-                step_run_id,
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def find_running_subprocesses_for_run(self, run_id: str) -> List[Dict[str, Any]]:
@@ -965,8 +1362,13 @@ class WorkflowsDatabase:
             "SELECT step_run_id, pid, pgid, workdir, stdout_path, stderr_path FROM workflow_step_runs "
             "WHERE run_id = ? AND status = 'running' AND (pid IS NOT NULL OR pgid IS NOT NULL)"
         )
-        rows = self._conn.cursor().execute(sql, (run_id,)).fetchall()
-        return [dict(r) for r in rows]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, (run_id,), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(sql, (run_id,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
 
     # ---------- Artifacts ----------
     def add_artifact(
@@ -985,59 +1387,75 @@ class WorkflowsDatabase:
         owned_by: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._conn.execute(
-            """
+        params = (
+            artifact_id,
+            tenant_id,
+            run_id,
+            step_run_id,
+            type,
+            uri,
+            size_bytes,
+            mime_type,
+            checksum_sha256,
+            encryption,
+            owned_by,
+            json.dumps(metadata or {}),
+            _utcnow_iso(),
+        )
+        query = """
             INSERT INTO workflow_artifacts(
                 artifact_id, tenant_id, run_id, step_run_id, type, uri, size_bytes, mime_type, checksum_sha256,
                 encryption, owned_by, metadata_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                artifact_id,
-                tenant_id,
-                run_id,
-                step_run_id,
-                type,
-                uri,
-                size_bytes,
-                mime_type,
-                checksum_sha256,
-                encryption,
-                owned_by,
-                json.dumps(metadata or {}),
-                _utcnow_iso(),
-            ),
-        )
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def list_artifacts_for_run(self, run_id: str) -> List[Dict[str, Any]]:
-        rows = self._conn.cursor().execute(
-            "SELECT * FROM workflow_artifacts WHERE run_id = ? ORDER BY created_at ASC",
-            (run_id,),
-        ).fetchall()
+        sql = "SELECT * FROM workflow_artifacts WHERE run_id = ? ORDER BY created_at ASC"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, (run_id,), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(sql, (run_id,)).fetchall()
+
         out: List[Dict[str, Any]] = []
         for r in rows:
-            d = dict(r)
+            data = self._row_to_dict(r)
             try:
-                d["metadata_json"] = json.loads(d.get("metadata_json") or "{}")
+                data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
             except Exception:
                 pass
-            out.append(d)
+            out.append(data)
         return out
 
     def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.cursor().execute(
-            "SELECT * FROM workflow_artifacts WHERE artifact_id = ?",
-            (artifact_id,),
-        ).fetchone()
-        if not row:
-            return None
-        d = dict(row)
+        query = "SELECT * FROM workflow_artifacts WHERE artifact_id = ?"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, (artifact_id,), connection=conn)
+            row = self._row_from_result(result)
+            if not row:
+                return None
+            data = row.to_dict()
+        else:
+            row = self._conn.cursor().execute(query, (artifact_id,)).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+
         try:
-            d["metadata_json"] = json.loads(d.get("metadata_json") or "{}")
+            data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
         except Exception:
             pass
-        return d
+        return data
 
 
 __all__ = ["WorkflowsDatabase", "WorkflowDefinition", "WorkflowRun", "DEFAULT_DB_PATH"]

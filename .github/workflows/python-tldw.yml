@@ -295,6 +295,8 @@ jobs:
             tldw_Server_API/tests/DB_Management/test_migration_tools.py \
             tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py \
             tldw_Server_API/tests/prompt_studio/integration/test_dual_backend_prompt_studio.py \
+            tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
+            tldw_Server_API/tests/Workflows/test_dual_backend_engine.py \
             tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
             --junit-xml=postgres-tests.xml
 
