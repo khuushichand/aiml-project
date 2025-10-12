@@ -132,6 +132,7 @@ from tldw_Server_API.app.core.Metrics import (
 #
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
+from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 #
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 #
@@ -233,6 +234,12 @@ async def lifespan(app: FastAPI):
                 logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
         except Exception as _e:
             logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
+        # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
+        try:
+            await ensure_single_user_rbac_seed_if_needed()
+            logger.info("App Startup: Ensured single-user RBAC seed (baseline roles/permissions)")
+        except Exception as _e:
+            logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
         
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager

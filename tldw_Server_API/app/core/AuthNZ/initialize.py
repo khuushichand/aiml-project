@@ -451,6 +451,159 @@ async def setup_database():
     
     return True
 
+
+async def ensure_single_user_rbac_seed_if_needed() -> None:
+    """Ensure baseline RBAC seed exists in single-user mode for any backend.
+
+    Idempotent: inserts roles/permissions only if missing. Intended to backstop
+    environments where migrations or bootstrap did not seed RBAC yet.
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "single_user":
+        return
+    try:
+        # Acquire a connection via pool/transaction abstraction
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        pool = await get_db_pool()
+        async with pool.transaction() as conn:
+            # Postgres path
+            if hasattr(conn, "execute"):
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS roles (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(64) UNIQUE NOT NULL,
+                        description TEXT,
+                        is_system BOOLEAN DEFAULT FALSE
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS permissions (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(128) UNIQUE NOT NULL,
+                        description TEXT,
+                        category VARCHAR(64)
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                        permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                        PRIMARY KEY (role_id, permission_id)
+                    )
+                """)
+                # Minimal seed for tests and baseline UI flows
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
+                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
+
+                for _name, _desc, _cat in (
+                    ('media.read','Read media','media'),
+                    ('media.create','Create media','media'),
+                    ('users.manage_roles','Manage user roles','users'),
+                ):
+                    await conn.execute(
+                        "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
+                        _name, _desc, _cat,
+                    )
+                role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+                perm_rows = await conn.fetch("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+                role_id = {r['name']: r['id'] for r in role_rows}
+                perm_id = {p['name']: p['id'] for p in perm_rows}
+                # Grant user baseline perms
+                for pname in ('media.read','media.create'):
+                    if pname in perm_id and 'user' in role_id:
+                        await conn.execute(
+                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                            role_id['user'], perm_id[pname]
+                        )
+                # Viewer read-only
+                if 'viewer' in role_id and 'media.read' in perm_id:
+                    await conn.execute(
+                        "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                        role_id['viewer'], perm_id['media.read']
+                    )
+                # Admin elevated
+                if 'admin' in role_id:
+                    for pname in ('media.read','media.create','users.manage_roles'):
+                        if pname in perm_id:
+                            await conn.execute(
+                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                role_id['admin'], perm_id[pname]
+                            )
+                return
+
+        # SQLite path (pool adapters expose .execute returning cursor-like)
+        async with pool.transaction() as conn:  # type: ignore[attr-defined]
+            # Some adapters may not expose .execute; fallback to connection from pool
+            try:
+                cur = await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS roles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        is_system INTEGER DEFAULT 0
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS permissions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        category TEXT
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role_id INTEGER NOT NULL,
+                        permission_id INTEGER NOT NULL,
+                        PRIMARY KEY (role_id, permission_id)
+                    )
+                """)
+            except Exception:
+                pass
+
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('admin','Administrator',1)")
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('user','Standard User',1)")
+            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('viewer','Read-only User',1)")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.read','Read media','media')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.create','Create media','media')")
+            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('users.manage_roles','Manage user roles','users')")
+
+            # Map role names → ids
+            cur = await conn.execute("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+            rows = await cur.fetchall()
+            role_id = {r[1]: r[0] for r in rows}
+            cur = await conn.execute("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles')")
+            rows = await cur.fetchall()
+            perm_id = {r[1]: r[0] for r in rows}
+
+            # Baselines
+            for pname in ('media.read','media.create'):
+                if pname in perm_id and 'user' in role_id:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                        (role_id['user'], perm_id[pname])
+                    )
+            if 'viewer' in role_id and 'media.read' in perm_id:
+                await conn.execute(
+                    "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                    (role_id['viewer'], perm_id['media.read'])
+                )
+            if 'admin' in role_id:
+                for pname in ('media.read','media.create','users.manage_roles'):
+                    if pname in perm_id:
+                        await conn.execute(
+                            "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                            (role_id['admin'], perm_id[pname])
+                        )
+            # Commit if adapter requires it
+            try:
+                await conn.commit()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Single-user RBAC seed ensure skipped or failed: {e}")
+
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
     settings = get_settings()

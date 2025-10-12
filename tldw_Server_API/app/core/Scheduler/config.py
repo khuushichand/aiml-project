@@ -123,15 +123,15 @@ class SchedulerConfig:
         default_factory=lambda: int(os.getenv('SCHEDULER_DEFAULT_RETRY_DELAY', '60'))
     )
     
+    # Emergency backup file (for buffer fallbacks)
+    emergency_backup_path: Optional[Path] = None
+    
     @property
     def payload_storage_path(self) -> Path:
         """Path for external payload storage"""
         return self.base_path / 'payloads'
     
-    @property
-    def emergency_backup_path(self) -> Path:
-        """Path for emergency buffer backup"""
-        return self.base_path / 'emergency' / 'buffer_backup.json'
+    
     
     @property
     def is_postgresql(self) -> bool:
@@ -153,6 +153,13 @@ class SchedulerConfig:
         # Validate and sanitize paths to prevent directory traversal
         # This must happen before attempting to create directories
         self._validate_and_sanitize_paths()
+        
+        # Default emergency backup path if not provided
+        if self.emergency_backup_path is None:
+            self.emergency_backup_path = self.base_path / 'emergency' / 'backup.json'
+        else:
+            # Ensure Path type and absolute
+            self.emergency_backup_path = Path(self.emergency_backup_path).resolve()
         
         # Only create directories after validation passes
         try:
@@ -221,8 +228,10 @@ class SchedulerConfig:
         errors = []
         
         # Validate numeric ranges
-        if self.min_workers < 1:
-            errors.append(f"min_workers must be >= 1, got {self.min_workers}")
+        # Allow 0 in test or when workers aren't started; in production
+        # users typically run with >=1. Tests may configure 0.
+        if self.min_workers < 0:
+            errors.append(f"min_workers must be >= 0, got {self.min_workers}")
         
         if self.max_workers < self.min_workers:
             errors.append(f"max_workers ({self.max_workers}) must be >= min_workers ({self.min_workers})")

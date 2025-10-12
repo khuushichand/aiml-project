@@ -4,7 +4,7 @@ Defines the complete lifecycle and metadata for tasks.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 import uuid
@@ -153,13 +153,13 @@ class Task:
         """Check if task has expired"""
         if not self.expires_at:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc).replace(tzinfo=None) > self.expires_at
     
     def is_scheduled(self) -> bool:
         """Check if task is scheduled for future execution"""
         if not self.scheduled_at:
             return False
-        return datetime.utcnow() < self.scheduled_at
+        return datetime.now(timezone.utc).replace(tzinfo=None) < self.scheduled_at
     
     def should_retry(self) -> bool:
         """Check if task should be retried after failure"""

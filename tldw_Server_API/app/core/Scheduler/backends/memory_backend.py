@@ -5,7 +5,7 @@ Not suitable for production use.
 
 import asyncio
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 from collections import defaultdict
 
@@ -101,7 +101,7 @@ class MemoryBackend(QueueBackend):
                     continue
                 
                 # Check if scheduled
-                if task.scheduled_at and task.scheduled_at > datetime.utcnow():
+                if task.scheduled_at and task.scheduled_at > datetime.now(timezone.utc).replace(tzinfo=None):
                     continue
                 
                 # Check dependencies
@@ -120,10 +120,10 @@ class MemoryBackend(QueueBackend):
                 task.status = TaskStatus.RUNNING
                 task.worker_id = worker_id
                 task.lease_id = str(uuid.uuid4())
-                task.lease_expires_at = datetime.utcnow() + timedelta(
+                task.lease_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
                     seconds=self.config.lease_duration_seconds
                 )
-                task.started_at = datetime.utcnow()
+                task.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 task.retry_count += 1
                 
                 return task
@@ -141,7 +141,7 @@ class MemoryBackend(QueueBackend):
                 return False
             
             task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.utcnow()
+            task.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             task.result = result
             task.lease_id = None
             task.lease_expires_at = None
@@ -164,7 +164,7 @@ class MemoryBackend(QueueBackend):
                 task.status = TaskStatus.FAILED
             else:
                 task.status = TaskStatus.QUEUED
-                task.scheduled_at = datetime.utcnow() + timedelta(seconds=task.retry_delay)
+                task.scheduled_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=task.retry_delay)
                 queue_name = task.queue_name or self.config.default_queue_name
                 self.queues[queue_name].append(task_id)
             
@@ -184,7 +184,7 @@ class MemoryBackend(QueueBackend):
             if task.lease_id != lease_id or task.status != TaskStatus.RUNNING:
                 return False
             
-            task.lease_expires_at = datetime.utcnow() + timedelta(
+            task.lease_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
                 seconds=self.config.lease_duration_seconds
             )
             return True
@@ -192,7 +192,7 @@ class MemoryBackend(QueueBackend):
     async def reclaim_expired_leases(self) -> int:
         """Reclaim tasks with expired leases."""
         reclaimed = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         
         async with self._lock:
             for task in self.tasks.values():
@@ -227,7 +227,7 @@ class MemoryBackend(QueueBackend):
     async def get_ready_tasks(self) -> List[str]:
         """Get tasks ready to run."""
         ready = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         
         for task_id, task in self.tasks.items():
             if task.status != TaskStatus.QUEUED:
@@ -253,7 +253,7 @@ class MemoryBackend(QueueBackend):
     async def acquire_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
         """Try to acquire leadership."""
         async with self._lock:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             
             if resource in self.leaders:
                 leader = self.leaders[resource]
@@ -277,7 +277,7 @@ class MemoryBackend(QueueBackend):
             if leader['leader_id'] != leader_id:
                 return False
             
-            leader['expires_at'] = datetime.utcnow() + timedelta(seconds=ttl)
+            leader['expires_at'] = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=ttl)
             return True
     
     async def release_leader(self, resource: str, leader_id: str) -> bool:

@@ -6,7 +6,7 @@ Leverages PostgreSQL-specific features for optimal performance.
 import asyncio
 import json
 from typing import List, Optional, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 try:
@@ -301,7 +301,7 @@ class PostgreSQLBackend(QueueBackend):
         atomic dequeue that scales to thousands of workers.
         """
         lease_id = str(uuid.uuid4())
-        lease_expires = datetime.utcnow() + timedelta(seconds=self.config.lease_duration_seconds)
+        lease_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
         
         async with self.pool.acquire() as conn:
             # Single atomic query with SKIP LOCKED
@@ -390,7 +390,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Renew task lease to prevent timeout.
         """
-        new_expires = datetime.utcnow() + timedelta(seconds=self.config.lease_duration_seconds)
+        new_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
         
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""
@@ -490,7 +490,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Try to acquire leadership using advisory locks.
         """
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         
         async with self.pool.acquire() as conn:
             # Use advisory lock for atomic operation
@@ -524,7 +524,7 @@ class PostgreSQLBackend(QueueBackend):
         """
         Renew leadership lease.
         """
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""

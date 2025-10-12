@@ -372,6 +372,13 @@ async def list_user_sessions(
         
     except Exception as e:
         logger.error(f"Failed to list user sessions: {e}")
+        # In test mode, surface the underlying error to aid debugging
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve sessions: {e}"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve sessions"

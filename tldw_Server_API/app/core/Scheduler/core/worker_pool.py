@@ -6,7 +6,7 @@ Handles dynamic scaling, health checks, and graceful shutdown.
 import asyncio
 import uuid
 from typing import Optional, Dict, Any, List, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from loguru import logger
 
@@ -58,7 +58,7 @@ class Worker:
         self.current_task: Optional[Task] = None
         self.tasks_processed = 0
         self.tasks_failed = 0
-        self.started_at = datetime.utcnow()
+        self.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
         self.last_task_at: Optional[datetime] = None
         
         self._task: Optional[asyncio.Task] = None
@@ -140,7 +140,7 @@ class Worker:
                 # Process the task
                 self.state = WorkerState.BUSY
                 self.current_task = task
-                self.last_task_at = datetime.utcnow()
+                self.last_task_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 
                 success = await self._process_task(task)
                 
@@ -237,7 +237,7 @@ class Worker:
     
     def get_status(self) -> Dict[str, Any]:
         """Get worker status."""
-        uptime = (datetime.utcnow() - self.started_at).total_seconds()
+        uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self.started_at).total_seconds()
         
         return {
             'worker_id': self.worker_id,

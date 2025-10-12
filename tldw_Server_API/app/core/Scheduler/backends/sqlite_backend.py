@@ -9,7 +9,7 @@ import asyncio
 import aiosqlite
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, AsyncContextManager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 
@@ -308,8 +308,8 @@ class SQLiteBackend(QueueBackend):
             task.timeout,
             json.dumps(task.depends_on) if task.depends_on else None,
             task.idempotency_key,
-            datetime.utcnow().isoformat(),
-            datetime.utcnow().isoformat(),
+            datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             task.payload_ref
         )
         
@@ -341,8 +341,8 @@ class SQLiteBackend(QueueBackend):
                 task.timeout,
                 json.dumps(task.depends_on) if task.depends_on else None,
                 task.idempotency_key,
-                datetime.utcnow().isoformat(),
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 task.payload_ref
             ))
         
@@ -399,7 +399,7 @@ class SQLiteBackend(QueueBackend):
                 # Create lease
                 lease_id = str(uuid.uuid4())
                 lease_duration = task.timeout or self.config.lease_duration_seconds
-                expires_at = datetime.utcnow() + timedelta(seconds=lease_duration)
+                expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=lease_duration)
                 
                 await self._connection.execute("""
                     INSERT INTO task_leases (lease_id, task_id, worker_id, expires_at)
@@ -421,7 +421,7 @@ class SQLiteBackend(QueueBackend):
                 task.status = TaskStatus.RUNNING
                 task.worker_id = worker_id
                 task.lease_id = lease_id
-                task.started_at = datetime.utcnow()
+                task.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 
                 return task
                 
@@ -512,7 +512,7 @@ class SQLiteBackend(QueueBackend):
         if retry and task.retry_count < task.max_retries:
             # Schedule retry
             retry_delay = task.calculate_retry_delay()
-            scheduled_at = datetime.utcnow() + timedelta(seconds=retry_delay)
+            scheduled_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=retry_delay)
             
             await self.execute("""
                 UPDATE tasks
@@ -776,6 +776,78 @@ class SQLiteBackend(QueueBackend):
                 await self._connection.rollback()
                 logger.error(f"Failed to reclaim expired leases: {e}")
                 raise TransactionError(f"Lease reclamation failed: {e}")
+
+    # Leader election (TTL-based) using service_leaders table
+
+    async def acquire_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
+        """Try to acquire leadership for a resource using TTL semantics."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._lock:
+            # Begin immediate transaction to avoid races
+            await self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await self._connection.execute(
+                    "SELECT leader_id, acquired_at FROM service_leaders WHERE service_name = ?",
+                    (resource,)
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    # No leader, acquire
+                    await self._connection.execute(
+                        "INSERT INTO service_leaders (service_name, leader_id, acquired_at) VALUES (?, ?, ?)",
+                        (resource, leader_id, now.isoformat())
+                    )
+                    await self._connection.commit()
+                    return True
+                # Existing leader; check TTL expiry or same leader
+                current_leader, acquired_at = row[0], row[1]
+                expired = False
+                try:
+                    acquired_dt = datetime.fromisoformat(acquired_at) if isinstance(acquired_at, str) else now
+                    expired = (now - acquired_dt).total_seconds() >= ttl
+                except Exception:
+                    expired = True
+                if expired or current_leader == leader_id:
+                    await self._connection.execute(
+                        "UPDATE service_leaders SET leader_id = ?, acquired_at = ? WHERE service_name = ?",
+                        (leader_id, now.isoformat(), resource)
+                    )
+                    await self._connection.commit()
+                    return True
+                # Another valid leader holds it
+                await self._connection.rollback()
+                return False
+            except Exception:
+                await self._connection.rollback()
+                return False
+
+    async def renew_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
+        """Renew leadership by updating acquired_at if leader matches."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._lock:
+            cursor = await self._connection.execute(
+                "SELECT leader_id FROM service_leaders WHERE service_name = ?",
+                (resource,)
+            )
+            row = await cursor.fetchone()
+            if not row or row[0] != leader_id:
+                return False
+            await self._connection.execute(
+                "UPDATE service_leaders SET acquired_at = ? WHERE service_name = ?",
+                (now.isoformat(), resource)
+            )
+            await self._connection.commit()
+            return True
+
+    async def release_leader(self, resource: str, leader_id: str) -> bool:
+        """Release leadership if currently held by leader_id."""
+        async with self._lock:
+            affected = await self._connection.execute(
+                "DELETE FROM service_leaders WHERE service_name = ? AND leader_id = ?",
+                (resource, leader_id)
+            )
+            await self._connection.commit()
+            return affected.rowcount > 0
     
     # Schema management
     

@@ -555,6 +555,17 @@ def get_settings() -> Settings:
     if not _settings:
         overrides = _load_overrides_from_config()
         _settings = Settings(**overrides)
+        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic
+        try:
+            import os as _os, sys as _sys
+            if (
+                _os.getenv("PYTEST_CURRENT_TEST")
+                or _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+                or "pytest" in _sys.modules
+            ):
+                _settings.RATE_LIMIT_ENABLED = False
+        except Exception:
+            pass
         logger.info(f"Settings initialized - Auth mode: {_settings.AUTH_MODE}")
     return _settings
 

@@ -234,6 +234,38 @@ async def isolated_test_environment(monkeypatch):
             )
         """)
         
+        # RBAC core tables (minimal for tests)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS roles (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) UNIQUE NOT NULL,
+                description TEXT,
+                is_system BOOLEAN DEFAULT FALSE
+            )
+        """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS permissions (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) UNIQUE NOT NULL,
+                description TEXT,
+                category VARCHAR(100)
+            )
+        """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                UNIQUE(role_id, permission_id)
+            )
+        """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_roles (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                UNIQUE(user_id, role_id)
+            )
+        """)
+        
         # Create indexes
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
@@ -241,6 +273,18 @@ async def isolated_test_environment(monkeypatch):
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
         
+        # Seed minimal roles expected by tests
+        await test_conn.execute("""
+            INSERT INTO roles (name, description, is_system) VALUES 
+            ('admin','Administrator', TRUE)
+            ON CONFLICT (name) DO NOTHING
+        """)
+        await test_conn.execute("""
+            INSERT INTO roles (name, description, is_system) VALUES 
+            ('user','Standard user', TRUE)
+            ON CONFLICT (name) DO NOTHING
+        """)
+
         logger.info(f"Created schema in test database: {db_name}")
     finally:
         await test_conn.close()

@@ -48,7 +48,7 @@ class TestAsyncWriteBuffer:
         )
         
         buffer = AsyncWriteBuffer(backend, config, FlushStrategy.BLOCK)
-        await buffer.start()
+        await buffer.start(run_workers=True)
         
         try:
             # Add tasks to trigger flush
@@ -76,7 +76,7 @@ class TestAsyncWriteBuffer:
             assert buffer.metrics.total_flushed >= 2
             
         finally:
-            await buffer.close()
+            await buffer.close(timeout=0.1)
     
     @pytest.mark.asyncio
     async def test_flush_strategies(self):
@@ -117,7 +117,8 @@ class TestAsyncWriteBuffer:
             FlushStrategy.REJECT,
             max_queue_size=2
         )
-        await buffer2.start()
+        # Start without workers so queue capacity is deterministic for REJECT
+        await buffer2.start(run_workers=False)
         
         try:
             # Fill up the queue
@@ -131,7 +132,7 @@ class TestAsyncWriteBuffer:
                         await buffer2.add(task)
             
         finally:
-            await buffer2.close()
+            await buffer2.close(timeout=0.1)
     
     @pytest.mark.asyncio
     async def test_adaptive_flush_interval(self):

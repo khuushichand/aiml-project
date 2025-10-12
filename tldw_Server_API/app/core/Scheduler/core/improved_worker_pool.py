@@ -13,7 +13,7 @@ import asyncio
 import uuid
 import weakref
 from typing import Optional, Dict, Any, List, Set
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -157,7 +157,7 @@ class ImprovedWorker:
         self.metrics = WorkerMetrics()
         self.resource_tracker = ResourceTracker()
         
-        self.started_at = datetime.utcnow()
+        self.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
         self.last_task_at: Optional[datetime] = None
         
         self._main_task: Optional[asyncio.Task] = None
@@ -165,7 +165,7 @@ class ImprovedWorker:
         self._stopped_event = asyncio.Event()
         
         # Health check
-        self._last_heartbeat = datetime.utcnow()
+        self._last_heartbeat = datetime.now(timezone.utc).replace(tzinfo=None)
         self._consecutive_errors = 0
         self._max_consecutive_errors = 5
     
@@ -235,7 +235,7 @@ class ImprovedWorker:
             while not self._stop_event.is_set():
                 try:
                     # Update heartbeat
-                    self._last_heartbeat = datetime.utcnow()
+                    self._last_heartbeat = datetime.now(timezone.utc).replace(tzinfo=None)
                     
                     # Check if we should recycle
                     if self._should_recycle():
@@ -265,7 +265,7 @@ class ImprovedWorker:
                     # Process the task
                     self.state = WorkerState.BUSY
                     self.current_task = task
-                    self.last_task_at = datetime.utcnow()
+                    self.last_task_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     
                     success = await self._process_task_safely(task)
                     
@@ -286,7 +286,7 @@ class ImprovedWorker:
                     logger.error(f"Worker {self.worker_id} loop error: {e}")
                     self._consecutive_errors += 1
                     self.metrics.errors.append(str(e))
-                    self.metrics.last_error_at = datetime.utcnow()
+                    self.metrics.last_error_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     
                     # Back off on error
                     await asyncio.sleep(min(2 ** self._consecutive_errors, 30))
@@ -444,7 +444,7 @@ class ImprovedWorker:
             return True
         
         # Recycle after certain uptime
-        uptime = (datetime.utcnow() - self.started_at).total_seconds()
+        uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self.started_at).total_seconds()
         max_uptime = getattr(self.config, 'worker_max_uptime_seconds', 3600)
         if uptime > max_uptime:
             return True
@@ -459,7 +459,7 @@ class ImprovedWorker:
     def is_healthy(self) -> bool:
         """Check if worker is healthy"""
         # Check heartbeat
-        heartbeat_age = (datetime.utcnow() - self._last_heartbeat).total_seconds()
+        heartbeat_age = (datetime.now(timezone.utc).replace(tzinfo=None) - self._last_heartbeat).total_seconds()
         if heartbeat_age > 60:
             return False
         
@@ -475,7 +475,7 @@ class ImprovedWorker:
     
     def get_status(self) -> Dict[str, Any]:
         """Get worker status"""
-        uptime = (datetime.utcnow() - self.started_at).total_seconds()
+        uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self.started_at).total_seconds()
         
         return {
             'worker_id': self.worker_id,

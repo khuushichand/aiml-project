@@ -559,6 +559,7 @@ async def logout(
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     request: RefreshTokenRequest,
+    response: Response,
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db=Depends(get_db_transaction),
@@ -579,29 +580,74 @@ async def refresh_token(
     start_time = time.perf_counter()
     log_counter("auth_refresh_attempt")
     try:
+        # TEST_MODE diagnostics (set DB and CSRF headers for easier triage)
+        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            try:
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
+                pool = await _get_pool()
+                db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
+                from tldw_Server_API.app.core.AuthNZ.csrf_protection import global_settings as _csrf_globals
+                response.headers["X-TLDW-DB"] = db_backend
+                response.headers["X-TLDW-CSRF-Enabled"] = "true" if bool(_csrf_globals.get("CSRF_ENABLED", None)) else "false"
+            except Exception:
+                pass
+
         # Handle based on auth mode
         if settings.AUTH_MODE == "single_user":
             # Simple token validation for single-user mode
             if not request.refresh_token.startswith("single-user-refresh-"):
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers["X-TLDW-Refresh-Stage"] = "validate"
+                        response.headers["X-TLDW-Refresh-Reason"] = "invalid-format"
+                    except Exception:
+                        pass
                 raise InvalidTokenError("Invalid refresh token format")
             user_id = int(request.refresh_token.split("-")[-1])
         else:
             # JWT validation for multi-user mode
-            payload = jwt_service.decode_refresh_token(request.refresh_token)
+            try:
+                payload = jwt_service.decode_refresh_token(request.refresh_token)
+            except Exception as _e:
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers["X-TLDW-Refresh-Stage"] = "decode"
+                        response.headers["X-TLDW-Refresh-Reason"] = f"invalid-token:{type(_e).__name__}"
+                    except Exception:
+                        pass
+                raise
             
             # Check if token is blacklisted
             if await session_manager.is_token_blacklisted(request.refresh_token):
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers["X-TLDW-Refresh-Stage"] = "blacklist"
+                        response.headers["X-TLDW-Refresh-Reason"] = "revoked"
+                    except Exception:
+                        pass
                 raise InvalidTokenError("Refresh token has been revoked")
             
             # JWT standard uses 'sub' for subject (user ID)
             user_id = payload.get("sub") or payload.get("user_id")
             if not user_id:
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers["X-TLDW-Refresh-Stage"] = "decode"
+                        response.headers["X-TLDW-Refresh-Reason"] = "missing-user-id"
+                    except Exception:
+                        pass
                 raise InvalidTokenError("Invalid refresh token payload")
             
             # Convert to int if it's a string
             try:
                 user_id = int(user_id)
             except (ValueError, TypeError):
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers["X-TLDW-Refresh-Stage"] = "decode"
+                        response.headers["X-TLDW-Refresh-Reason"] = "invalid-user-id"
+                    except Exception:
+                        pass
                 raise InvalidTokenError("Invalid user ID in refresh token")
         
         # Fetch user
@@ -621,6 +667,12 @@ async def refresh_token(
             user = await cursor.fetchone()
         
         if not user:
+            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                try:
+                    response.headers["X-TLDW-Refresh-Stage"] = "fetch-user"
+                    response.headers["X-TLDW-Refresh-Reason"] = "user-not-found"
+                except Exception:
+                    pass
             raise UserNotFoundError(f"User {user_id}")
         
         # Convert to dict
@@ -648,6 +700,12 @@ async def refresh_token(
         
         log_counter("auth_refresh_success")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
+        # TEST_MODE: include simple duration metric header (non-breaking)
+        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            try:
+                response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
+            except Exception:
+                pass
         return TokenResponse(
             access_token=new_access_token,
             refresh_token=request.refresh_token,
@@ -659,6 +717,12 @@ async def refresh_token(
         logger.warning(f"Token refresh failed: {e}")
         log_counter("auth_refresh_token_error", labels={"type": type(e).__name__})
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
+        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            try:
+                response.headers.setdefault("X-TLDW-Refresh-Stage", "error")
+                response.headers.setdefault("X-TLDW-Refresh-Reason", type(e).__name__)
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
@@ -668,6 +732,13 @@ async def refresh_token(
         logger.error(f"Token refresh error: {e}")
         log_counter("auth_refresh_unexpected_error")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
+        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            try:
+                response.headers["X-TLDW-Refresh-Stage"] = "unexpected"
+                response.headers["X-TLDW-Refresh-Reason"] = str(e)
+                response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during token refresh"
