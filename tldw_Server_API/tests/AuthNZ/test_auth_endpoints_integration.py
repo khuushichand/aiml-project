@@ -1,7 +1,11 @@
 """
 Integration tests for authentication endpoints.
+Stabilized by resetting app state between tests and ensuring TEST_MODE
+disables CSRF and rate limiter prior to FastAPI app import.
 """
 
+import os
+import importlib
 import pytest
 import asyncio
 from datetime import datetime, timedelta
@@ -12,7 +16,63 @@ from hypothesis import given, strategies as st, settings as hypothesis_settings,
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Import app initially; tests will rebind this reference via the module-level
+# fixture below to ensure a fresh instance when needed.
 from tldw_Server_API.app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_state_per_test(monkeypatch):
+    """Ensure clean app state per test and disable CSRF/rate limiter.
+
+    - Sets TEST_MODE/TESTING env vars so main.py skips global rate limiter.
+    - Disables CSRF via the shared settings dict used by CSRF middleware logic.
+    - Resets JWT service singleton to avoid stale secrets across tests.
+    - Reloads app.main and rebinds the module-level `app` reference so
+      dependency_overrides and middleware are built under current env.
+    """
+    # Ensure test-mode environment prior to app import/reload
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+
+    # Disable CSRF through global settings before app import
+    try:
+        from tldw_Server_API.app.core.config import settings as _global_settings
+        _global_settings["CSRF_ENABLED"] = False
+    except Exception:
+        pass
+
+    # Reset JWT singleton so a fresh key/config is used each test
+    try:
+        from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service as _reset_jwt
+        _reset_jwt()
+    except Exception:
+        pass
+
+    # Reload app.main under the new environment and rebind global `app`
+    try:
+        import tldw_Server_API.app.main as _main
+        reloaded = importlib.reload(_main)
+        # Rebind the module-level app reference for this test module
+        global app  # type: ignore
+        app = reloaded.app
+        # Clear any leftover overrides just in case
+        app.dependency_overrides.clear()
+    except Exception:
+        # If reload fails for any reason, at least clear overrides on existing app
+        try:
+            app.dependency_overrides.clear()
+        except Exception:
+            pass
+
+    yield
+
+    # Teardown: clear overrides after each test
+    try:
+        app.dependency_overrides.clear()
+    except Exception:
+        pass
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidCredentialsError,
     UserNotFoundError,

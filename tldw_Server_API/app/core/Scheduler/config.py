@@ -206,8 +206,12 @@ class SchedulerConfig:
                 logger.warning(f"Using Windows temp path: {self.base_path}")
         else:
             # Unix-like systems
-            if str(self.base_path).startswith('/var/lib') and not os.access('/var/lib', os.W_OK):
-                # Fall back to user's home directory if /var/lib is not writable
+            base_str = str(self.base_path)
+            is_var_lib = base_str.startswith('/var/lib') or base_str.startswith('/private/var/lib')
+            var_paths = ['/var/lib', '/private/var/lib']
+            writable = any(os.path.exists(p) and os.access(p, os.W_OK) for p in var_paths)
+            if is_var_lib and not writable:
+                # Fall back to user's home directory if var/lib is not writable
                 self.base_path = Path.home() / '.local' / 'share' / 'scheduler'
                 logger.warning(f"Using user directory: {self.base_path}")
         

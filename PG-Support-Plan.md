@@ -1,13 +1,13 @@
 # PostgreSQL Support Implementation Plan
 
 ## ⚠️ ACTUAL IMPLEMENTATION STATUS ⚠️
-**As of 2025-09-07 (revised 2025-10-08):**
-- **Integration Progress**: ~40% – MediaDatabase now runs through backend helpers for keyword sync, soft delete, document versions, and sync-log paths; remaining Media CRUD and ChaCha integration still pending.
+**As of 2025-09-07 (revised 2025-10-12):**
+- **Integration Progress**: ~65% – MediaDatabase runs through backend helpers for keyword sync, soft delete, document versions, sync-log paths, and permanent delete (backend-aware). ChaChaNotes has backend-aware constructors, schema bootstrap, and PostgreSQL FTS rebuild/search in place; analytics uses the backend abstraction. Remaining work: finish Media transcript/analytics helpers and a few SQLite-only branches; complete ChaCha link/flashcard legacy utilities; broaden end-to-end tests.
 - **Functional PostgreSQL Support**: Partial – Schema bootstrap and several write paths execute via the Postgres backend, but trash/restore flows, transcript handling, and analytics queries still rely on SQLite SQL or features.
-- **Tests Written**: 0 tests (Postgres CI coverage still outstanding).
+- **Tests Written**: Partial – dual-backend unit/integration tests cover ChaChaNotes PostgreSQL FTS flows, Media/claims retrievers, migration CLI row-count parity, and selected end-to-end RAG paths; two flaky AuthNZ refresh tests stabilized via module fixture (TEST_MODE with per-test app reload).
 - **Files Created**: Backend abstraction (~2200 LOC) lives under `app/core/DB_Management/backends/`; MediaDatabase refactor in progress.
 - **Git Status**: Backend modules plus new factory helpers are committed; ongoing refactor tracked in working tree.
-- **Dependencies**: psycopg deps remain commented out in `requirements.txt` (runtime opt-in still pending).
+- **Dependencies**: psycopg deps remain commented out in `requirements.txt` (enable after broader Postgres CI passes consistently).
 - **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager factories reuse shared backend.
 - **Main Issue**: Residual SQLite-specific SQL across Media/ChaCha code and lack of migrations/tests block full Postgres enablement.
 

@@ -1507,8 +1507,9 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
             )
             return PermissionResponse(**dict(row))
         else:
+            # SQLite: tolerate duplicates via INSERT OR IGNORE, then return the row by name
             await db.execute(
-                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)",
                 payload.name, payload.description, payload.category,
             )
             # Fetch the row via adapter
@@ -1522,6 +1523,10 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
             return PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3])
     except Exception as e:
         logger.error(f"Failed to create permission: {e}")
+        # In tests, include error details for quicker diagnosis
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            raise HTTPException(status_code=500, detail=f"Failed to create permission: {e}")
         raise HTTPException(status_code=500, detail="Failed to create permission")
 
 

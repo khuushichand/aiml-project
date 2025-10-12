@@ -76,6 +76,10 @@ async def get_db_transaction():
             async def fetchrow(self, query: str, *args):
                 return await self._pool.fetchone(query, *args)
 
+            async def fetchone(self, query: str, *args):
+                # Alias to fetchrow for compatibility
+                return await self._pool.fetchone(query, *args)
+
             async def fetch(self, query: str, *args):
                 return await self._pool.fetchall(query, *args)
 

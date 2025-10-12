@@ -6937,22 +6937,28 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
     logger.warning(f"!!! PERMANENT DELETE initiated Media ID: {media_id} DB {db_instance.db_path_str}. NOT SYNCED !!!")
     try:
         with db_instance.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM Media WHERE id = ?", (media_id,))
-            if not cursor.fetchone():
+            # Existence check (backend-aware placeholders handled by execute_query)
+            sel_cur = db_instance.execute_query("SELECT 1 AS one FROM Media WHERE id = ?", (media_id,))
+            row = sel_cur.fetchone()
+            if not row:
                 logger.warning(f"Permanent delete failed: Media {media_id} not found.")
                 return False
+
             # Hard delete - Cascades should handle children via FKs
-            cursor.execute("DELETE FROM Media WHERE id = ?", (media_id,))
-            deleted_count = cursor.rowcount
-            # Manually delete from FTS (cascade should work, but belt-and-suspenders)
-            db_instance._delete_fts_media(conn, media_id)
-        if deleted_count > 0:
+            del_cur = db_instance.execute_query("DELETE FROM Media WHERE id = ?", (media_id,), commit=False)
+            deleted_count = getattr(del_cur, "rowcount", 0) or 0
+
+            # Manually clear/update FTS vectors as a belt-and-suspenders
+            try:
+                db_instance._delete_fts_media(conn, media_id)
+            except Exception as _fts_exc:
+                logger.debug(f"FTS cleanup during permanent delete skipped/failed: {_fts_exc}")
+
+        if int(deleted_count) > 0:
             logger.info(f"Permanently deleted Media ID: {media_id}. NO sync log generated.")
             return True
-        else:
-            logger.error(f"Permanent delete failed unexpectedly Media {media_id}.")
-            return False
+        logger.error(f"Permanent delete failed unexpectedly Media {media_id}.")
+        return False
     except sqlite3.Error as e:
         logger.error(f"Error permanently deleting Media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"Failed permanently delete item: {e}") from e
