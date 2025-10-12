@@ -5,6 +5,7 @@ import os
 import sqlite3
 import uuid
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -32,22 +33,95 @@ _required_env = [
     "POSTGRES_TEST_PASSWORD",
 ]
 
-pytestmark = pytest.mark.skipif(
-    _PG_DRIVER is None or any(env not in os.environ for env in _required_env),
-    reason="PostgreSQL test environment not configured",
-)
+pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
+
+
+def _base_postgres_config() -> DatabaseConfig:
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
+        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
+        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
+        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
+        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+    )
+
+
+def _create_temp_postgres_database(config: DatabaseConfig) -> DatabaseConfig:
+    assert _PG_DRIVER is not None
+    db_name = f"tldw_test_{uuid.uuid4().hex[:8]}"
+    if _PG_DRIVER == "psycopg":
+        admin = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        admin = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE DATABASE {db_name} OWNER {config.pg_user};")
+    finally:
+        admin.close()
+
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=config.pg_host,
+        pg_port=config.pg_port,
+        pg_database=db_name,
+        pg_user=config.pg_user,
+        pg_password=config.pg_password,
+    )
+
+
+def _drop_postgres_database(config: DatabaseConfig) -> None:
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        admin = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        admin = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
+                (config.pg_database,),
+            )
+            cur.execute(f"DROP DATABASE IF EXISTS {config.pg_database};")
+    finally:
+        admin.close()
 
 
 @pytest.fixture()
-def postgres_config() -> DatabaseConfig:
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=os.environ["POSTGRES_TEST_HOST"],
-        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
-        pg_database=os.environ["POSTGRES_TEST_DB"],
-        pg_user=os.environ["POSTGRES_TEST_USER"],
-        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
-    )
+def temp_postgres_config() -> DatabaseConfig:
+    base = _base_postgres_config()
+    cfg = _create_temp_postgres_database(base)
+    try:
+        return cfg
+    finally:
+        # pytest won't run this finally here; actual cleanup is done in tests' teardown where used
+        ...
 
 
 @pytest.fixture()
@@ -174,29 +248,8 @@ def sqlite_workflows_db(tmp_path: Path) -> Path:
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
-    assert _PG_DRIVER is not None
-    if _PG_DRIVER == "psycopg":
-        conn = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname=config.pg_database,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    else:
-        conn = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database=config.pg_database,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    conn.autocommit = True
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    finally:
-        conn.close()
+    # No-op retained for backward compatibility (per-test DB is created instead)
+    return None
 
 
 def _postgres_counts(config: DatabaseConfig) -> tuple[int, int]:
@@ -229,20 +282,18 @@ def _postgres_counts(config: DatabaseConfig) -> tuple[int, int]:
 
 
 @pytest.mark.integration
-def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_config: DatabaseConfig) -> None:
-    _reset_postgres_database(postgres_config)
-
-    backend = DatabaseBackendFactory.create_backend(postgres_config)
+def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, temp_postgres_config: DatabaseConfig) -> None:
+    backend = DatabaseBackendFactory.create_backend(temp_postgres_config)
     pg_media_db = MediaDatabase(db_path=":memory:", client_id="migration-target", backend=backend)
     pg_media_db.close_connection()
 
-    migration_tools.migrate_sqlite_to_postgres(sqlite_media_db, postgres_config, label="content", batch_size=16)
+    migration_tools.migrate_sqlite_to_postgres(sqlite_media_db, temp_postgres_config, label="content", batch_size=16)
 
     with sqlite3.connect(sqlite_media_db) as conn:
         sqlite_media = conn.execute("SELECT COUNT(*) FROM Media").fetchone()[0]
         sqlite_claims = conn.execute("SELECT COUNT(*) FROM Claims").fetchone()[0]
 
-    pg_media, pg_claims = _postgres_counts(postgres_config)
+    pg_media, pg_claims = _postgres_counts(temp_postgres_config)
 
     assert pg_media == sqlite_media
     assert pg_claims == sqlite_claims
@@ -252,19 +303,19 @@ def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_co
 
     if _PG_DRIVER == "psycopg":
         conn = _psycopg_v3.connect(
-            host=postgres_config.pg_host,
-            port=postgres_config.pg_port,
-            dbname=postgres_config.pg_database,
-            user=postgres_config.pg_user,
-            password=postgres_config.pg_password,
+            host=temp_postgres_config.pg_host,
+            port=temp_postgres_config.pg_port,
+            dbname=temp_postgres_config.pg_database,
+            user=temp_postgres_config.pg_user,
+            password=temp_postgres_config.pg_password,
         )
     else:
         conn = _psycopg2.connect(
-            host=postgres_config.pg_host,
-            port=postgres_config.pg_port,
-            database=postgres_config.pg_database,
-            user=postgres_config.pg_user,
-            password=postgres_config.pg_password,
+            host=temp_postgres_config.pg_host,
+            port=temp_postgres_config.pg_port,
+            database=temp_postgres_config.pg_database,
+            user=temp_postgres_config.pg_user,
+            password=temp_postgres_config.pg_password,
         )
     try:
         with conn.cursor() as cur:
@@ -274,6 +325,8 @@ def test_migration_cli_transfers_content_rows(sqlite_media_db: Path, postgres_co
         conn.close()
 
     assert migrated_claim == "Claim copied via migration"
+    # Cleanup temporary DB
+    _drop_postgres_database(temp_postgres_config)
 
 
 def _postgres_workflow_counts(config: DatabaseConfig) -> tuple[int, int, int, int]:
@@ -323,23 +376,23 @@ def _sqlite_workflow_counts(path: Path) -> tuple[int, int, int, int]:
 
 
 @pytest.mark.integration
-def test_migration_cli_transfers_workflow_rows(sqlite_workflows_db: Path, postgres_config: DatabaseConfig) -> None:
-    _reset_postgres_database(postgres_config)
-
-    backend = DatabaseBackendFactory.create_backend(postgres_config)
+def test_migration_cli_transfers_workflow_rows(sqlite_workflows_db: Path, temp_postgres_config: DatabaseConfig) -> None:
+    backend = DatabaseBackendFactory.create_backend(temp_postgres_config)
     wf_db = WorkflowsDatabase(db_path=':memory:', backend=backend)
     wf_db.close_connection()
 
     migration_tools.migrate_workflows_sqlite_to_postgres(
         sqlite_workflows_db,
-        postgres_config,
+        temp_postgres_config,
         batch_size=32,
     )
 
     sqlite_counts = _sqlite_workflow_counts(sqlite_workflows_db)
-    pg_counts = _postgres_workflow_counts(postgres_config)
+    pg_counts = _postgres_workflow_counts(temp_postgres_config)
 
     assert sqlite_counts == pg_counts
 
     defs, runs, _, _ = pg_counts
     assert defs > 0 and runs > 0
+    # Cleanup temporary DB
+    _drop_postgres_database(temp_postgres_config)

@@ -173,6 +173,7 @@ class Modal {
         if (this.options.backdrop) {
             this.backdrop = document.createElement('div');
             this.backdrop.className = 'modal-backdrop';
+            this.backdrop.setAttribute('aria-hidden', 'true');
             this.backdrop.onclick = () => {
                 if (this.options.backdrop === 'static') return;
                 this.close();
@@ -193,6 +194,18 @@ class Modal {
             ${this.options.footer ? `<div class="modal-footer">${this.options.footer}</div>` : ''}
         `;
 
+        // ARIA roles and labelling
+        try {
+            this.modal.setAttribute('role', 'dialog');
+            this.modal.setAttribute('aria-modal', 'true');
+            const titleEl = this.modal.querySelector('.modal-title');
+            if (titleEl) {
+                const titleId = `modal-title-${Math.random().toString(36).slice(2)}`;
+                titleEl.id = titleId;
+                this.modal.setAttribute('aria-labelledby', titleId);
+            }
+        } catch (e) { /* ignore */ }
+
         if (this.options.closeButton) {
             const closeBtn = this.modal.querySelector('.modal-close');
             closeBtn.onclick = () => this.close();
@@ -207,6 +220,24 @@ class Modal {
     handleKeydown(e) {
         if (e.key === 'Escape') {
             this.close();
+        }
+        if (e.key === 'Tab') {
+            // trap focus inside the modal
+            const focusable = this.modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey) {
+                if (document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                }
+            } else {
+                if (document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
         }
     }
 

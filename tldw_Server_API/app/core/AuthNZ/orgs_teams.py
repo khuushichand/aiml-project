@@ -109,9 +109,9 @@ async def create_team(
 async def add_team_member(*, team_id: int, user_id: int, role: str = "member") -> Dict[str, Any]:
     pool = await get_db_pool()
     async with pool.transaction() as conn:
-        if hasattr(conn, 'execute'):
+        if hasattr(conn, 'fetchrow'):
             await conn.execute(
-                "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING",
                 team_id, user_id, role,
             )
             row = await conn.fetchrow(

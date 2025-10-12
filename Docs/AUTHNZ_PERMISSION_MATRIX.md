@@ -198,6 +198,75 @@ def critical_operation(user: User):
 
 ## Migration Path
 
+## Admin Endpoints (RBAC helpers)
+
+### Role Effective Permissions
+
+- GET `/api/v1/admin/roles/{role_id}/permissions/effective`
+  - Returns a convenience combined view of a role’s permissions:
+    - `permissions`: non-tool permissions (e.g., `media.read`)
+    - `tool_permissions`: tool execution permissions (e.g., `tools.execute:my_tool` or `tools.execute:*`)
+    - `all_permissions`: union of both lists
+
+Example (single-user mode):
+```bash
+curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://127.0.0.1:8000/api/v1/admin/roles/2/permissions/effective | jq
+```
+
+OpenAPI example
+
+```yaml
+paths:
+  /api/v1/admin/roles/{role_id}/permissions/effective:
+    get:
+      summary: Get role effective permissions
+      tags: [admin]
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Effective permissions for the role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role_id:
+                    type: integer
+                  role_name:
+                    type: string
+                  permissions:
+                    type: array
+                    items: { type: string }
+                  tool_permissions:
+                    type: array
+                    items: { type: string }
+                  all_permissions:
+                    type: array
+                    items: { type: string }
+              examples:
+                sample:
+                  value:
+                    role_id: 2
+                    role_name: user
+                    permissions:
+                      - media.create
+                      - media.read
+                      - users.read
+                    tool_permissions:
+                      - tools.execute:*
+                    all_permissions:
+                      - media.create
+                      - media.read
+                      - users.read
+                      - tools.execute:*
+```
+
 ### Single-User to Multi-User
 
 1. Run the migration script:

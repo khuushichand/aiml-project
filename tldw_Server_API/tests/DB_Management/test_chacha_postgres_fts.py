@@ -193,3 +193,17 @@ def test_set_flashcard_tags_postgres_uses_on_conflict():
     assert insert_calls, "expected flashcard_keywords insert when adding tags"
     assert all("on conflict (card_id, keyword_id) do nothing" in sql for sql in insert_calls)
     assert all("insert or ignore" not in sql for sql in insert_calls)
+
+
+def test_search_keywords_postgres_uses_tsquery(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _make_postgres_db()
+    rows = [{"id": 1, "keyword": "fruit", "rank": 0.88}]
+    db.execute_query = MagicMock(return_value=_CursorStub(rows))
+
+    result = db.search_keywords("fruit", limit=5)
+
+    assert result == rows
+    assert db.execute_query.call_count == 1
+    sql, params = db.execute_query.call_args[0]
+    assert "keywords_fts_tsv" in sql and "to_tsquery('english', ?)" in sql
+    assert params == ("fruit", "fruit", 5)

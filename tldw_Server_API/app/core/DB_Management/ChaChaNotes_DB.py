@@ -1499,7 +1499,7 @@ UPDATE db_schema_version
             transformer=self._transform_query_for_backend
             if self.backend_type == BackendType.POSTGRESQL
             else None,
-            ensure_returning=self.backend_type == BackendType.POSTGRESQL,
+            ensure_returning=False,
         )
 
     def _prepare_backend_many_statement(
@@ -2227,6 +2227,13 @@ UPDATE db_schema_version
                 )
 
             try:
+                # Namespace migration: if legacy 'keywords' exists, rename to 'chacha_keywords'
+                try:
+                    if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
+                        self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
+                except Exception:
+                    pass
+
                 self._ensure_postgres_fts(conn)
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
@@ -2236,9 +2243,10 @@ UPDATE db_schema_version
 
         backend = self.backend
         for fts_table, source_table, columns in self._FTS_CONFIG:
+            actual_source = self._map_table_for_backend(source_table)
             backend.create_fts_table(
                 table_name=fts_table,
-                source_table=source_table,
+                source_table=actual_source,
                 columns=columns,
                 connection=conn,
             )
@@ -2249,9 +2257,10 @@ UPDATE db_schema_version
         if self.backend_type == BackendType.POSTGRESQL:
             try:
                 for fts_table, source_table, columns in self._FTS_CONFIG:
+                    actual_source = self._map_table_for_backend(source_table)
                     self.backend.create_fts_table(
                         table_name=fts_table,
-                        source_table=source_table,
+                        source_table=actual_source,
                         columns=columns,
                         connection=None,
                     )
@@ -2373,14 +2382,82 @@ UPDATE db_schema_version
 
         stmt = replace_insert_or_ignore(stmt)
 
+        # Special-case: seed insert for character_cards uses integer for boolean 'deleted'.
+        lower_stmt = stmt.lower()
+        if lower_stmt.startswith('insert') and 'into character_cards' in lower_stmt:
+            # Convert trailing deleted value 0/1 to boolean FALSE/TRUE for Postgres
+            stmt = re.sub(r",\s*0\)\s*;\s*$", ", FALSE);", stmt)
+            stmt = re.sub(r",\s*1\)\s*;\s*$", ", TRUE);", stmt)
+            stmt = re.sub(r",\s*0\)\s*ON\s+CONFLICT", ", FALSE) ON CONFLICT", stmt, flags=re.IGNORECASE)
+            stmt = re.sub(r",\s*1\)\s*ON\s+CONFLICT", ", TRUE) ON CONFLICT", stmt, flags=re.IGNORECASE)
+
+        # Break circular FK between conversations/messages by dropping conversations->messages FK at create time
+        if lower_stmt.startswith('create table') and 'create table if not exists conversations' in lower_stmt:
+            # Remove the forked_from_message_id FK clause
+            stmt = re.sub(
+                r"forked_from_message_id\s+TEXT\s+REFERENCES\s+messages\s*\(\s*id\s*\)\s*ON\s+DELETE\s+SET\s+NULL,?",
+                "forked_from_message_id TEXT,",
+                stmt,
+                flags=re.IGNORECASE,
+            )
+
+        # Namespace the 'keywords' table to avoid collision with Media DB keywords
+        # Only adjust creation/references; triggers and FTS blocks are skipped earlier
+        if 'create table if not exists keywords' in lower_stmt:
+            stmt = re.sub(
+                r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+keywords\s*\(",
+                "CREATE TABLE IF NOT EXISTS chacha_keywords(",
+                stmt,
+                flags=re.IGNORECASE,
+            )
+        # Adjust references to keywords in foreign keys/content declarations
+        stmt = re.sub(
+            r"REFERENCES\s+keywords\s*\(\s*id\s*\)",
+            "REFERENCES chacha_keywords(id)",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+        stmt = re.sub(
+            r"content='keywords'",
+            "content='chacha_keywords'",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+
         if not stmt.endswith(';'):
             stmt = f"{stmt};"
         return stmt
 
     def _apply_schema_v4_postgres(self, conn) -> None:
         statements = self._convert_sqlite_schema_to_postgres_statements(self._FULL_SCHEMA_SQL_V4)
+
+        deferred_sync_idx_stmt: Optional[str] = None
         for stmt in statements:
+            up = stmt.upper().strip()
+            if up.startswith("CREATE INDEX IF NOT EXISTS IDX_SYNC_LOG_ENTITY"):
+                deferred_sync_idx_stmt = stmt
+                continue
             self.backend.execute(stmt, connection=conn)
+
+        # Create sync_log entity index depending on available columns
+        try:
+            cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+        except Exception:
+            cols = set()
+
+        if 'entity_id' in cols:
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_id)",
+                connection=conn,
+            )
+        elif 'entity_uuid' in cols:
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_uuid)",
+                connection=conn,
+            )
+        elif deferred_sync_idx_stmt:
+            self.backend.execute(deferred_sync_idx_stmt, connection=conn)
+
         self._set_schema_version_postgres(conn, 4)
         self._sync_postgres_sequences(conn)
 
@@ -2419,6 +2496,12 @@ UPDATE db_schema_version
 
         for table_name, column_name in self._POSTGRES_SEQUENCE_TABLES:
             try:
+                # Skip tables that may not exist yet at this schema version
+                try:
+                    if not backend.table_exists(table_name, connection=conn):
+                        continue
+                except Exception:
+                    continue
                 seq_result = backend.execute(
                     "SELECT pg_get_serial_sequence(%s, %s) AS seq",
                     (table_name, column_name),
@@ -2481,6 +2564,18 @@ UPDATE db_schema_version
             A string representation of the UUID.
         """
         return str(uuid.uuid4())
+
+    def _map_table_for_backend(self, table_name: str) -> str:
+        """Map logical table names to backend-specific physical names.
+
+        This avoids name collisions with other modules when sharing a Postgres database.
+        """
+        if self.backend_type == BackendType.POSTGRESQL:
+            mapping = {
+                'keywords': 'chacha_keywords',
+            }
+            return mapping.get(table_name, table_name)
+        return table_name
 
     def _get_current_db_version(self, conn: sqlite3.Connection, table_name: str, pk_col_name: str,
                                 pk_value: Any) -> int:
@@ -2660,7 +2755,7 @@ UPDATE db_schema_version
                 alternate_greetings, tags, creator, character_version, extensions,
                 created_at, last_modified, client_id, version, deleted
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
             card_data['name'], card_data.get('description'), card_data.get('personality'),
@@ -2675,12 +2770,14 @@ UPDATE db_schema_version
                 cursor = conn.cursor()
                 if self.backend_type == BackendType.POSTGRESQL:
                     query = base_query + " RETURNING id"
-                    prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                    exec_params = params + (1, False)
+                    prepared_query, prepared_params = self._prepare_backend_statement(query, exec_params)
                     cursor.execute(prepared_query, prepared_params)
                     row = cursor.fetchone()
                     char_id = row['id'] if row else None
                 else:
-                    cursor.execute(base_query, params)
+                    exec_params = params + (1, 0)
+                    cursor.execute(base_query, exec_params)
                     char_id = cursor.lastrowid
                 logger.info(f"Added character card '{card_data['name']}' with ID: {char_id}.")
                 return char_id
@@ -3308,14 +3405,22 @@ UPDATE db_schema_version
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
                                            character_id, title, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
-        params = (
-            conv_id, root_id, conv_data.get('forked_from_message_id'),
-            conv_data.get('parent_conversation_id'), conv_data['character_id'],
-            conv_data.get('title'), conv_data.get('rating'),
-            now, now, client_id # created_at, last_modified, client_id
-        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                conv_id, root_id, conv_data.get('forked_from_message_id'),
+                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('title'), conv_data.get('rating'),
+                now, now, client_id, 1, False
+            )
+        else:
+            params = (
+                conv_id, root_id, conv_data.get('forked_from_message_id'),
+                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('title'), conv_data.get('rating'),
+                now, now, client_id, 1, 0
+            )
         try:
             with self.transaction() as conn:
                 conn.execute(query, params)
@@ -3747,14 +3852,22 @@ UPDATE db_schema_version
                 INSERT INTO messages (id, conversation_id, parent_message_id, sender, content,
                                       image_data, image_mime_type,
                                       timestamp, ranking, last_modified, client_id, version, deleted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-        params = (
-            msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
-            msg_data['sender'], msg_data.get('content', ''),  # Default to empty string if no text content
-            msg_data.get('image_data'), msg_data.get('image_mime_type'),
-            timestamp, msg_data.get('ranking'), now, client_id
-        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
+                msg_data['sender'], msg_data.get('content', ''),
+                msg_data.get('image_data'), msg_data.get('image_mime_type'),
+                timestamp, msg_data.get('ranking'), now, client_id, 1, False
+            )
+        else:
+            params = (
+                msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
+                msg_data['sender'], msg_data.get('content', ''),
+                msg_data.get('image_data'), msg_data.get('image_mime_type'),
+                timestamp, msg_data.get('ranking'), now, client_id
+            )
         try:
             with self.transaction():
                 conv_cursor = self.execute_query("SELECT 1 FROM conversations WHERE id = ? AND deleted = 0",
@@ -4149,15 +4262,26 @@ UPDATE db_schema_version
 
         # Add created_at for new inserts
         cols_str_list_insert = cols_str_list + ['created_at', 'last_modified', 'client_id', 'version', 'deleted']
-        placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '1', '0']
+        if self.backend_type == BackendType.POSTGRESQL:
+            placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '?', '?']
+            version_value = 1
+            deleted_value = False
+        else:
+            placeholders_str_list_insert = placeholders_str_list + ['?', '?', '?', '1', '0']
+            version_value = 1
+            deleted_value = 0
 
+        table_name = self._map_table_for_backend(table_name)
         query = f"""
             INSERT INTO {table_name} (
                 {', '.join(cols_str_list_insert)}
             ) VALUES ({', '.join(placeholders_str_list_insert)})
         """
         # Params for INSERT: main_value, other_values..., created_at, last_modified, client_id
-        params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use])
+        if self.backend_type == BackendType.POSTGRESQL:
+            params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use, version_value, deleted_value])
+        else:
+            params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use])
 
 
         try:
@@ -4194,7 +4318,15 @@ UPDATE db_schema_version
 
                 # If not undeleting, proceed with insert
                 cursor_insert = conn.execute(query, params_tuple_insert)
-                item_id_insert = cursor_insert.lastrowid
+                item_id_insert = cursor_insert.lastrowid if hasattr(cursor_insert, 'lastrowid') else None
+                if item_id_insert is None and self.backend_type == BackendType.POSTGRESQL:
+                    sel = conn.execute(
+                        f"SELECT id FROM {table_name} WHERE {unique_col_name} = ?",
+                        (main_col_value,)
+                    )
+                    row = sel.fetchone()
+                    if row is not None:
+                        item_id_insert = int(row['id'] if isinstance(row, dict) else row[0])
                 logger.info(f"Added {table_name} '{main_col_value}' with ID: {item_id_insert}.")
                 return item_id_insert
         except sqlite3.IntegrityError as e:
@@ -4224,6 +4356,7 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
+        table_name = self._map_table_for_backend(table_name)
         query = f"SELECT * FROM {table_name} WHERE id = ? AND deleted = 0"
         try:
             cursor = self.execute_query(query, (item_id,))
@@ -4249,6 +4382,7 @@ UPDATE db_schema_version
         Raises:
             CharactersRAGDBError: For database errors.
         """
+        table_name = self._map_table_for_backend(table_name)
         query = f"SELECT * FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 0"
         try:
             cursor = self.execute_query(query, (value,))
@@ -4289,6 +4423,7 @@ UPDATE db_schema_version
             base, _, direction = order_by_col.partition('COLLATE NOCASE')
             order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
 
+        table_name = self._map_table_for_backend(table_name)
         query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_expression} LIMIT ? OFFSET ?"
         try:
             cursor = self.execute_query(query, (limit, offset))
@@ -4698,6 +4833,29 @@ UPDATE db_schema_version
         Returns:
             A list of matching keyword dictionaries.
         """
+        if self.backend_type == BackendType.POSTGRESQL:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            if not tsquery:
+                logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
+                return []
+
+            source_table = self._map_table_for_backend("keywords")
+            fts_column = "keywords_fts_tsv"
+            query = f"""
+                SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                FROM {source_table} k
+                WHERE k.deleted = FALSE
+                  AND k.{fts_column} @@ to_tsquery('english', ?)
+                ORDER BY rank DESC, k.last_modified DESC
+                LIMIT ?
+            """
+            try:
+                cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                raise
+
         # Support prefix/substring search expectations in tests by using prefix match
         # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
         # Avoid quoting here to preserve wildcard behavior.
@@ -4839,9 +4997,12 @@ UPDATE db_schema_version
 
         query = """
             INSERT INTO notes (id, title, content, last_modified, client_id, version, deleted, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
-        params = (final_note_id, title.strip(), content, now, client_id_to_use, now) # created_at is also now
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, False, now)
+        else:
+            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, 0, now)
 
         try:
             with self.transaction() as conn:
@@ -5072,10 +5233,19 @@ UPDATE db_schema_version
                     sync_op = 'create' if operation == 'link' else 'delete'
                     sync_timestamp = now_iso # Use now_iso for create, and also for delete event time
 
-                    sync_log_query = """
-                        INSERT INTO sync_log (entity, entity_id, operation, timestamp, client_id, version, payload)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """
+                    entity_col = 'entity_id'
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        try:
+                            cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+                            if 'entity_uuid' in cols and 'entity_id' not in cols:
+                                entity_col = 'entity_uuid'
+                        except Exception:
+                            pass
+
+                    sync_log_query = (
+                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "
+                        f"VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    )
                     sync_log_params = (
                         link_table, sync_entity_id, sync_op, sync_timestamp,
                         self.client_id, 1, # Link table entries don't have their own version, use 1 for sync log

@@ -21,12 +21,11 @@ from tldw_Server_API.app.core.MCP_unified.auth import (
     UserRole,
     RBACPolicy
 )
-from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import (
-    TokenData,
-    get_jwt_manager
-)
+from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -91,40 +90,73 @@ class AuthTokenResponse(BaseModel):
 # Dependency functions
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Security(security)
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
 ) -> Optional[TokenData]:
-    """Get current user from JWT token (optional)"""
-    if not credentials:
-        return None
-    
+    """Get current user (AuthNZ JWT, MCP JWT, or API key)."""
+    # Try AuthNZ JWT first (multi-user)
     try:
-        jwt_manager = get_jwt_manager()
-        return jwt_manager.verify_token(credentials.credentials)
+        if credentials and credentials.credentials:
+            jwt_service = get_jwt_service()
+            payload = jwt_service.decode_access_token(credentials.credentials)
+            uid = str(payload.get("user_id") or payload.get("sub"))
+            if uid:
+                return TokenData(sub=uid, username=payload.get("username"), roles=[], permissions=[], token_type="access")
     except Exception as e:
-        logger.debug(f"Token verification failed: {e}")
-        return None
+        logger.debug(f"AuthNZ JWT check failed: {e}")
+
+    # MCP JWT fallback
+    try:
+        if credentials and credentials.credentials:
+            jwt_manager = get_jwt_manager()
+            return jwt_manager.verify_token(credentials.credentials)
+    except Exception as e:
+        logger.debug(f"MCP token verification failed: {e}")
+
+    # API key fallback
+    try:
+        if x_api_key:
+            # Single-user mode: accept the configured SINGLE_USER_API_KEY directly
+            try:
+                if is_single_user_mode():
+                    settings = get_settings()
+                    if x_api_key == settings.SINGLE_USER_API_KEY:
+                        return TokenData(
+                            sub=str(settings.SINGLE_USER_FIXED_ID),
+                            username="single_user",
+                            roles=["admin"],
+                            permissions=[],
+                            token_type="access",
+                        )
+            except Exception:
+                # Fall through to multi-user API key validation
+                pass
+            api_mgr = await get_api_key_manager()
+            info = await api_mgr.validate_api_key(x_api_key)
+            if info and info.get("user_id"):
+                return TokenData(sub=str(info["user_id"]), username=None, roles=["api_client"], permissions=[], token_type="access")
+    except Exception as e:
+        logger.debug(f"API key check failed: {e}")
+
+    return None
 
 
 async def require_user(
-    credentials: HTTPAuthorizationCredentials = Security(security)
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
 ) -> TokenData:
     """Require authenticated user"""
-    if not credentials:
+    if not credentials and not x_api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    try:
-        jwt_manager = get_jwt_manager()
-        return jwt_manager.verify_token(credentials.credentials)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Reuse get_current_user to resolve any auth form
+    user = await get_current_user(credentials, x_api_key)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return user
 
 
 async def require_admin(
@@ -150,7 +182,8 @@ async def require_admin(
 async def websocket_endpoint(
     websocket: WebSocket,
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    token: Optional[str] = Query(None, description="Authentication token")
+    token: Optional[str] = Query(None, description="Authentication token"),
+    api_key: Optional[str] = Query(None, description="API key for authentication")
 ):
     """
     WebSocket endpoint for MCP protocol.
@@ -187,7 +220,7 @@ async def websocket_endpoint(
         await server.initialize()
     
     # Handle WebSocket connection
-    await server.handle_websocket(websocket, client_id=client_id, auth_token=token)
+    await server.handle_websocket(websocket, client_id=client_id, auth_token=token, api_key=api_key)
 
 
 # HTTP endpoints
@@ -196,7 +229,8 @@ async def websocket_endpoint(
 async def mcp_request(
     request: MCPRequest,
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    user: Optional[TokenData] = Depends(get_current_user)
+    user: Optional[TokenData] = Depends(get_current_user),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
 ):
     """
     Process an MCP request via HTTP.
@@ -211,12 +245,52 @@ async def mcp_request(
         await server.initialize()
     
     # Process request
+    # Attach org/team metadata when auth via API key
+    metadata = {}
+    if x_api_key:
+        try:
+            api_mgr = await get_api_key_manager()
+            info = await api_mgr.validate_api_key(x_api_key)
+            if info:
+                if info.get('org_id') is not None:
+                    metadata['org_id'] = info.get('org_id')
+                if info.get('team_id') is not None:
+                    metadata['team_id'] = info.get('team_id')
+        except Exception:
+            pass
+
+    # Derive user id with a robust single-user fallback
+    derived_user_id: Optional[str] = user.sub if user else None
+    if derived_user_id is None:
+        try:
+            if x_api_key and is_single_user_mode():
+                settings = get_settings()
+                if x_api_key == settings.SINGLE_USER_API_KEY:
+                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
         client_id=client_id,
-        user_id=user.sub if user else None
+        user_id=derived_user_id,
+        metadata=metadata or None
     )
-    
+    # Convert authorization errors to HTTP 403 with hint for HTTP clients
+    if response.error and response.error.code == -32001:
+        hint = None
+        try:
+            if request.method == "tools/call":
+                tname = (request.params or {}).get("name") if isinstance(request.params, dict) else None
+                if tname:
+                    hint = f"Permission denied. Ask an admin to grant tools.execute:{tname} or tools.execute:* to your role (Admin → Access Control)."
+        except Exception:
+            hint = None
+        raise HTTPException(status_code=403, detail={
+            "message": response.error.message or "Insufficient permissions",
+            "hint": hint or "Insufficient permissions for this operation"
+        })
+
     return response
 
 
@@ -266,7 +340,8 @@ async def get_server_metrics(
 @router.get("/tools")
 async def list_tools(
     module: Optional[str] = Query(None, description="Filter by module"),
-    user: Optional[TokenData] = Depends(get_current_user)
+    user: Optional[TokenData] = Depends(get_current_user),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ):
     """
     List available MCP tools.
@@ -283,12 +358,28 @@ async def list_tools(
     if not server.initialized:
         await server.initialize()
     
+    # Derive user id with a robust single-user fallback
+    derived_user_id: Optional[str] = user.sub if user else None
+    if derived_user_id is None:
+        try:
+            if x_api_key and is_single_user_mode():
+                settings = get_settings()
+                if x_api_key == settings.SINGLE_USER_API_KEY:
+                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
+        except Exception:
+            pass
+
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None
+        user_id=derived_user_id,
     )
     
     if response.error:
+        if response.error.code == -32001:
+            raise HTTPException(status_code=403, detail={
+                "message": response.error.message or "Insufficient permissions",
+                "hint": "Permission denied for listing tools. Contact an admin."
+            })
         raise HTTPException(status_code=500, detail=response.error.message)
     
     return response.result
@@ -325,14 +416,37 @@ async def execute_tool(
     )
     
     if response.error:
-        raise HTTPException(
-            status_code=400 if response.error.code == -32602 else 500,
-            detail=response.error.message
-        )
+        # Map authorization failures to 403 with a helpful hint
+        if response.error.code == -32001:  # AUTHORIZATION_ERROR
+            hint = {
+                "message": response.error.message or "Insufficient permissions",
+                "hint": (
+                    f"Permission denied. Ask an admin to grant tools.execute:{request.tool_name} "
+                    f"or tools.execute:* to your role (Admin → Access Control)."
+                )
+            }
+            raise HTTPException(status_code=403, detail=hint)
+        # Invalid params
+        if response.error.code == -32602:
+            raise HTTPException(status_code=400, detail=response.error.message)
+        # Other errors
+        raise HTTPException(status_code=500, detail=response.error.message)
     
     execution_time = (time.time() - start_time) * 1000
     
     result_payload = response.result
+    # Back-compat: unwrap plain text content to raw string when possible
+    display_result = result_payload
+    try:
+        if isinstance(result_payload, dict):
+            content = result_payload.get("content")
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict) and first.get("type") == "text" and isinstance(first.get("text"), str):
+                    display_result = first.get("text")
+    except Exception:
+        display_result = result_payload
+
     served_by = None
     try:
         if isinstance(result_payload, dict):
@@ -341,7 +455,7 @@ async def execute_tool(
         served_by = None
 
     return ToolExecutionResponse(
-        result=result_payload,
+        result=display_result,
         execution_time_ms=execution_time,
         module=served_by or "unknown"
     )
@@ -368,6 +482,11 @@ async def list_modules(
     )
     
     if response.error:
+        if response.error.code == -32001:
+            raise HTTPException(status_code=403, detail={
+                "message": response.error.message or "Insufficient permissions",
+                "hint": "Permission denied for listing tools. Contact an admin."
+            })
         raise HTTPException(status_code=500, detail=response.error.message)
     
     return response.result
@@ -391,6 +510,11 @@ async def get_modules_health(
     response = await server.handle_http_request(request)
     
     if response.error:
+        if response.error.code == -32001:
+            raise HTTPException(status_code=403, detail={
+                "message": response.error.message or "Insufficient permissions",
+                "hint": "Permission denied for listing modules. Contact an admin."
+            })
         raise HTTPException(status_code=500, detail=response.error.message)
     
     return response.result
@@ -417,6 +541,11 @@ async def list_resources(
     )
     
     if response.error:
+        if response.error.code == -32001:
+            raise HTTPException(status_code=403, detail={
+                "message": response.error.message or "Insufficient permissions",
+                "hint": "Permission denied for listing resources. Contact an admin."
+            })
         raise HTTPException(status_code=500, detail=response.error.message)
     
     return response.result
@@ -443,6 +572,11 @@ async def list_prompts(
     )
     
     if response.error:
+        if response.error.code == -32001:
+            raise HTTPException(status_code=403, detail={
+                "message": response.error.message or "Insufficient permissions",
+                "hint": "Permission denied for listing prompts. Contact an admin."
+            })
         raise HTTPException(status_code=500, detail=response.error.message)
     
     return response.result

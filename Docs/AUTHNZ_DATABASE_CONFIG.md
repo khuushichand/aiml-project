@@ -191,7 +191,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:18
     environment:
       POSTGRES_DB: tldw_users
       POSTGRES_USER: tldw_user

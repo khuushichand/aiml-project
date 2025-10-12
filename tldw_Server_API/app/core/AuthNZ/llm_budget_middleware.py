@@ -49,8 +49,26 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
         key_id = getattr(request.state, 'api_key_id', None)
         if not key_id:
-            # JWT or single-user: not a virtual key context
-            return await call_next(request)
+            # Try to validate API key header early (before route deps set request.state)
+            api_key = request.headers.get('X-API-KEY')
+            if api_key:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                    mgr = await get_api_key_manager()
+                    info = await mgr.validate_api_key(api_key=api_key, ip_address=(request.client.host if request.client else None))
+                    if info:
+                        key_id = info.get('id')
+                        try:
+                            # Attach for downstream if route deps rely on it too
+                            request.state.api_key_id = key_id
+                            request.state.user_id = info.get('user_id')
+                        except Exception:
+                            pass
+                except Exception as _e:
+                    logger.debug(f"LLM budget: early API key validation failed: {_e}")
+            if not key_id:
+                # JWT or no API key set yet: skip enforcement
+                return await call_next(request)
 
         try:
             limits = await get_key_limits(int(key_id))

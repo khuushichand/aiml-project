@@ -496,6 +496,12 @@ def get_jwt_service() -> JWTService:
     return _jwt_service
 
 
+def reset_jwt_service() -> None:
+    """Reset the cached JWTService singleton (used in tests to pick up new settings)."""
+    global _jwt_service
+    _jwt_service = None
+
+
 def create_access_token(user_id: int, username: str, role: str) -> str:
     """Convenience function to create an access token"""
     return get_jwt_service().create_access_token(user_id, username, role)

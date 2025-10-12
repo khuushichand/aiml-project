@@ -306,12 +306,15 @@
 
         <!-- Search Container -->
         <div class="search-container">
-            <input 
-                type="search" 
-                id="endpoint-search" 
-                placeholder="Search endpoints... (Ctrl+K)"
-                aria-label="Search endpoints"
-            >
+            <div style="display:flex; gap:8px; align-items:center;">
+                <input 
+                    type="search" 
+                    id="endpoint-search" 
+                    placeholder="Search endpoints... (Ctrl+K)"
+                    aria-label="Search endpoints"
+                >
+                <button id="preload-endpoints-btn" class="btn btn-secondary btn-sm" title="Load all tabs so search spans every endpoint">Load all endpoints for search</button>
+            </div>
         </div>
 
         <!-- Top Level Tabs -->
@@ -818,6 +821,7 @@
                                         aria-describedby="apiKey-help"
                                     >
                                     <button id="toggleApiKeyVisibility" type="button" class="btn btn-secondary btn-sm" title="Show/Hide token">Show</button>
+                                    <button id="copyApiKeyBtn" type="button" class="btn btn-secondary btn-sm" title="Copy API token">Copy</button>
                                 </div>
                                 <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
                             </div>
@@ -1166,8 +1170,34 @@
                         '</div>';
                     Toast.error('Request timed out. The operation may still be processing on the server.');
                 } else {
-                    responseArea.textContent = `Error: ${error.message}`;
-                    Toast.error(`Request failed: ${error.message}`);
+                    // MCP-specific hint for permission denials
+                    let hinted = false;
+                    try {
+                        if (error.status === 403 && (processedPath || '').startsWith('/api/v1/mcp')) {
+                            let hintText = '';
+                            const d = error.details;
+                            // FastAPI detail can be string or object
+                            if (d && typeof d === 'object') {
+                                const det = d.detail || d; // sometimes nested in detail
+                                if (typeof det === 'object' && det.hint) hintText = det.hint;
+                                else if (det && det.hint) hintText = det.hint;
+                            }
+                            if (!hintText) {
+                                hintText = 'Permission denied. Ask an admin to grant tools.execute:<tool> or tools.execute:* to your role (Admin → Access Control).';
+                            }
+                            responseArea.innerHTML = '<div style="padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; margin: 10px 0;">' +
+                                '<strong>🚫 Insufficient permissions</strong><br>' +
+                                Utils.escapeHtml(hintText) +
+                                '</div>';
+                            Toast.warning('Permission denied (HTTP 403)');
+                            hinted = true;
+                        }
+                    } catch (e) { /* ignore */ }
+
+                    if (!hinted) {
+                        responseArea.textContent = `Error: ${error.message}`;
+                        Toast.error(`Request failed: ${error.message}`);
+                    }
                 }
             } finally {
                 Loading.hide(responseArea.parentElement);

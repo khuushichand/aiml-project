@@ -488,7 +488,8 @@ def quality_evaluator() -> ResponseQualityEvaluator:
     return ResponseQualityEvaluator()
 
 
-@pytest.fixture(scope="function")
+import pytest_asyncio
+@pytest_asyncio.fixture(scope="function")
 async def unified_service(temp_db_path) -> AsyncGenerator[UnifiedEvaluationService, None]:
     """Create a UnifiedEvaluationService instance for testing."""
     service = UnifiedEvaluationService(
@@ -501,7 +502,7 @@ async def unified_service(temp_db_path) -> AsyncGenerator[UnifiedEvaluationServi
     await service.shutdown()
 
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedEvaluationService, None]:
     """Create a UnifiedEvaluationService instance with webhooks enabled."""
     service = UnifiedEvaluationService(

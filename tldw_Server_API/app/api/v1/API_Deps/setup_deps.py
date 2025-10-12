@@ -55,7 +55,14 @@ def _first_forwarded_ip(request: Request) -> str | None:
 
 
 def _is_local_host(host: str | None, forwarded_ip: str | None) -> bool:
-    # We do not trust forwarded IPs unless explicitly allowed elsewhere.
+    """Return True if the request originates from a local address.
+
+    When proxy trust is enabled and a forwarded IP is present, prefer the
+    forwarded IP for locality checks; otherwise fall back to the client host.
+    """
+    # Prefer forwarded IP when available and trusted
+    if forwarded_ip:
+        return forwarded_ip in LOCAL_HOSTS
     if not host:
         return False
     return host in LOCAL_HOSTS
@@ -118,29 +125,52 @@ async def require_local_setup_access(request: Request) -> None:
     path = (request.url.path or "").lower()
     method = (request.method or "").upper()
 
-    # Localhost detection helpers
+    # Localhost and proxy header helpers
     client_host = request.client.host if request.client else None
+    forwarded_ip = _first_forwarded_ip(request)
     host_header_is_local = _host_header_is_local(request)
-    client_is_local = _is_local_host(client_host, None)
+    client_is_local = _is_local_host(client_host, forwarded_ip)
 
-    # Permit proxied, localhost GET to setup config snapshot
+    # Permit GET to setup config snapshot only if effectively local.
+    # If proxy headers are present, require forwarded IP to be local.
     if method == "GET" and path.endswith("/api/v1/setup/config"):
         if host_header_is_local or client_is_local:
-            # Allow even if proxy headers are present; read-only endpoint
             if _has_proxy_headers(request):
-                logger.debug("Allowing proxied localhost GET to /api/v1/setup/config")
+                if forwarded_ip and _is_local_host(client_host, forwarded_ip):
+                    logger.debug("Allowing proxied localhost GET to /api/v1/setup/config with local forwarded IP")
+                    return
+                # Proxied but remote forwarded IP -> block
+                logger.warning("Blocked proxied GET to setup config from remote forwarded IP: %s", forwarded_ip)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "Setup access is restricted to local requests. Forwarded client is not local."
+                    ),
+                )
+            # No proxy headers, treat as local GET
             return
 
-    # For all other guarded endpoints, block when proxy headers are present
+    # For all other guarded endpoints, if behind a proxy and the forwarded IP
+    # is not local, block. If forwarded IP is local, allow as local.
     if _has_proxy_headers(request):
-        logger.warning("Blocked setup access due to proxy headers present")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Setup changes are restricted to local requests (no proxies). Set TLDW_SETUP_ALLOW_REMOTE=1 "
-                "to permit remote access temporarily."
-            ),
-        )
+        if forwarded_ip is None:
+            # Proxy headers present but not trusted or malformed; block by default
+            logger.warning("Blocked setup access due to untrusted/missing forwarded IP under proxy")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Setup changes are restricted to local requests. Set TLDW_SETUP_TRUST_PROXY=1 to honor "
+                    "X-Forwarded-For and TLDW_SETUP_ALLOW_REMOTE=1 to permit remote access temporarily."
+                ),
+            )
+        if not _is_local_host(client_host, forwarded_ip):
+            logger.warning("Blocked setup access from proxied remote IP: %s", forwarded_ip)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Setup changes are restricted to local requests. Forwarded client is not local."
+                ),
+            )
 
     # Require both client host to be local and Host header to target local
     if client_is_local and host_header_is_local:

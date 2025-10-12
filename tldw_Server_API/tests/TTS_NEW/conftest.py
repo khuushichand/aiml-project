@@ -275,7 +275,8 @@ def mock_adapter_factory():
 # Service Fixtures
 # =====================================================================
 
-@pytest.fixture
+import pytest_asyncio
+@pytest_asyncio.fixture
 async def tts_service(mock_adapter_factory):
     """Create a TTS service instance with mocked adapters."""
     service = TTSServiceV2()
@@ -284,7 +285,7 @@ async def tts_service(mock_adapter_factory):
     yield service
     await service.shutdown()
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def real_tts_service():
     """Create a real TTS service for integration tests."""
     service = TTSServiceV2()

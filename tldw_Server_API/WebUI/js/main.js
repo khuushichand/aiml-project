@@ -7,6 +7,8 @@ class WebUI {
         this.loadedContentGroups = new Set();
         this.activeTopTabButton = null;
         this.activeSubTabButton = null;
+        this.apiOnline = false;
+        this.searchPreloaded = false;
         this.theme = 'light';
         this.apiStatusCheckInterval = null;
         this.init();
@@ -33,6 +35,17 @@ class WebUI {
 
         // Initialize search functionality
         this.initSearch();
+
+        // If opened via file://, show guidance banner
+        if (window.location.protocol === 'file:') {
+            try {
+                const banner = document.createElement('div');
+                banner.style.cssText = 'padding:10px; background:#fff3cd; border:1px solid #ffeeba; color:#856404; text-align:center;';
+                banner.innerText = 'Opened from file:// — start the server and use http://127.0.0.1:8000/webui/ for full functionality.';
+                const container = document.querySelector('.app-container');
+                if (container) container.insertBefore(banner, container.firstChild);
+            } catch (e) { /* ignore */ }
+        }
 
         console.log('WebUI initialized successfully');
     }
@@ -78,11 +91,13 @@ class WebUI {
             // Remove active class from previous tab
             if (this.activeTopTabButton) {
                 this.activeTopTabButton.classList.remove('active');
+                this.activeTopTabButton.setAttribute('aria-selected', 'false');
             }
 
             // Set new active tab
             this.activeTopTabButton = tabButton;
             this.activeTopTabButton.classList.add('active');
+            this.activeTopTabButton.setAttribute('aria-selected', 'true');
 
             // Get tab name
             const topTabName = tabButton.dataset.toptab;
@@ -96,6 +111,7 @@ class WebUI {
             const subTabRow = document.getElementById(`${topTabName}-subtabs`);
             if (subTabRow) {
                 subTabRow.classList.add('active');
+                try { this.activeTopTabButton.setAttribute('aria-controls', `${topTabName}-subtabs`); } catch (e) { /* ignore */ }
 
                 // Activate first sub-tab
                 const firstSubTab = subTabRow.querySelector('.sub-tab-button');
@@ -127,15 +143,18 @@ class WebUI {
         // Remove active class from all sub-tabs in this row
         parentRow.querySelectorAll('.sub-tab-button').forEach(btn => {
             btn.classList.remove('active');
+            btn.setAttribute('aria-selected', 'false');
         });
 
         // Set new active sub-tab
         this.activeSubTabButton = tabButton;
         this.activeSubTabButton.classList.add('active');
+        this.activeSubTabButton.setAttribute('aria-selected', 'true');
 
         // Get content ID and load group
         const contentId = tabButton.dataset.contentId;
         const loadGroup = tabButton.dataset.loadGroup;
+        try { if (contentId) this.activeSubTabButton.setAttribute('aria-controls', contentId); } catch (e) { /* ignore */ }
 
         // Load content if not already loaded
         if (loadGroup && !this.loadedContentGroups.has(loadGroup)) {
@@ -214,7 +233,33 @@ class WebUI {
 
         const html = await response.text();
         const mainContentArea = document.getElementById('main-content-area');
-        mainContentArea.insertAdjacentHTML('beforeend', html);
+        // Ensure inline scripts inside tab HTML are executed
+        const temp = document.createElement('div');
+        temp.innerHTML = html;
+        const scripts = Array.from(temp.querySelectorAll('script'));
+        scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
+        mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
+        for (const s of scripts) {
+            try {
+                if (s.src) {
+                    const newScript = document.createElement('script');
+                    if (s.type) newScript.type = s.type;
+                    newScript.src = s.src;
+                    document.body.appendChild(newScript);
+                    document.body.removeChild(newScript);
+                } else {
+                    // Inline script: evaluate in global scope
+                    const code = s.textContent || '';
+                    (0, eval)(code);
+                }
+            } catch (e) {
+                console.error('Failed to execute inline script for group', groupName, e);
+            }
+        }
+        try {
+            window.__groupScriptEval = window.__groupScriptEval || {};
+            window.__groupScriptEval[groupName] = (window.__groupScriptEval[groupName] || 0) + scripts.length;
+        } catch (e) { /* ignore */ }
 
         // Re-initialize form handlers for newly loaded content
         this.initFormHandlers();
@@ -356,6 +401,17 @@ class WebUI {
                     }
                 });
             }
+
+            // Copy API key button
+            const copyApiBtn = document.getElementById('copyApiKeyBtn');
+            if (copyApiBtn) {
+                copyApiBtn.addEventListener('click', async () => {
+                    const success = await Utils.copyToClipboard(apiKeyInput.value || '');
+                    if (typeof Toast !== 'undefined' && Toast) {
+                        success ? Toast.success('Copied API token') : Toast.error('Failed to copy');
+                    }
+                });
+            }
         }
 
         // Multi-user API key preference toggle
@@ -405,6 +461,8 @@ class WebUI {
                     }
                     statusText.title = `API: ${apiClient.baseUrl}\nResponse time: ${responseTime}ms`;
                 }
+                this.apiOnline = true;
+                this.updateApiDependentControls(true);
             } else {
                 if (statusDot) {
                     statusDot.classList.add('offline');
@@ -414,6 +472,8 @@ class WebUI {
                     statusText.textContent = 'API Offline';
                     statusText.title = `Cannot reach API at ${apiClient.baseUrl}`;
                 }
+                this.apiOnline = false;
+                this.updateApiDependentControls(false);
             }
         } catch (error) {
             if (statusDot) {
@@ -433,6 +493,8 @@ class WebUI {
                     statusText.title = error.message;
                 }
             }
+            this.apiOnline = false;
+            this.updateApiDependentControls(false);
         }
     }
 
@@ -460,6 +522,8 @@ class WebUI {
                 e.preventDefault();
                 const searchInput = document.getElementById('endpoint-search');
                 if (searchInput) {
+                    const sc = document.querySelector('.search-container');
+                    if (sc) sc.classList.add('visible');
                     searchInput.focus();
                 }
             }
@@ -476,9 +540,11 @@ class WebUI {
                 this.showRequestHistory();
             }
 
-            // Escape: Close modals
+            // Escape: close modals and hide search UI
             if (e.key === 'Escape') {
-                // This will be handled by individual modals
+                const sc = document.querySelector('.search-container');
+                if (sc) sc.classList.remove('visible');
+                // Modal handling is implemented in Modal
             }
         });
     }
@@ -487,12 +553,59 @@ class WebUI {
         const searchInput = document.getElementById('endpoint-search');
         if (!searchInput) return;
 
+        // Preload all lazy tabs on first focus so search spans all endpoints
+        searchInput.addEventListener('focus', async () => {
+            if (this.searchPreloaded) return;
+            try { await this.preloadAllEndpointsForSearch(); } catch (e) { /* ignore */ }
+            this.searchPreloaded = true;
+        });
+
+        // Hide search container after blur
+        searchInput.addEventListener('blur', () => {
+            setTimeout(() => {
+                const sc = document.querySelector('.search-container');
+                if (sc) sc.classList.remove('visible');
+            }, 150);
+        });
+
         const searchHandler = Utils.debounce((e) => {
             const query = e.target.value.toLowerCase();
             this.filterEndpoints(query);
         }, 300);
 
         searchInput.addEventListener('input', searchHandler);
+
+        // Manual preload button for users who prefer not to auto-preload
+        const preloadBtn = document.getElementById('preload-endpoints-btn');
+        if (preloadBtn) {
+            preloadBtn.addEventListener('click', async () => {
+                try {
+                    if (!this.searchPreloaded) {
+                        await this.preloadAllEndpointsForSearch();
+                        this.searchPreloaded = true;
+                        if (typeof Toast !== 'undefined' && Toast) {
+                            Toast.success('All endpoints loaded for search');
+                        }
+                    }
+                } catch (e) {
+                    if (typeof Toast !== 'undefined' && Toast) {
+                        Toast.error('Failed to load endpoints');
+                    }
+                }
+            });
+        }
+    }
+
+    async preloadAllEndpointsForSearch() {
+        const groups = new Set(Array.from(document.querySelectorAll('.sub-tab-button'))
+            .map(b => b.dataset.loadGroup)
+            .filter(Boolean));
+        for (const g of groups) {
+            if (!this.loadedContentGroups.has(g)) {
+                await this.loadContentGroup(g);
+                this.loadedContentGroups.add(g);
+            }
+        }
     }
 
     filterEndpoints(query) {
@@ -516,6 +629,16 @@ class WebUI {
         if (noResultsMsg) {
             noResultsMsg.style.display = visibleCount === 0 ? 'block' : 'none';
         }
+    }
+
+    updateApiDependentControls(online) {
+        try {
+            document.querySelectorAll('.api-button').forEach(btn => {
+                btn.setAttribute('data-requires-api', 'true');
+                btn.disabled = !online;
+                if (!online) btn.title = 'Disabled: API offline'; else btn.removeAttribute('title');
+            });
+        } catch (e) { /* ignore */ }
     }
 
     showRequestHistory() {

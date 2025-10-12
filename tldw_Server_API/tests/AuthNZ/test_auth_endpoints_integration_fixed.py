@@ -130,7 +130,25 @@ class TestAuthEndpointsIntegration:
                 "password": "S3cur3P@ssw0rd2024!"
             }
         )
-        
+        # Debug/diagnostics: print status, payload, and diagnostic headers
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"raw": response.text}
+        diag_headers = {k: v for k, v in response.headers.items() if k.startswith("X-TLDW-")}
+        print("register_status:", response.status_code, "headers:", diag_headers, "payload:", payload)
+
+        # Assert diagnostics to ensure correct runtime wiring (conditionally present)
+        db_hdr = response.headers.get("X-TLDW-DB")
+        if db_hdr is not None:
+            assert db_hdr == "postgres"
+        csrf_hdr = response.headers.get("X-TLDW-CSRF-Enabled")
+        if csrf_hdr is not None:
+            assert csrf_hdr == "false"
+        dur_hdr = response.headers.get("X-TLDW-Register-Duration-ms")
+        if dur_hdr is not None:
+            dur_ms = int(dur_hdr or 0)
+            assert dur_ms >= 0 and dur_ms < 5000
         assert response.status_code in [200, 201]
         data = response.json()
         assert data["username"] == "newuser"

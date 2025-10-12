@@ -121,9 +121,22 @@ MCP_unified/
 
 ## 📊 API Endpoints
 
+### Authentication
+
+MCP Unified supports multiple authentication methods:
+
+- AuthNZ JWT (preferred): `Authorization: Bearer <AuthNZ access token>`
+- MCP JWT (back-compat): `Authorization: Bearer <MCP JWT>`
+- API Key (HTTP): `X-API-KEY: <api_key>`
+- API Key (WebSocket): query param `api_key=<api_key>`
+
+When using API keys, RequestContext.metadata includes `org_id` and `team_id` (if present on the key) so modules can scope behavior.
+
 ### WebSocket
 ```
 ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&token=<jwt>
+# or
+ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 ```
 
 ### HTTP Endpoints
@@ -278,3 +291,36 @@ Available at `/metrics` endpoint (port 9090):
 ## 📄 License
 
 Part of tldw_server project - see main LICENSE file.
+### Authorization (RBAC)
+
+MCP Unified now uses the project's AuthNZ RBAC (roles, permissions, overrides). Tool execution uses fine‑grained permissions:
+
+- Per‑tool permission: `tools.execute:<tool_name>`
+- Wildcard permission: `tools.execute:*`
+
+Admin endpoints for managing tool permissions:
+
+- List: `GET /api/v1/admin/permissions/tools`
+- Create: `POST /api/v1/admin/permissions/tools` with `{ "tool_name": "*" | "<name>", "description": "..." }`
+- Delete: `DELETE /api/v1/admin/permissions/tools/{perm_name}`
+
+Grant/revoke tool permissions to roles:
+
+- Grant: `POST /api/v1/admin/roles/{role_id}/permissions/tools` with `{ "tool_name": "*" | "<name>" }`
+- Revoke: `DELETE /api/v1/admin/roles/{role_id}/permissions/tools/{tool_name}`
+
+Example: seed wildcard and grant to a role
+
+```bash
+# Create wildcard permission (if not present)
+curl -X POST http://127.0.0.1:8000/api/v1/admin/permissions/tools \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name":"*","description":"Allow executing all tools"}'
+
+# Grant wildcard to role (replace 1 with your role id)
+curl -X POST http://127.0.0.1:8000/api/v1/admin/roles/1/permissions/tools \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name":"*"}'
+```

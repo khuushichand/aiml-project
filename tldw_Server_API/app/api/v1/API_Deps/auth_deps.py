@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 #
 # 3rd-party imports
-from fastapi import Depends, HTTPException, status, Request, Header
+from fastapi import Depends, HTTPException, status, Request, Header, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 #
@@ -45,6 +45,34 @@ security = HTTPBearer(auto_error=False)
 async def get_db_transaction():
     """Get database connection in transaction mode"""
     db_pool = await get_db_pool()
+    # In TEST_MODE, return a lightweight adapter that opens short-lived
+    # connections per call via the pool to avoid event-loop release issues.
+    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        class _PoolAdapter:
+            def __init__(self, pool: DatabasePool):
+                self._pool = pool
+
+            async def fetchrow(self, query: str, *args):
+                return await self._pool.fetchone(query, *args)
+
+            async def fetch(self, query: str, *args):
+                return await self._pool.fetchall(query, *args)
+
+            async def fetchval(self, query: str, *args):
+                return await self._pool.fetchval(query, *args)
+
+            async def execute(self, query: str, *args):
+                return await self._pool.execute(query, *args)
+
+        # Ensure the generator can be finalized cleanly even if the request fails early
+        try:
+            yield _PoolAdapter(db_pool)
+        finally:
+            # No resources to release in adapter mode
+            pass
+        return
+
+    # Default: return a request-scoped transaction so writes commit reliably
     async with db_pool.transaction() as conn:
         yield conn
 
@@ -66,6 +94,17 @@ async def get_session_manager_dep() -> SessionManager:
 
 async def get_rate_limiter_dep() -> RateLimiter:
     """Get rate limiter dependency"""
+    # In TEST_MODE, avoid touching the database by returning a disabled, initialized limiter
+    try:
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter as _RL
+            rl = _RL(db_pool=None)
+            rl.enabled = False
+            rl._initialized = True
+            return rl
+    except Exception:
+        # Fall back to normal path if any issue
+        pass
     return await get_rate_limiter()
 
 
@@ -85,6 +124,7 @@ async def get_storage_service_dep() -> StorageQuotaService:
 
 async def get_current_user(
     request: Request,
+    response: Response,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool),
@@ -106,6 +146,13 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
+    # TEST_MODE diagnostics: log auth header presence
+    try:
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            logger.info(f"get_current_user: has_bearer={bool(credentials)} has_api_key={bool(x_api_key)} path={request.url.path}")
+    except Exception:
+        pass
+
     # Single-user mode: honor the configured SINGLE_USER_API_KEY directly (no DB lookups)
     try:
         if is_single_user_mode() and x_api_key:
@@ -173,10 +220,19 @@ async def get_current_user(
 
     # Otherwise, require Bearer token
     if not credentials:
+        # TEST_MODE: surface why we failed
+        extra_headers = {"WWW-Authenticate": "Bearer"}
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            try:
+                present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
+                extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
+                extra_headers["X-TLDW-Auth-Headers"] = present_headers
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"}
+            headers=extra_headers
         )
     
     try:
@@ -247,23 +303,31 @@ async def get_current_user(
         return user
         
     except TokenExpiredError:
+        logger.warning("get_current_user: token expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except InvalidTokenError as e:
+        logger.warning(f"get_current_user: invalid token: {e}")
+        extra_headers = {"WWW-Authenticate": "Bearer"}
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            extra_headers["X-TLDW-Auth-Reason"] = f"invalid-token:{e}"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
-            headers={"WWW-Authenticate": "Bearer"}
+            headers=extra_headers
         )
     except Exception as e:
         logger.error(f"Authentication error: {e}")
+        extra_headers = {"WWW-Authenticate": "Bearer"}
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"}
+            headers=extra_headers
         )
 
 

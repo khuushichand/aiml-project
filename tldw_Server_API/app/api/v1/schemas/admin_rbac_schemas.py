@@ -92,3 +92,11 @@ class RolePermissionBooleanMatrixResponse(BaseModel):
     permission_names: List[str]
     matrix: List[List[bool]]
     total_roles: int
+
+
+class RoleEffectivePermissionsResponse(BaseModel):
+    role_id: int
+    role_name: str
+    permissions: List[str]
+    tool_permissions: List[str]
+    all_permissions: List[str]

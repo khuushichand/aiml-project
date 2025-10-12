@@ -856,13 +856,4 @@ const TTS = {
     }
 };
 
-// Initialize when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        // Wait a bit for apiClient to be ready if it exists
-        setTimeout(() => TTS.init(), 100);
-    });
-} else {
-    // Wait a bit for apiClient to be ready if it exists
-    setTimeout(() => TTS.init(), 100);
-}
+// Initialization is triggered lazily by tts-loader.js when the Audio > TTS tab is activated.

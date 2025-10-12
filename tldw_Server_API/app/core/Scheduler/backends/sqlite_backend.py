@@ -392,7 +392,9 @@ class SQLiteBackend(QueueBackend):
                     await self._connection.rollback()
                     return None
                 
-                task = await self._row_to_task(row, cursor)
+                # Convert row to dict using cursor description
+                columns = [desc[0] for desc in cursor.description]
+                task = await self._row_to_task(dict(zip(columns, row)))
                 
                 # Create lease
                 lease_id = str(uuid.uuid4())
@@ -537,8 +539,8 @@ class SQLiteBackend(QueueBackend):
         
         return True
     
-    async def _row_to_task(self, row: sqlite3.Row) -> Task:
-        """Convert database row to Task object"""
+    async def _row_to_task(self, row: Dict[str, Any]) -> Task:
+        """Convert database row dict to Task object"""
         task_dict = dict(row)
 
         # Parse JSON fields
@@ -709,14 +711,14 @@ class SQLiteBackend(QueueBackend):
             return row[0] if row else None
     
     async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
-        """Fetch single row using read pool"""
+        """Fetch single row using read pool and return as dict"""
         async with self._get_read_connection() as conn:
             cursor = await conn.execute(query, args)
             row = await cursor.fetchone()
             if row:
                 columns = [desc[0] for desc in cursor.description]
-                return dict(zip(columns, row)), cursor
-            return None, None
+                return dict(zip(columns, row))
+            return None
     
     async def reclaim_expired_leases(self) -> int:
         """

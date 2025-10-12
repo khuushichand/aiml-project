@@ -16,14 +16,18 @@ ParamsType = Optional[Union[Tuple[Any, ...], List[Any], Dict[str, Any], Any]]
 
 
 def normalise_params(params: ParamsType) -> Optional[Union[Tuple[Any, ...], Dict[str, Any]]]:
-    """Normalize parameter containers for backend execution."""
+    """Normalize parameter containers for backend execution.
+
+    Rules:
+    - None stays None
+    - tuple/list coerced to tuple (positional placeholders)
+    - dict preserved as-is (named placeholders like %(name)s)
+    - scalars wrapped in a single-item tuple
+    """
     if params is None:
         return None
     if isinstance(params, dict):
-        # Preserve insertion order (Python 3.7+) so callers constructing
-        # dictionaries inline with positional placeholders continue to work.
-        # psycopg2 expects sequences for `%s` placeholders, so coerce here.
-        return tuple(params.values())
+        return params
     if isinstance(params, tuple):
         return params
     if isinstance(params, list):

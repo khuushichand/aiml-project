@@ -29,6 +29,7 @@
 Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 - Docs Hub: `Docs/Documentation.md`
+- Moderation/Guardrails: `Docs/Moderation-Guardrails.md`
 
 ### Media Processing
 - **Multi-format Support** [Stable]: Video, audio, PDF, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps
@@ -122,6 +123,7 @@ PST/OST note
 - **Auth Modes** [Stable]: Single-user API key; Multi-user JWT
 - **Organizations & Teams** [New]: Group users into orgs and teams; membership management APIs
 - **Virtual Keys** [New]: API keys with endpoint allowlists and day/month token/USD budgets for LLM usage control; optional provider/model allowlists
+  - See: Docs/API-related/Virtual_Keys.md
 
 ### Audio
 - **Speech-to-Text** [Stable]: faster_whisper, NeMo, Qwen2Audio; WebSocket streaming (`/api/v1/audio/stream/transcribe`)
@@ -1252,6 +1254,20 @@ Admin API (selected)
 - POST `/api/v1/admin/teams/{team_id}/members` — add user to team; GET `/api/v1/admin/teams/{team_id}/members` — list
 - POST `/api/v1/admin/users/{user_id}/virtual-keys` — create virtual key with budgets/scopes
 - GET `/api/v1/admin/users/{user_id}/virtual-keys` — list virtual keys (metadata only)
+  - For a fuller RBAC endpoint list with OpenAPI snippets, see `Docs/Published/Admin_RBAC_API.md`.
+
+RBAC: Effective Permissions View
+- GET `/api/v1/admin/roles/{role_id}/permissions/effective` — Convenience view that combines a role’s granted permissions and tool-execution permissions.
+  - Response fields:
+    - `role_id`, `role_name`
+    - `permissions`: non-tool permissions (e.g., `media.read`)
+    - `tool_permissions`: tool permissions (e.g., `tools.execute:my_tool`)
+    - `all_permissions`: union of both, sorted
+- Example:
+  ```bash
+  curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+    http://127.0.0.1:8000/api/v1/admin/roles/2/permissions/effective | jq
+  ```
 
 Configuration
 - `VIRTUAL_KEYS_ENABLED` default true

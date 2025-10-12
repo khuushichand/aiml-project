@@ -15,6 +15,10 @@ from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
     BlocklistAppendRequest,
     BlocklistAppendResponse,
     BlocklistDeleteResponse,
+    ModerationTestRequest,
+    ModerationTestResponse,
+    ModerationSettingsResponse,
+    ModerationSettingsUpdate,
 )
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 
@@ -99,6 +103,36 @@ async def reload_moderation(_: Any = Depends(require_admin)):
 
 
 @router.get(
+    "/moderation/settings",
+    response_model=ModerationSettingsResponse,
+    summary="Get runtime moderation settings and effective state",
+    tags=["moderation"],
+)
+async def get_moderation_settings(_: Any = Depends(require_admin)):
+    svc = get_moderation_service()
+    try:
+        data = svc.get_settings()
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/moderation/settings",
+    response_model=ModerationSettingsResponse,
+    summary="Update runtime moderation settings (non-persistent)",
+    tags=["moderation"],
+)
+async def update_moderation_settings(body: ModerationSettingsUpdate, _: Any = Depends(require_admin)):
+    svc = get_moderation_service()
+    try:
+        data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/moderation/blocklist/managed",
     response_model=BlocklistManagedResponse,
     summary="Managed blocklist listing with version",
@@ -167,3 +201,36 @@ async def delete_blocklist_item(
     items = state.get("items") or []
     response.headers["ETag"] = version
     return BlocklistDeleteResponse(version=version, count=len(items))
+
+
+@router.post(
+    "/moderation/test",
+    response_model=ModerationTestResponse,
+    summary="Test moderation against sample text for a user",
+    tags=["moderation"],
+)
+async def test_moderation(payload: ModerationTestRequest, _: Any = Depends(require_admin)):
+    svc = get_moderation_service()
+    eff = svc.get_effective_policy(payload.user_id)
+
+    # Determine phase enablement
+    phase_enabled = eff.enabled and (eff.input_enabled if payload.phase == 'input' else eff.output_enabled)
+    if not phase_enabled:
+        return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
+    if hasattr(svc, 'evaluate_action'):
+        eval_res = svc.evaluate_action(payload.text, eff, payload.phase)
+        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+            action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+            category = eval_res[3] if len(eval_res) >= 4 else None
+        else:
+            action, redacted, sample = eval_res  # type: ignore
+            category = None
+        flagged = (action != 'pass')
+        return ModerationTestResponse(flagged=flagged, action=action if action else 'pass', sample=sample, redacted_text=redacted, effective=eff.to_dict(), category=category)
+    else:
+        flagged, sample = svc.check_text(payload.text, eff)
+        if not flagged:
+            return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
+        action = eff.input_action if payload.phase == 'input' else eff.output_action
+        redacted = svc.redact_text(payload.text, eff) if action == 'redact' else None
+        return ModerationTestResponse(flagged=True, action=action, sample=sample, redacted_text=redacted, effective=eff.to_dict())

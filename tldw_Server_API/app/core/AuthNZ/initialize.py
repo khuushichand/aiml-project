@@ -155,10 +155,6 @@ async def setup_database():
             users_db = await get_users_db()
             await users_db.initialize()
 
-            # Ensure API key tables
-            api_mgr = APIKeyManager()
-            await api_mgr.initialize()
-
             # Ensure sessions and registration_codes tables (if missing)
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             pool = await get_db_pool()
@@ -263,71 +259,7 @@ async def setup_database():
                             PRIMARY KEY (user_id, resource)
                         )
                     """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            bytes BIGINT,
-                            meta JSONB
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_daily (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            day DATE NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            bytes_total BIGINT DEFAULT 0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (user_id, day)
-                        )
-                    """)
-                    # LLM usage tables (per-request log + daily aggregate)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            operation TEXT,
-                            provider TEXT,
-                            model TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            prompt_tokens INTEGER,
-                            completion_tokens INTEGER,
-                            total_tokens INTEGER,
-                            prompt_cost_usd DOUBLE PRECISION,
-                            completion_cost_usd DOUBLE PRECISION,
-                            total_cost_usd DOUBLE PRECISION,
-                            currency TEXT DEFAULT 'USD',
-                            estimated BOOLEAN DEFAULT FALSE,
-                            request_id TEXT
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
-                            day DATE NOT NULL,
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            operation TEXT NOT NULL,
-                            provider TEXT NOT NULL,
-                            model TEXT NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            input_tokens BIGINT DEFAULT 0,
-                            output_tokens BIGINT DEFAULT 0,
-                            total_tokens BIGINT DEFAULT 0,
-                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (day, user_id, operation, provider, model)
-                        )
-                    """)
+                    # (moved) Usage tables will be created after api_keys schema exists
 
                     # Organizations and Teams hierarchy
                     await conn.execute("""
@@ -382,7 +314,59 @@ async def setup_database():
                     """)
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
 
-                    # Extend api_keys with Virtual Key fields
+                    # Seed baseline RBAC roles and permissions
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
+                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
+
+                    perm_defs = [
+                        ('media.read','Read media','media'),
+                        ('media.create','Create media','media'),
+                        ('media.delete','Delete media','media'),
+                        ('system.configure','Configure system','system'),
+                        ('users.manage_roles','Manage user roles','users'),
+                    ]
+                    for _name, _desc, _cat in perm_defs:
+                        await conn.execute(
+                            "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
+                            _name, _desc, _cat
+                        )
+                    role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
+                    perm_rows = await conn.fetch("SELECT id,name FROM permissions")
+                    role_id = {r['name']: r['id'] for r in role_rows}
+                    perm_id = {p['name']: p['id'] for p in perm_rows}
+                    # user role defaults
+                    for pname in ('media.read','media.create'):
+                        if pname in perm_id and 'user' in role_id:
+                            await conn.execute(
+                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                role_id['user'], perm_id[pname]
+                            )
+                    # viewer role default
+                    if 'viewer' in role_id and 'media.read' in perm_id:
+                        await conn.execute(
+                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                            role_id['viewer'], perm_id['media.read']
+                        )
+                    # admin: grant all
+                    if 'admin' in role_id:
+                        for pname in ('media.read','media.create','media.delete','system.configure','users.manage_roles'):
+                            if pname in perm_id:
+                                await conn.execute(
+                                    "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                                    role_id['admin'], perm_id[pname]
+                                )
+
+                    # (moved) api_keys column extensions will be applied after api_keys exists
+            # Ensure API key tables after org/team tables exist
+            api_mgr = APIKeyManager()
+            await api_mgr.initialize()
+
+            # Now create usage tables that reference api_keys
+            pool = await get_db_pool()
+            async with pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    # Extend api_keys with Virtual Key fields (apply after base api_keys created)
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
@@ -394,7 +378,72 @@ async def setup_database():
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints JSONB")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers JSONB")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models JSONB")
-            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC)")
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            bytes BIGINT,
+                            meta JSONB
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS usage_daily (
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            day DATE NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            bytes_total BIGINT DEFAULT 0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (user_id, day)
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_log (
+                            id SERIAL PRIMARY KEY,
+                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                            endpoint TEXT,
+                            operation TEXT,
+                            provider TEXT,
+                            model TEXT,
+                            status INTEGER,
+                            latency_ms INTEGER,
+                            prompt_tokens INTEGER,
+                            completion_tokens INTEGER,
+                            total_tokens INTEGER,
+                            prompt_cost_usd DOUBLE PRECISION,
+                            completion_cost_usd DOUBLE PRECISION,
+                            total_cost_usd DOUBLE PRECISION,
+                            currency TEXT DEFAULT 'USD',
+                            estimated BOOLEAN DEFAULT FALSE,
+                            request_id TEXT
+                        )
+                    """)
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+                            day DATE NOT NULL,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            operation TEXT NOT NULL,
+                            provider TEXT NOT NULL,
+                            model TEXT NOT NULL,
+                            requests INTEGER DEFAULT 0,
+                            errors INTEGER DEFAULT 0,
+                            input_tokens BIGINT DEFAULT 0,
+                            output_tokens BIGINT DEFAULT 0,
+                            total_tokens BIGINT DEFAULT 0,
+                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
+                            latency_avg_ms DOUBLE PRECISION,
+                            PRIMARY KEY (day, user_id, operation, provider, model)
+                        )
+                    """)
+
+            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")

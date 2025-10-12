@@ -19,6 +19,8 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from loguru import logger
+import time
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
@@ -178,6 +180,8 @@ class SessionManager:
         Returns:
             Session information dictionary
         """
+        start_time = time.perf_counter()
+        log_counter("auth_session_create_attempt")
         if not self._initialized:
             await self.initialize()
         
@@ -240,6 +244,8 @@ class SessionManager:
                     )
                 
                 logger.info(f"Created session {session_id} for user {user_id}")
+                log_counter("auth_session_create_success")
+                log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
                 
                 return {
                     "session_id": session_id,
@@ -251,6 +257,8 @@ class SessionManager:
                 
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
+            log_counter("auth_session_create_error")
+            log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
             raise SessionError(f"Failed to create session: {e}")
     
     async def validate_session(self, access_token: str) -> Optional[Dict[str, Any]]:
@@ -969,8 +977,19 @@ class SessionManager:
     
     async def shutdown(self):
         """Shutdown session manager and cleanup"""
-        if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
+        # Guard against shutdown being called after the event loop has closed
+        try:
+            if self.scheduler.running:
+                loop = None
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is None or not loop.is_closed():
+                    self.scheduler.shutdown(wait=False)
+        except Exception as e:
+            # In tests, teardown may run after the loop is closed; ignore scheduler shutdown errors
+            logger.debug(f"SessionManager scheduler shutdown skipped: {e}")
         
         if self.redis_client:
             self.redis_client.close()

@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
+import uuid
 
 import pytest
 
@@ -33,7 +34,7 @@ _POSTGRES_ENV_VARS = (
     "POSTGRES_TEST_PASSWORD",
 )
 
-_HAS_POSTGRES = (_PG_DRIVER is not None) and all(env in os.environ for env in _POSTGRES_ENV_VARS)
+_HAS_POSTGRES = (_PG_DRIVER is not None)
 
 
 @dataclass
@@ -45,32 +46,74 @@ class DualBackendEnv:
     chacha_db: CharactersRAGDB
 
 
-def _reset_postgres_database(config: DatabaseConfig) -> None:
-    """Drop and recreate the public schema so each test gets a clean slate."""
+def _create_temp_postgres_database(config: DatabaseConfig) -> DatabaseConfig:
+    """Create a temporary Postgres database for this test and return a config pointing to it."""
 
     assert _PG_DRIVER is not None
+    temp_db = f"tldw_test_{uuid.uuid4().hex[:8]}"
     if _PG_DRIVER == "psycopg":
-        conn = _psycopg_v3.connect(
+        admin_conn = _psycopg_v3.connect(
             host=config.pg_host,
             port=config.pg_port,
-            dbname=config.pg_database,
+            dbname="postgres",
             user=config.pg_user,
             password=config.pg_password,
         )
     else:
-        conn = _psycopg2.connect(
+        admin_conn = _psycopg2.connect(
             host=config.pg_host,
             port=config.pg_port,
-            database=config.pg_database,
+            database="postgres",
             user=config.pg_user,
             password=config.pg_password,
         )
-    conn.autocommit = True
+    admin_conn.autocommit = True
     try:
-        with conn.cursor() as cur:
-            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        with admin_conn.cursor() as cur:
+            cur.execute(f"CREATE DATABASE {temp_db} OWNER {config.pg_user};")
     finally:
-        conn.close()
+        admin_conn.close()
+
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=config.pg_host,
+        pg_port=config.pg_port,
+        pg_database=temp_db,
+        pg_user=config.pg_user,
+        pg_password=config.pg_password,
+    )
+
+
+def _drop_postgres_database(config: DatabaseConfig) -> None:
+    """Drop the temporary Postgres database created for this test."""
+    assert _PG_DRIVER is not None
+    if _PG_DRIVER == "psycopg":
+        admin_conn = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    else:
+        admin_conn = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+        )
+    admin_conn.autocommit = True
+    try:
+        with admin_conn.cursor() as cur:
+            # terminate existing connections to allow drop
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
+                (config.pg_database,),
+            )
+            cur.execute(f"DROP DATABASE IF EXISTS {config.pg_database};")
+    finally:
+        admin_conn.close()
 
 
 def _build_postgres_config() -> DatabaseConfig:
@@ -84,10 +127,7 @@ def _build_postgres_config() -> DatabaseConfig:
     )
 
 
-@pytest.fixture(params=[
-    "sqlite",
-    pytest.param("postgres", marks=pytest.mark.skipif(not _HAS_POSTGRES, reason="Postgres fixtures unavailable")),
-])
+@pytest.fixture(params=["sqlite", "postgres"])
 def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[DualBackendEnv]:
     """Yield Media + ChaCha database instances for the requested backend."""
 
@@ -102,8 +142,16 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
         media_db = MediaDatabase(db_path=str(media_path), client_id="dual-sqlite-media")
         chacha_db = CharactersRAGDB(db_path=str(chacha_path), client_id="dual-sqlite-chacha")
     else:  # postgres
-        config = _build_postgres_config()
-        _reset_postgres_database(config)
+        # Build base config from env or fall back to compose defaults, then create a temp DB
+        base_config = DatabaseConfig(
+            backend_type=BackendType.POSTGRESQL,
+            pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
+            pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
+            pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
+            pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
+            pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        )
+        config = _create_temp_postgres_database(base_config)
 
         media_backend = DatabaseBackendFactory.create_backend(config)
         chacha_backend = DatabaseBackendFactory.create_backend(config)
@@ -123,6 +171,12 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
             media_db.close_connection()
             if media_db.backend_type == BackendType.POSTGRESQL:
                 media_db.backend.get_pool().close_all()
+
+        if label == "postgres":
+            try:
+                _drop_postgres_database(config)  # type: ignore[name-defined]
+            except Exception:
+                pass
 
 
 @pytest.fixture

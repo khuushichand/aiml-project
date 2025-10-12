@@ -137,8 +137,15 @@ def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
 
     create_call = db.backend.execute.call_args_list[0]
     sql_text = create_call.args[0]
-    assert "CREATE TABLE IF NOT EXISTS \"DocumentVersionIdentifiers\"" in sql_text
-    assert "REFERENCES \"DocumentVersions\"" in sql_text
+    # Accept either CamelCase (legacy) or lowercase (standardized) identifiers
+    assert (
+        "CREATE TABLE IF NOT EXISTS \"DocumentVersionIdentifiers\"" in sql_text
+        or "CREATE TABLE IF NOT EXISTS \"documentversionidentifiers\"" in sql_text
+    )
+    assert (
+        "REFERENCES \"DocumentVersions\"" in sql_text
+        or "REFERENCES \"documentversions\"" in sql_text
+    )
 
     index_calls = [call.args[0] for call in db.backend.execute.call_args_list[1:]]
     expected_indices = {

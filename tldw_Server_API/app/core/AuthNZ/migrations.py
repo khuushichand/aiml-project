@@ -83,7 +83,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             key_hash TEXT UNIQUE NOT NULL,
-            key_prefix TEXT NOT NULL,
+            key_prefix TEXT,
             name TEXT,
             description TEXT,
             scope TEXT DEFAULT 'read',
@@ -104,11 +104,42 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    
-    # Create indexes
+
+    # Harmonize legacy schemas: add missing columns if needed
+    try:
+        cur = conn.execute("PRAGMA table_info(api_keys)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col('key_prefix', "key_prefix TEXT")
+        add_col('description', "description TEXT")
+        add_col('scope', "scope TEXT DEFAULT 'read'")
+        add_col('status', "status TEXT DEFAULT 'active'")
+        add_col('last_used_at', "last_used_at TIMESTAMP")
+        add_col('last_used_ip', "last_used_ip TEXT")
+        add_col('usage_count', "usage_count INTEGER DEFAULT 0")
+        add_col('rate_limit', "rate_limit INTEGER")
+        add_col('allowed_ips', "allowed_ips TEXT")
+        add_col('metadata', "metadata TEXT")
+        add_col('rotated_from', "rotated_from INTEGER REFERENCES api_keys(id)")
+        add_col('rotated_to', "rotated_to INTEGER REFERENCES api_keys(id)")
+        add_col('revoked_at', "revoked_at TIMESTAMP")
+        add_col('revoked_by', "revoked_by INTEGER")
+        add_col('revoke_reason', "revoke_reason TEXT")
+    except Exception:
+        pass
+
+    # Create indexes (only if columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    except Exception:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
     
     conn.commit()
@@ -304,7 +335,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            token_hash TEXT UNIQUE NOT NULL,
+            token_hash TEXT UNIQUE,
             expires_at TIMESTAMP NOT NULL,
             used_at TIMESTAMP,
             ip_address TEXT,
@@ -312,7 +343,19 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
+    # Harmonize legacy column name 'token' -> ensure 'token_hash' exists
+    try:
+        cur = conn.execute("PRAGMA table_info(password_reset_tokens)")
+        cols = {row[1] for row in cur.fetchall()}
+        if 'token_hash' not in cols:
+            conn.execute("ALTER TABLE password_reset_tokens ADD COLUMN token_hash TEXT UNIQUE")
+    except Exception:
+        pass
+    # Indexes
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
+    except Exception:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)")
     
     # Failed attempts table for lockout tracking
@@ -365,8 +408,16 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     columns = [row[1] for row in cursor.fetchall()]
     
     if 'uuid' not in columns:
-        conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
-        logger.info("Added uuid column to users table")
+        # SQLite cannot add a UNIQUE constraint via ALTER TABLE. Add column first,
+        # then create a unique index to enforce uniqueness. This keeps the
+        # migration compatible with fresh DBs and legacy ones.
+        conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)")
+        except Exception:
+            # If an older schema already enforced uniqueness differently, ignore
+            pass
+        logger.info("Added uuid column to users table with unique index")
 
     if 'email_verified_at' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMP")

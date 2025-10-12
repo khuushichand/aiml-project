@@ -54,7 +54,9 @@ def client():
         yield c
 
 
-@pytest.fixture(scope="function")
+import pytest_asyncio
+
+@pytest_asyncio.fixture(scope="function")
 async def async_client():
     """Create an async test client"""
     from httpx import ASGITransport

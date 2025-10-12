@@ -28,7 +28,7 @@ _POSTGRES_ENV_VARS = (
     "POSTGRES_TEST_PASSWORD",
 )
 
-HAS_POSTGRES = (_PG_DRIVER is not None) and all(env in os.environ for env in _POSTGRES_ENV_VARS)
+HAS_POSTGRES = (_PG_DRIVER is not None)
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
@@ -82,13 +82,7 @@ def _bootstrap_media_record(db: MediaDatabase, *, claim_text: str) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    "backend_label",
-    [
-        "sqlite",
-        pytest.param("postgres", marks=pytest.mark.skipif(not HAS_POSTGRES, reason="Postgres fixtures unavailable")),
-    ],
-)
+@pytest.mark.parametrize("backend_label", ["sqlite", "postgres"])
 async def test_claims_retrieval_backend_parity(backend_label: str, tmp_path: Path) -> None:
     """Ensure ClaimsRetriever returns results for both SQLite and PostgreSQL deployments."""
 
@@ -98,11 +92,11 @@ async def test_claims_retrieval_backend_parity(backend_label: str, tmp_path: Pat
     if backend_label == "postgres":
         config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            pg_host=os.environ["POSTGRES_TEST_HOST"],
-            pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
-            pg_database=os.environ["POSTGRES_TEST_DB"],
-            pg_user=os.environ["POSTGRES_TEST_USER"],
-            pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
+            pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
+            pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
+            pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
+            pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
+            pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
         )
         _reset_postgres_database(config)
         backend = DatabaseBackendFactory.create_backend(config)

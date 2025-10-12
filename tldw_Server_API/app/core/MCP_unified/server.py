@@ -16,7 +16,8 @@ from .config import get_config
 from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
 from .modules.registry import get_module_registry
 from .auth.jwt_manager import get_jwt_manager
-from .auth.rbac import get_rbac_policy
+from .auth.authnz_rbac import get_rbac_policy
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
 
 
@@ -28,12 +29,14 @@ class WebSocketConnection:
         websocket: WebSocket,
         connection_id: str,
         client_id: Optional[str] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ):
         self.websocket = websocket
         self.connection_id = connection_id
         self.client_id = client_id
         self.user_id = user_id
+        self.metadata = metadata or {}
         self.connected_at = datetime.now(timezone.utc)
         self.last_activity = self.connected_at
         self.message_count = 0
@@ -118,6 +121,9 @@ class MCPServer:
             
             # Register default modules (will be implemented when migrating modules)
             await self._register_default_modules()
+
+            # Ensure default tool permissions exist (wildcard)
+            await self._ensure_default_tool_permissions()
             
             # Start background tasks
             self._start_background_tasks()
@@ -128,6 +134,27 @@ class MCPServer:
         except Exception as e:
             logger.error(f"Server initialization failed: {e}")
             raise
+
+    async def _ensure_default_tool_permissions(self):
+        """Seed wildcard tool permission tools.execute:* if missing."""
+        try:
+            pool = await get_db_pool()
+            name = 'tools.execute:*'
+            desc = 'Wildcard tool execution'
+            if pool.pool:
+                await pool.execute(
+                    "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
+                    name, desc, 'tools'
+                )
+            else:
+                row = await pool.fetchone("SELECT 1 FROM permissions WHERE name = ?", name)
+                if not row:
+                    await pool.execute(
+                        "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
+                        name, desc, 'tools'
+                    )
+        except Exception as e:
+            logger.debug(f"Seed wildcard tool permission failed: {e}")
     
     async def shutdown(self):
         """Gracefully shutdown the server"""
@@ -313,7 +340,8 @@ class MCPServer:
         self,
         websocket: WebSocket,
         client_id: Optional[str] = None,
-        auth_token: Optional[str] = None
+        auth_token: Optional[str] = None,
+        api_key: Optional[str] = None
     ):
         """
         Handle a WebSocket connection.
@@ -326,14 +354,51 @@ class MCPServer:
         connection_id = f"ws_{client_id or 'anonymous'}_{datetime.now().timestamp()}"
         user_id = None
         
-        # Authenticate if token provided
+        # Authenticate if token provided (MCP JWT, or fallback to AuthNZ JWT)
         if auth_token:
+            ok = False
             try:
                 token_data = self.jwt_manager.verify_token(auth_token)
                 user_id = token_data.sub
-                logger.info(f"WebSocket authenticated for user: {user_id}")
+                ok = True
+                logger.info(f"WebSocket authenticated for user (MCP JWT): {user_id}")
             except Exception as e:
-                logger.warning(f"WebSocket authentication failed: {e}")
+                logger.debug(f"MCP JWT auth failed: {e}")
+                # Try AuthNZ JWT
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                    jwt_service = get_jwt_service()
+                    payload = jwt_service.decode_access_token(auth_token)
+                    user_id = str(payload.get("user_id") or payload.get("sub")) if payload else None
+                    ok = bool(user_id)
+                    if ok:
+                        logger.info(f"WebSocket authenticated for user (AuthNZ JWT): {user_id}")
+                except Exception as _e:
+                    logger.debug(f"AuthNZ JWT auth failed: {_e}")
+            if auth_token and not ok:
+                await websocket.close(code=1008, reason="Authentication failed")
+                return
+
+        # API key auth (optional)
+        metadata: Dict[str, Any] = {}
+        if api_key and not user_id:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                mgr = await get_api_key_manager()
+                info = await mgr.validate_api_key(api_key)
+                if info and info.get('user_id'):
+                    user_id = str(info['user_id'])
+                    # Attach org/team context
+                    if info.get('org_id') is not None:
+                        metadata['org_id'] = info.get('org_id')
+                    if info.get('team_id') is not None:
+                        metadata['team_id'] = info.get('team_id')
+                    logger.info(f"WebSocket authenticated via API key for user: {user_id}")
+                else:
+                    await websocket.close(code=1008, reason="Authentication failed")
+                    return
+            except Exception as e:
+                logger.warning(f"WebSocket API key authentication failed: {e}")
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
         
@@ -352,7 +417,8 @@ class MCPServer:
                 websocket=websocket,
                 connection_id=connection_id,
                 client_id=client_id,
-                user_id=user_id
+                user_id=user_id,
+                metadata=metadata
             )
             
             self.connections[connection_id] = connection
@@ -434,7 +500,8 @@ class MCPServer:
                 request_id=data.get("id", "unknown") if isinstance(data, dict) else "unknown",
                 user_id=connection.user_id,
                 client_id=connection.client_id,
-                session_id=connection.connection_id
+                session_id=connection.connection_id,
+                metadata=connection.metadata
             )
             
             # Process MCP request
@@ -465,7 +532,8 @@ class MCPServer:
         self,
         request: MCPRequest,
         client_id: Optional[str] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """
         Handle an HTTP MCP request.
@@ -482,7 +550,8 @@ class MCPServer:
         context = RequestContext(
             request_id=request.id or "http_request",
             user_id=user_id,
-            client_id=client_id
+            client_id=client_id,
+            metadata=metadata or {}
         )
         
         # Process request

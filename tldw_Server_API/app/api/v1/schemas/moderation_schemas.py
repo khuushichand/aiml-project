@@ -12,6 +12,7 @@ class ModerationUserOverride(BaseModel):
     input_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for input violations")
     output_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for output violations")
     redact_replacement: Optional[str] = Field(None, description="Replacement text for redaction")
+    categories_enabled: Optional[str] = Field(None, description="Comma-separated categories to enable for this user (e.g., 'pii,confidential')")
 
     @field_validator('redact_replacement')
     @classmethod
@@ -53,3 +54,29 @@ class BlocklistDeleteResponse(BaseModel):
     version: str
     count: int
 
+
+class ModerationTestRequest(BaseModel):
+    user_id: Optional[str] = Field(None, description="User ID to apply effective policy")
+    phase: Literal['input', 'output'] = Field('input', description="Moderation phase to test")
+    text: str = Field(..., description="Sample text to test against moderation policy")
+
+
+class ModerationTestResponse(BaseModel):
+    flagged: bool
+    action: Literal['block', 'redact', 'warn', 'pass']
+    sample: Optional[str] = None
+    redacted_text: Optional[str] = None
+    effective: Dict[str, Any]
+    category: Optional[str] = None
+
+
+class ModerationSettingsResponse(BaseModel):
+    pii_enabled: Optional[bool] = Field(None, description="Runtime override for pii_enabled or None if not overridden")
+    categories_enabled: Optional[List[str]] = Field(None, description="Runtime override for categories_enabled or None if not overridden")
+    effective: Dict[str, Any] = Field(..., description="Effective settings after merge with config")
+
+
+class ModerationSettingsUpdate(BaseModel):
+    pii_enabled: Optional[bool] = None
+    categories_enabled: Optional[List[str]] = None
+    persist: Optional[bool] = Field(False, description="Persist runtime overrides to file")

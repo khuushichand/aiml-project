@@ -71,7 +71,7 @@ class APIKeyManager:
         """Create API keys and related tables if they don't exist"""
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS api_keys (
@@ -226,8 +226,12 @@ class APIKeyManager:
         full_key = f"{self.key_prefix}{random_part}"
         
         # Create HMAC hash for storage (more secure than plain SHA256)
-        # Use a consistent HMAC key derived from settings
-        hmac_key = self.settings.JWT_SECRET_KEY[:32].encode() if len(self.settings.JWT_SECRET_KEY) >= 32 else self.settings.JWT_SECRET_KEY.encode()
+        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
+        key_material = (
+            (self.settings.JWT_SECRET_KEY or "")
+            or (self.settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        hmac_key = (key_material[:32]).encode()
         key_hash = hmac.new(hmac_key, full_key.encode(), hashlib.sha256).hexdigest()
         
         return full_key, key_hash
@@ -250,8 +254,12 @@ class APIKeyManager:
         Returns:
             HMAC-SHA256 hash of the API key
         """
-        # Use a consistent HMAC key derived from settings
-        hmac_key = self.settings.JWT_SECRET_KEY[:32].encode() if len(self.settings.JWT_SECRET_KEY) >= 32 else self.settings.JWT_SECRET_KEY.encode()
+        # Use a consistent HMAC key derived from settings with safe fallback for single-user mode
+        key_material = (
+            (self.settings.JWT_SECRET_KEY or "")
+            or (self.settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        hmac_key = (key_material[:32]).encode()
         return hmac.new(hmac_key, api_key.encode(), hashlib.sha256).hexdigest()
     
     async def create_api_key(
@@ -362,6 +370,8 @@ class APIKeyManager:
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
         allowed_endpoints: Optional[list[str]] = None,
+        allowed_providers: Optional[list[str]] = None,
+        allowed_models: Optional[list[str]] = None,
         budget_day_tokens: Optional[int] = None,
         budget_month_tokens: Optional[int] = None,
         budget_day_usd: Optional[float] = None,
@@ -389,11 +399,11 @@ class APIKeyManager:
                             is_virtual, parent_key_id, org_id, team_id,
                             llm_budget_day_tokens, llm_budget_month_tokens,
                             llm_budget_day_usd, llm_budget_month_usd,
-                            llm_allowed_endpoints
+                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
                         ) VALUES (
                             $1,$2,$3,$4,$5,$6,'active',$7,
                             TRUE,$8,$9,$10,
-                            $11,$12,$13,$14,$15
+                            $11,$12,$13,$14,$15,$16,$17
                         ) RETURNING id
                         """,
                         user_id, key_hash, key_prefix, name, description, 'read', expires_at,
@@ -401,6 +411,8 @@ class APIKeyManager:
                         budget_day_tokens, budget_month_tokens,
                         budget_day_usd, budget_month_usd,
                         json.dumps(allowed_endpoints) if allowed_endpoints else None,
+                        json.dumps(allowed_providers) if allowed_providers else None,
+                        json.dumps(allowed_models) if allowed_models else None,
                     )
                 else:
                     cursor = await conn.execute(
@@ -410,9 +422,9 @@ class APIKeyManager:
                             is_virtual, parent_key_id, org_id, team_id,
                             llm_budget_day_tokens, llm_budget_month_tokens,
                             llm_budget_day_usd, llm_budget_month_usd,
-                            llm_allowed_endpoints
+                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
                         ) VALUES (?,?,?,?,?,?,'active',?,
-                            1,?,?,?,?,?,?,?,?
+                            1,?,?,?,?,?,?,?,?,?,?
                         )
                         """,
                         (
@@ -422,6 +434,8 @@ class APIKeyManager:
                             budget_day_tokens, budget_month_tokens,
                             budget_day_usd, budget_month_usd,
                             (json.dumps(allowed_endpoints) if allowed_endpoints else None),
+                            (json.dumps(allowed_providers) if allowed_providers else None),
+                            (json.dumps(allowed_models) if allowed_models else None),
                         )
                     )
                     key_id = cursor.lastrowid

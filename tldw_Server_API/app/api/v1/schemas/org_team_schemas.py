@@ -56,8 +56,9 @@ class VirtualKeyCreateRequest(BaseModel):
     org_id: Optional[int] = None
     team_id: Optional[int] = None
     allowed_endpoints: Optional[List[str]] = Field(default_factory=lambda: ["chat.completions", "embeddings"])
+    allowed_providers: Optional[List[str]] = None
+    allowed_models: Optional[List[str]] = None
     budget_day_tokens: Optional[int] = None
     budget_month_tokens: Optional[int] = None
     budget_day_usd: Optional[float] = None
     budget_month_usd: Optional[float] = None
-

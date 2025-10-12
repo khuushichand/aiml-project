@@ -124,7 +124,8 @@ def test_client(test_db):
             # Cleanup - don't clear, let the autouse fixture handle it
 
 
-@pytest.fixture
+import pytest_asyncio
+@pytest_asyncio.fixture
 async def async_test_client():
     """Create async test client for the actual FastAPI app."""
     async with AsyncClient(app=app, base_url="http://test") as client:

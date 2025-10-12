@@ -301,6 +301,47 @@ class LLMTopSpendersResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+#######################################################################################################################
+#
+# Tool Permission Schemas (MCP Integration)
+
+class ToolPermissionCreateRequest(BaseModel):
+    """Create a tool execute permission.
+
+    If tool_name is "*", creates tools.execute:* (wildcard).
+    """
+    tool_name: str = Field(..., min_length=1)
+    description: Optional[str] = None
+
+
+class ToolPermissionResponse(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+
+
+class ToolPermissionGrantRequest(BaseModel):
+    """Grant a tool execution permission to a role.
+
+    tool_name '*' means tools.execute:*
+    """
+    tool_name: str = Field(..., min_length=1)
+
+
+class ToolPermissionBatchRequest(BaseModel):
+    """Grant multiple tool execution permissions to a role in one call."""
+    tool_names: List[str] = Field(..., min_length=1)
+
+
+class ToolPermissionPrefixRequest(BaseModel):
+    """Grant/Revoke all tool permissions matching a name prefix.
+
+    Examples:
+      {"prefix": "tools.execute:media."} or {"prefix": "media."}
+    """
+    prefix: str = Field(..., min_length=1)
+
+
 #
 ## End of admin_schemas.py
 #######################################################################################################################

@@ -628,56 +628,75 @@ async def create_chat_completion(
             req_user_id = None
         eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
 
-        def _moderate_text_in_place(text: str) -> str:
+        async def _moderate_text_in_place(text: str) -> str:
             if not eff_policy.enabled or not eff_policy.input_enabled:
                 return text
-            flagged, sample = moderation.check_text(text, eff_policy)
-            if not flagged:
+            resolved_action = None
+            sample = None
+            redacted = None
+            if hasattr(moderation, 'evaluate_action'):
+                try:
+                    eval_res = moderation.evaluate_action(text, eff_policy, 'input')
+                    # Backward compatible unpacking
+                    if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                        resolved_action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+                        category = eval_res[3] if len(eval_res) >= 4 else None
+                    else:
+                        resolved_action, redacted, sample = eval_res  # type: ignore
+                        category = None
+                except Exception:
+                    resolved_action = None
+            if not resolved_action:
+                flagged, sample = moderation.check_text(text, eff_policy)
+                if not flagged:
+                    return text
+                resolved_action = eff_policy.input_action
+                redacted = moderation.redact_text(text, eff_policy) if resolved_action == 'redact' else None
+            if resolved_action == 'pass' or (resolved_action == 'warn' and sample is None):
                 return text
             logger.info(f"Input moderation flag (user={req_user_id or client_id}): pattern={sample}")
             # Metrics + Audit (input)
             try:
-                metrics.track_moderation_input(str(req_user_id or client_id), eff_policy.input_action, category="default")
+                metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
             except Exception:
                 pass
             try:
                 if audit_service and context:
-                    # Fire and forget to avoid blocking in nested function
                     import asyncio as _asyncio
                     _asyncio.create_task(
                         audit_service.log_event(
                             event_type=AuditEventType.SECURITY_VIOLATION,
                             context=context,
                             action="moderation.input",
-                            result=("failure" if eff_policy.input_action == 'block' else "success"),
+                            result=("failure" if resolved_action == 'block' else "success"),
                             metadata={
                                 "phase": "input",
-                                "action": eff_policy.input_action,
+                                "action": resolved_action,
                                 "pattern": sample,
                             }
                         )
                     )
             except Exception:
                 pass
-            if eff_policy.input_action == 'block':
+            if resolved_action == 'block':
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
-            if eff_policy.input_action == 'redact':
-                return moderation.redact_text(text, eff_policy)
-            return text  # warn → pass-through
+            if resolved_action == 'redact' and redacted is not None:
+                return redacted
+            return text
 
         if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
             for m in request_data.messages:
                 if getattr(m, 'role', None) != 'user':
                     continue
                 if isinstance(m.content, str):
-                    m.content = _moderate_text_in_place(m.content)
+                    m.content = await _moderate_text_in_place(m.content)
                 elif isinstance(m.content, list):
                     for part in m.content:
                         try_type = getattr(part, 'type', None)
                         if try_type == 'text':
                             current = getattr(part, 'text', None)
                             if isinstance(current, str):
-                                setattr(part, 'text', _moderate_text_in_place(current))
+                                setattr(part, 'text', await _moderate_text_in_place(current))
     except HTTPException:
         raise
     except Exception as e:
@@ -1246,13 +1265,32 @@ async def create_chat_completion(
                     def _out_transform(s: str) -> str:
                         if not eff_policy.enabled or not eff_policy.output_enabled:
                             return s
-                        flagged, sample = moderation.check_text(s, eff_policy)
-                        if flagged:
-                            if eff_policy.output_action == 'block':
+                        # Prefer per-pattern action if service supports it
+                        resolved_action = None
+                        sample = None
+                        redacted_s = None
+                        if hasattr(moderation, 'evaluate_action'):
+                            try:
+                                eval_res = moderation.evaluate_action(s, eff_policy, 'output')
+                                if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                                    resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                                    out_category = eval_res[3] if len(eval_res) >= 4 else None
+                                else:
+                                    resolved_action, redacted_s, sample = eval_res  # type: ignore
+                                    out_category = None
+                            except Exception:
+                                resolved_action = None
+                        if not resolved_action:
+                            flagged, sample = moderation.check_text(s, eff_policy)
+                            if not flagged:
+                                return s
+                            resolved_action = eff_policy.output_action
+                            redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == 'redact' else None
+                        if resolved_action == 'block':
                                 # Abort stream gracefully after sending SSE error
                                 try:
                                     if not stream_block_logged:
-                                        metrics.track_moderation_stream_block(str(req_user_id or client_id), category="default")
+                                        metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
                                         stream_block_logged = True
                                 except Exception:
                                     pass
@@ -1279,35 +1317,34 @@ async def create_chat_completion(
                                     message="Output violates moderation policy",
                                     error_type="output_moderation_block"
                                 )
-                            if eff_policy.output_action == 'redact':
-                                try:
-                                    if not stream_redact_logged:
-                                        metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category="default")
-                                        stream_redact_logged = True
-                                except Exception:
-                                    pass
-                                try:
-                                    if audit_service and context and not stream_redact_logged:
-                                        import asyncio as _asyncio
-                                        _asyncio.create_task(
-                                            audit_service.log_event(
-                                                event_type=AuditEventType.SECURITY_VIOLATION,
-                                                context=context,
-                                                action="moderation.output",
-                                                result="success",
-                                                metadata={
-                                                    "phase": "output",
-                                                    "streaming": True,
-                                                    "action": "redact",
-                                                    "pattern": sample,
-                                                }
-                                            )
+                        if resolved_action == 'redact':
+                            try:
+                                if not stream_redact_logged:
+                                    metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
+                                    stream_redact_logged = True
+                            except Exception:
+                                pass
+                            try:
+                                if audit_service and context and not stream_redact_logged:
+                                    import asyncio as _asyncio
+                                    _asyncio.create_task(
+                                        audit_service.log_event(
+                                            event_type=AuditEventType.SECURITY_VIOLATION,
+                                            context=context,
+                                            action="moderation.output",
+                                            result="success",
+                                            metadata={
+                                                "phase": "output",
+                                                "streaming": True,
+                                                "action": "redact",
+                                                "pattern": sample,
+                                            }
                                         )
-                                except Exception:
-                                    pass
-                                return moderation.redact_text(s, eff_policy)
-                            # warn → pass-through
-                            return s
+                                    )
+                            except Exception:
+                                pass
+                            return redacted_s or moderation.redact_text(s, eff_policy)
+                        # warn → pass-through
                         return s
 
                     generator = create_streaming_response_with_timeout(
@@ -1524,11 +1561,29 @@ async def create_chat_completion(
                     req_user_id = None
                 eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
                 if eff_policy.enabled and eff_policy.output_enabled and content_to_save:
-                    flagged, sample = moderation.check_text(content_to_save, eff_policy)
-                    if flagged and eff_policy.output_action == 'block':
+                    resolved_action = None
+                    sample = None
+                    redacted_val = None
+                    if hasattr(moderation, 'evaluate_action'):
+                        try:
+                            eval_res = moderation.evaluate_action(content_to_save, eff_policy, 'output')
+                            if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                                resolved_action, redacted_val, sample = eval_res[0], eval_res[1], eval_res[2]
+                                out_category2 = eval_res[3] if len(eval_res) >= 4 else None
+                            else:
+                                resolved_action, redacted_val, sample = eval_res  # type: ignore
+                                out_category2 = None
+                        except Exception:
+                            resolved_action = None
+                    if not resolved_action:
+                        flagged, sample = moderation.check_text(content_to_save, eff_policy)
+                        if flagged:
+                            resolved_action = eff_policy.output_action
+                            redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == 'redact' else None
+                    if resolved_action == 'block':
                         logger.info(f"Output moderation block (user={req_user_id or client_id}): pattern={sample}")
                         try:
-                            metrics.track_moderation_output(str(req_user_id or client_id), "block", streaming=False, category="default")
+                            metrics.track_moderation_output(str(req_user_id or client_id), "block", streaming=False, category=(out_category2 or "default"))
                         except Exception:
                             pass
                         try:
@@ -1548,10 +1603,10 @@ async def create_chat_completion(
                         except Exception:
                             pass
                         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
-                    if flagged or eff_policy.output_action == 'redact':
-                        if flagged:
+                    if resolved_action == 'redact':
+                        if sample is not None:
                             try:
-                                metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category="default")
+                                metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category=(out_category2 or "default"))
                             except Exception:
                                 pass
                             try:
@@ -1570,7 +1625,7 @@ async def create_chat_completion(
                                     )
                             except Exception:
                                 pass
-                        content_to_save = moderation.redact_text(content_to_save, eff_policy)
+                        content_to_save = redacted_val or moderation.redact_text(content_to_save, eff_policy)
                         # Also update llm_response dict if applicable
                         try:
                             if isinstance(llm_response, dict):

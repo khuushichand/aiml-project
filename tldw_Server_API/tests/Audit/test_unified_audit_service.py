@@ -34,7 +34,9 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 # Test Fixtures
 # ============================================================================
 
-@pytest.fixture
+import pytest_asyncio
+
+@pytest_asyncio.fixture
 async def temp_db_path():
     """Create temporary database path"""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -44,7 +46,7 @@ async def temp_db_path():
     Path(db_path).unlink(missing_ok=True)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def audit_service(temp_db_path):
     """Create audit service instance"""
     service = UnifiedAuditService(

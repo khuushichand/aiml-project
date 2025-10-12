@@ -1332,8 +1332,10 @@ class MediaDatabase:
             return None
 
         upper = stmt.upper()
-        # Skip WAL/FTS helper blocks that aren't relevant post-conversion
+        # Skip SQLite-only statements that are not relevant in Postgres
         if upper.startswith('ANALYZE '):
+            return None
+        if upper.startswith('PRAGMA '):
             return None
 
         # Normalize whitespace for easier pattern replacements
@@ -1372,10 +1374,38 @@ class MediaDatabase:
         """Apply the Version 1 schema using Postgres-compatible statements."""
 
         table_statements = self._convert_sqlite_sql_to_postgres_statements(self._TABLES_SQL_V1)
+        # Ensure base tables definitely exist before any indices
+        # Add Claims table after base
         table_statements += self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
-        index_statements = self._convert_sqlite_sql_to_postgres_statements(self._INDICES_SQL_V1)
 
-        for stmt in table_statements + index_statements:
+        # Defensive ordering: run CREATE TABLE statements first, then non-DDL (INSERT/UPDATE), then indexes
+        create_tables = [s for s in table_statements if s.strip().upper().startswith('CREATE TABLE')]
+        other_table_stmts = [s for s in table_statements if s not in create_tables]
+
+        # Execute CREATE TABLEs
+        for stmt in create_tables:
+            logger.debug(f"Applying Postgres base table DDL: {stmt[:120]}...")
+            self.backend.execute(stmt, connection=conn)
+
+        # Now run any INSERT/UPDATE initializers (e.g., schema_version seed)
+        for stmt in other_table_stmts:
+            logger.debug(f"Applying Postgres base initializer DDL: {stmt[:120]}...")
+            self.backend.execute(stmt, connection=conn)
+
+        # Verify critical tables exist (defensive):
+        must_tables = [
+            'media', 'keywords', 'mediakeywords', 'transcripts',
+            'mediachunks', 'unvectorizedmediachunks',
+            'documentversions', 'documentversionidentifiers',
+            'sync_log', 'chunkingtemplates', 'claims',
+        ]
+        for t in must_tables:
+            if not self.backend.table_exists(t, connection=conn):
+                raise SchemaError(f"Postgres schema init missing table: {t}")
+
+        index_statements = self._convert_sqlite_sql_to_postgres_statements(self._INDICES_SQL_V1)
+        for stmt in index_statements:
+            logger.debug(f"Applying Postgres index DDL: {stmt[:120]}...")
             self.backend.execute(stmt, connection=conn)
 
         # Ensure schema_version reflects the current code version (single row)
@@ -1510,6 +1540,24 @@ class MediaDatabase:
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
                 )
 
+            # Defensive: ensure base tables exist even if schema_version table is present
+            # Some environments may create schema_version before full schema creation.
+            must_tables = [
+                'media', 'keywords', 'mediakeywords', 'transcripts',
+                'mediachunks', 'unvectorizedmediachunks', 'documentversions',
+                'documentversionidentifiers', 'sync_log', 'chunkingtemplates', 'claims',
+            ]
+            missing = [t for t in must_tables if not backend.table_exists(t, connection=conn)]
+            if missing:
+                logger.warning(
+                    "Postgres schema_version exists but base tables missing: %s. Applying base schema.", missing
+                )
+                self._apply_schema_v1_postgres(conn)
+                current_version = target_version  # base schema applies current version
+                self._ensure_postgres_fts(conn)
+                self._sync_postgres_sequences(conn)
+                return
+
             if current_version < target_version:
                 self._run_postgres_migrations(conn, current_version, target_version)
 
@@ -1556,11 +1604,18 @@ class MediaDatabase:
         )
 
     def _postgres_migrate_to_v6(self, conn) -> None:
-        """Introduce the DocumentVersionIdentifiers table and supporting indexes."""
+        """Introduce the DocumentVersionIdentifiers table and supporting indexes.
+
+        For PostgreSQL we standardize on lower-case, unquoted identifiers to
+        avoid case-sensitive table name issues. The base schema creation path
+        also uses lower-case names via the SQL translator, so we reference
+        documentversions consistently here.
+        """
 
         backend = self.backend
         ident = backend.escape_identifier
 
+        # Always use lower-case identifiers to match base PostgreSQL schema
         backend.execute(
             (
                 f"CREATE TABLE IF NOT EXISTS {ident('documentversionidentifiers')} ("
@@ -2586,7 +2641,16 @@ class MediaDatabase:
             try:
                 count_cursor = self.execute_query(count_sql, tuple(count_params_seq))
                 total_matches_row = count_cursor.fetchone()
-                total_matches = total_matches_row[0] if total_matches_row else 0
+                if isinstance(total_matches_row, dict):
+                    # Use first value or common alias count/total
+                    total_matches = (
+                        total_matches_row.get('count')
+                        or total_matches_row.get('total')
+                        or next(iter(total_matches_row.values()))
+                        or 0
+                    )
+                else:
+                    total_matches = total_matches_row[0] if total_matches_row else 0
                 logging.info(f"Search query '{search_query}' found {total_matches} total matches")
             except sqlite3.OperationalError as e:
                 # Handle specific FTS MATCH errors
@@ -2615,7 +2679,15 @@ class MediaDatabase:
 
                         count_cursor = self.execute_query(count_sql, count_params)
                         total_matches_row = count_cursor.fetchone()
-                        total_matches = total_matches_row[0] if total_matches_row else 0
+                        if isinstance(total_matches_row, dict):
+                            total_matches = (
+                                total_matches_row.get('count')
+                                or total_matches_row.get('total')
+                                or next(iter(total_matches_row.values()))
+                                or 0
+                            )
+                        else:
+                            total_matches = total_matches_row[0] if total_matches_row else 0
                         logging.info(f"Fallback search query '{search_query}' found {total_matches} total matches")
                     else:
                         # If no conditions left, return empty results

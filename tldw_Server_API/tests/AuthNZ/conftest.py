@@ -5,6 +5,7 @@ Provides PostgreSQL test database isolation with transaction rollback.
 
 import os
 import pytest
+import pytest_asyncio
 import asyncio
 import uuid
 import tempfile
@@ -37,7 +38,6 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
 
 # Import TestClient for isolated environment
 from fastapi.testclient import TestClient
-from tldw_Server_API.app.main import app
 
 
 # Mark all tests in this package as integration tests (require PostgreSQL)
@@ -52,7 +52,7 @@ def event_loop():
     loop.close()
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def reset_singletons():
     """Auto-reset all singletons before and after each test for clean state."""
     # Reset before test
@@ -61,6 +61,7 @@ async def reset_singletons():
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
     
     # Disable CSRF protection for tests
     original_csrf_setting = settings.get('CSRF_ENABLED')
@@ -69,11 +70,16 @@ async def reset_singletons():
     await reset_db_pool()
     await reset_session_manager()
     reset_settings()
+    reset_jwt_service()
     await reset_registration_service()
     await shutdown_audit_service()
     
     # Clear any FastAPI dependency overrides
-    app.dependency_overrides.clear()
+    try:
+        from tldw_Server_API.app.main import app as _app
+        _app.dependency_overrides.clear()
+    except Exception:
+        pass
     
     yield
     
@@ -81,9 +87,14 @@ async def reset_singletons():
     await reset_db_pool()
     await reset_session_manager()
     reset_settings()
+    reset_jwt_service()
     await reset_registration_service()
     await shutdown_audit_service()
-    app.dependency_overrides.clear()
+    try:
+        from tldw_Server_API.app.main import app as _app
+        _app.dependency_overrides.clear()
+    except Exception:
+        pass
     
     # Restore original CSRF setting
     if original_csrf_setting is not None:
@@ -92,7 +103,7 @@ async def reset_singletons():
         settings.pop('CSRF_ENABLED', None)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def isolated_test_environment(monkeypatch):
     """Create isolated DB and app instance for each test - TRUE ONE DB PER TEST."""
     import uuid as uuid_lib
@@ -216,7 +227,7 @@ async def isolated_test_environment(monkeypatch):
                 target_type VARCHAR(100),
                 target_id INTEGER,
                 success BOOLEAN DEFAULT TRUE,
-                details JSONB,
+                details TEXT,
                 ip_address VARCHAR(45),
                 user_agent TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -243,7 +254,8 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("REQUIRE_REGISTRATION_CODE", "false")
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
-    
+    monkeypatch.setenv("TEST_MODE", "true")
+
     # 5. Reset ALL singletons to force fresh initialization with new DB
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
@@ -256,12 +268,23 @@ async def isolated_test_environment(monkeypatch):
     reset_settings()
     await reset_registration_service()
     await shutdown_audit_service()
-    
-    # 6. Clear app dependency overrides
-    app.dependency_overrides.clear()
+
+    # 5.1 Skip forcing a DatabasePool into the app to avoid cross-event-loop issues.
+    #     Let the FastAPI app create its own pool within its own loop when handling requests.
+    # 5.2 We already created the minimal schema required for registration/login above.
+    #     Avoid calling module bootstrap that could prime a global pool on the fixture loop.
     
     # 7. Create TestClient (DB exists, singletons reset, env vars set)
-    with TestClient(app) as client:
+    from tldw_Server_API.app.main import app as _app
+    # Diagnostics: verify settings and DB URL are pointing to our per-test DB
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _s = _get_settings()
+        logger.info(f"AuthNZ test fixture DB URL: {_s.DATABASE_URL}")
+        logger.info(f"AuthNZ mode: {_s.AUTH_MODE} | CSRF_ENABLED={settings.get('CSRF_ENABLED')}")
+    except Exception as _diag_e:
+        logger.warning(f"AuthNZ test fixture diagnostics failed: {_diag_e}")
+    with TestClient(_app) as client:
         yield client, db_name
     
     # 8. Cleanup: reset singletons again
@@ -295,7 +318,7 @@ async def isolated_test_environment(monkeypatch):
     settings.pop('CSRF_ENABLED', None)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def setup_test_database():
     """Create and setup the test database for the test session."""
     # Connect to postgres database to create test database
@@ -323,7 +346,7 @@ async def setup_test_database():
     finally:
         await conn.close()
     
-    # Connect to test database and create schema
+    # Connect to test database and create base minimal schema (core tables)
     test_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
         port=TEST_DB_PORT,
@@ -411,7 +434,7 @@ async def setup_test_database():
                 target_type VARCHAR(100),
                 target_id INTEGER,
                 success BOOLEAN DEFAULT TRUE,
-                details JSONB,
+                details TEXT,
                 ip_address VARCHAR(45),
                 user_agent TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -426,9 +449,22 @@ async def setup_test_database():
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
         
         logger.info("Created test database schema")
-        
+
     finally:
         await test_conn.close()
+
+    # Also run the AuthNZ module's Postgres bootstrap to ensure full schema parity
+    # (sessions, registration_codes, RBAC, API keys, usage tables, etc.)
+    os.environ["AUTH_MODE"] = "multi_user"
+    os.environ["DATABASE_URL"] = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
+    os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only")
+    os.environ["RATE_LIMIT_ENABLED"] = "false"
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import setup_database as _authnz_setup_db
+        await _authnz_setup_db()
+        logger.info("AuthNZ Postgres schema bootstrap completed for session test DB")
+    except Exception as exc:
+        logger.exception(f"AuthNZ schema bootstrap failed in setup_test_database: {exc}")
     
     yield
     
@@ -453,7 +489,7 @@ async def setup_test_database():
         await cleanup_conn.close()
 
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def clean_database(setup_test_database):
     """Ensure database is clean before each test."""
     conn = await asyncpg.connect(
@@ -497,7 +533,7 @@ async def clean_database(setup_test_database):
         await cleanup_conn.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_db_pool(setup_test_database, clean_database):
     """Create a test database pool connected to the test PostgreSQL database."""
     test_database_url = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
@@ -520,7 +556,7 @@ async def test_db_pool(setup_test_database, clean_database):
         await pool.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_db_pool():
     """Create a mock database pool for unit testing."""
     pool = AsyncMock(spec=DatabasePool)
@@ -586,7 +622,7 @@ def jwt_service(jwt_settings):
     return JWTService(settings=jwt_settings)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def session_manager(test_db_pool):
     """Create a session manager instance for testing."""
     manager = SessionManager(db_pool=test_db_pool)
@@ -595,7 +631,7 @@ async def session_manager(test_db_pool):
     await manager.shutdown()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def rate_limiter():
     """Create a rate limiter instance for testing."""
     limiter = RateLimiter()
@@ -604,7 +640,7 @@ async def rate_limiter():
     await limiter.cleanup()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def registration_service(test_db_pool, password_service):
     """Create a registration service instance for testing."""
     return RegistrationService(
@@ -613,7 +649,7 @@ async def registration_service(test_db_pool, password_service):
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def audit_service(test_db_pool):
     """Create an audit service instance for testing."""
     service = UnifiedAuditService()
@@ -624,13 +660,13 @@ async def audit_service(test_db_pool):
         await service.stop()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def storage_service(test_db_pool):
     """Create a storage quota service instance for testing."""
     return StorageQuotaService(test_db_pool)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_user(test_db_pool, password_service):
     """Create a test user in the database."""
     user_uuid = str(uuid.uuid4())
@@ -665,7 +701,7 @@ async def test_user(test_db_pool, password_service):
     }
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def admin_user(test_db_pool, password_service):
     """Create an admin test user in the database."""
     user_uuid = str(uuid.uuid4())
@@ -700,7 +736,7 @@ async def admin_user(test_db_pool, password_service):
     }
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def inactive_user(test_db_pool, password_service):
     """Create an inactive test user in the database."""
     user_uuid = str(uuid.uuid4())

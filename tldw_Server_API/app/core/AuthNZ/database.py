@@ -161,27 +161,22 @@ class DatabasePool:
         
         if self.pool:
             # PostgreSQL transaction
-            conn = None
             try:
-                conn = await self.pool.acquire()
-                # Start a transaction using async with
-                async with conn.transaction():
-                    yield conn
+                async with self.pool.acquire() as conn:
+                    async with conn.transaction():
+                        yield conn
                 logger.debug("PostgreSQL transaction committed successfully")
             except asyncpg.exceptions.TooManyConnectionsError:
                 raise ConnectionPoolExhaustedError()
-            except HTTPException as e:
+            except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError) as e:
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError):
                 # Re-raise registration exceptions unchanged
                 raise
             except Exception as e:
                 logger.error(f"PostgreSQL transaction error: {e}")
                 raise TransactionError("PostgreSQL transaction", str(e))
-            finally:
-                if conn:
-                    await self.pool.release(conn)
         else:
             # SQLite transaction
             conn = None

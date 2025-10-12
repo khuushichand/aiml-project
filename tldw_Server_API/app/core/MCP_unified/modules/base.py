@@ -27,7 +27,8 @@ class ModuleHealth:
     """Module health information"""
     status: HealthStatus
     message: str = ""
-    last_check: datetime = field(default_factory=datetime.utcnow)
+    # Set to None initially so the first health_check() performs real checks
+    last_check: Optional[datetime] = None
     checks: Dict[str, bool] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     

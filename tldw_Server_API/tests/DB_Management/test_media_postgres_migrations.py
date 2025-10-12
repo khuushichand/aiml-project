@@ -26,10 +26,7 @@ _REQUIRED_ENV = [
     "POSTGRES_TEST_PASSWORD",
 ]
 
-pytestmark = pytest.mark.skipif(
-    _PG_DRIVER is None or any(env not in os.environ for env in _REQUIRED_ENV),
-    reason="PostgreSQL test environment not configured",
-)
+pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
 
 
 @pytest.fixture()
@@ -38,11 +35,11 @@ def postgres_config() -> DatabaseConfig:
 
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.environ["POSTGRES_TEST_HOST"],
-        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
-        pg_database=os.environ["POSTGRES_TEST_DB"],
-        pg_user=os.environ["POSTGRES_TEST_USER"],
-        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
+        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
+        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
+        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
+        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
+        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
     )
 
 

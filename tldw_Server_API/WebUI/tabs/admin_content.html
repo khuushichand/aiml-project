@@ -211,14 +211,14 @@
         <div class="columns">
             <div class="column">
                 <div class="form-group">
-                    <label for="adminLLM_start">Start (ISO):</label>
-                    <input type="text" id="adminLLM_start" placeholder="YYYY-MM-DD or ISO timestamp">
+                    <label for="adminLLM_start">Start (date):</label>
+                    <input type="date" id="adminLLM_start" placeholder="YYYY-MM-DD">
                 </div>
             </div>
             <div class="column">
                 <div class="form-group">
-                    <label for="adminLLM_end">End (ISO):</label>
-                    <input type="text" id="adminLLM_end" placeholder="YYYY-MM-DD or ISO timestamp">
+                    <label for="adminLLM_end">End (date):</label>
+                    <input type="date" id="adminLLM_end" placeholder="YYYY-MM-DD">
                 </div>
             </div>
         </div>
@@ -282,13 +282,19 @@
             <div class="column">
                 <div class="form-group">
                     <label for="adminLLMCharts_start">Start (YYYY-MM-DD):</label>
-                    <input type="text" id="adminLLMCharts_start" placeholder="2025-01-01">
+                    <input type="date" id="adminLLMCharts_start" placeholder="2025-01-01">
                 </div>
             </div>
             <div class="column">
                 <div class="form-group">
                     <label for="adminLLMCharts_end">End (YYYY-MM-DD):</label>
-                    <input type="text" id="adminLLMCharts_end" placeholder="2025-01-31">
+                    <input type="date" id="adminLLMCharts_end" placeholder="2025-01-31">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="llmCharts_topN">Top N:</label>
+                    <input type="number" id="llmCharts_topN" value="10" min="3" max="50">
                 </div>
             </div>
             <div class="column">
@@ -321,7 +327,10 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminLoadLLMCharts()">Load Charts</button>
+            <button class="api-button" onclick="adminLoadLLMCharts()" data-requires-api="true">Load Charts</button>
+            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendTopSpenders','llmChartTopSpenders')" title="Reset Top Spenders visibility">Reset Top</button>
+            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendModelMix','llmChartModelMix')" title="Reset Model Mix visibility">Reset Model</button>
+            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendProviderMix','llmChartProviderMix')" title="Reset Provider Mix visibility">Reset Provider</button>
         </div>
 
         <div class="columns mt-3">
@@ -429,7 +438,7 @@
                             const h = Math.max(5, (p.value / maxVal) * 100);
                             return `
                                 <div class="chart-bar" data-label="${p.label}" data-value="${p.value}" style="height:${h}%; ${style}">
-                                    <span class="chart-bar-label">${p.label}</span>
+                                    <span class="chart-bar-label" title="${p.label}">${p.label}</span>
                                     <span class="chart-bar-value">${_formatValue(p.value, valueLabel)} ${valueLabel || ''}</span>
                                 </div>
                             `;
@@ -437,6 +446,8 @@
                     </div>
                 </div>
             `;
+            // Store unit on the container for robust tooltip logic
+            try { container.dataset.unit = valueLabel || ''; } catch (_) {}
             _attachTooltips(containerId);
         }
 
@@ -468,7 +479,7 @@
                 bar.addEventListener('mouseenter', (e) => {
                     const label = bar.getAttribute('data-label') || '';
                     const value = bar.getAttribute('data-value') || '';
-                    const unit = containerId.includes('Provider') ? (document.getElementById('llmCharts_provider_metric') && document.getElementById('llmCharts_provider_metric').value === 'tokens' ? 'tokens' : 'USD') : (containerId.includes('Model') ? (document.getElementById('llmCharts_model_metric') && document.getElementById('llmCharts_model_metric').value === 'cost' ? 'USD' : 'tokens') : 'USD');
+                    const unit = (container.dataset && container.dataset.unit) ? container.dataset.unit : 'USD';
                     tooltip.innerHTML = `<strong>${label}</strong><br/>${_formatValue(value, unit)} ${unit}`;
                     tooltip.style.display = 'block';
                 });
@@ -676,6 +687,173 @@
 
     <div id="tabModeration" class="tab-content">
     <!-- Moderation Management -->
+    <div class="endpoint-section" id="moderationSettings">
+        <h2>
+            <span class="endpoint-method get">GET/PUT</span>
+            <span class="endpoint-path">/api/v1/moderation/settings - Runtime Settings</span>
+        </h2>
+        <p>Quick toggles for moderation categories and built-in PII rules (non-persistent across restarts).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="modSettings_pii">Enable built-in PII rules:</label>
+                    <select id="modSettings_pii">
+                        <option value="">(no override)</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="modSettings_categories">Categories enabled (comma-separated):</label>
+                    <input id="modSettings_categories" type="text" placeholder="e.g., pii,confidential" />
+                </div>
+            </div>
+        </div>
+        <div class="btn-group">
+            <button class="api-button" onclick="moderationLoadSettings()">Load</button>
+            <button class="api-button" onclick="moderationSaveSettings()">Save</button>
+            <label style="margin-left:12px;">
+                <input type="checkbox" id="modSettings_persist" /> Persist to file
+            </label>
+        </div>
+        <h3>Status:</h3>
+        <pre id="moderationSettings_status">---</pre>
+    </div>
+
+    <script>
+        async function moderationLoadSettings() {
+            try {
+                const res = await apiClient.get('/api/v1/moderation/settings');
+                // Show effective values
+                const eff = res && res.effective ? res.effective : {};
+                document.getElementById('modSettings_categories').value = (eff.categories_enabled || []).join(',');
+                const piiOverride = res && Object.prototype.hasOwnProperty.call(res, 'pii_enabled') ? res.pii_enabled : null;
+                document.getElementById('modSettings_pii').value = (piiOverride === null || piiOverride === undefined) ? '' : String(!!piiOverride);
+                document.getElementById('moderationSettings_status').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Loaded settings');
+            } catch (e) {
+                document.getElementById('moderationSettings_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load settings');
+            }
+        }
+
+        async function moderationSaveSettings() {
+            try {
+                const rawCats = (document.getElementById('modSettings_categories').value || '').trim();
+                const cats = rawCats ? rawCats.split(',').map(x => x.trim()).filter(Boolean) : [];
+                const piiVal = document.getElementById('modSettings_pii').value;
+                const body = {};
+                if (piiVal !== '') body.pii_enabled = (piiVal === 'true');
+                body.categories_enabled = cats;
+                body.persist = !!document.getElementById('modSettings_persist').checked;
+                const res = await apiClient.put('/api/v1/moderation/settings', body);
+                document.getElementById('moderationSettings_status').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Saved settings');
+            } catch (e) {
+                document.getElementById('moderationSettings_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to save settings');
+            }
+        }
+    </script>
+    <div class="endpoint-section" id="moderationBlocklistManaged">
+        <h2>
+            <span class="endpoint-method get">GET/POST/DELETE</span>
+            <span class="endpoint-path">/api/v1/moderation/blocklist/managed - Managed Blocklist</span>
+        </h2>
+        <p>List, append, and remove blocklist entries with concurrency protection. Uses a content hash version as ETag.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="moderationManaged_filter">Filter:</label>
+                    <input id="moderationManaged_filter" type="text" placeholder="Search patterns..." oninput="renderManagedBlocklist()" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="moderationManaged_newLine">Append Line:</label>
+                    <input id="moderationManaged_newLine" type="text" placeholder="/secret\\d+/ or literal" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="moderationAppendManaged()">Append</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="moderationLoadManaged()">Load</button>
+            <button class="api-button" onclick="moderationRefreshManaged()">Refresh</button>
+        </div>
+
+        <div id="moderationManaged_table"></div>
+        <h3>Status:</h3>
+        <pre id="moderationManaged_status">---</pre>
+    </div>
+
+    <script>
+        window._moderationManaged = { version: '', items: [] };
+
+        function renderManagedBlocklist() {
+            const container = document.getElementById('moderationManaged_table');
+            const filter = (document.getElementById('moderationManaged_filter').value || '').toLowerCase();
+            const items = (window._moderationManaged.items || []).filter(it => !filter || String(it.line).toLowerCase().includes(filter));
+            let html = '<table class="table"><thead><tr><th>ID</th><th>Pattern</th><th>Actions</th></tr></thead><tbody>';
+            for (const it of items) {
+                html += `<tr>
+                    <td>${it.id}</td>
+                    <td><code>${Utils.escapeHtml(String(it.line))}</code></td>
+                    <td><button class="btn btn-danger" onclick="moderationDeleteManaged(${it.id})">Delete</button></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function moderationLoadManaged() {
+            try {
+                const res = await apiClient.get('/api/v1/moderation/blocklist/managed');
+                window._moderationManaged = res || { version: '', items: [] };
+                renderManagedBlocklist();
+                document.getElementById('moderationManaged_status').textContent = `Loaded version: ${res.version}`;
+                Toast.success('Loaded managed blocklist');
+            } catch (e) {
+                document.getElementById('moderationManaged_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load managed blocklist');
+            }
+        }
+
+        async function moderationRefreshManaged() { return moderationLoadManaged(); }
+
+        async function moderationAppendManaged() {
+            try {
+                const line = (document.getElementById('moderationManaged_newLine').value || '').trim();
+                if (!line) { Toast.error('Enter a line'); return; }
+                const res = await apiClient.post('/api/v1/moderation/blocklist/append', { line }, { headers: { 'If-Match': window._moderationManaged.version }});
+                window._moderationManaged.version = res.version;
+                await moderationLoadManaged();
+                document.getElementById('moderationManaged_newLine').value = '';
+                Toast.success('Appended');
+            } catch (e) {
+                document.getElementById('moderationManaged_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to append');
+            }
+        }
+
+        async function moderationDeleteManaged(id) {
+            try {
+                if (!confirm('Delete blocklist entry #' + id + '?')) return;
+                const res = await apiClient.delete(`/api/v1/moderation/blocklist/${id}`, { headers: { 'If-Match': window._moderationManaged.version }});
+                window._moderationManaged.version = res.version;
+                await moderationLoadManaged();
+                Toast.success('Deleted');
+            } catch (e) {
+                document.getElementById('moderationManaged_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to delete');
+            }
+        }
+    </script>
     <div class="endpoint-section" id="moderationBlocklist">
         <h2>
             <span class="endpoint-method get">GET/PUT</span>
@@ -798,6 +976,102 @@
         <pre id="moderationOverrides_result">---</pre>
     </div>
 
+    <div class="endpoint-section" id="moderationOverridesList">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/moderation/users - List Overrides</span>
+        </h2>
+        <p>List all configured per-user overrides and load one into the editor above.</p>
+        <div class="btn-group">
+            <button class="api-button" onclick="moderationListOverrides()">Load List</button>
+        </div>
+        <div id="moderationOverrides_table"></div>
+    </div>
+
+    <script>
+        async function moderationListOverrides() {
+            try {
+                const res = await apiClient.get('/api/v1/moderation/users');
+                const overrides = (res && res.overrides) || {};
+                const rows = Object.entries(overrides).map(([uid, o]) => ({ uid, ...o }));
+                let html = '<table class="table"><thead><tr><th>User</th><th>enabled</th><th>input_enabled</th><th>output_enabled</th><th>input_action</th><th>output_action</th><th>redact_replacement</th><th>categories_enabled</th><th>Actions</th></tr></thead><tbody>';
+                for (const r of rows) {
+                    html += `<tr>
+                        <td>${Utils.escapeHtml(String(r.uid))}</td>
+                        <td>${String(r.enabled ?? '')}</td>
+                        <td>${String(r.input_enabled ?? '')}</td>
+                        <td>${String(r.output_enabled ?? '')}</td>
+                        <td>${Utils.escapeHtml(String(r.input_action ?? ''))}</td>
+                        <td>${Utils.escapeHtml(String(r.output_action ?? ''))}</td>
+                        <td>${Utils.escapeHtml(String(r.redact_replacement ?? ''))}</td>
+                        <td>${Utils.escapeHtml(String(r.categories_enabled ?? ''))}</td>
+                        <td><button class="btn" onclick="moderationLoadIntoEditor('${r.uid}')">Load</button></td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                document.getElementById('moderationOverrides_table').innerHTML = html;
+            } catch (e) {
+                document.getElementById('moderationOverrides_table').innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+            }
+        }
+
+        function moderationLoadIntoEditor(uid) {
+            document.getElementById('modUserId').value = uid;
+            loadUserOverride();
+            Toast.success('Loaded override into editor');
+        }
+    </script>
+
+    <div class="endpoint-section" id="moderationTester">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/moderation/test - Test Policy</span>
+        </h2>
+        <p>Test how the current policy behaves for a user and sample text.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="modTest_user">User ID (optional):</label>
+                    <input id="modTest_user" type="text" placeholder="e.g., 1" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="modTest_phase">Phase:</label>
+                    <select id="modTest_phase">
+                        <option value="input">input</option>
+                        <option value="output">output</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="modTest_text">Text:</label>
+            <textarea id="modTest_text" rows="4" placeholder="Enter sample text to test..."></textarea>
+        </div>
+        <div class="btn-group">
+            <button class="api-button" onclick="moderationRunTest()">Test</button>
+        </div>
+        <h3>Result:</h3>
+        <pre id="moderationTester_result">---</pre>
+    </div>
+
+    <script>
+        async function moderationRunTest() {
+            try {
+                const user_id = (document.getElementById('modTest_user').value || '').trim() || null;
+                const phase = document.getElementById('modTest_phase').value;
+                const text = document.getElementById('modTest_text').value || '';
+                const res = await apiClient.post('/api/v1/moderation/test', { user_id, phase, text });
+                document.getElementById('moderationTester_result').textContent = JSON.stringify(res, null, 2);
+                Toast.success('Test completed');
+            } catch (e) {
+                document.getElementById('moderationTester_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Test failed');
+            }
+        }
+    </script>
+
     <script>
         function _buildOverridePayload() {
             const v = (id) => (document.getElementById(id)?.value ?? '').trim();
@@ -809,12 +1083,14 @@
             const ia = v('modInputAction');
             const oa = v('modOutputAction');
             const rr = v('modRedact');
+            const cat = v('modUserCategories');
             if (enabled !== undefined) payload.enabled = enabled;
             if (inp !== undefined) payload.input_enabled = inp;
             if (outp !== undefined) payload.output_enabled = outp;
             if (ia) payload.input_action = ia;
             if (oa) payload.output_action = oa;
             if (rr) payload.redact_replacement = rr;
+            if (cat) payload.categories_enabled = cat;
             return payload;
         }
 
@@ -1474,6 +1750,16 @@
         <h3>User Assignments</h3>
         <div class="columns">
             <div class="column">
+                <h4>Role Effective Permissions</h4>
+                <div class="form-group">
+                    <label for="rbacEffRoleId">Role ID:</label>
+                    <input type="number" id="rbacEffRoleId" placeholder="e.g., 2" />
+                </div>
+                <div class="btn-group">
+                    <button class="api-button" onclick="rbacGetRoleEffective()">Get Role Effective Permissions</button>
+                </div>
+                <pre id="rbacRoleEffOut">---</pre>
+
                 <div class="form-group">
                     <label for="rbacUserId">User ID:</label>
                     <input type="number" id="rbacUserId" placeholder="123" />
@@ -1517,6 +1803,29 @@
     </div>
 
     <script>
+        async function rbacGetRoleEffective() {
+            const roleIdRaw = document.getElementById('rbacEffRoleId').value.trim();
+            if (!roleIdRaw) return Toast.error('Role ID is required');
+            const roleId = parseInt(roleIdRaw, 10);
+            if (isNaN(roleId) || roleId <= 0) return Toast.error('Enter a valid Role ID');
+            try {
+                const data = await apiClient.get(`/api/v1/admin/roles/${roleId}/permissions/effective`);
+                document.getElementById('rbacRoleEffOut').textContent = JSON.stringify(data, null, 2);
+                Toast.success('Loaded role effective permissions');
+            } catch (e) {
+                document.getElementById('rbacRoleEffOut').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load role effective permissions');
+            }
+        }
+        function rbacViewEffectiveForRole(roleId) {
+            try {
+                const input = document.getElementById('rbacEffRoleId');
+                if (input) input.value = String(roleId);
+                rbacGetRoleEffective();
+                const out = document.getElementById('rbacRoleEffOut');
+                if (out && out.scrollIntoView) out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } catch (_) { /* no-op */ }
+        }
         async function rbacListRoles() {
             const res = await apiClient.get('/api/v1/admin/roles');
             document.getElementById('rbacRolesOut').textContent = JSON.stringify(res, null, 2);
@@ -1594,19 +1903,6 @@
     <div class="endpoint-section" id="adminRbacMatrix">
         <h3>RBAC Matrix</h3>
         <p>Inspect role-to-permission assignments in a single view.</p>
-
-        <style>
-            .rbac-sticky-left { position: sticky; left: 0; background: var(--panel-bg, #111); z-index: 2; }
-            .rbac-sticky-left.header { z-index: 3; }
-            .small-table th, .small-table td { white-space: nowrap; }
-            .scroll-x { overflow-x: auto; }
-            .scroll-y { overflow-y: auto; }
-            .spinner {
-                width: 36px; height: 36px; border: 4px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.8);
-                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 8px auto;
-            }
-            @keyframes spin { to { transform: rotate(360deg); } }
-        </style>
 
         <div class="columns" style="margin-bottom:8px;">
             <div class="column">
@@ -2247,7 +2543,7 @@ async function _ensurePermissionCategories() {
                 const nameToIndex = new Map();
                 const originalNames = RBAC_CACHE.boolean.permission_names;
                 for (let i = 0; i < originalNames.length; i++) nameToIndex.set(originalNames[i], i);
-                html += `<tr><td class="rbac-sticky-left"><strong>${_escapeHtml(role.name)}</strong></td>`;
+                html += `<tr><td class="rbac-sticky-left"><strong>${_escapeHtml(role.name)}</strong> <button class="btn btn-secondary btn-compact" title="View effective permissions" aria-label="View effective permissions for role ${_escapeHtml(role.name)}" onclick="rbacViewEffectiveForRole(${role.id})">Eff</button></td>`;
                 for (let c = 0; c < permNames.length; c++) {
                     const idx = nameToIndex.get(permNames[c]);
                     const v = idx != null ? !!fullRow[idx] : false;
@@ -2289,7 +2585,7 @@ async function _ensurePermissionCategories() {
                 for (const p of perms) {
                     if (grants.has(`${role.id}:${p.id}`)) names.push(p.name);
                 }
-                html += `<div class="card"><div class="card-header"><strong>${_escapeHtml(role.name)}</strong></div>`;
+                html += `<div class="card"><div class="card-header"><strong>${_escapeHtml(role.name)}</strong> <button class="btn btn-secondary btn-compact" title="View effective permissions" aria-label="View effective permissions for role ${_escapeHtml(role.name)}" onclick="rbacViewEffectiveForRole(${role.id})">Eff</button></div>`;
                 html += `<div class="card-body"><div>${names.length ? names.map(_escapeHtml).join(', ') : '<em>No permissions</em>'}</div></div></div>`;
             }
             html += '</div>';

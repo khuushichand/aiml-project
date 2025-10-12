@@ -1097,8 +1097,83 @@ class CharacterCardsRetriever(BaseRetriever):
         Returns:
             List of retrieved documents
         """
-        documents = []
-        
+        documents: List[Document] = []
+
+        # Prefer backend-aware path via ChaCha DB (leverages Postgres FTS when available)
+        if self.chacha_db is not None:
+            try:
+                limit_cards = max(1, self.config.max_results // 2)
+                card_rows = self.chacha_db.search_character_cards(query, limit=limit_cards)
+                for row in card_rows:
+                    name = row.get("name") or "(Unnamed)"
+                    description = row.get("description") or ""
+                    personality = row.get("personality") or ""
+                    scenario = row.get("scenario") or ""
+                    first_message = row.get("first_message") or ""
+                    rank = row.get("rank") or 0.0
+
+                    content = (
+                        f"# {name}\n\n"
+                        f"**Description:** {description}\n\n"
+                        f"**Personality:** {personality}\n\n"
+                        f"**Scenario:** {scenario}\n\n"
+                        f"**First Message:** {first_message}"
+                    )
+                    doc = Document(
+                        id=f"character_{row['id']}",
+                        content=content,
+                        source=DataSource.CHARACTER_CARDS,
+                        metadata={
+                            "name": name,
+                            "creator": row.get("creator"),
+                            "version": row.get("version"),
+                            "type": "character_card",
+                            "source": "characters",
+                        },
+                        score=float(rank) if isinstance(rank, (int, float)) else 0.75,
+                    )
+                    documents.append(doc)
+
+                if include_chats:
+                    limit_msgs = max(1, self.config.max_results // 2)
+                    msg_rows = self.chacha_db.search_messages_by_content(query, limit=limit_msgs)
+                    for row in msg_rows:
+                        character_name = None
+                        character_id = None
+                        conv_id = row.get("conversation_id")
+                        if conv_id:
+                            conv = self.chacha_db.get_conversation_by_id(conv_id)
+                            if conv and conv.get("character_id") is not None:
+                                character_id = conv.get("character_id")
+                                card = self.chacha_db.get_character_card_by_id(int(character_id))
+                                if card:
+                                    character_name = card.get("name")
+
+                        content = f"{row.get('sender')}: {row.get('content', '')}"
+                        metadata = {
+                            "sender": row.get("sender"),
+                            "timestamp": row.get("timestamp"),
+                            "character_id": character_id,
+                            "character_name": character_name,
+                            "type": "chat_message",
+                            "source": "characters",
+                        }
+                        doc = Document(
+                            id=f"chat_{row['id']}",
+                            content=content,
+                            source=DataSource.CHARACTER_CARDS,
+                            metadata=metadata,
+                            score=0.5,
+                        )
+                        documents.append(doc)
+
+                documents.sort(key=lambda x: x.score, reverse=True)
+                logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
+                return documents
+            except Exception as e:
+                logger.debug(f"ChaCha backend search failed; falling back to legacy SQL: {e}")
+
+        # Legacy SQLite-style path
         # Search character cards
         card_sql = """
             SELECT 
@@ -1117,46 +1192,30 @@ class CharacterCardsRetriever(BaseRetriever):
                 OR cc.scenario LIKE ?
             LIMIT ?
         """
-        
         params = [f"%{query}%"] * 4 + [self.config.max_results // 2]
-        
         card_results = self._execute_query(card_sql, params)
-        
-        # Convert character cards to documents
         for row in card_results:
-            content = f"""# {row['name']}
-            
-**Description:** {row['description']}
-
-**Personality:** {row['personality']}
-
-**Scenario:** {row['scenario']}
-
-**First Message:** {row['first_message']}"""
-            
-            # Calculate relevance
+            content = f"""# {row['name']}\n\n**Description:** {row['description']}\n\n**Personality:** {row['personality']}\n\n**Scenario:** {row['scenario']}\n\n**First Message:** {row['first_message']}"""
             matches = sum([
                 query.lower() in (row[field] or "").lower()
                 for field in ["name", "description", "personality", "scenario"]
             ])
             score = matches / 4.0
-            
             doc = Document(
                 id=f"character_{row['id']}",
                 content=content,
-                source=DataSource.CHARACTER_CARDS,  # Add required source parameter
+                source=DataSource.CHARACTER_CARDS,
                 metadata={
                     "name": row["name"],
                     "creator": row["creator"],
                     "version": row["version"],
                     "type": "character_card",
-                    "source": "characters"
+                    "source": "characters",
                 },
-                score=score
+                score=score,
             )
             documents.append(doc)
-        
-        # Search chat messages if requested
+
         if include_chats:
             chat_sql = """
                 SELECT 
@@ -1173,34 +1232,27 @@ class CharacterCardsRetriever(BaseRetriever):
                 ORDER BY cm.timestamp DESC
                 LIMIT ?
             """
-            
             chat_params = [f"%{query}%", self.config.max_results // 2]
             chat_results = self._execute_query(chat_sql, chat_params)
-            
-            # Convert chat messages to documents
             for row in chat_results:
                 content = f"[{row['sender']}]: {row['message']}"
-                
                 doc = Document(
                     id=f"chat_{row['id']}",
                     content=content,
-                    source=DataSource.CHAT_HISTORY,  # Add required source parameter
+                    source=DataSource.CHAT_HISTORY,
                     metadata={
                         "sender": row["sender"],
                         "timestamp": row["timestamp"],
                         "character": row["character_name"],
                         "type": "chat_message",
-                        "source": "characters"
+                        "source": "characters",
                     },
-                    score=0.5  # Lower base score for chat messages
+                    score=0.5,
                 )
                 documents.append(doc)
-        
-        # Sort by score
+
         documents.sort(key=lambda x: x.score, reverse=True)
-        
         logger.debug(f"Retrieved {len(documents)} documents from Character Cards")
-        
         return documents
     
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:

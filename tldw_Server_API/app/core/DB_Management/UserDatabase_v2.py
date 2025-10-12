@@ -169,6 +169,11 @@ class UserDatabase:
             DuplicateUserError: If username or email already exists
         """
         try:
+            # Enforce max lengths similar to typical DB constraints
+            if username is not None and len(username) > 255:
+                username = username[:255]
+            if email is not None and len(email) > 255:
+                email = email[:255]
             with self.backend.transaction() as conn:
                 # Check for duplicates
                 existing = self.backend.execute(
@@ -213,8 +218,12 @@ class UserDatabase:
                 return user_id
                 
         except Exception as e:
-            if "duplicate" in str(e).lower() or "unique" in str(e).lower():
-                raise DuplicateUserError(f"Username or email already exists")
+            # Preserve explicit duplicate signal
+            if isinstance(e, DuplicateUserError):
+                raise
+            emsg = str(e).lower()
+            if ("duplicate" in emsg) or ("unique" in emsg) or ("already exists" in emsg):
+                raise DuplicateUserError("Username or email already exists")
             raise UserDatabaseError(f"Failed to create user: {e}")
     
     def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None, 
@@ -719,8 +728,8 @@ class UserDatabase:
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
+                username TEXT UNIQUE NOT NULL CHECK (length(username) <= 255),
+                email TEXT UNIQUE NOT NULL CHECK (length(email) <= 255),
                 password_hash TEXT NOT NULL,
                 metadata TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
@@ -832,8 +841,8 @@ class UserDatabase:
             """
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 metadata JSONB,
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -928,6 +937,7 @@ class UserDatabase:
         ]
 
     def _seed_default_data(self) -> None:
+        # Seed roles
         default_roles = [
             ("admin", "Administrator", True),
             ("user", "Standard User", True),
@@ -939,14 +949,81 @@ class UserDatabase:
                 "INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?) "
                 "ON CONFLICT (name) DO NOTHING"
             )
+            perm_sql = (
+                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?) "
+                "ON CONFLICT (name) DO NOTHING"
+            )
+            rp_sql = (
+                "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?) "
+                "ON CONFLICT DO NOTHING"
+            )
+            sel_role_id = "SELECT id FROM roles WHERE name = ?"
+            sel_perm_id = "SELECT id FROM permissions WHERE name = ?"
         else:
             role_sql = "INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)"
+            perm_sql = "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)"
+            rp_sql = "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)"
+            sel_role_id = "SELECT id FROM roles WHERE name = ?"
+            sel_perm_id = "SELECT id FROM permissions WHERE name = ?"
 
         for name, description, is_system in default_roles:
             try:
                 self.backend.execute(role_sql, (name, description, is_system))
             except Exception as exc:  # noqa: BLE001
                 logger.debug(f"Skipping role seed for %s: %s", name, exc)
+
+        # Seed baseline permissions
+        default_perms = [
+            ("media.read", "Read media", "media"),
+            ("media.create", "Create media", "media"),
+            ("media.delete", "Delete media", "media"),
+            ("system.configure", "Configure system", "system"),
+            ("users.manage_roles", "Manage user roles", "users"),
+        ]
+        for name, desc, cat in default_perms:
+            try:
+                self.backend.execute(perm_sql, (name, desc, cat))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping permission seed for %s: %s", name, exc)
+
+        # Map permissions to roles
+        def _get_id(query: str, value: str) -> Optional[int]:
+            res = self.backend.execute(query, (value,))
+            return res.rows[0]['id'] if res.rows else None
+
+        admin_id = _get_id(sel_role_id, "admin")
+        user_id = _get_id(sel_role_id, "user")
+        viewer_id = _get_id(sel_role_id, "viewer")
+
+        def _pid(name: str) -> Optional[int]:
+            return _get_id(sel_perm_id, name)
+
+        # user role defaults
+        for pname in ("media.read", "media.create"):
+            rid = user_id
+            pid = _pid(pname)
+            if rid and pid:
+                try:
+                    self.backend.execute(rp_sql, (rid, pid))
+                except Exception:
+                    pass
+        # viewer role
+        rid = viewer_id
+        pid = _pid("media.read")
+        if rid and pid:
+            try:
+                self.backend.execute(rp_sql, (rid, pid))
+            except Exception:
+                pass
+        # admin all
+        if admin_id:
+            for pname in ("media.read", "media.create", "media.delete", "system.configure", "users.manage_roles"):
+                pid = _pid(pname)
+                if pid:
+                    try:
+                        self.backend.execute(rp_sql, (admin_id, pid))
+                    except Exception:
+                        pass
 
 
 #

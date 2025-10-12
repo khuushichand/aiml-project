@@ -8,7 +8,7 @@ import secrets
 import string
 #
 # 3rd-party imports
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 #
@@ -32,6 +32,11 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMUsageSummaryRow,
     LLMTopSpendersResponse,
     LLMTopSpenderRow,
+    ToolPermissionCreateRequest,
+    ToolPermissionResponse,
+    ToolPermissionGrantRequest,
+    ToolPermissionBatchRequest,
+    ToolPermissionPrefixRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -57,6 +62,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     RolePermissionMatrixResponse,
     RolePermissionGrant,
     RolePermissionBooleanMatrixResponse,
+    RoleEffectivePermissionsResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_admin,
@@ -110,6 +116,8 @@ router = APIRouter(
 
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
+    request: Request,
+    response: Response,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     role: Optional[str] = None,
@@ -130,6 +138,23 @@ async def list_users(
     Returns:
         Paginated list of users
     """
+    # TEST_MODE diagnostics: annotate DB backend and admin dependency success
+    try:
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            try:
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+                pool = await get_db_pool()
+                db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
+                response.headers["X-TLDW-Admin-DB"] = db_backend
+                response.headers["X-TLDW-Admin-Req"] = "ok"
+                # Log presence of Authorization header for debugging
+                from loguru import logger as _logger
+                auth_hdr = request.headers.get("Authorization")
+                _logger.info(f"Admin list_users TEST_MODE: Authorization present={bool(auth_hdr)}")
+            except Exception as _e:
+                response.headers["X-TLDW-Admin-Diag-Error"] = str(_e)
+    except Exception:
+        pass
     try:
         offset = (page - 1) * limit
         
@@ -215,16 +240,22 @@ async def list_users(
                 }
                 users.append(user_dict)
         
-        return UserListResponse(
+        result = UserListResponse(
             users=users,
             total=total,
             page=page,
             limit=limit,
             pages=(total + limit - 1) // limit
         )
+        return result
         
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
+        try:
+            if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+                response.headers["X-TLDW-Admin-Error"] = str(e)
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users"
@@ -465,6 +496,8 @@ async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateReques
             org_id=payload.org_id,
             team_id=payload.team_id,
             allowed_endpoints=payload.allowed_endpoints,
+            allowed_providers=payload.allowed_providers,
+            allowed_models=payload.allowed_models,
             budget_day_tokens=payload.budget_day_tokens,
             budget_month_tokens=payload.budget_month_tokens,
             budget_day_usd=payload.budget_day_usd,
@@ -831,6 +864,320 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
     except Exception as e:
         logger.error(f"Failed to list permissions for role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list role permissions")
+
+
+@router.get("/permissions/tools", response_model=list[ToolPermissionResponse])
+async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
+    """List tool execution permissions (name starts with 'tools.execute:')."""
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                "SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name"
+            )
+            return [ToolPermissionResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                "SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name"
+            )
+            rows = await cur.fetchall()
+            return [ToolPermissionResponse(name=r[0], description=r[1], category=r[2]) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list tool permissions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list tool permissions")
+
+
+@router.post("/permissions/tools", response_model=ToolPermissionResponse)
+async def create_tool_permission(payload: ToolPermissionCreateRequest, db=Depends(get_db_transaction)) -> ToolPermissionResponse:
+    """Create a tool execution permission.
+
+    - tool_name='*' → creates tools.execute:*
+    - tool_name='<name>' → creates tools.execute:<name>
+    """
+    try:
+        tool = payload.tool_name.strip()
+        name = f"tools.execute:{'*' if tool == '*' else tool}"
+        desc = payload.description or ("Wildcard tool execution" if tool == '*' else f"Execute tool {tool}")
+
+        if hasattr(db, 'fetchrow'):
+            await db.execute(
+                "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
+                name, desc, 'tools',
+            )
+            row = await db.fetchrow(
+                "SELECT name, description, category FROM permissions WHERE name = $1",
+                name,
+            )
+            return ToolPermissionResponse(**dict(row))
+        else:
+            # SQLite doesn't support upsert on all versions; emulate
+            cur = await db.execute("SELECT name, description, category FROM permissions WHERE name = ?", (name,))
+            r = await cur.fetchone()
+            if not r:
+                await db.execute(
+                    "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
+                    (name, desc, 'tools'),
+                )
+                await db.commit()
+                cur = await db.execute("SELECT name, description, category FROM permissions WHERE name = ?", (name,))
+                r = await cur.fetchone()
+            return ToolPermissionResponse(name=r[0], description=r[1], category=r[2])
+    except Exception as e:
+        logger.error(f"Failed to create tool permission: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create tool permission")
+
+
+@router.delete("/permissions/tools/{perm_name}")
+async def delete_tool_permission(perm_name: str, db=Depends(get_db_transaction)) -> dict:
+    """Delete a tool execution permission by full name (e.g., tools.execute:my_tool)."""
+    try:
+        if not perm_name.startswith('tools.execute:'):
+            raise HTTPException(status_code=400, detail="Invalid tool permission name")
+        if hasattr(db, 'execute'):
+            await db.execute("DELETE FROM permissions WHERE name = $1", perm_name)
+        else:
+            await db.execute("DELETE FROM permissions WHERE name = ?", (perm_name,))
+            await db.commit()
+        return {"message": "Tool permission deleted", "name": perm_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete tool permission {perm_name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete tool permission")
+
+
+@router.post("/roles/{role_id}/permissions/tools", response_model=ToolPermissionResponse)
+async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGrantRequest, db=Depends(get_db_transaction)) -> ToolPermissionResponse:
+    """Grant a tool execution permission to a role.
+
+    - tool_name='*' → grants tools.execute:*
+    - tool_name='<name>' → grants tools.execute:<name>
+    Creates the permission in catalog if missing.
+    """
+    tool = payload.tool_name.strip()
+    name = f"tools.execute:{'*' if tool == '*' else tool}"
+    desc = f"Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
+    try:
+        # Ensure permission exists
+        if hasattr(db, 'fetchrow'):
+            await db.execute(
+                "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
+                name, desc, 'tools',
+            )
+            row = await db.fetchrow("SELECT id, name, description, category FROM permissions WHERE name = $1", name)
+            perm_id = row['id'] if row else None
+            if perm_id is None:
+                raise HTTPException(status_code=500, detail="Failed to insert permission")
+            await db.execute(
+                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                role_id, perm_id,
+            )
+            return ToolPermissionResponse(name=name, description=row['description'], category=row['category'])
+        else:
+            cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+            r = await cur.fetchone()
+            if not r:
+                await db.execute("INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)", (name, desc, 'tools'))
+                await db.commit()
+                cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+                r = await cur.fetchone()
+            perm_id = r[0]
+            await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, perm_id))
+            await db.commit()
+            return ToolPermissionResponse(name=r[1], description=r[2], category=r[3])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to grant tool permission to role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to grant tool permission")
+
+
+@router.delete("/roles/{role_id}/permissions/tools/{tool_name}")
+async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depends(get_db_transaction)) -> dict:
+    """Revoke a tool execution permission from a role.
+
+    tool_name '*' refers to tools.execute:*
+    """
+    name = f"tools.execute:{'*' if tool_name.strip() == '*' else tool_name.strip()}"
+    try:
+        if hasattr(db, 'fetchrow'):
+            row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", name)
+            if not row:
+                return {"message": "Permission not found; nothing to revoke", "name": name}
+            await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, row['id'])
+            return {"message": "Tool permission revoked", "name": name}
+        else:
+            cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (name,))
+            r = await cur.fetchone()
+            if not r:
+                return {"message": "Permission not found; nothing to revoke", "name": name}
+            await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, r[0]))
+            await db.commit()
+            return {"message": "Tool permission revoked", "name": name}
+    except Exception as e:
+        logger.error(f"Failed to revoke tool permission from role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke tool permission")
+
+
+@router.get("/roles/{role_id}/permissions/tools", response_model=list[ToolPermissionResponse])
+async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
+    """List tool execution permissions assigned to a role."""
+    try:
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch(
+                """
+                SELECT p.name, p.description, p.category
+                FROM permissions p
+                JOIN role_permissions rp ON rp.permission_id = p.id
+                WHERE rp.role_id = $1 AND p.name LIKE 'tools.execute:%'
+                ORDER BY p.name
+                """,
+                role_id,
+            )
+            return [ToolPermissionResponse(**dict(r)) for r in rows]
+        else:
+            cur = await db.execute(
+                """
+                SELECT p.name, p.description, p.category
+                FROM permissions p
+                JOIN role_permissions rp ON rp.permission_id = p.id
+                WHERE rp.role_id = ? AND p.name LIKE 'tools.execute:%'
+                ORDER BY p.name
+                """,
+                (role_id,),
+            )
+            rows = await cur.fetchall()
+            return [ToolPermissionResponse(name=r[0], description=r[1], category=r[2]) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list role tool permissions for role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list role tool permissions")
+
+
+@router.post("/roles/{role_id}/permissions/tools/batch", response_model=list[ToolPermissionResponse])
+async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatchRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
+    """Grant multiple tool execution permissions to a role in one call."""
+    try:
+        results: list[ToolPermissionResponse] = []
+        # Reuse single-grant logic inline
+        for tool in payload.tool_names:
+            tool = tool.strip()
+            if not tool:
+                continue
+            name = f"tools.execute:{'*' if tool == '*' else tool}"
+            desc = "Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
+
+            if hasattr(db, 'fetchrow'):
+                await db.execute(
+                    "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
+                    name, desc, 'tools',
+                )
+                row = await db.fetchrow("SELECT id, name, description, category FROM permissions WHERE name = $1", name)
+                if not row:
+                    continue
+                await db.execute(
+                    "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    role_id, row['id'],
+                )
+                results.append(ToolPermissionResponse(name=row['name'], description=row['description'], category=row['category']))
+            else:
+                cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+                r = await cur.fetchone()
+                if not r:
+                    await db.execute("INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)", (name, desc, 'tools'))
+                    await db.commit()
+                    cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name = ?", (name,))
+                    r = await cur.fetchone()
+                await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, r[0]))
+                await db.commit()
+                results.append(ToolPermissionResponse(name=r[1], description=r[2], category=r[3]))
+        return results
+    except Exception as e:
+        logger.error(f"Failed to batch grant tool permissions to role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to grant tool permissions")
+
+
+@router.post("/roles/{role_id}/permissions/tools/batch/revoke")
+async def revoke_tool_permissions_batch(role_id: int, payload: ToolPermissionBatchRequest, db=Depends(get_db_transaction)) -> dict:
+    """Revoke multiple tool execution permissions from a role."""
+    try:
+        revoked: list[str] = []
+        for tool in payload.tool_names:
+            tool = tool.strip()
+            if not tool:
+                continue
+            name = f"tools.execute:{'*' if tool == '*' else tool}"
+            if hasattr(db, 'fetchrow'):
+                row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", name)
+                if row:
+                    await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, row['id'])
+                    revoked.append(name)
+            else:
+                cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (name,))
+                r = await cur.fetchone()
+                if r:
+                    await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, r[0]))
+                    await db.commit()
+                    revoked.append(name)
+        return {"revoked": revoked, "count": len(revoked)}
+    except Exception as e:
+        logger.error(f"Failed to batch revoke tool permissions from role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke tool permissions")
+
+
+def _normalize_tool_prefix(raw_prefix: str) -> str:
+    px = raw_prefix.strip()
+    if not px:
+        return "tools.execute:"
+    if not px.startswith('tools.execute:'):
+        px = 'tools.execute:' + px
+    return px
+
+
+@router.post("/roles/{role_id}/permissions/tools/prefix/grant", response_model=list[ToolPermissionResponse])
+async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermissionPrefixRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
+    """Grant all existing tool permissions with names starting with the prefix."""
+    try:
+        prefix = _normalize_tool_prefix(payload.prefix)
+        results: list[ToolPermissionResponse] = []
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch("SELECT id, name, description, category FROM permissions WHERE name LIKE $1", prefix + '%')
+            for r in rows:
+                await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, r['id'])
+                results.append(ToolPermissionResponse(name=r['name'], description=r['description'], category=r['category']))
+        else:
+            cur = await db.execute("SELECT id, name, description, category FROM permissions WHERE name LIKE ?", (prefix + '%',))
+            rows = await cur.fetchall()
+            for r in rows:
+                await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, r[0]))
+                await db.commit()
+                results.append(ToolPermissionResponse(name=r[1], description=r[2], category=r[3]))
+        return results
+    except Exception as e:
+        logger.error(f"Failed to grant tool permissions by prefix to role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to grant permissions by prefix")
+
+
+@router.post("/roles/{role_id}/permissions/tools/prefix/revoke")
+async def revoke_tool_permissions_by_prefix(role_id: int, payload: ToolPermissionPrefixRequest, db=Depends(get_db_transaction)) -> dict:
+    """Revoke all tool permissions with names starting with the prefix from a role."""
+    try:
+        prefix = _normalize_tool_prefix(payload.prefix)
+        names: list[str] = []
+        if hasattr(db, 'fetch'):
+            rows = await db.fetch("SELECT id, name FROM permissions WHERE name LIKE $1", prefix + '%')
+            for r in rows:
+                await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, r['id'])
+                names.append(r['name'])
+        else:
+            cur = await db.execute("SELECT id, name FROM permissions WHERE name LIKE ?", (prefix + '%',))
+            rows = await cur.fetchall()
+            for r in rows:
+                await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, r[0]))
+                await db.commit()
+                names.append(r[1])
+        return {"revoked": names, "count": len(names)}
+    except Exception as e:
+        logger.error(f"Failed to revoke tool permissions by prefix from role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke permissions by prefix")
 
 
 @router.get("/roles/matrix", response_model=RolePermissionMatrixResponse)
@@ -1219,7 +1566,8 @@ async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> 
 @router.post("/users/{user_id}/roles/{role_id}")
 async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        # Detect Postgres by presence of asyncpg-style fetch/fetchval
+        if hasattr(db, 'fetch') or hasattr(db, 'fetchval'):
             await db.execute(
                 "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT (user_id, role_id) DO NOTHING",
                 user_id, role_id,
@@ -1239,7 +1587,7 @@ async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transac
 @router.delete("/users/{user_id}/roles/{role_id}")
 async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        if hasattr(db, 'fetch') or hasattr(db, 'fetchval'):
             await db.execute("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", user_id, role_id)
         else:
             await db.execute("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?", (user_id, role_id))
@@ -1284,6 +1632,31 @@ async def list_user_overrides(user_id: int, db=Depends(get_db_transaction)) -> U
 @router.post("/users/{user_id}/overrides")
 async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest, db=Depends(get_db_transaction)) -> dict:
     try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _settings = _get_settings()
+        _is_pg = str(_settings.DATABASE_URL).startswith("postgresql")
+        # In single-user mode, ensure the fixed user row exists before applying overrides (SQLite/PG FK safety)
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode as _is_single
+        if _is_single() and int(user_id) == int(getattr(_settings, 'SINGLE_USER_FIXED_ID', 1)):
+            if _is_pg and hasattr(db, 'execute'):
+                await db.execute(
+                    """
+                    INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                    VALUES ($1, $2, $3, $4, TRUE, TRUE, COALESCE((SELECT role FROM users WHERE id=$1),'user'))
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    user_id, 'single_user', 'single_user@example.local', '',
+                )
+            else:
+                cur = await db.execute(
+                    """
+                    INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                    VALUES (?, ?, ?, ?, 1, 1, COALESCE((SELECT role FROM users WHERE id=?),'user'))
+                    """,
+                    (user_id, 'single_user', 'single_user@example.local', '', user_id),
+                )
+                if hasattr(db, 'commit'):
+                    await db.commit()
         # Resolve permission_id if only name provided
         perm_id = payload.permission_id
         if not perm_id and payload.permission_name:
@@ -1297,7 +1670,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
             raise HTTPException(status_code=400, detail="permission_id or permission_name required")
 
         granted = 1 if payload.effect == 'allow' else 0
-        if hasattr(db, 'execute'):
+        if _is_pg:
             await db.execute(
                 """
                 INSERT INTO user_permissions (user_id, permission_id, granted, expires_at)
@@ -1308,33 +1681,46 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
                 user_id, perm_id, granted, payload.expires_at,
             )
         else:
-            await db.execute(
+            cur = await db.execute(
                 """
                 INSERT OR REPLACE INTO user_permissions (user_id, permission_id, granted, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
                 (user_id, perm_id, granted, payload.expires_at),
             )
-            await db.commit()
+            # Commit on SQLite acquire()-based connection
+            if hasattr(db, 'commit'):
+                await db.commit()
         return {"message": "Override upserted"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to upsert override for user {user_id}: {e}")
+        logger.exception(f"Failed to upsert override for user {user_id}: {e}")
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _settings = _get_settings()
+        # In tests or single-user dev, surface error details to aid debugging
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or str(_settings.AUTH_MODE) == "single_user":
+            raise HTTPException(status_code=500, detail=f"Failed to upsert user override: {e}")
         raise HTTPException(status_code=500, detail="Failed to upsert user override")
 
 
 @router.delete("/users/{user_id}/overrides/{permission_id}")
 async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _settings = _get_settings()
+        _is_pg = str(_settings.DATABASE_URL).startswith("postgresql")
+        if _is_pg:
             await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
         else:
-            await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
-            await db.commit()
+            cur = await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
+            if hasattr(db, 'commit'):
+                await db.commit()
         return {"message": "Override deleted"}
     except Exception as e:
-        logger.error(f"Failed to delete override for user {user_id}: {e}")
+        logger.exception(f"Failed to delete override for user {user_id}: {e}")
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            raise HTTPException(status_code=500, detail=f"Failed to delete user override: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete user override")
 
 
@@ -1346,6 +1732,70 @@ async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsR
     except Exception as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute effective permissions")
+
+
+@router.get("/roles/{role_id}/permissions/effective", response_model=RoleEffectivePermissionsResponse)
+async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transaction)) -> RoleEffectivePermissionsResponse:
+    """Return a convenience view combining a role's granted permissions and tool permissions.
+
+    - permissions: non-tool permission names (e.g., media.read)
+    - tool_permissions: tool execution permission names (tools.execute:...)
+    - all_permissions: union of both, sorted
+    """
+    try:
+        # Fetch role information
+        role_name: Optional[str] = None
+        if hasattr(db, 'fetchrow'):
+            r = await db.fetchrow("SELECT id, name FROM roles WHERE id = $1", role_id)
+            if not r:
+                raise HTTPException(status_code=404, detail="Role not found")
+            role_name = r['name']
+            rows = await db.fetch(
+                """
+                SELECT p.name
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                WHERE rp.role_id = $1
+                ORDER BY p.name
+                """,
+                role_id,
+            )
+            names = [str(rr['name']) for rr in rows]
+        else:
+            cur = await db.execute("SELECT id, name FROM roles WHERE id = ?", (role_id,))
+            r = await cur.fetchone()
+            if not r:
+                raise HTTPException(status_code=404, detail="Role not found")
+            role_name = str(r[1])
+            cur2 = await db.execute(
+                """
+                SELECT p.name
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                WHERE rp.role_id = ?
+                ORDER BY p.name
+                """,
+                (role_id,),
+            )
+            rows2 = await cur2.fetchall()
+            names = [str(x[0]) for x in rows2]
+
+        tool_prefix = 'tools.execute:'
+        tool_permissions = [n for n in names if n.startswith(tool_prefix)]
+        permissions = [n for n in names if not n.startswith(tool_prefix)]
+        all_permissions = sorted(set(tool_permissions) | set(permissions))
+        return RoleEffectivePermissionsResponse(
+            role_id=role_id,
+            role_name=role_name or "",
+            permissions=permissions,
+            tool_permissions=tool_permissions,
+            all_permissions=all_permissions,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to compute effective permissions for role {role_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute role effective permissions")
 
 
 @router.post("/roles/{role_id}/rate-limits", response_model=RateLimitResponse)

@@ -75,9 +75,10 @@ async def test_virtual_keys_and_budget_postgres(test_db_pool):
     )
 
     # Insert a user
+    import uuid
     await pool.execute(
-        "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES (gen_random_uuid(), $1, $2, $3, TRUE)",
-        "pguser", "pguser@example.com", "x",
+        "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES ($1, $2, $3, $4, TRUE)",
+        str(uuid.uuid4()), "pguser", "pguser@example.com", "x",
     )
     user_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pguser")
 
@@ -130,4 +131,3 @@ async def test_virtual_keys_and_budget_postgres(test_db_pool):
     over2 = await is_key_over_budget(key_id)
     assert over2['over'] is True
     assert any(r.startswith('day_tokens_exceeded') for r in over2['reasons'])
-

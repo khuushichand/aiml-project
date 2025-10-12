@@ -11,12 +11,10 @@ Implementation Status
 - [x] Admin: effective policy preview and reload endpoint
 - [x] Admin: blocklist append/remove with ETag/versioning
 - [x] Observability: moderation metrics + audit annotations
-- [ ] Policy: per-pattern actions and replacements
-- [ ] Admin: blocklist append/remove with ETag/versioning
-- [ ] Observability: moderation metrics + audit annotations
-- [ ] Safety/Perf: regex validation, locks, combined matcher
-- [ ] UI: list overrides/blocklist + “Test this text”
-- [ ] Optional: categories + local PII rules
+- [x] Safety/Perf: regex validation + locks
+- [x] UI: list overrides/blocklist + “Test this text”
+- [x] Policy: per-pattern actions and replacements
+- [x] Optional: categories + local PII rules
 
 Context
 - A rule-based moderation/guardrails layer is implemented for chat input/output with global and per-user controls. Blocklist supports regex and literals. Admin endpoints exist to CRUD per-user overrides and replace the blocklist file. Streaming redaction is supported; streaming block yields an SSE error and a graceful [DONE].
@@ -82,12 +80,12 @@ Design Overview
   - Literal: "forbidden term" (defaults to current global behavior)
   - Regex: "/pattern/i"
   - With action: "forbidden term -> block" or "/pattern/ -> redact:[MASK]"
-  - With categories: "forbidden term #pii,company_confidential"
+- With categories: "forbidden term #pii,company_confidential"
 - Resolution order:
   - Per-user overrides toggle enabled/input/output and default actions/redact string.
-  - Pattern-specific action/replacement overrides global defaults when a pattern matches.
+  - Pattern-specific action/replacement overrides global defaults when a pattern matches. (Implemented)
   - Categories allow enabling/disabling subsets via global or per-user override (e.g., categories_enabled=["pii"]).
-- Backward compatibility: lines without directives behave exactly as today.
+- Backward compatibility: lines without directives behave exactly as today. (Implemented)
 
 2) Detection & Safety
 - Optional PII rules: lightweight regex for common PII (email, phone, basic ID formats), controlled by policy.
@@ -104,6 +102,16 @@ Design Overview
 - Optional: emit "event: error" with error payload while keeping OpenAI-compatible data frames; default off.
 
 Current Implementation Notes
+- Extended blocklist grammar supported in loader:
+  - literal
+  - /regex/
+  - literal -> block|warn
+  - literal -> redact:REPL
+  - /regex/ -> block|warn|redact:REPL
+- New PatternRule structure stores compiled regex and optional per-pattern action/replacement.
+- evaluate_action(text, policy, phase) used by chat input, streaming, non-streaming output to honor per-pattern actions.
+ - Categories: blocklist rules may include a categories suffix (e.g., #pii,confidential). Global/per-user categories_enabled filter gates which rules are active. (Implemented)
+ - Built-in PII: optional pii_enabled adds redact rules for common PII patterns using PIIDetector when available; defaults to off. (Implemented)
 - Implemented in tldw_Server_API/app/core/Chat/streaming_utils.py
   - Added handler.done_sent flag to avoid duplicate [DONE].
   - safe_stream_generator now yields event: stream_end and then data: [DONE] if not already sent.
@@ -123,9 +131,17 @@ Current Implementation Notes
 
 5) Admin UI Enhancements
 - Moderation tab improvements:
-  - Table of blocklist entries with add/remove and search.
-  - Render list of per-user overrides; quick toggle enable/input/output and actions; deep edit opens existing form.
-  - “Test this text”: show matched rule, action, and sample result (redacted or blocked) for a selected user.
+  - Table of blocklist entries with add/remove and search. (Implemented via managed list with ETag)
+  - Render list of per-user overrides; quick load into editor. (Implemented)
+  - “Test this text”: show matched rule, action, and sample result (redacted or blocked) for a selected user. (Implemented)
+
+Current Implementation Notes
+- New endpoints used by UI:
+  - GET /api/v1/moderation/blocklist/managed, POST /moderation/blocklist/append, DELETE /moderation/blocklist/{id}
+  - GET /api/v1/moderation/users
+  - POST /api/v1/moderation/test
+  - GET /api/v1/moderation/settings, PUT /api/v1/moderation/settings (runtime overrides)
+- UI locations: tldw_Server_API/WebUI/tabs/admin_content.html under Moderation tab.
 
 6) Observability & Audit
 - Metrics (Prometheus/registry):
@@ -141,11 +157,14 @@ Current Implementation Notes
 Current Implementation Notes
 - Metrics added to ChatMetricsCollector and wired into chat input/output moderation paths, including streaming transform. Labels include user_id, action, category (default), and streaming where applicable.
 - Audit events emitted via UnifiedAuditService with event_type=SECURITY_VIOLATION and metadata {phase, action, pattern, streaming}. Blocks mark result=failure; redactions result=success.
+ - Category label favors a specific subtype (e.g., pii_email) over generic 'pii' when available.
 
 7) Performance & Reliability
-- Combined matcher: compile a union/alternation for literals and maintain separate compiled regex for complex rules; short-circuit on first match when appropriate.
-- Thread-safety: protect policy reload and setters with a lock; ensure streaming transforms read a consistent snapshot.
-- Optional file watchers to auto-reload; exponential backoff on repeated streaming blocks per-user to limit churn.
+- Combined matcher: compile a union/alternation for literals and maintain separate compiled regex for complex rules; short-circuit on first match when appropriate. (Planned)
+- Thread-safety: protect policy reload and setters with a lock; ensure streaming transforms read a consistent snapshot. (Implemented via RLock)
+- Scan budgets: cap max characters scanned per text and max replacements per pattern to avoid pathological costs. (Implemented defaults: max_scan_chars=200000, max_replacements_per_pattern=1000; configurable via [Moderation])
+- Regex validation: skip dangerous regexes (nested quantifiers, excessive groups) and length caps; log and continue. (Implemented)
+- Optional file watchers to auto-reload; exponential backoff on repeated streaming blocks per-user to limit churn. (Planned)
 
 8) Data Model
 - Keep file-backed blocklist as primary for single-user/local setups.

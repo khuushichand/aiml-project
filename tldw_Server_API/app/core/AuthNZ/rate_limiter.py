@@ -12,6 +12,7 @@ import json
 import redis
 from redis.exceptions import RedisError
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
@@ -86,6 +87,7 @@ class RateLimiter:
 
         self._initialized = True
         logger.info(f"RateLimiter initialized (enabled={self.enabled})")
+        log_counter("auth_rate_limiter_initialized", labels={"enabled": str(self.enabled)})
 
     async def _ensure_sqlite_schema(self):
         """Create SQLite tables used by rate limiter if they do not exist."""
@@ -288,6 +290,7 @@ class RateLimiter:
                     )
                 
                 logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
+                log_counter("auth_rate_limit_lockout", labels={"attempt_type": attempt_type})
                 
                 return {
                     "attempt_count": attempt_count,

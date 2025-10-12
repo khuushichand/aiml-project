@@ -571,6 +571,10 @@ redact_replacement = [REDACTED]
 blocklist_file = tldw_Server_API/Config_Files/moderation_blocklist.txt
 user_overrides_file = tldw_Server_API/Config_Files/moderation_user_overrides.json
 per_user_overrides = True
+# Optional: enable built-in PII rules and category filtering
+pii_enabled = False
+categories_enabled = 
+runtime_overrides_file = tldw_Server_API/Config_Files/moderation_runtime_overrides.json
 
 [Redis]
 redis_enabled = False

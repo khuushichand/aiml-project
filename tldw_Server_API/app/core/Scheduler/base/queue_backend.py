@@ -121,6 +121,19 @@ class QueueBackend(ABC):
             Task or None if not found
         """
         pass
+
+    @abstractmethod
+    async def get_task_by_idempotency_key(self, idempotency_key: str) -> Optional[str]:
+        """
+        Get a task ID by idempotency key, if it exists.
+
+        Args:
+            idempotency_key: Idempotency key to look up
+
+        Returns:
+            Task ID if found, otherwise None
+        """
+        pass
     
     @abstractmethod
     async def update_task(self, task: Task) -> bool:

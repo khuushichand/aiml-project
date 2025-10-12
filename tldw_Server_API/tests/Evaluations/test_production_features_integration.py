@@ -182,7 +182,8 @@ class TestDatabaseMigration:
 class TestUserRateLimiter:
     """Test per-user rate limiting."""
     
-    @pytest.fixture
+    import pytest_asyncio
+    @pytest_asyncio.fixture
     async def rate_limiter(self):
         """Create rate limiter with temp database."""
         temp_dir = tempfile.mkdtemp()
@@ -314,7 +315,7 @@ class TestUserRateLimiter:
 class TestWebhookManager:
     """Test webhook management and delivery."""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def webhook_manager(self):
         """Create webhook manager with temp database."""
         temp_dir = tempfile.mkdtemp()

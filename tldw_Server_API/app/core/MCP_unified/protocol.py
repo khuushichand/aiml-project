@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field, validator
 from loguru import logger
 
 from .modules.registry import get_module_registry
-from .auth.rbac import get_rbac_policy, Resource, Action
+import inspect
+from .auth.authnz_rbac import get_rbac_policy, Resource, Action
 from .auth.rate_limiter import get_rate_limiter
 
 
@@ -202,10 +203,26 @@ class MCPProtocol:
             
             # Check authorization
             if not await self._check_authorization(request.method, context):
+                # Provide a short hint for common denied operations
+                hint_data = None
+                try:
+                    if request.method == "tools/call":
+                        tool = (request.params or {}).get("name")
+                        if tool:
+                            hint_data = {
+                                "hint": (
+                                    f"Permission denied. Ask an admin to grant tools.execute:{tool} "
+                                    f"or tools.execute:* to your role (Admin → Access Control)."
+                                )
+                            }
+                except Exception:
+                    hint_data = None
+
                 return self._error_response(
                     ErrorCode.AUTHORIZATION_ERROR,
                     "Insufficient permissions",
-                    request.id
+                    request.id,
+                    data=hint_data
                 )
             
             # Execute handler
@@ -271,9 +288,13 @@ class MCPProtocol:
         if not context.user_id:
             return False
         
+        # tools/list: allow any authenticated user (deny if unauthenticated)
+        if method == "tools/list":
+            return bool(context.user_id)
+
         # Map methods to resources and actions
         method_permissions = {
-            "tools/list": (Resource.TOOL, Action.READ),
+            # tools/list handled above
             "tools/call": (Resource.TOOL, Action.EXECUTE),
             "resources/list": (Resource.RESOURCE, Action.READ),
             "resources/read": (Resource.RESOURCE, Action.READ),
@@ -285,11 +306,12 @@ class MCPProtocol:
         
         if method in method_permissions:
             resource, action = method_permissions[method]
-            return self.rbac_policy.check_permission(
-                context.user_id,
-                resource,
-                action
-            )
+            fn = getattr(self.rbac_policy, 'check_permission', None)
+            if fn is None:
+                return False
+            if inspect.iscoroutinefunction(fn):
+                return await fn(context.user_id, resource, action)
+            return fn(context.user_id, resource, action)
         
         # Unknown method - deny by default
         return False
@@ -352,12 +374,14 @@ class MCPProtocol:
                     
                     # Check if user can execute this tool
                     if context.user_id:
-                        can_execute = self.rbac_policy.check_permission(
-                            context.user_id,
-                            Resource.TOOL,
-                            Action.EXECUTE,
-                            tool["name"]
-                        )
+                        fn = getattr(self.rbac_policy, 'check_permission', None)
+                        if fn:
+                            if inspect.iscoroutinefunction(fn):
+                                can_execute = await fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool["name"])  # type: ignore
+                            else:
+                                can_execute = fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool["name"])  # type: ignore
+                        else:
+                            can_execute = False
                         tool_copy["canExecute"] = can_execute
                     
                     tools.append(tool_copy)
@@ -390,13 +414,11 @@ class MCPProtocol:
         
         # Check specific tool permission
         if context.user_id:
-            if not self.rbac_policy.check_permission(
-                context.user_id,
-                Resource.TOOL,
-                Action.EXECUTE,
-                tool_name
-            ):
-                raise PermissionError(f"Permission denied for tool: {tool_name}")
+            fn = getattr(self.rbac_policy, 'check_permission', None)
+            if fn:
+                permitted = await fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name) if inspect.iscoroutinefunction(fn) else fn(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name)
+                if not permitted:
+                    raise PermissionError(f"Permission denied for tool: {tool_name}")
         
         # Execute tool with circuit breaker
         try:

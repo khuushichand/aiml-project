@@ -215,6 +215,10 @@ class MemoryBackend(QueueBackend):
     async def get_task(self, task_id: str) -> Optional[Task]:
         """Get task by ID."""
         return self.tasks.get(task_id)
+
+    async def get_task_by_idempotency_key(self, idempotency_key: str) -> Optional[str]:
+        """Lookup task ID for a given idempotency key."""
+        return self.idempotency_keys.get(idempotency_key)
     
     async def get_queue_size(self, queue_name: str) -> int:
         """Get queue size."""

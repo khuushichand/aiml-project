@@ -32,7 +32,7 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
                    org_id, team_id,
                    llm_budget_day_tokens, llm_budget_month_tokens,
                    llm_budget_day_usd, llm_budget_month_usd,
-                   llm_allowed_endpoints
+                   llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
             FROM api_keys WHERE id = $1
             """,
             key_id,
@@ -46,7 +46,7 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
                    org_id, team_id,
                    llm_budget_day_tokens, llm_budget_month_tokens,
                    llm_budget_day_usd, llm_budget_month_usd,
-                   llm_allowed_endpoints
+                   llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
             FROM api_keys WHERE id = ?
             """,
             key_id,

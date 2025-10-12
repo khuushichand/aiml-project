@@ -52,9 +52,10 @@ async def test_orgs_teams_postgres(test_db_pool):
     )
 
     # Create user
+    import uuid
     await pool.execute(
-        "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES (gen_random_uuid(), $1, $2, $3, TRUE)",
-        "pgorguser", "pgorguser@example.com", "x",
+        "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES ($1, $2, $3, $4, TRUE)",
+        str(uuid.uuid4()), "pgorguser", "pgorguser@example.com", "x",
     )
     user_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pgorguser")
 
@@ -68,4 +69,3 @@ async def test_orgs_teams_postgres(test_db_pool):
     assert member['team_id'] == team['id'] and member['user_id'] == user_id
     members = await list_team_members(team_id=team['id'])
     assert any(m['user_id'] == user_id for m in members)
-
