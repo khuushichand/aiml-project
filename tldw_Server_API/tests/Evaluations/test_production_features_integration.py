@@ -1,3 +1,5 @@
+# test_production_features_integration.py
+#
 """
 Integration tests for production features:
 - Database migration
@@ -5,26 +7,23 @@ Integration tests for production features:
 - Webhook support
 - Advanced metrics
 """
-
+#
+# Imports
 import pytest
 pytestmark = pytest.mark.integration
-import asyncio
 import sqlite3
-import json
 import tempfile
 import shutil
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
-import aiohttp
 from aioresponses import aioresponses
-
-# Import test configuration
 import sys
 import os
-
+#
+# Local Imports
 from tldw_Server_API.tests.test_config import test_config
-
+#
+#######################################################################################################################
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Set up test environment
@@ -315,7 +314,7 @@ class TestUserRateLimiter:
 class TestWebhookManager:
     """Test webhook management and delivery."""
     
-    @pytest_asyncio.fixture
+    @pytest.mark.asyncio
     async def webhook_manager(self):
         """Create webhook manager with temp database."""
         temp_dir = tempfile.mkdtemp()
@@ -672,3 +671,7 @@ class TestIntegration:
 # Run tests with pytest
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+#
+# End of test_production_features_integration.py
+#######################################################################################################################
