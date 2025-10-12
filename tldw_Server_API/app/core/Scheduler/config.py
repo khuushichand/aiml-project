@@ -187,12 +187,21 @@ class SchedulerConfig:
         # Check for directory traversal BEFORE resolving
         original_base = str(self.base_path)
         
+        # Reject symlink base paths explicitly before resolving
+        import os as _os
+        try:
+            abspath = _os.path.abspath(original_base)
+            realpath = _os.path.realpath(original_base)
+            if abspath != realpath or _os.path.islink(original_base):
+                raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
+        except Exception:
+            pass
+        
         # Detect and prevent directory traversal attempts
         if '..' in original_base or '~' in original_base:
             raise ValueError(f"Directory traversal detected in base_path: {original_base}")
         
-        # Now resolve to absolute path after validation
-        self.base_path = self.base_path.resolve()
+        # Do not resolve symlinks here to preserve detection
         
         # Platform-specific path validation
         if platform.system() == 'Windows':

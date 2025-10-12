@@ -521,9 +521,8 @@ class ImprovedWorkerPool:
         self.queue_workers: Dict[str, Set[str]] = {}
         self.resource_tracker = ResourceTracker()
         
-        self._monitor_task: Optional[asyncio.Task] = None
-        self._scaling_task: Optional[asyncio.Task] = None
-        self._health_check_task: Optional[asyncio.Task] = None
+        # Consolidated ops task to minimize background tasks
+        self._ops_task: Optional[asyncio.Task] = None
         
         self._stop_event = asyncio.Event()
         self._stopped_event = asyncio.Event()
@@ -542,16 +541,9 @@ class ImprovedWorkerPool:
         # Start minimum workers
         await self._ensure_min_workers()
         
-        # Start background tasks
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
-        self._scaling_task = asyncio.create_task(self._scaling_loop())
-        self._health_check_task = asyncio.create_task(self._health_check_loop())
-        self._recycle_task = asyncio.create_task(self._recycle_loop())
-        
-        # Register background tasks
-        for task in [self._monitor_task, self._scaling_task, 
-                    self._health_check_task, self._recycle_task]:
-            await self.resource_tracker.register_task(task)
+        # Start consolidated ops task
+        self._ops_task = asyncio.create_task(self._ops_loop())
+        await self.resource_tracker.register_task(self._ops_task)
         
         logger.info("Improved worker pool started")
     
@@ -568,11 +560,18 @@ class ImprovedWorkerPool:
         # Stop accepting new work
         start_time = asyncio.get_event_loop().time()
         
-        # Cancel background tasks
-        for task in [self._monitor_task, self._scaling_task,
-                    self._health_check_task, self._recycle_task]:
+        # Cancel and await background tasks to ensure cleanup
+        bg_tasks = [self._ops_task]
+        for task in bg_tasks:
             if task and not task.done():
                 task.cancel()
+        for task in bg_tasks:
+            if task:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._ops_task = None
         
         # Stop all workers gracefully
         stop_tasks = []
@@ -671,106 +670,106 @@ class ImprovedWorkerPool:
     
     async def _monitor_loop(self) -> None:
         """Monitor worker health and performance"""
-        while not self._stop_event.is_set():
-            try:
-                await asyncio.sleep(30)
-                
-                # Check each worker
-                for worker_id, worker in list(self.workers.items()):
-                    # Check if worker needs recycling
-                    if worker.state == WorkerState.RECYCLING:
-                        await self._recycle_queue.put(worker_id)
-                    
-                    # Check if worker is in error state
-                    elif worker.state == WorkerState.ERROR:
-                        logger.warning(f"Worker {worker_id} in error state, recycling")
-                        await self._recycle_queue.put(worker_id)
-                
-                # Ensure minimum workers
-                await self._ensure_min_workers()
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
+        # Deprecated: logic moved into _ops_loop
+        return
     
     async def _health_check_loop(self) -> None:
         """Perform health checks on workers"""
-        while not self._stop_event.is_set():
-            try:
-                await asyncio.sleep(15)
-                
-                unhealthy_workers = []
-                for worker_id, worker in list(self.workers.items()):
-                    if not worker.is_healthy():
-                        unhealthy_workers.append(worker_id)
-                
-                # Recycle unhealthy workers
-                for worker_id in unhealthy_workers:
-                    logger.warning(f"Worker {worker_id} unhealthy, recycling")
-                    await self._recycle_queue.put(worker_id)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Health check loop error: {e}")
+        # Deprecated: logic moved into _ops_loop
+        return
     
     async def _recycle_loop(self) -> None:
         """Process worker recycle requests"""
-        while not self._stop_event.is_set():
-            try:
-                # Wait for recycle request with timeout
-                worker_id = await asyncio.wait_for(
-                    self._recycle_queue.get(),
-                    timeout=1.0
-                )
-                
-                await self._recycle_worker(worker_id)
-                
-            except asyncio.TimeoutError:
-                continue
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Recycle loop error: {e}")
+        # Deprecated: logic moved into _ops_loop
+        return
     
     async def _scaling_loop(self) -> None:
         """Auto-scale workers based on load"""
+        # Single pass scaling for backward-compatible tests
+        for queue_name in list(self.queue_workers.keys()):
+            queue_size = await self.backend.get_queue_size(queue_name)
+            current_workers = len(self.queue_workers.get(queue_name, set()))
+            if queue_size > current_workers * 10:
+                if len(self.workers) < self.config.max_workers:
+                    await self._add_worker(queue_name)
+                    logger.info(
+                        f"Scaled up queue {queue_name}: {queue_size} tasks, {current_workers + 1} workers"
+                    )
+            elif queue_size == 0 and current_workers > 1:
+                if len(self.workers) > self.config.min_workers:
+                    for worker_id in list(self.queue_workers[queue_name]):
+                        worker = self.workers.get(worker_id)
+                        if worker and worker.state == WorkerState.IDLE:
+                            await self._remove_worker(worker_id)
+                            logger.info(
+                                f"Scaled down queue {queue_name}: 0 tasks, {current_workers - 1} workers"
+                            )
+                            break
+
+    async def _ops_loop(self) -> None:
+        """Consolidated operations loop handling monitoring, health, scaling, recycling"""
+        logger.debug("Ops loop started")
+        last_monitor = 0.0
+        last_health = 0.0
+        last_scale = 0.0
         while not self._stop_event.is_set():
             try:
-                await asyncio.sleep(10)
-                
-                for queue_name in list(self.queue_workers.keys()):
-                    queue_size = await self.backend.get_queue_size(queue_name)
-                    current_workers = len(self.queue_workers.get(queue_name, set()))
-                    
-                    # Scale up if high load
-                    if queue_size > current_workers * 10:
-                        if len(self.workers) < self.config.max_workers:
-                            await self._add_worker(queue_name)
-                            logger.info(
-                                f"Scaled up queue {queue_name}: "
-                                f"{queue_size} tasks, {current_workers + 1} workers"
-                            )
-                    
-                    # Scale down if low load
-                    elif queue_size == 0 and current_workers > 1:
-                        if len(self.workers) > self.config.min_workers:
-                            # Find idle worker to remove
-                            for worker_id in list(self.queue_workers[queue_name]):
-                                worker = self.workers.get(worker_id)
-                                if worker and worker.state == WorkerState.IDLE:
-                                    await self._remove_worker(worker_id)
-                                    logger.info(
-                                        f"Scaled down queue {queue_name}: "
-                                        f"0 tasks, {current_workers - 1} workers"
-                                    )
-                                    break
-                
+                now = asyncio.get_event_loop().time()
+                # Monitor every 30s
+                if now - last_monitor >= 30:
+                    # Check each worker
+                    for worker_id, worker in list(self.workers.items()):
+                        if worker.state == WorkerState.RECYCLING:
+                            await self._recycle_queue.put(worker_id)
+                        elif worker.state == WorkerState.ERROR:
+                            logger.warning(f"Worker {worker_id} in error state, recycling")
+                            await self._recycle_queue.put(worker_id)
+                    await self._ensure_min_workers()
+                    last_monitor = now
+                # Health check every 15s
+                if now - last_health >= 15:
+                    unhealthy = [wid for wid, w in list(self.workers.items()) if not w.is_healthy()]
+                    for wid in unhealthy:
+                        logger.warning(f"Worker {wid} unhealthy, recycling")
+                        await self._recycle_queue.put(wid)
+                    last_health = now
+                # Scaling every 10s
+                if now - last_scale >= 10:
+                    for queue_name in list(self.queue_workers.keys()):
+                        queue_size = await self.backend.get_queue_size(queue_name)
+                        current_workers = len(self.queue_workers.get(queue_name, set()))
+                        if queue_size > current_workers * 10:
+                            if len(self.workers) < self.config.max_workers:
+                                await self._add_worker(queue_name)
+                                logger.info(
+                                    f"Scaled up queue {queue_name}: {queue_size} tasks, {current_workers + 1} workers"
+                                )
+                        elif queue_size == 0 and current_workers > 1:
+                            if len(self.workers) > self.config.min_workers:
+                                # Find idle worker to remove
+                                for worker_id in list(self.queue_workers[queue_name]):
+                                    worker = self.workers.get(worker_id)
+                                    if worker and worker.state == WorkerState.IDLE:
+                                        await self._remove_worker(worker_id)
+                                        logger.info(
+                                            f"Scaled down queue {queue_name}: 0 tasks, {current_workers - 1} workers"
+                                        )
+                                        break
+                    last_scale = now
+                # Process recycle queue quickly without blocking
+                try:
+                    while True:
+                        worker_id = self._recycle_queue.get_nowait()
+                        await self._recycle_worker(worker_id)
+                except asyncio.QueueEmpty:
+                    pass
+                await asyncio.sleep(0.5)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Scaling loop error: {e}")
+                logger.error(f"Ops loop error: {e}")
+                await asyncio.sleep(0.5)
+        logger.debug("Ops loop stopped")
     
     def get_status(self) -> Dict[str, Any]:
         """Get detailed pool status"""

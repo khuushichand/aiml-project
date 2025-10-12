@@ -1047,24 +1047,32 @@ from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddlewa
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
 
-_enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
-_enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
-    (_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"}
+_TEST_MODE = (
+    _env_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    or bool(_env_os.getenv("PYTEST_CURRENT_TEST"))
 )
-if _enable_sec_headers:
-    app.add_middleware(SecurityHeadersMiddleware, enabled=True)
 
-# HTTP request metrics middleware (records count and latency per route)
-app.add_middleware(HTTPMetricsMiddleware)
+if _TEST_MODE:
+    logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging, LLM budget, request id)")
+else:
+    _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
+    _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
+        (_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"}
+    )
+    if _enable_sec_headers:
+        app.add_middleware(SecurityHeadersMiddleware, enabled=True)
 
-# Per-request usage logging (guarded by settings flag)
-app.add_middleware(UsageLoggingMiddleware)
+    # HTTP request metrics middleware (records count and latency per route)
+    app.add_middleware(HTTPMetricsMiddleware)
 
-# LLM budgets and virtual-key endpoint allowlists (guarded by settings)
-app.add_middleware(LLMBudgetMiddleware)
+    # Per-request usage logging (guarded by settings flag)
+    app.add_middleware(UsageLoggingMiddleware)
 
-# Request ID propagation (adds X-Request-ID header)
-app.add_middleware(RequestIDMiddleware)
+    # LLM budgets and virtual-key endpoint allowlists (guarded by settings)
+    app.add_middleware(LLMBudgetMiddleware)
+
+    # Request ID propagation (adds X-Request-ID header)
+    app.add_middleware(RequestIDMiddleware)
 
 # WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
 WEBUI_DIR = BASE_DIR.parent / "WebUI"

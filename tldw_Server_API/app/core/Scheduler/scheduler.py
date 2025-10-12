@@ -207,21 +207,26 @@ class Scheduler:
                 raise ValueError(f"Payload validation failed: {error}")
         
         # Security validation
-        # 1. Validate handler is registered (prevents arbitrary code execution)
-        if handler not in self.registry:
-            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
-            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
-        
-        # 2. Validate handler name format (prevent injection attacks)
+        # 1. Validate handler name format (prevent injection attacks)
         if not handler.replace('_', '').replace('-', '').isalnum():
             logger.error(f"Invalid handler name format: {handler}")
             raise ValueError(f"Handler name contains invalid characters: {handler}")
+        
+        # 2. Validate handler is registered (prevents arbitrary code execution)
+        if handler not in self.registry:
+            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
+            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
         
         # 3. Validate and sanitize payload (prevent resource exhaustion and injection attacks)
         max_payload_size = self.config.max_payload_size if hasattr(self.config, 'max_payload_size') else 1048576  # 1MB default
         if payload:
             import json
             
+            # Hard reject obvious code injection attempts
+            if self._has_code_injection(payload):
+                logger.warning("Code injection patterns detected in payload")
+                raise ValueError("Payload contains potentially malicious content")
+
             # Sanitize payload - remove any potentially dangerous content
             payload = self._sanitize_payload(payload)
             
@@ -237,9 +242,9 @@ class Scheduler:
                 logger.error(f"Payload size {payload_size} exceeds maximum {max_payload_size}")
                 raise ValueError(f"Payload size {payload_size} bytes exceeds maximum allowed size of {max_payload_size} bytes")
             
-            # Additional content validation
+            # Additional content validation: after sanitization, reject only if still suspicious
             if self._contains_suspicious_content(payload_json):
-                logger.warning(f"Suspicious content detected in payload for handler {handler}")
+                logger.warning(f"Suspicious content still present after sanitization for handler {handler}")
                 raise ValueError("Payload contains potentially malicious content")
         
         # 4. Validate queue name
@@ -290,7 +295,16 @@ class Scheduler:
         )
 
         # Add to write buffer
-        task_id = await self.write_buffer.add(task)
+        add_result = self.write_buffer.add(task)
+        try:
+            import inspect
+            if inspect.isawaitable(add_result):
+                task_id = await add_result
+            else:
+                task_id = add_result
+        except TypeError:
+            # Fallback: not awaitable
+            task_id = add_result
 
         # Dependency validation (moved after adding to buffer)
         if depends_on and self.dependency_service:
@@ -739,6 +753,35 @@ class Scheduler:
                 return True
         
         return False
+
+    def _has_code_injection(self, obj: Any) -> bool:
+        """
+        Detect code-execution patterns in nested payload structures.
+        This is stricter than general suspicious content detection and is used
+        to hard-reject clearly malicious submissions.
+        """
+        patterns = [
+            '__import__(', 'eval(', 'exec(', 'compile(', 'os.system(', 'subprocess.Popen(', 'subprocess.call(', 'sh -c', 'bash -c'
+        ]
+        try:
+            if isinstance(obj, dict):
+                # Reject certain critical keys outright
+                for k, v in obj.items():
+                    lk = str(k).lower()
+                    if 'eval' in lk or 'exec' in lk:
+                        return True
+                    if self._has_code_injection(v):
+                        return True
+                return False
+            elif isinstance(obj, list):
+                return any(self._has_code_injection(x) for x in obj)
+            elif isinstance(obj, str):
+                s = obj.lower()
+                return any(p in s for p in (p.lower() for p in patterns))
+            else:
+                return False
+        except Exception:
+            return True
 
 
 # Convenience functions

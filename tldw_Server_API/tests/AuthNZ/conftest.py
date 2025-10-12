@@ -39,6 +39,27 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
 # Import TestClient for isolated environment
 from fastapi.testclient import TestClient
 
+# Internal flag to ensure we prepare a default session-wide Postgres DB once
+_SESSION_DB_ENSURED = False
+
+
+class _StubAuditService:
+    """No-op audit service used in TEST_MODE to avoid background tasks."""
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def initialize(self) -> None:
+        return None
+
+    async def log_event(self, *args, **kwargs) -> None:
+        return None
+
+    async def log_login(self, *args, **kwargs) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
 
 # Mark all tests in this package as integration tests (require PostgreSQL)
 pytestmark = pytest.mark.integration
@@ -55,6 +76,41 @@ def event_loop():
 @pytest_asyncio.fixture(autouse=True)
 async def reset_singletons():
     """Auto-reset all singletons before and after each test for clean state."""
+    global _SESSION_DB_ENSURED
+    # Ensure a default Postgres test database exists for tests that rely on the
+    # global pool without using the isolated fixture. Only do this once per session.
+    if not _SESSION_DB_ENSURED:
+        try:
+            import asyncpg as _apg
+            admin_conn = await _apg.connect(
+                host=TEST_DB_HOST,
+                port=TEST_DB_PORT,
+                user=TEST_DB_USER,
+                password=TEST_DB_PASSWORD,
+                database="postgres",
+            )
+            try:
+                exists = await admin_conn.fetchval(
+                    "SELECT 1 FROM pg_database WHERE datname = $1",
+                    TEST_DB_NAME,
+                )
+                if not exists:
+                    await admin_conn.execute(f"CREATE DATABASE {TEST_DB_NAME}")
+            finally:
+                await admin_conn.close()
+            # Provide a default DATABASE_URL so modules using get_db_pool have a target
+            os.environ["AUTH_MODE"] = os.environ.get("AUTH_MODE", "multi_user")
+            os.environ["DATABASE_URL"] = os.environ.get(
+                "DATABASE_URL",
+                f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}",
+            )
+            os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+            os.environ.setdefault("TEST_MODE", "true")
+            _SESSION_DB_ENSURED = True
+        except Exception as _e:
+            # Do not fail tests if local Postgres is not available here; other
+            # fixtures may create isolated DBs per test.
+            logger.debug(f"AuthNZ conftest: default DB ensure skipped/failed: {_e}")
     # Reset before test
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
@@ -78,6 +134,37 @@ async def reset_singletons():
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()
+        # In TEST_MODE, stub audit service to avoid background task group errors
+        try:
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+
+            async def _override_audit_dep(*_args, **_kwargs):
+                return _StubAuditService()
+
+            _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
+        except Exception:
+            # If import fails here, tests that don't hit audit won't care
+            pass
+
+        # Also, in TEST_MODE, strip non-essential middlewares that may perform
+        # background DB work after response (to avoid TaskGroup noise in full runs)
+        try:
+            from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware as _HTTPMM
+            from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware as _ULM
+            from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware as _LLMB
+            from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware as _SHM
+            from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware as _RID
+            kept = []
+            for m in getattr(_app, 'user_middleware', []):
+                if getattr(m, 'cls', None) in (_HTTPMM, _ULM, _LLMB, _SHM, _RID):
+                    continue
+                kept.append(m)
+            if len(kept) != len(getattr(_app, 'user_middleware', [])):
+                _app.user_middleware = kept
+                # Rebuild the Starlette middleware stack
+                _app.middleware_stack = _app.build_middleware_stack()
+        except Exception:
+            pass
     except Exception:
         pass
     
