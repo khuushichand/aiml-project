@@ -1281,8 +1281,10 @@ async def api_metrics():
 # Router for health monitoring endpoints (NEW)
 from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
 from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
+from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
 app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
 app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
+app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
 
 # Router for authentication endpoints (NEW)
 app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])

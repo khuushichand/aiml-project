@@ -157,6 +157,7 @@ from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 #######################################################################################################################
 #
@@ -623,6 +624,22 @@ async def create_chat_completion(
         eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
 
         async def _moderate_text_in_place(text: str) -> str:
+            # Topic monitoring (non-blocking): emit alerts if configured
+            try:
+                try:
+                    mon = get_topic_monitoring_service()
+                except Exception:
+                    mon = None
+                if mon is not None and text:
+                    mon.evaluate_and_alert(
+                        user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                        text=text,
+                        source="chat.input",
+                        scope_type="user",
+                        scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                    )
+            except Exception as _e:
+                logger.debug(f"Topic monitoring (input) skipped: {_e}")
             if not eff_policy.enabled or not eff_policy.input_enabled:
                 return text
             resolved_action = None
@@ -1257,6 +1274,22 @@ async def create_chat_completion(
                     stream_redact_logged = False
 
                     def _out_transform(s: str) -> str:
+                        # Topic monitoring (streaming output): non-blocking, deduped in service
+                        try:
+                            try:
+                                mon = get_topic_monitoring_service()
+                            except Exception:
+                                mon = None
+                            if mon is not None and s:
+                                mon.evaluate_and_alert(
+                                    user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                                    text=s,
+                                    source="chat.output",
+                                    scope_type="user",
+                                    scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                                )
+                        except Exception as _e:
+                            logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
                         if not eff_policy.enabled or not eff_policy.output_enabled:
                             return s
                         # Prefer per-pattern action if service supports it
@@ -1574,6 +1607,22 @@ async def create_chat_completion(
                         if flagged:
                             resolved_action = eff_policy.output_action
                             redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == 'redact' else None
+                    # Topic monitoring (non-streaming final output)
+                    try:
+                        try:
+                            mon3 = get_topic_monitoring_service()
+                        except Exception:
+                            mon3 = None
+                        if mon3 is not None and content_to_save:
+                            mon3.evaluate_and_alert(
+                                user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                                text=content_to_save,
+                                source="chat.output",
+                                scope_type="user",
+                                scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                            )
+                    except Exception as _e:
+                        logger.debug(f"Topic monitoring (final output) skipped: {_e}")
                     if resolved_action == 'block':
                         logger.info(f"Output moderation block (user={req_user_id or client_id}): pattern={sample}")
                         try:

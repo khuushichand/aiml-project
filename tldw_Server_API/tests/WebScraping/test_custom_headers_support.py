@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import ASGITransport, AsyncClient
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
     CookieManager,
@@ -99,8 +100,9 @@ async def test_process_web_scraping_endpoint_receives_custom_headers():
             new=AsyncMock(return_value=mocked_result),
         ) as patched_process:
             mock_process = patched_process
+            headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
+                transport=ASGITransport(app=app), base_url="http://test", headers=headers
             ) as client:
                 response = await client.post(
                     "/api/v1/media/process-web-scraping",
