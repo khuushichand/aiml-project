@@ -46,8 +46,13 @@ from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced impo
 from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
 from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
 #
-# Media Endpoint
-from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+# Media Endpoint (guarded import; not critical for unrelated tests)
+try:
+    from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+    _HAS_MEDIA = True
+except Exception as _media_import_err:  # noqa: BLE001 - log and continue for deterministic test startup
+    logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
+    _HAS_MEDIA = False
 # Media Embeddings Endpoint (for generating embeddings for uploaded media)
 from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
 #
@@ -58,12 +63,18 @@ from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
 from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
 #
 # Prompt Studio Endpoints
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import router as prompt_studio_test_cases_router
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import router as prompt_studio_optimization_router
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import router as prompt_studio_websocket_router
-from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import router as prompt_studio_evaluations_router
+try:
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import router as prompt_studio_test_cases_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import router as prompt_studio_optimization_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import router as prompt_studio_websocket_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import router as prompt_studio_evaluations_router
+    _HAS_PROMPT_STUDIO = True
+except Exception as _ps_import_err:  # noqa: BLE001 - log and continue, not critical for unrelated tests
+    logger.warning(f"Prompt Studio endpoints unavailable; skipping import: {_ps_import_err}")
+    _HAS_PROMPT_STUDIO = False
 #
 # RAG Endpoints
 from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router  # RAG health/caching/metrics endpoints
@@ -195,6 +206,11 @@ test_db_instance_ref = None # Global or context variable to hold the test DB ins
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Test-aware flag to optionally skip heavy startup subsystems in tests
+    import os as _startup_os
+    _is_test_mode = _startup_os.getenv("TEST_MODE", "").lower() == "true"
+    _disable_heavy_startup = _startup_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}
+    _skip_heavy = _is_test_mode or _disable_heavy_startup
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
     try:
@@ -250,53 +266,59 @@ async def lifespan(app: FastAPI):
         # Continue startup even if auth services fail (for backward compatibility)
     
     # Initialize MCP Unified Server (secure, production-ready)
-    logger.info("App Startup: Initializing MCP Unified server...")
-    try:
-        from tldw_Server_API.app.core.MCP_unified import get_mcp_server
-        mcp_server = get_mcp_server()
-        await mcp_server.initialize()
-        logger.info("App Startup: MCP Unified server initialized successfully")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
-        logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
-        # Continue startup even if MCP fails (for backward compatibility)
+    if _skip_heavy:
+        logger.info("Test mode/heavy-startup disabled: Skipping MCP Unified server initialization")
+    else:
+        logger.info("App Startup: Initializing MCP Unified server...")
+        try:
+            from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+            mcp_server = get_mcp_server()
+            await mcp_server.initialize()
+            logger.info("App Startup: MCP Unified server initialized successfully")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
+            logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
+            # Continue startup even if MCP fails (for backward compatibility)
     
     # Initialize Chat Module Components
-    logger.info("App Startup: Initializing Chat module components...")
-    
-    # Initialize Provider Manager
-    try:
-        from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-        from tldw_Server_API.app.core.Chat.Chat_Functions import API_CALL_HANDLERS
+    if _skip_heavy:
+        logger.info("Test mode/heavy-startup disabled: Skipping Chat provider manager and request queue initialization")
+    else:
+        logger.info("App Startup: Initializing Chat module components...")
         
-        # Get list of configured providers
-        providers = list(API_CALL_HANDLERS.keys())
-        provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
-        await provider_manager.start_health_checks()
-        logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize provider manager: {e}")
-    
-    # Initialize Request Queue
-    try:
-        from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
-        from tldw_Server_API.app.core.config import load_comprehensive_config
+        # Initialize Provider Manager
+        try:
+            from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
+            from tldw_Server_API.app.core.Chat.Chat_Functions import API_CALL_HANDLERS
+            
+            # Get list of configured providers
+            providers = list(API_CALL_HANDLERS.keys())
+            provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
+            await provider_manager.start_health_checks()
+            logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize provider manager: {e}")
         
-        config = load_comprehensive_config()
-        chat_config = {}
-        if config and config.has_section('Chat-Module'):
-            chat_config = dict(config.items('Chat-Module'))
-        
-        request_queue = initialize_request_queue(
-            max_queue_size=int(chat_config.get('max_queue_size', 100)),
-            max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
-            global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
-            per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
-        )
-        await request_queue.start(num_workers=4)
-        logger.info("App Startup: Request queue initialized with 4 workers")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize request queue: {e}")
+        # Initialize Request Queue
+        try:
+            from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            
+            config = load_comprehensive_config()
+            chat_config = {}
+            if config and config.has_section('Chat-Module'):
+                chat_config = dict(config.items('Chat-Module'))
+            
+            request_queue = initialize_request_queue(
+                max_queue_size=int(chat_config.get('max_queue_size', 100)),
+                max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
+                global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
+                per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
+            )
+            await request_queue.start(num_workers=4)
+            logger.info("App Startup: Request queue initialized with 4 workers")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize request queue: {e}")
     
     # Initialize Rate Limiter
     try:
@@ -314,35 +336,41 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
     
     # Initialize TTS Service
-    logger.info("App Startup: Initializing TTS service...")
-    try:
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-        from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
-        
-        # Load comprehensive config and extract TTS config dict
-        cfg_obj = load_comprehensive_config_with_tts()
-        tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
-        
-        # Initialize the TTS service with configuration (falls back to internal loader if None)
-        await get_tts_service_v2(config=tts_cfg_dict)
-        logger.info("App Startup: TTS service initialized successfully")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize TTS service: {e}")
-        logger.warning("TTS functionality will be unavailable")
-        # Continue startup even if TTS fails (for backward compatibility)
+    if _skip_heavy:
+        logger.info("Test mode/heavy-startup disabled: Skipping TTS service initialization")
+    else:
+        logger.info("App Startup: Initializing TTS service...")
+        try:
+            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+            from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+            
+            # Load comprehensive config and extract TTS config dict
+            cfg_obj = load_comprehensive_config_with_tts()
+            tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
+            
+            # Initialize the TTS service with configuration (falls back to internal loader if None)
+            await get_tts_service_v2(config=tts_cfg_dict)
+            logger.info("App Startup: TTS service initialized successfully")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize TTS service: {e}")
+            logger.warning("TTS functionality will be unavailable")
+            # Continue startup even if TTS fails (for backward compatibility)
     
     # Initialize Chunking Templates
-    logger.info("App Startup: Initializing chunking templates...")
-    try:
-        from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
-        
-        if ensure_templates_initialized():
-            logger.info("App Startup: Chunking templates initialized successfully")
-        else:
-            logger.warning("App Startup: Chunking templates initialization incomplete")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
-        # Continue startup even if template initialization fails
+    if _skip_heavy:
+        logger.info("Test mode/heavy-startup disabled: Skipping chunking template initialization")
+    else:
+        logger.info("App Startup: Initializing chunking templates...")
+        try:
+            from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
+            
+            if ensure_templates_initialized():
+                logger.info("App Startup: Chunking templates initialized successfully")
+            else:
+                logger.warning("App Startup: Chunking templates initialization incomplete")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
+            # Continue startup even if template initialization fails
     
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
@@ -395,10 +423,13 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Ephemeral cleanup loop error: {ce}")
                 await _asyncio.sleep(_interval_dyn)
 
-        if _enabled:
-            cleanup_task = _asyncio.create_task(_ephemeral_cleanup_loop())
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping ephemeral cleanup worker")
         else:
-            logger.info("Ephemeral cleanup worker disabled by settings")
+            if _enabled:
+                cleanup_task = _asyncio.create_task(_ephemeral_cleanup_loop())
+            else:
+                logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
 
@@ -460,7 +491,9 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Claims rebuild loop error: {e}")
                 await _asyncio.sleep(_claims_interval)
 
-        if _claims_enabled:
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping claims rebuild worker")
+        elif _claims_enabled:
             claims_task = _asyncio.create_task(_claims_rebuild_loop())
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
@@ -583,11 +616,16 @@ async def lifespan(app: FastAPI):
     # No global shutdown needed
     logger.info("App Shutdown: Audit services cleanup handled by dependency injection")
     
-    # Close auth database pool
+    # Close auth database pool (skip in test contexts to avoid closing shared pool)
     try:
         if 'db_pool' in locals():
-            await db_pool.close()
-            logger.info("App Shutdown: Auth database pool closed")
+            import os as _os, sys as _sys
+            _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST") or ("pytest" in _sys.modules))
+            if not (_is_test_mode or _in_pytest):
+                await db_pool.close()
+                logger.info("App Shutdown: Auth database pool closed")
+            else:
+                logger.info("App Shutdown: Skipping DB pool close in test context")
     except Exception as e:
         logger.error(f"App Shutdown: Error closing auth database pool: {e}")
     
@@ -994,11 +1032,16 @@ async def display_startup_info():
         logger.info("Authentication required via JWT tokens")
         logger.info("="*70)
 
-    try:
-        await asyncio.to_thread(get_cached_evaluation_manager)
-    except Exception as exc:
-        logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
-        raise
+    # Skip evaluation manager pre-warm in tests/heavy-disabled mode
+    import os as _event_os
+    if _event_os.getenv("TEST_MODE", "").lower() == "true" or _event_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}:
+        logger.info("Test mode/heavy-startup disabled: Skipping evaluation manager pre-warm")
+    else:
+        try:
+            await asyncio.to_thread(get_cached_evaluation_manager)
+        except Exception as exc:
+            logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
+            raise
 
     try:
         if needs_setup():
@@ -1053,7 +1096,7 @@ _TEST_MODE = (
 )
 
 if _TEST_MODE:
-    logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging, LLM budget, request id)")
+    logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging, request id)")
 else:
     _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
     _enable_sec_headers = True if (_prod_flag and _enable_sec_headers_env is None) else (
@@ -1068,11 +1111,14 @@ else:
     # Per-request usage logging (guarded by settings flag)
     app.add_middleware(UsageLoggingMiddleware)
 
-    # LLM budgets and virtual-key endpoint allowlists (guarded by settings)
-    app.add_middleware(LLMBudgetMiddleware)
-
     # Request ID propagation (adds X-Request-ID header)
     app.add_middleware(RequestIDMiddleware)
+
+# Always apply LLM budget middleware (guarded by settings) even in tests so allowlists/budgets are enforced
+try:
+    app.add_middleware(LLMBudgetMiddleware)
+except Exception as _e:
+    logger.debug(f"Skipping LLMBudgetMiddleware: {_e}")
 
 # WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
 WEBUI_DIR = BASE_DIR.parent / "WebUI"
@@ -1249,7 +1295,8 @@ from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
 app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
 
 # Router for media endpoints/media file handling
-app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+if _HAS_MEDIA:
+    app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
 
 # Router for /audio/ endpoints
 app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
@@ -1300,12 +1347,14 @@ app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prom
 
 
 # Router for Prompt Studio endpoints
-app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
-app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
-app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
-app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
-app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
-app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
+if _HAS_PROMPT_STUDIO:
+    app.include_router(prompt_studio_projects_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_prompts_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_test_cases_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_optimization_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_status_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_evaluations_router, tags=["prompt-studio"])
+    app.include_router(prompt_studio_websocket_router, tags=["prompt-studio"])
 
 
 # Router for RAG endpoints

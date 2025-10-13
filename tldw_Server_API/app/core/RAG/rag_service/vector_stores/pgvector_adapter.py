@@ -210,8 +210,12 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     # Adapter-specific helper: list vectors with pagination
     def _build_where_from_filter(self, filt: Dict[str, Any]) -> Tuple[str, List[Any]]:
-        clauses: List[str] = []
-        params: List[Any] = []
+        # Prefer JSON containment for simple equality maps
+        if isinstance(filt, dict) and all(not isinstance(v, dict) for v in filt.values()):
+            import json as _json
+            return ' WHERE metadata @> %s', [_json.dumps(filt)]
+
+        # Fallback: build explicit predicates (supports $and/$or and operators)
         def handle_node(node) -> Tuple[List[str], List[Any]]:
             if not isinstance(node, dict):
                 return [], []
@@ -221,7 +225,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 if k == '$and' and isinstance(v, list):
                     sub_parts = [handle_node(x) for x in v]
                     sub_sql = [f"({ ' AND '.join(p[0]) })" for p in sub_parts if p[0]]
-                    sub_params = []
+                    sub_params: List[Any] = []
                     for p in sub_parts:
                         sub_params.extend(p[1])
                     if sub_sql:
@@ -230,41 +234,40 @@ class PGVectorAdapter(VectorStoreAdapter):
                 elif k == '$or' and isinstance(v, list):
                     sub_parts = [handle_node(x) for x in v]
                     sub_sql = [f"({ ' AND '.join(p[0]) })" for p in sub_parts if p[0]]
-                    sub_params = []
+                    sub_params: List[Any] = []
                     for p in sub_parts:
                         sub_params.extend(p[1])
                     if sub_sql:
                         local_clauses.append(' OR '.join(sub_sql))
                         local_params.extend(sub_params)
                 else:
-                    # Field condition
                     field = str(k)
                     if isinstance(v, dict):
                         for op, val in v.items():
                             if op in ('$eq', 'eq'):
-                                local_clauses.append(f"(metadata->>%s) = %s")
+                                local_clauses.append("(metadata->>%s) = %s")
                                 local_params.extend([field, str(val)])
                             elif op in ('$neq', 'neq'):
-                                local_clauses.append(f"(metadata->>%s) <> %s")
+                                local_clauses.append("(metadata->>%s) <> %s")
                                 local_params.extend([field, str(val)])
                             elif op in ('$in', 'in') and isinstance(val, (list, tuple)) and val:
-                                local_clauses.append(f"(metadata->>%s) IN %s")
+                                local_clauses.append("(metadata->>%s) IN %s")
                                 local_params.extend([field, tuple(map(str, val))])
                             elif op in ('$gt', '$gte', '$lt', '$lte'):
                                 cmp = {'$gt': '>', '$gte': '>=', '$lt': '<', '$lte': '<='}[op]
                                 local_clauses.append(f"(metadata->>%s)::numeric {cmp} %s")
                                 local_params.extend([field, float(val)])
                             else:
-                                # Fallback equality
-                                local_clauses.append(f"(metadata->>%s) = %s")
+                                local_clauses.append("(metadata->>%s) = %s")
                                 local_params.extend([field, str(val)])
                     else:
-                        local_clauses.append(f"(metadata->>%s) = %s")
+                        local_clauses.append("(metadata->>%s) = %s")
                         local_params.extend([field, str(v)])
             return local_clauses, local_params
-        c, p = handle_node(filt)
-        if c:
-            return ' WHERE ' + ' AND '.join(c), p
+
+        clauses, params = handle_node(filt)
+        if clauses:
+            return ' WHERE ' + ' AND '.join(clauses), params
         return '', []
 
     async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None, order_by: Optional[str] = None, order_dir: str = 'asc') -> Dict[str, Any]:

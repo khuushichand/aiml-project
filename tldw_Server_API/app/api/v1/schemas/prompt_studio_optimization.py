@@ -34,6 +34,8 @@ class OptimizationConfig(BaseModel):
     techniques_to_try: List[str] = Field(default=["cot", "few_shot"], description="Prompt techniques to try")
     models_to_test: Optional[List[str]] = Field(None, description="Models to test during optimization")
     budget_limit: Optional[float] = Field(None, ge=0.0, description="Maximum budget in dollars")
+    # Strategy-specific knobs (optional, forward-compatible)
+    strategy_params: Dict[str, Any] = Field(default_factory=dict, description="Additional strategy-specific parameters (e.g., beam_width, mutation_rate)")
     
     @field_validator('temperature_range')
     @classmethod

@@ -10,6 +10,7 @@ Integration tests for production features:
 #
 # Imports
 import pytest
+import pytest_asyncio
 pytestmark = pytest.mark.integration
 import sqlite3
 import tempfile
@@ -311,20 +312,15 @@ class TestUserRateLimiter:
         assert allowed is False
 
 
+@pytest_asyncio.fixture
+async def webhook_manager(temp_db_path):
+    """Async fixture: provides a WebhookManager bound to the temp DB schema."""
+    manager = WebhookManager(str(temp_db_path))
+    yield manager
+
+
 class TestWebhookManager:
     """Test webhook management and delivery."""
-    
-    @pytest.mark.asyncio
-    async def webhook_manager(self):
-        """Create webhook manager with temp database."""
-        temp_dir = tempfile.mkdtemp()
-        db_path = Path(temp_dir) / "test_webhooks.db"
-        
-        manager = WebhookManager(str(db_path))
-        yield manager
-        
-        # Cleanup
-        shutil.rmtree(temp_dir)
     
     @pytest.mark.asyncio
     async def test_webhook_registration(self, webhook_manager):

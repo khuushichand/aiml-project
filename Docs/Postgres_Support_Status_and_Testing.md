@@ -79,12 +79,24 @@ pytest -q \
 Expected outcome (current snapshot): 22 passed, 2 skipped.
 
 Notes:
-- The Prompt Studio suites parameterize the backend; providing the Postgres env vars turns on the Postgres variant.
-- The heavy optimization suite supports additional env tuning:
+- Prompt Studio dual-backend suites parameterize the backend; providing the Postgres env vars turns on the Postgres variant.
+- Heavy optimization suite (slow): now marked `@pytest.mark.slow` and runs against a single backend per run. Select with:
+  - `TLDW_PS_BACKEND=sqlite|postgres` (default `sqlite`)
+  - `pytest -m slow tldw_Server_API/tests/prompt_studio/integration/test_optimizations_dual_backend_heavy.py`
+- Heavy optimization env tuning:
   - `TLDW_PS_STRESS=1` enables larger datasets/iterations.
   - `TLDW_PS_TC_COUNT` (default 250; stress 1000) controls test case volume.
   - `TLDW_PS_ITERATIONS` (default 5; stress 10) controls iteration count.
   - `TLDW_PS_OPT_COUNT` (default 3; stress 8) controls concurrent optimizations.
+- CI/PG control:
+  - `TLDW_TEST_POSTGRES_REQUIRED=1` makes tests fail fast if Postgres is unreachable (instead of skip).
+- SQLite mode control (Prompt Studio tests):
+  - `TLDW_PS_SQLITE_WAL=1` opts into WAL mode for per-test SQLite DBs to mimic prod; default is `DELETE` to reduce file churn in CI.
+- Faster, prod-close test startup:
+  - The API app respects `TEST_MODE=true` and/or `DISABLE_HEAVY_STARTUP=1` to skip unrelated heavy subsystems (MCP, TTS, chat workers, background loops) during tests. Prompt Studio behavior remains unchanged.
+- Job queue leasing:
+  - `TLDW_PS_JOB_LEASE_SECONDS` controls the lease window for processing jobs (default `60`). Jobs with expired leases are reclaimed on next acquire.
+  - `TLDW_PS_HEARTBEAT_SECONDS` optionally sets the heartbeat interval for renewing leases (default is lease/2 capped at 30s).
 - Workflows and migration CLI tests require the Postgres container to be running and reachable via env vars.
 
 ## Run the Migration CLI Against Staging Databases
@@ -162,6 +174,12 @@ export TLDW_CONTENT_PG_PASSWORD=TestPassword123!
 
 export DISABLE_CORS=1                        # optional
 export TLDW_SETUP_ALLOW_REMOTE=1             # optional (be cautious)
+
+# Prompt Studio test controls
+export TLDW_TEST_POSTGRES_REQUIRED=1         # fail fast if PG unreachable
+export TLDW_PS_SQLITE_WAL=1                  # opt-in: use WAL for per-test SQLite
+export DISABLE_HEAVY_STARTUP=1               # skip MCP/TTS/chat workers in tests
+export TLDW_PS_BACKEND=sqlite                # heavy suite backend: sqlite|postgres
 ```
 
 ## Troubleshooting

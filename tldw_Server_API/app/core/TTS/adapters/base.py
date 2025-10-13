@@ -86,11 +86,22 @@ class TTSCapabilities:
 # Backward-compatibility for tests expecting VoiceSettings
 @dataclass
 class VoiceSettings:
-    id: str
-    name: str
+    """Voice settings and metadata (adapter-agnostic).
+
+    Supports both simple metadata (id/name) and provider-specific tuning
+    such as ElevenLabs' voice settings.
+    """
+    # Optional metadata
+    id: Optional[str] = None
+    name: Optional[str] = None
     language: str = "en"
     gender: Optional[str] = None
-    style: Optional[str] = None
+    # Style can be numeric intensity for some providers
+    style: Optional[float] = None
+    # ElevenLabs tuning fields (optional)
+    stability: Optional[float] = None
+    similarity_boost: Optional[float] = None
+    use_speaker_boost: Optional[bool] = None
 
 @dataclass
 class TTSRequest:
@@ -108,6 +119,9 @@ class TTSRequest:
     voice_reference: Optional[bytes] = None  # For voice cloning
     ssml: bool = False
     stream: bool = True
+    # Optional provider/model hints for adapter selection
+    provider: Optional[str] = None
+    model: Optional[str] = None
     # Multi-speaker dialogue support
     speakers: Optional[Dict[str, str]] = None  # Speaker ID to voice mapping
     
@@ -119,22 +133,76 @@ class TTSRequest:
     top_p: Optional[float] = None  # 0.1-1.0, nucleus sampling
     attention_type: Optional[str] = None  # auto, sdpa, flash_attention_2, eager
     
+    # Structured voice settings (e.g., ElevenLabs)
+    voice_settings: Optional[VoiceSettings] = None
     # Additional provider-specific parameters
     extra_params: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Clamp speed into a broadly accepted range
+        try:
+            if self.speed is not None:
+                if self.speed < 0.25:
+                    self.speed = 0.25
+                elif self.speed > 4.0:
+                    self.speed = 4.0
+        except Exception:
+            pass
+        # Coerce provider/model to lowercase strings if present
+        try:
+            if isinstance(self.provider, str):
+                self.provider = self.provider.lower()
+            if isinstance(self.model, str):
+                self.model = self.model.lower()
+        except Exception:
+            pass
+        # If voice_settings arrives as a plain dict (from round-trip), coerce to VoiceSettings
+        try:
+            if isinstance(self.voice_settings, dict):
+                self.voice_settings = VoiceSettings(**self.voice_settings)
+        except Exception:
+            # If coercion fails, leave as-is; validation layer may catch it later
+            pass
+
+    def dict(self) -> Dict[str, Any]:
+        """Return a dictionary representation (compat with tests)."""
+        from dataclasses import asdict
+        return asdict(self)
 
 @dataclass
 class TTSResponse:
     """Response from TTS generation"""
+    # Support both legacy 'audio_data' and newer 'audio_content' naming.
     audio_data: Optional[bytes] = None
+    audio_content: Optional[bytes] = None
     audio_stream: Optional[AsyncGenerator[bytes, None]] = None
     format: AudioFormat = AudioFormat.MP3
     sample_rate: int = 24000
     channels: int = 1
+    # Support both 'duration' and 'duration_seconds' naming
+    duration: Optional[float] = None
     duration_seconds: Optional[float] = None
     text_processed: Optional[str] = None
     voice_used: Optional[str] = None
     provider: Optional[str] = None
+    model: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Keep audio_data and audio_content in sync for compatibility
+        if self.audio_content is None and self.audio_data is not None:
+            self.audio_content = self.audio_data
+        elif self.audio_data is None and self.audio_content is not None:
+            self.audio_data = self.audio_content
+        # Keep duration aliases in sync
+        if self.duration_seconds is None and self.duration is not None:
+            self.duration_seconds = self.duration
+        elif self.duration is None and self.duration_seconds is not None:
+            self.duration = self.duration_seconds
+
+    def dict(self) -> Dict[str, Any]:
+        from dataclasses import asdict
+        return asdict(self)
 
 
 class TTSAdapter(ABC):

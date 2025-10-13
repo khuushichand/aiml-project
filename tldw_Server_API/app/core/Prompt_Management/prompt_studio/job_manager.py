@@ -3,6 +3,7 @@
 
 import json
 import asyncio
+import time
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
 from loguru import logger
@@ -10,6 +11,10 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError
 )
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+    prompt_studio_metrics,
+)
+import os
 
 ########################################################################################################################
 # Job Types and Status
@@ -44,6 +49,7 @@ class JobManager:
         self._job_handlers: Dict[JobType, Callable] = {}
         self._is_processing = False
         self._processing_task = None
+        self._metrics = prompt_studio_metrics
     
     ####################################################################################################################
     # Job Creation and Management
@@ -76,6 +82,10 @@ class JobManager:
                 client_id=self.client_id,
             )
             logger.info(f"Created {job_type} job {job.get('id')} for entity {entity_id}")
+            try:
+                self._refresh_gauges_for_type(job_type.value)
+            except Exception:
+                pass
             return self._normalize_job(job)
         except DatabaseError:
             raise
@@ -196,7 +206,14 @@ class JobManager:
             Next job or None
         """
         job = self.db.acquire_next_job()
-        return self._normalize_job(job)
+        normalized = self._normalize_job(job)
+        if normalized:
+            try:
+                jt = str(normalized.get("job_type"))
+                self._refresh_gauges_for_type(jt)
+            except Exception:
+                pass
+        return normalized
     
     def retry_job(self, job_id: int) -> bool:
         """
@@ -222,6 +239,16 @@ class JobManager:
             logger.info(
                 f"Scheduled retry for job {job_id} (attempt {job['retry_count'] + 1})"
             )
+            try:
+                # Derive job type for metrics if possible
+                j = self.get_job(job_id)
+                jt = str(j.get("job_type")) if j else ""
+                self._metrics.metrics_manager.increment(
+                    "prompt_studio.jobs.retries_total",
+                    labels={"job_type": jt},
+                )
+            except Exception:
+                pass
         return success
     
     def register_handler(self, job_type: JobType, handler: Callable):
@@ -251,6 +278,9 @@ class JobManager:
         if not handler:
             raise ValueError(f"No handler registered for job type {job_type.value}")
         
+        # Heartbeat: periodically renew the job lease while processing
+        lease_task = None
+        started_at = time.time()
         try:
             logger.info(f"Processing {job_type.value} job {job['id']}")
             
@@ -262,11 +292,49 @@ class JobManager:
                 except Exception:
                     pass
             
+            # Start lease heartbeat
+            lease_secs = 60
+            try:
+                lease_secs = max(5, min(3600, int(os.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
+            except Exception:
+                lease_secs = 60
+            try:
+                hb = int(os.getenv("TLDW_PS_HEARTBEAT_SECONDS", "0") or "0")
+            except Exception:
+                hb = 0
+            interval = hb if hb > 0 else max(2, min(lease_secs // 2, 30))
+
+            async def _lease_heartbeat():
+                try:
+                    while True:
+                        await asyncio.sleep(interval)
+                        try:
+                            ok = self.db.renew_job_lease(int(job["id"]), seconds=lease_secs)
+                            if ok:
+                                try:
+                                    self._metrics.metrics_manager.increment(
+                                        "prompt_studio.jobs.lease_renewals_total",
+                                        labels={"job_type": job_type.value},
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception:
+                            # Best-effort; ignore renewal failures here
+                            pass
+                except asyncio.CancelledError:  # graceful shutdown
+                    return
+
+            lease_task = asyncio.create_task(_lease_heartbeat())
+
             # Execute handler
             result = await handler(payload, job["entity_id"])  # type: ignore[arg-type]
             
             # Update job as completed
             self.update_job_status(job["id"], JobStatus.COMPLETED, result=result)
+            try:
+                self._refresh_gauges_for_type(job_type.value)
+            except Exception:
+                pass
             
             logger.info(f"Completed {job_type.value} job {job['id']}")
             return result
@@ -283,8 +351,78 @@ class JobManager:
                     JobStatus.FAILED,
                     error_message=str(e)
                 )
+                try:
+                    self._metrics.metrics_manager.increment(
+                        "prompt_studio.jobs.failures_total",
+                        labels={"job_type": job_type.value, "reason": type(e).__name__},
+                    )
+                except Exception:
+                    pass
+            try:
+                self._refresh_gauges_for_type(job_type.value)
+            except Exception:
+                pass
             
             raise
+        finally:
+            if lease_task is not None:
+                try:
+                    lease_task.cancel()
+                except Exception:
+                    pass
+            # Record duration histogram
+            try:
+                duration = max(0.0, time.time() - started_at)
+                self._metrics.metrics_manager.observe(
+                    "prompt_studio.jobs.duration_seconds",
+                    duration,
+                    labels={"job_type": job_type.value},
+                )
+            except Exception:
+                pass
+
+    def _refresh_gauges_for_type(self, job_type: str) -> None:
+        """Refresh queued and processing gauges for a given job type."""
+        try:
+            queued = int(self.db.count_jobs(status=JobStatus.QUEUED.value, job_type=job_type))
+        except Exception:
+            queued = 0
+        try:
+            processing = int(self.db.count_jobs(status=JobStatus.PROCESSING.value, job_type=job_type))
+        except Exception:
+            processing = 0
+        # Update gauges
+        try:
+            self._metrics.update_job_queue_size(job_type, queued)
+        except Exception:
+            pass
+        try:
+            self._metrics.metrics_manager.set_gauge(
+                "prompt_studio.jobs.processing",
+                float(processing),
+                labels={"job_type": job_type},
+            )
+        except Exception:
+            pass
+        # Backlog gauge
+        try:
+            backlog = max(0, int(queued) - int(processing))
+            self._metrics.metrics_manager.set_gauge(
+                "prompt_studio.jobs.backlog",
+                float(backlog),
+                labels={"job_type": job_type},
+            )
+        except Exception:
+            pass
+        # Stale processing (aggregate)
+        try:
+            lease_stats = self.db.get_lease_stats()
+            self._metrics.metrics_manager.set_gauge(
+                "prompt_studio.jobs.stale_processing",
+                float(lease_stats.get("stale_processing", 0)),
+            )
+        except Exception:
+            pass
     
     async def start_processing(self, max_concurrent: int = 3):
         """

@@ -1851,6 +1851,7 @@ class MediaDatabase:
         try:
             current_time = self._get_current_utc_timestamp_str()
             cur = conn.cursor()
+            # Mark rows as deleted and bump version/last_modified
             cur.execute(
                 """
                 UPDATE Claims
@@ -1862,8 +1863,19 @@ class MediaDatabase:
                 """,
                 (current_time, self.client_id, int(media_id)),
             )
+            affected = cur.rowcount or 0
+            # Defensively ensure FTS index no longer references these rows even if triggers were
+            # not created or failed to fire in some environments.
+            try:
+                conn.execute(
+                    "DELETE FROM claims_fts WHERE rowid IN (SELECT id FROM Claims WHERE media_id = ?)",
+                    (int(media_id),),
+                )
+            except sqlite3.Error:
+                # Best-effort cleanup; ignore if FTS table doesn't exist
+                pass
             conn.commit()
-            return cur.rowcount or 0
+            return affected
         except sqlite3.Error as e:
             logging.error(f"Failed to soft-delete claims for media_id={media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to soft-delete claims: {e}") from e
@@ -1938,6 +1950,14 @@ class MediaDatabase:
         try:
             with self.transaction() as conn:
                 if self.backend_type == BackendType.SQLITE:
+                    # Defensive: ensure the FTS index reflects current Claims content.
+                    # In some environments, FTS triggers may not have been applied yet
+                    # (e.g., freshly created DBs in tests). A lightweight rebuild ensures
+                    # correctness for subsequent MATCH queries.
+                    try:
+                        conn.execute("INSERT INTO claims_fts(claims_fts) VALUES('rebuild')")
+                    except sqlite3.Error:
+                        pass
                     sql = (
                         "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
                         "       bm25(claims_fts) AS relevance_score "

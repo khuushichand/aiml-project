@@ -342,6 +342,48 @@ class MetricsRegistry:
                 labels=["service", "reason"]
             )
         )
+
+        # Prompt Studio metrics
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_queue_depth",
+                type=MetricType.GAUGE,
+                description="Number of queued Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_processing",
+                type=MetricType.GAUGE,
+                description="Number of processing Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_active",
+                type=MetricType.GAUGE,
+                description="Active leases for Prompt Studio jobs",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_expiring_soon",
+                type=MetricType.GAUGE,
+                description="Prompt Studio leases expiring soon",
+                labels=["backend"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="prompt_studio_leases_stale_processing",
+                type=MetricType.GAUGE,
+                description="Processing jobs with missing/expired lease",
+                labels=["backend"],
+            )
+        )
     
     def register_metric(self, definition: MetricDefinition) -> bool:
         """

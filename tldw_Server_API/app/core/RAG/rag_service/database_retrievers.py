@@ -262,6 +262,13 @@ class MediaDBRetriever(BaseRetriever):
             start_date, end_date = self.config.date_filter
             sql += " AND m.ingestion_date BETWEEN ? AND ?"
             params.extend([start_date.isoformat(), end_date.isoformat()])
+
+        # Optional restriction to specific media IDs
+        allowed_media_ids = kwargs.get("allowed_media_ids")
+        if allowed_media_ids and isinstance(allowed_media_ids, (list, tuple)):
+            placeholders = ",".join(["?"] * len(allowed_media_ids))
+            sql += f" AND m.id IN ({placeholders})"
+            params.extend(list(allowed_media_ids))
         
         # Add ordering and limit
         sql += " ORDER BY rank DESC LIMIT ?"
@@ -484,7 +491,9 @@ class MediaDBRetriever(BaseRetriever):
                     'last_modified': row.get('last_modified'),
                     'source': 'media_db',
                 }
-            doc_id = row.get('uuid') or row.get('id')
+            # Use numeric media ID for Document.id to match callers/tests that
+            # expect Media DB identifiers, and keep uuid in metadata if needed.
+            doc_id = row.get('id')
             title_text = (row.get('title') or '').strip()
             body_text = (row.get('content') or '').strip()
             if title_text and (not body_text or title_text.lower() not in body_text.lower()):
@@ -815,12 +824,9 @@ class NotesDBRetriever(BaseRetriever):
                 n.id,
                 n.title,
                 n.content,
-                n.notebook_id,
                 n.created_at,
-                n.updated_at,
-                nb.name as notebook_name
+                n.last_modified AS updated_at
             FROM notes n
-            LEFT JOIN notebooks nb ON n.notebook_id = nb.id
             WHERE (n.title LIKE ? OR n.content LIKE ?)
         """
         
@@ -843,8 +849,15 @@ class NotesDBRetriever(BaseRetriever):
             """.format(",".join("?" * len(self.config.tags_filter)))
             params.extend(self.config.tags_filter)
         
+        # Optional restriction to specific note IDs (e.g., from access control)
+        allowed_note_ids = kwargs.get("allowed_note_ids")
+        if allowed_note_ids and isinstance(allowed_note_ids, (list, tuple)):
+            placeholders = ",".join(["?"] * len(allowed_note_ids))
+            sql += f" AND n.id IN ({placeholders})"
+            params.extend(list(allowed_note_ids))
+        
         # Order and limit
-        sql += " ORDER BY n.updated_at DESC LIMIT ?"
+        sql += " ORDER BY n.last_modified DESC LIMIT ?"
         params.append(self.config.max_results)
         
         # Execute query
@@ -863,8 +876,8 @@ class NotesDBRetriever(BaseRetriever):
                 source=DataSource.NOTES,  # Add required source parameter
                 metadata={
                     "title": row["title"],
-                    "notebook": row["notebook_name"],
-                    "notebook_id": row["notebook_id"],
+                    "notebook": None,
+                    "notebook_id": None,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "source": "notes_db"

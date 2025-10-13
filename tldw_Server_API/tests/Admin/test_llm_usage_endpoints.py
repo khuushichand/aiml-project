@@ -17,6 +17,32 @@ def _setup_env():
 async def _ensure_llm_tables_and_seed():
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     pool = await get_db_pool()
+    # Ensure two users exist and capture their IDs (respect FK constraints)
+    import uuid as _uuid
+    if pool.pool:
+        # PostgreSQL-style
+        await pool.execute(
+            "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES ($1,$2,$3,$4,TRUE) ON CONFLICT (username) DO NOTHING",
+            str(_uuid.uuid4()), "llmuser1", "llmuser1@example.com", "x"
+        )
+        await pool.execute(
+            "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES ($1,$2,$3,$4,TRUE) ON CONFLICT (username) DO NOTHING",
+            str(_uuid.uuid4()), "llmuser2", "llmuser2@example.com", "x"
+        )
+        u1 = await pool.fetchval("SELECT id FROM users WHERE username = $1", "llmuser1")
+        u2 = await pool.fetchval("SELECT id FROM users WHERE username = $1", "llmuser2")
+    else:
+        # SQLite-style
+        await pool.execute(
+            "INSERT OR IGNORE INTO users (uuid, username, email, password_hash, is_active) VALUES (?,?,?,?,1)",
+            str(_uuid.uuid4()), "llmuser1", "llmuser1@example.com", "x"
+        )
+        await pool.execute(
+            "INSERT OR IGNORE INTO users (uuid, username, email, password_hash, is_active) VALUES (?,?,?,?,1)",
+            str(_uuid.uuid4()), "llmuser2", "llmuser2@example.com", "x"
+        )
+        u1 = await pool.fetchval("SELECT id FROM users WHERE username = ?", "llmuser1")
+        u2 = await pool.fetchval("SELECT id FROM users WHERE username = ?", "llmuser2")
     # Create tables if not exist
     if pool.pool:
         await pool.execute(
@@ -46,12 +72,12 @@ async def _ensure_llm_tables_and_seed():
         await pool.execute(
             "INSERT INTO llm_usage_log (user_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            1, "/api/v1/chat/completions", "chat", "openai", "gpt-3.5-turbo", 200, 120, 100, 50, 150, 0.1, "USD", False
+            int(u1), "/api/v1/chat/completions", "chat", "openai", "gpt-3.5-turbo", 200, 120, 100, 50, 150, 0.1, "USD", False
         )
         await pool.execute(
             "INSERT INTO llm_usage_log (user_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            2, "/api/v1/embeddings", "embeddings", "openai", "text-embedding-3-small", 500, 250, 200, 0, 200, 0.02, "USD", True
+            int(u2), "/api/v1/embeddings", "embeddings", "openai", "text-embedding-3-small", 500, 250, 200, 0, 200, 0.02, "USD", True
         )
     else:
         await pool.execute(
@@ -80,12 +106,12 @@ async def _ensure_llm_tables_and_seed():
         await pool.execute(
             "INSERT INTO llm_usage_log (user_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            1, "/api/v1/chat/completions", "chat", "openai", "gpt-3.5-turbo", 200, 120, 100, 50, 150, 0.1, "USD", 0
+            int(u1), "/api/v1/chat/completions", "chat", "openai", "gpt-3.5-turbo", 200, 120, 100, 50, 150, 0.1, "USD", 0
         )
         await pool.execute(
             "INSERT INTO llm_usage_log (user_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            2, "/api/v1/embeddings", "embeddings", "openai", "text-embedding-3-small", 500, 250, 200, 0, 200, 0.02, "USD", 1
+            int(u2), "/api/v1/embeddings", "embeddings", "openai", "text-embedding-3-small", 500, 250, 200, 0, 200, 0.02, "USD", 1
         )
 
 
@@ -122,4 +148,3 @@ async def test_llm_usage_endpoints_sqlite(monkeypatch):
         r3 = client.get("/api/v1/admin/llm-usage/export.csv?operation=chat&limit=5")
         assert r3.status_code == 200
         assert r3.text.startswith("id,ts,user_id,key_id,endpoint,operation")
-

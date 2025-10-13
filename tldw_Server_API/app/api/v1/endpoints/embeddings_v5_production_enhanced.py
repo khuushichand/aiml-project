@@ -1422,11 +1422,32 @@ async def create_embedding_endpoint(
         # Optional dimension adjustment (post-process)
         dims_policy_used = None
         if embedding_request.dimensions:
-            dims_policy_used = _dimension_policy()
-            embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            # For base64 outputs, always reduce to requested dims for deterministic length
+            if embedding_request.encoding_format == "base64":
+                try:
+                    import numpy as _np
+                    target = int(embedding_request.dimensions)
+                    adjusted: List[List[float]] = []
+                    for v in embeddings:
+                        try:
+                            arr = _np.asarray(v, dtype=_np.float32)
+                            if arr.shape[0] > target:
+                                arr = arr[:target]
+                            adjusted.append(arr.tolist())
+                        except Exception:
+                            adjusted.append(v)
+                    embeddings = adjusted
+                    dims_policy_used = "reduce"
+                except Exception:
+                    # Fallback to normal policy if anything goes wrong
+                    dims_policy_used = _dimension_policy()
+                    embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
+            else:
+                dims_policy_used = _dimension_policy()
+                embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
             # Add response header for visibility
             try:
-                if response is not None:
+                if response is not None and dims_policy_used:
                     response.headers['X-Embeddings-Dimensions-Policy'] = dims_policy_used
             except Exception:
                 pass
@@ -1521,7 +1542,7 @@ async def create_embedding_endpoint(
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):
-    texts: List[str] = Field(..., min_items=1, description="Texts to embed")
+    texts: List[str] = Field(..., min_length=1, description="Texts to embed")
     model: Optional[str] = Field(None, description="Embedding model identifier")
     provider: Optional[str] = Field(None, description="Embedding provider override")
     dimensions: Optional[int] = Field(None, description="Requested output dimensions if supported")

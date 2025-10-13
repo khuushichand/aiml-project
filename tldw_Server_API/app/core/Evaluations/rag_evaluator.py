@@ -69,7 +69,7 @@ def _simple_tokens(text: str) -> List[str]:
 class RAGEvaluator:
     """Evaluator for RAG system performance"""
     
-    def __init__(self, embedding_provider: str = "openai", embedding_model: str = "text-embedding-3-small", api_key: Optional[str] = None):
+    def __init__(self, embedding_provider: Optional[str] = "openai", embedding_model: Optional[str] = "text-embedding-3-small", api_key: Optional[str] = None):
         """
         Initialize RAG evaluator with production embeddings.
         
@@ -81,13 +81,21 @@ class RAGEvaluator:
         self.embedding_provider = embedding_provider
         self.embedding_model = embedding_model
         self.api_key = api_key
-        
-        # Get embedding configuration
-        self.embedding_config = self._setup_embedding_config()
-        
-        # Lazy check - don't test embeddings on init, only when first used
-        self._embedding_available = None  # Will be set on first use
-        logger.info(f"RAG evaluator initialized with {embedding_provider}/{embedding_model} configuration")
+
+        # If either provider or model is not specified (None/empty), treat embeddings as disabled.
+        if not self.embedding_provider or not self.embedding_model:
+            # Minimal config stub to avoid downstream KeyErrors when referenced
+            self.embedding_config = {"embedding_config": {"default_model_id": ""}}
+            # Explicitly mark as unavailable so property does not probe backends
+            self._embedding_available = False
+            logger.info("RAG evaluator initialized without embeddings (disabled by configuration)")
+        else:
+            # Get embedding configuration
+            self.embedding_config = self._setup_embedding_config()
+
+            # Lazy check - don't test embeddings on init, only when first used
+            self._embedding_available = None  # Will be set on first use
+            logger.info(f"RAG evaluator initialized with {embedding_provider}/{embedding_model} configuration")
     
     def _setup_embedding_config(self) -> Dict[str, Any]:
         """Setup embedding configuration."""

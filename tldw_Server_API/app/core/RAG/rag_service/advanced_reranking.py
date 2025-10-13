@@ -320,19 +320,6 @@ class LlamaCppReranker(BaseReranker):
         if not documents:
             return []
 
-        # Sanity: ensure we can run
-        if which(self.binary) is None or not self.model_path:
-            logger.warning("LlamaCppReranker unavailable (binary/model missing); returning original order")
-            return [
-                ScoredDocument(
-                    document=doc,
-                    original_score=original_scores[i] if original_scores else doc.score,
-                    rerank_score=original_scores[i] if original_scores else doc.score,
-                    relevance_score=original_scores[i] if original_scores else doc.score,
-                )
-                for i, doc in enumerate(documents[: self.config.top_k])
-            ]
-
         # Build prompt: query first, then candidate passages
         # Format query/documents (instruct-style prefixes when configured)
         def _fmt_q(txt: str) -> str:

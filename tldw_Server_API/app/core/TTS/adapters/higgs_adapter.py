@@ -3,6 +3,7 @@
 #
 # Imports
 import os
+import asyncio
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List
 #
 # Third-party Imports
@@ -147,8 +148,11 @@ class HiggsAdapter(TTSAdapter):
             # Get resource manager for memory monitoring
             resource_manager = await get_resource_manager()
             
-            # Check memory before loading model
-            if resource_manager.memory_monitor.is_memory_critical():
+            # Check memory before loading model (support sync or async monitors in tests)
+            _crit = resource_manager.memory_monitor.is_memory_critical()
+            if asyncio.iscoroutine(_crit):
+                _crit = await _crit
+            if _crit:
                 raise TTSInsufficientMemoryError(
                     "Insufficient memory to load Higgs model",
                     provider=self.provider_name,

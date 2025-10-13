@@ -18,7 +18,7 @@ Security
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Header
 from loguru import logger
 
 # Local imports
@@ -129,7 +129,8 @@ async def create_prompt(
     prompt_data: PromptCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
 ) -> StandardResponse:
     """
     Create a new prompt in a project.
@@ -168,6 +169,18 @@ async def create_prompt(
         if prompt_data.modules_config:
             modules_payload = [mod.model_dump() if hasattr(mod, "model_dump") else mod.dict() for mod in prompt_data.modules_config]
 
+        # Idempotency: if provided, return existing prompt for this key
+        user_id_str = str(user_context.get("user_id", "anonymous"))
+        if idempotency_key:
+            try:
+                existing_id = db.lookup_idempotency("prompt", idempotency_key, user_id_str)
+                if existing_id:
+                    existing = db.get_prompt(existing_id)
+                    if existing:
+                        return StandardResponse(success=True, data=PromptResponse(**existing))
+            except Exception:
+                pass
+
         prompt_record = db.create_prompt(
             project_id=prompt_data.project_id,
             name=prompt_data.name,
@@ -190,6 +203,13 @@ async def create_prompt(
             logger.info("Created prompt record: %s", prompt_record)
         except Exception:
             pass
+
+        # Record idempotency mapping if provided
+        if idempotency_key and prompt_record.get("id"):
+            try:
+                db.record_idempotency("prompt", idempotency_key, int(prompt_record["id"]), user_id_str)
+            except Exception:
+                pass
 
         return StandardResponse(
             success=True,

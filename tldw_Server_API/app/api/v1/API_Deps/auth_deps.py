@@ -69,33 +69,47 @@ async def get_db_transaction():
         use_adapter = False
 
     if use_adapter:
-        class _PoolAdapter:
-            def __init__(self, pool: DatabasePool):
-                self._pool = pool
+        # Keep a single connection open for the request lifetime so cursors remain valid
+        conn_cm = db_pool.acquire()
+        conn = await conn_cm.__aenter__()
 
-            async def fetchrow(self, query: str, *args):
-                return await self._pool.fetchone(query, *args)
-
-            async def fetchone(self, query: str, *args):
-                # Alias to fetchrow for compatibility
-                return await self._pool.fetchone(query, *args)
-
-            async def fetch(self, query: str, *args):
-                return await self._pool.fetchall(query, *args)
-
-            async def fetchval(self, query: str, *args):
-                return await self._pool.fetchval(query, *args)
+        class _ConnAdapter:
+            def __init__(self, _conn):
+                self._conn = _conn
 
             async def execute(self, query: str, *args):
-                return await self._pool.execute(query, *args)
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                return await self._conn.execute(query, params)
 
-        adapter = _PoolAdapter(db_pool)
+            async def fetchval(self, query: str, *args):
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                cur = await self._conn.execute(query, params)
+                row = await cur.fetchone()
+                return row[0] if row else None
+
+            async def fetch(self, query: str, *args):
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                cur = await self._conn.execute(query, params)
+                rows = await cur.fetchall()
+                try:
+                    return [{key: r[key] for key in r.keys()} for r in rows]
+                except Exception:
+                    return rows
+
+            async def fetchrow(self, query: str, *args):
+                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                cur = await self._conn.execute(query, params)
+                row = await cur.fetchone()
+                try:
+                    return {key: row[key] for key in row.keys()} if row else None
+                except Exception:
+                    return row
+
+        adapter = _ConnAdapter(conn)
         try:
-            # Yield the lightweight adapter; no explicit cleanup required
             yield adapter
         finally:
-            # Ensure generator finalizes cleanly regardless of request outcome
-            pass
+            await conn_cm.__aexit__(None, None, None)
     else:
         # Default: yield a request-scoped transaction so writes commit reliably
         async with db_pool.transaction() as conn:

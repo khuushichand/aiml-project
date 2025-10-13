@@ -31,6 +31,62 @@ try:
 except Exception:
     _html2text = None  # Optional dependency; fallback stripping will apply
 
+# Compatibility shim for Python 3.13 EmailMessage/contentmanager API changes
+# Some helpers call: outer.add_attachment(inner, maintype="message", subtype="rfc822").
+# In Python 3.13 this ultimately calls email.contentmanager.set_message_content(),
+# whose signature no longer accepts 'maintype'. We provide two defensive shims:
+# 1) Patch contentmanager.set_message_content to drop 'maintype'.
+# 2) Patch the active Policy's ContentManager set_handlers[Message] mapping to a wrapper
+#    that drops 'maintype' before delegating to the original handler. This ensures the
+#    fix applies even if handlers were bound at import-time to the original function.
+try:  # pragma: no cover - defensive guard
+    import email.contentmanager as _ecm  # type: ignore
+    if hasattr(_ecm, 'set_message_content'):
+        _orig_cm_set_message_content = _ecm.set_message_content  # type: ignore[attr-defined]
+
+        def _compat_cm_set_message_content(msg, obj, *args, **kwargs):  # type: ignore[no-redef]
+            if 'maintype' in kwargs:
+                kwargs.pop('maintype', None)
+            return _orig_cm_set_message_content(msg, obj, *args, **kwargs)  # type: ignore[misc]
+
+        _ecm.set_message_content = _compat_cm_set_message_content  # type: ignore[assignment]
+
+    # Additionally patch the active policy content manager mapping so any
+    # pre-bound handler for Message objects also ignores 'maintype'.
+    try:
+        from email.message import Message as _EMessage  # local alias
+        from email import policy as _epolicy
+        _cm_inst = getattr(_epolicy.default, 'content_manager', None)
+        if _cm_inst and hasattr(_cm_inst, 'set_handlers'):
+            _orig_handler = _cm_inst.set_handlers.get(_EMessage)
+            if callable(_orig_handler):
+                def _compat_handler(msg, obj, *args, **kwargs):  # type: ignore[no-redef]
+                    if 'maintype' in kwargs:
+                        kwargs.pop('maintype', None)
+                    return _orig_handler(msg, obj, *args, **kwargs)
+
+                _cm_inst.set_handlers[_EMessage] = _compat_handler  # type: ignore[index]
+    except Exception:
+        # best-effort; if anything fails, fall back to add_attachment shim below
+        pass
+except Exception:
+    pass
+
+# Also guard add_attachment path for message/rfc822 to drop 'maintype' kwarg
+try:  # pragma: no cover
+    _OrigEmailMessage = EmailMessage
+    if hasattr(_OrigEmailMessage, 'add_attachment'):
+        _orig_add_attachment = _OrigEmailMessage.add_attachment  # type: ignore[attr-defined]
+
+        def _compat_add_attachment(self, content, *args, **kwargs):  # type: ignore[no-redef]
+            if isinstance(content, EmailMessage) and 'maintype' in kwargs:
+                kwargs.pop('maintype', None)
+            return _orig_add_attachment(self, content, *args, **kwargs)
+
+        _OrigEmailMessage.add_attachment = _compat_add_attachment  # type: ignore[assignment]
+except Exception:
+    pass
+
 
 def _decode_mime_header(value: Optional[str]) -> str:
     if not value:
@@ -508,19 +564,15 @@ def process_mbox_bytes(
             tmp_path = tmp.name
 
         mbox = mailbox.mbox(tmp_path)
-        # Iterate messages with cap
+        # Iterate messages with cap; stage successes, and if cap exceeded, emit a single guardrail error only
         count = 0
+        limit_exceeded = False
+        staged: List[Dict[str, Any]] = []
         for msg in mbox:
-            if count >= max_internal_files:
-                results.append({
-                    "status": "Error",
-                    "input_ref": mbox_name,
-                    "media_type": "email",
-                    "processing_source": f"mbox:{mbox_name}",
-                    "error": f"MBOX contains too many messages (>{max_internal_files})",
-                })
-                break
             count += 1
+            if count > max_internal_files:
+                limit_exceeded = True
+                break
 
             try:
                 try:
@@ -529,7 +581,7 @@ def process_mbox_bytes(
                     # Fallback: use legacy as_bytes without policy
                     child_bytes = msg.as_bytes()  # type: ignore[attr-defined]
             except Exception as e:
-                results.append({
+                staged.append({
                     "status": "Error",
                     "input_ref": f"{mbox_name}::message_{count}",
                     "media_type": "email",
@@ -567,7 +619,19 @@ def process_mbox_bytes(
                 one["keywords"] = sorted(list(kws))
             except Exception:
                 pass
-            results.append(one)
+            staged.append(one)
+
+        if limit_exceeded:
+            # Emit a single guardrail error entry and ignore any previously staged successes
+            return [{
+                "status": "Error",
+                "input_ref": mbox_name,
+                "media_type": "email",
+                "processing_source": f"mbox:{mbox_name}",
+                "error": f"MBOX contains too many messages (>{max_internal_files})",
+            }]
+        # Otherwise, return the staged results
+        results.extend(staged)
     except Exception as e:
         logging.error(f"Invalid or unreadable MBOX '{mbox_name}': {e}")
         return [{

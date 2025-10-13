@@ -19,7 +19,7 @@ Security
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, BackgroundTasks, Header
 import json
 from datetime import datetime
 from loguru import logger
@@ -44,6 +44,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engine import OptimizationEngine
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager, JobType
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
 
 ########################################################################################################################
 # Router Setup
@@ -62,6 +63,272 @@ router = APIRouter(
 ########################################################################################################################
 # Optimization CRUD Endpoints
 
+# --- Strategy helpers ---
+_OPTIMIZER_SYNONYMS = {
+    "hill_climb": "hill_climbing",
+}
+
+_VALIDATION_REQUIRED = {
+    # For these strategies, we validate additional fields
+    "grid_search": ("models_to_test",),
+    "bayesian": ("models_to_test",),
+    # bootstrap may require bootstrap_config, but we keep this optional for now
+}
+
+def _normalize_optimizer_type(opt_type: str) -> str:
+    t = (opt_type or "").strip().lower()
+    return _OPTIMIZER_SYNONYMS.get(t, t)
+
+def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
+    """Light validation for specific strategies.
+
+    Keeps existing behavior for common strategies (iterative, mipro, random_search, hill_climbing,
+    beam_search, greedy, anneal, genetic). For grid_search/bayesian, require non-empty models_to_test.
+    """
+    ot = _normalize_optimizer_type(optimizer_type)
+    required = _VALIDATION_REQUIRED.get(ot, tuple())
+    for field in required:
+        value = cfg.get(field)
+        if not value or (isinstance(value, list) and len(value) == 0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"optimizer_type='{optimizer_type}' requires non-empty '{field}'",
+            )
+
+    # Optional, strategy-specific validations (only apply if provided)
+    params: Dict[str, Any] = {}
+    try:
+        raw = cfg.get("strategy_params")
+        if isinstance(raw, dict):
+            params = raw
+    except Exception:
+        params = {}
+
+    def _get(name: str) -> Any:
+        # Look both at top-level and strategy_params
+        return cfg.get(name, params.get(name))
+
+    # beam_search: validate beam_width if provided
+    if ot == "beam_search":
+        bw = _get("beam_width")
+        if bw is not None:
+            try:
+                bw_int = int(bw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="beam_width must be an integer >= 2")
+            if bw_int < 2:
+                raise HTTPException(status_code=400, detail="beam_width must be >= 2")
+        # Optional pruning threshold within [0,1]
+        pt = _get("prune_threshold")
+        if pt is not None:
+            try:
+                pt_f = float(pt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="prune_threshold must be a float between 0 and 1")
+            if not (0.0 <= pt_f <= 1.0):
+                raise HTTPException(status_code=400, detail="prune_threshold must be in [0, 1]")
+        # Optional max_candidates >= beam_width if both provided
+        mc = _get("max_candidates")
+        if mc is not None:
+            try:
+                mc_i = int(mc)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_candidates must be an integer >= 2")
+            if mc_i < 2:
+                raise HTTPException(status_code=400, detail="max_candidates must be >= 2")
+            if bw is not None and int(bw) > mc_i:
+                raise HTTPException(status_code=400, detail="max_candidates must be >= beam_width")
+        # Optional diversity_rate in [0,1]
+        dr = _get("diversity_rate")
+        if dr is not None:
+            try:
+                dr_f = float(dr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="diversity_rate must be a float between 0 and 1")
+            if not (0.0 <= dr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="diversity_rate must be in [0, 1]")
+        # Optional length_penalty (>= 0, typical range [0,2])
+        lp = _get("length_penalty")
+        if lp is not None:
+            try:
+                lp_f = float(lp)
+            except Exception:
+                raise HTTPException(status_code=400, detail="length_penalty must be a non-negative number")
+            if not (0.0 <= lp_f <= 2.0):
+                raise HTTPException(status_code=400, detail="length_penalty must be in [0, 2]")
+        # Optional candidate_reranker policy
+        crp = _get("candidate_reranker")
+        if crp is not None:
+            allowed_crp = {"none", "score", "diversity", "hybrid"}
+            if str(crp).lower() not in allowed_crp:
+                raise HTTPException(status_code=400, detail=f"candidate_reranker must be one of {sorted(allowed_crp)}")
+
+    # anneal (simulated annealing): validate cooling_rate and initial_temp if provided
+    if ot in {"anneal", "simulated_annealing"}:
+        cr = _get("cooling_rate")
+        if cr is not None:
+            try:
+                cr_f = float(cr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="cooling_rate must be a float between 0 and 1")
+            if not (0.0 < cr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="cooling_rate must be in (0, 1]")
+        it = _get("initial_temp")
+        if it is not None:
+            try:
+                it_f = float(it)
+            except Exception:
+                raise HTTPException(status_code=400, detail="initial_temp must be a positive number")
+            if it_f <= 0:
+                raise HTTPException(status_code=400, detail="initial_temp must be > 0")
+        # Optional schedule type
+        sched = _get("schedule")
+        if sched is not None:
+            allowed = {"exponential", "linear", "cosine"}
+            if str(sched).lower() not in allowed:
+                raise HTTPException(status_code=400, detail=f"schedule must be one of {sorted(allowed)}")
+        # Optional min_temp <= initial_temp and >= 0
+        mt = _get("min_temp")
+        if mt is not None:
+            try:
+                mt_f = float(mt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="min_temp must be a non-negative number")
+            if mt_f < 0:
+                raise HTTPException(status_code=400, detail="min_temp must be >= 0")
+            if _get("initial_temp") is not None and float(_get("initial_temp")) < mt_f:
+                raise HTTPException(status_code=400, detail="min_temp must be <= initial_temp")
+        # Optional step schedule knobs
+        step_size = _get("step_size")
+        if step_size is not None:
+            try:
+                ss_f = float(step_size)
+            except Exception:
+                raise HTTPException(status_code=400, detail="step_size must be a positive number")
+            if ss_f <= 0:
+                raise HTTPException(status_code=400, detail="step_size must be > 0")
+        epochs = _get("epochs")
+        if epochs is not None:
+            try:
+                ep_i = int(epochs)
+            except Exception:
+                raise HTTPException(status_code=400, detail="epochs must be a positive integer")
+            if ep_i < 1:
+                raise HTTPException(status_code=400, detail="epochs must be >= 1")
+        # If linear schedule and we have initial/min temps, epochs and step_size, ensure consistency
+        try:
+            if str(_get("schedule")).lower() == "linear" and all(v is not None for v in (it, mt, step_size, epochs)):
+                if float(it) - float(mt) < float(step_size) * int(epochs):
+                    raise HTTPException(status_code=400, detail="linear schedule: step_size * epochs must not exceed (initial_temp - min_temp)")
+        except HTTPException:
+            # Bubble up expected validation error
+            raise
+        except (TypeError, ValueError):
+            # Ignore only type conversion issues; other checks above handle them
+            pass
+
+    # genetic: validate population_size and mutation_rate if provided
+    if ot == "genetic":
+        ps = _get("population_size")
+        if ps is not None:
+            try:
+                ps_i = int(ps)
+            except Exception:
+                raise HTTPException(status_code=400, detail="population_size must be an integer >= 2")
+            if ps_i < 2:
+                raise HTTPException(status_code=400, detail="population_size must be >= 2")
+        mr = _get("mutation_rate")
+        if mr is not None:
+            try:
+                mr_f = float(mr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="mutation_rate must be a float between 0 and 1")
+            if not (0.0 <= mr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="mutation_rate must be in [0, 1]")
+        # Optional crossover_rate in [0,1]
+        cr = _get("crossover_rate")
+        if cr is not None:
+            try:
+                cr_f = float(cr)
+            except Exception:
+                raise HTTPException(status_code=400, detail="crossover_rate must be a float between 0 and 1")
+            if not (0.0 <= cr_f <= 1.0):
+                raise HTTPException(status_code=400, detail="crossover_rate must be in [0, 1]")
+        # Optional elitism >= 0
+        el = _get("elitism")
+        if el is not None:
+            try:
+                el_i = int(el)
+            except Exception:
+                raise HTTPException(status_code=400, detail="elitism must be a non-negative integer")
+            if el_i < 0:
+                raise HTTPException(status_code=400, detail="elitism must be >= 0")
+        # Optional selection policy
+        sel = _get("selection")
+        if sel is not None:
+            allowed_sel = {"tournament", "roulette", "rank"}
+            if str(sel).lower() not in allowed_sel:
+                raise HTTPException(status_code=400, detail=f"selection must be one of {sorted(allowed_sel)}")
+        # Optional crossover operator enum
+        xo = _get("crossover_operator")
+        if xo is not None:
+            allowed_xo = {"one_point", "two_point", "uniform"}
+            if str(xo).lower() not in allowed_xo:
+                raise HTTPException(status_code=400, detail=f"crossover_operator must be one of {sorted(allowed_xo)}")
+
+    # hyperparameter tuning (optional checks)
+    if ot in {"hyperparameter", "hyperparam", "hparam"}:
+        sm = _get("search_method")
+        if sm is not None:
+            allowed_sm = {"bayesian", "grid", "random"}
+            if str(sm).lower() not in allowed_sm:
+                raise HTTPException(status_code=400, detail=f"search_method must be one of {sorted(allowed_sm)}")
+        pto = _get("params_to_optimize")
+        if pto is not None:
+            if not isinstance(pto, list) or len(pto) == 0 or not all(isinstance(x, str) and x for x in pto):
+                raise HTTPException(status_code=400, detail="params_to_optimize must be a non-empty list of strings")
+        max_trials = _get("max_trials")
+        if max_trials is not None:
+            try:
+                mt_i = int(max_trials)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+            if mt_i < 1:
+                raise HTTPException(status_code=400, detail="max_trials must be >= 1")
+        # Optional bounds for common params (max_tokens_range)
+        mtr = _get("max_tokens_range")
+        if mtr is not None:
+            if not isinstance(mtr, (list, tuple)) or len(mtr) != 2:
+                raise HTTPException(status_code=400, detail="max_tokens_range must be [min, max]")
+            try:
+                mn, mx = int(mtr[0]), int(mtr[1])
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+            if not (1 <= mn < mx <= 100000):
+                raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
+
+    # random_search optional checks
+    if ot == "random_search":
+        mt = _get("max_trials")
+        if mt is not None:
+            try:
+                mt_i = int(mt)
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+            if mt_i < 1:
+                raise HTTPException(status_code=400, detail="max_trials must be >= 1")
+        # Optional bounds for common params (max_tokens_range)
+        mtr = _get("max_tokens_range")
+        if mtr is not None:
+            if not isinstance(mtr, (list, tuple)) or len(mtr) != 2:
+                raise HTTPException(status_code=400, detail="max_tokens_range must be [min, max]")
+            try:
+                mn, mx = int(mtr[0]), int(mtr[1])
+            except Exception:
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+            if not (1 <= mn < mx <= 100000):
+                raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
+
 # Compatibility: base POST returns job info directly
 @router.post("")
 async def create_optimization_simple(
@@ -79,6 +346,12 @@ async def create_optimization_simple(
         priority=5,
     )
     return {"id": job.get("id"), "status": job.get("status", "pending")}
+
+async def _rl_optimizations(
+    user_context: Dict = Depends(get_prompt_studio_user),
+    security_config: SecurityConfig = Depends(get_security_config),
+) -> bool:
+    return await check_rate_limit("optimization", user_context=user_context, security_config=security_config)
 
 @router.post(
     "/create",
@@ -128,10 +401,11 @@ async def create_optimization_simple(
 async def create_optimization(
     optimization_data: OptimizationCreate,
     background_tasks: BackgroundTasks,
-    _: bool = Depends(lambda: check_rate_limit("optimization")),
+    _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
 ) -> StandardResponse:
     """
     Create and start a new optimization.
@@ -182,6 +456,34 @@ async def create_optimization(
             else None
         )
 
+        # Idempotency: check existing optimization mapping for key
+        user_id_str = str(user_context.get("user_id", "anonymous"))
+        if idempotency_key:
+            try:
+                # TODO(PS-IDEMPOTENCY-SCOPE): Once DB lookup scopes by user_id, we can rely on per-user separation
+                # for idempotency keys. For now, lookup by key remains global.
+                existing_id = db.lookup_idempotency("optimization", idempotency_key, user_id_str)
+                if existing_id:
+                    try:
+                        prompt_studio_metrics.metrics_manager.increment(
+                            "prompt_studio.idempotency.hit_total", labels={"entity_type": "optimization"}
+                        )
+                    except Exception:
+                        pass
+                    existing_opt = db.get_optimization(existing_id)
+                    if existing_opt:
+                        return StandardResponse(success=True, data={"optimization": OptimizationResponse(**existing_opt), "job_id": None})
+            except Exception:
+                pass
+
+        # Per-strategy validation (lightweight)
+        try:
+            _validate_strategy_config(optimizer_type, combined_config)
+        except HTTPException:
+            raise
+        except Exception as _e:  # pragma: no cover - safety
+            raise HTTPException(status_code=400, detail=str(_e))
+
         optimization_record = db.create_optimization(
             project_id=project_id,
             name=optimization_data.name,
@@ -193,6 +495,19 @@ async def create_optimization(
             status="pending",
             client_id=db.client_id,
         )
+
+        # Record idempotency mapping
+        if idempotency_key and optimization_record.get("id"):
+            try:
+                db.record_idempotency("optimization", idempotency_key, int(optimization_record["id"]), user_id_str)
+                try:
+                    prompt_studio_metrics.metrics_manager.increment(
+                        "prompt_studio.idempotency.miss_total", labels={"entity_type": "optimization"}
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         job_manager = JobManager(db)
         job = job_manager.create_job(
@@ -218,11 +533,16 @@ async def create_optimization(
             optimization_record.get("id"),
         )
 
-        background_tasks.add_task(
-            run_optimization_async,
-            optimization_record["id"],
-            db,
-        )
+        # In test mode, avoid spawning background optimization to keep tests fast and deterministic
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() != "true":
+            background_tasks.add_task(
+                run_optimization_async,
+                optimization_record["id"],
+                db,
+            )
+        else:
+            logger.debug("TEST_MODE: skipping background optimization task spawn")
 
         response_payload = {
             "optimization": OptimizationResponse(**optimization_record),
@@ -233,6 +553,12 @@ async def create_optimization(
 
     except DatabaseError as exc:
         logger.error(f"Database error creating optimization: {exc}")
+        import os as _os
+        if _os.getenv("TEST_MODE", "").lower() == "true":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create optimization: {exc}",
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create optimization",
@@ -807,7 +1133,7 @@ async def list_optimization_iterations(
 async def compare_strategies(
     request: CompareStrategiesRequest,
     background_tasks: BackgroundTasks = None,
-    _: bool = Depends(lambda: check_rate_limit("optimization")),
+    _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
@@ -901,6 +1227,14 @@ async def compare_strategies(
             detail="Failed to compare strategies",
         )
 
+# Backward/compatibility alias used by tests: /compare-strategies
+router.add_api_route(
+    "/compare-strategies",
+    compare_strategies,
+    methods=["POST"],
+    response_model=StandardResponse,
+)
+
 ########################################################################################################################
 # Helper Functions
 
@@ -928,7 +1262,5 @@ async def run_optimization_async(optimization_id: int, db: PromptStudioDatabase)
             mark_completed=True,
         )
 
-async def require_project_access(project_id: int) -> bool:
-    """Check if user has access to project."""
-    # Placeholder - implement actual access control
-    return True
+# Note: Project access checks are provided via API_Deps.prompt_studio_deps.
+# Do not redeclare require_project_access here to avoid shadowing the dependency.

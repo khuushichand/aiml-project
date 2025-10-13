@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Optional, Dict, Any
 
 from loguru import logger
@@ -8,8 +8,13 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 
 
-def _utc_today() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+def _utc_today() -> date:
+    """Return today's date in UTC as a date object.
+
+    Postgres bindings expect a date object for date comparisons, while
+    SQLite queries can use ISO strings. Callers should convert as needed.
+    """
+    return datetime.now(timezone.utc).date()
 
 
 def _month_bounds_utc(dt: Optional[datetime] = None) -> tuple[str, str]:
@@ -19,6 +24,7 @@ def _month_bounds_utc(dt: Optional[datetime] = None) -> tuple[str, str]:
         nxt = start.replace(year=start.year + 1, month=1)
     else:
         nxt = start.replace(month=start.month + 1)
+    # Return ISO strings; callers will normalize tz-awareness
     return start.isoformat(), nxt.isoformat()
 
 
@@ -55,25 +61,30 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None) -> Dict[str, Any]:
-    day = day_iso or _utc_today()
+    # Use a proper date for Postgres; SQLite path will use ISO string
+    day_val = day_iso if day_iso is not None else _utc_today()
     pool = await get_db_pool()
     if pool.pool:
+        # Ensure we pass a datetime.date to asyncpg for date() comparisons
+        _day_param = day_val if isinstance(day_val, date) else date.fromisoformat(str(day_val))
         total_tokens = await pool.fetchval(
             "SELECT COALESCE(SUM(total_tokens),0) FROM llm_usage_log WHERE date(ts AT TIME ZONE 'UTC') = $1 AND key_id = $2",
-            day, key_id,
+            _day_param, key_id,
         )
         total_cost = await pool.fetchval(
             "SELECT COALESCE(SUM(total_cost_usd),0) FROM llm_usage_log WHERE date(ts AT TIME ZONE 'UTC') = $1 AND key_id = $2",
-            day, key_id,
+            _day_param, key_id,
         )
     else:
+        # SQLite: compare DATE(ts) to an ISO date string
+        _day_str = day_val.isoformat() if isinstance(day_val, date) else str(day_val)
         total_tokens = await pool.fetchval(
             "SELECT COALESCE(SUM(total_tokens),0) FROM llm_usage_log WHERE DATE(ts) = ? AND key_id = ?",
-            day, key_id,
+            _day_str, key_id,
         )
         total_cost = await pool.fetchval(
             "SELECT COALESCE(SUM(total_cost_usd),0) FROM llm_usage_log WHERE DATE(ts) = ? AND key_id = ?",
-            day, key_id,
+            _day_str, key_id,
         )
     return {"tokens": int(total_tokens or 0), "usd": float(total_cost or 0.0)}
 
@@ -82,6 +93,15 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
     start, end = _month_bounds_utc()
     pool = await get_db_pool()
     if pool.pool:
+        # Provide real datetimes to asyncpg
+        from datetime import datetime
+        _start_dt = datetime.fromisoformat(start)
+        _end_dt = datetime.fromisoformat(end)
+        # Postgres TIMESTAMP columns compare with naive datetimes; strip tzinfo if present
+        if _start_dt.tzinfo is not None:
+            _start_dt = _start_dt.replace(tzinfo=None)
+        if _end_dt.tzinfo is not None:
+            _end_dt = _end_dt.replace(tzinfo=None)
         totals = await pool.fetchone(
             """
             SELECT COALESCE(SUM(total_tokens),0) AS tokens,
@@ -89,7 +109,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
             FROM llm_usage_log
             WHERE ts >= $1 AND ts < $2 AND key_id = $3
             """,
-            start, end, key_id,
+            _start_dt, _end_dt, key_id,
         )
     else:
         totals = await pool.fetchone(

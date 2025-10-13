@@ -187,7 +187,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-    token: Optional[str] = Depends(oauth2_scheme) # No need for use_cache=False if auto_error handles it
+    token: Optional[str] = Depends(oauth2_scheme),  # Bearer from Authorization
+    legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Back-compat for chat endpoint tests
     ) -> User:
     """
     Determines the current user based on the application mode (single/multi)
@@ -216,22 +217,47 @@ async def get_request_user(
         # The 'token' parameter from oauth2_scheme will likely be None here, which is fine.
         logger.debug("get_request_user: In SINGLE_USER_MODE.")
         if api_key is None:
-            logger.warning("Single-User Mode: X-API-KEY header is missing or not resolved by FastAPI.")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="X-API-KEY header required for single-user mode"
-            )
+            # Backward compatibility: some clients send a 'Token' header with 'Bearer <API_KEY>'
+            extracted = None
+            try:
+                if legacy_token_header and isinstance(legacy_token_header, str):
+                    legacy_token_header = legacy_token_header.strip()
+                    if legacy_token_header.lower().startswith("bearer "):
+                        extracted = legacy_token_header[len("Bearer "):].strip()
+            except Exception:
+                extracted = None
+
+            # Accept Authorization Bearer token as API key in single-user mode (for OpenAI-compatible clients/tests)
+            if extracted is not None:
+                api_key = extracted
+            elif token:
+                api_key = token
+            else:
+                logger.warning("Single-User Mode: Missing X-API-KEY and Authorization Bearer; cannot authenticate.")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Missing API credentials"
+                )
         if api_key != settings.SINGLE_USER_API_KEY:
             # Fallback to app-level settings (helps when AuthNZ settings were initialized before env was set in tests)
             fallback_key = app_settings.get("SINGLE_USER_API_KEY")
             if not fallback_key or api_key != fallback_key:
-                logger.warning(
-                    f"Single-User Mode: Invalid X-API-KEY. Got: '{api_key[:10]}...'"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid X-API-KEY"
-                )
+                # Last-chance fallback to environment variables
+                try:
+                    import os as _os
+                    env_key = _os.getenv("SINGLE_USER_API_KEY") or _os.getenv("API_BEARER")
+                except Exception:
+                    env_key = None
+                if env_key and api_key == env_key:
+                    logger.debug("API key matched environment fallback; accepting.")
+                else:
+                    logger.warning(
+                        f"Single-User Mode: Invalid X-API-KEY. Got: '{api_key[:10]}...'"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid API key"
+                    )
             else:
                 logger.debug("X-API-KEY matched fallback app settings; accepting.")
         logger.debug("Single-user API Key verified. Returning fixed user object.")

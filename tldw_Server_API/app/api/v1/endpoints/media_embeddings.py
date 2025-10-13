@@ -92,7 +92,7 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class BatchMediaEmbeddingsRequest(BaseModel):
-    media_ids: List[int] = Field(..., min_items=1, description="List of media IDs to embed")
+    media_ids: List[int] = Field(..., min_length=1, description="List of media IDs to embed")
     embedding_model: Optional[str] = Field(None, alias="model")
     embedding_provider: Optional[str] = Field(None, alias="provider")
     chunk_size: int = Field(1000, description="Chunk size to use for each media item")

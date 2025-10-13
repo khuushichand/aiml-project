@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.Auth.auth_utils import (
     get_expected_api_token,
     is_authentication_required
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Utils.image_validation import (
     validate_data_uri,
     safe_decode_base64_image,
@@ -427,6 +428,7 @@ async def _save_message_turn_to_db(
 async def create_chat_completion(
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
@@ -518,33 +520,8 @@ async def create_chat_completion(
         # Track request size
         metrics.metrics.request_size_bytes.record(len(request_json_bytes))
 
-        # Secure authentication validation
-        if is_authentication_required():
-            auth_header_val = Authorization or Token
-            extracted_token: Optional[str] = None
-
-            if auth_header_val:
-                extracted_token = extract_bearer_token(auth_header_val)
-                if not extracted_token:
-                    metrics.track_auth_failure("invalid_token_format")
-                    logger.warning("Invalid token format provided")
-                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token format.")
-            elif X_API_KEY:
-                extracted_token = X_API_KEY.strip()
-            else:
-                metrics.track_auth_failure("missing_token")
-                logger.warning("Authentication required but no token provided")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token.")
-            
-            expected_token = get_expected_api_token()
-            if not expected_token:
-                logger.critical("Authentication required but API_BEARER not configured")
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server authentication is misconfigured.")
-            
-            if not validate_api_token(extracted_token, expected_token):
-                metrics.track_auth_failure("invalid_token")
-                logger.warning("Invalid authentication token provided")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token.")
+        # Authentication is enforced via get_request_user dependency (JWT or X-API-KEY).
+        # If it fails, FastAPI raises 401 before reaching here. No further checks needed.
 
         # Validate request payload using helper function
         validation_start = time.time()
@@ -587,8 +564,25 @@ async def create_chat_completion(
         
         # Apply rate limiting
         rate_limiter = get_rate_limiter()
-        if isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock):
+        # In some test scenarios we patch dependencies with Mocks. Historically we
+        # disabled rate limiting when mocks were detected to simplify unit tests.
+        # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
+        # limits to validate 429 behavior. So we only bypass the limiter for mocks
+        # when not running in TEST_MODE.
+        try:
+            _is_test_mode = os.getenv("TEST_MODE", "").lower() == "true"
+        except Exception:
+            _is_test_mode = False
+        if not _is_test_mode and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock)):
             rate_limiter = None
+        # Ensure a limiter exists in TEST_MODE even if startup didn't init it
+        if _is_test_mode and rate_limiter is None:
+            try:
+                from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+                # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
+                rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
+            except Exception:
+                rate_limiter = None
         if rate_limiter:
             # Estimate tokens for rate limiting
             estimated_tokens = len(request_json) // 4  # Rough estimate: 4 chars per token

@@ -733,8 +733,8 @@ class UnifiedBatchRequest(BaseModel):
     
     queries: List[str] = Field(
         ...,
-        min_items=1,
-        max_items=100,
+        min_length=1,
+        max_length=100,
         description="List of queries to process",
         example=["What is AI?", "Explain neural networks", "Define machine learning"]
     )

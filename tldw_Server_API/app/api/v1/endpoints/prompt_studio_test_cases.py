@@ -932,9 +932,15 @@ async def export_test_cases(
         }
     }
 )
+async def _rl_generate(
+    user_context: Dict = Depends(get_prompt_studio_user),
+    security_config: SecurityConfig = Depends(get_security_config),
+) -> bool:
+    return await check_rate_limit("generate", user_context=user_context, security_config=security_config)
+
 async def generate_test_cases(
     generate_request: TestCaseGenerateRequest,
-    _rate: bool = Depends(lambda: check_rate_limit("generate")),
+    _rate: bool = Depends(_rl_generate),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user)

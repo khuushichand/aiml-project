@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class WorldBookEntryBase(BaseModel):
     """Base schema for world book entries."""
-    keywords: List[str] = Field(..., min_items=1, description="Keywords to match")
+    keywords: List[str] = Field(..., min_length=1, description="Keywords to match")
     content: str = Field(..., min_length=1, description="Content to inject when matched")
     priority: int = Field(0, description="Priority for ordering (higher = more important)")
     enabled: bool = Field(True, description="Whether entry is active")
@@ -32,7 +32,7 @@ class WorldBookEntryCreate(WorldBookEntryBase):
 
 class WorldBookEntryUpdate(BaseModel):
     """Schema for updating a world book entry."""
-    keywords: Optional[List[str]] = Field(None, min_items=1, description="New keywords")
+    keywords: Optional[List[str]] = Field(None, min_length=1, description="New keywords")
     content: Optional[str] = Field(None, min_length=1, description="New content")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
@@ -188,7 +188,7 @@ class WorldBookStatistics(BaseModel):
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_items=1, description="List of entry IDs")
+    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs")
     operation: str = Field(..., pattern="^(enable|disable|delete|set_priority)$", description="Operation to perform")
     priority: Optional[int] = Field(None, description="New priority (for set_priority operation)")
 

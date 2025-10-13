@@ -381,7 +381,7 @@ async def create_transcription(
             transcribe_audio,
             speech_to_text as fw_speech_to_text,
         )
-        
+
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()

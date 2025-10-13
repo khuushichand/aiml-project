@@ -157,7 +157,7 @@ class ExportDictionaryJSONResponse(BaseModel):
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_items=1, description="List of entry IDs to operate on")
+    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs to operate on")
     operation: str = Field(..., pattern="^(delete|activate|deactivate|group)$", description="Operation to perform")
     group_name: Optional[str] = Field(None, description="Group name (for group operation)")
 

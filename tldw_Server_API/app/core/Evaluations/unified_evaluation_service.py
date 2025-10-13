@@ -83,12 +83,15 @@ class UnifiedEvaluationService:
         # Lifecycle flag
         self._initialized = False
 
-        # Initialize database
-        self.db = EvaluationsDatabase(db_path)
+        # Initialize database (allow override via env for tests)
+        import os as _os
+        _override_db = _os.getenv("EVALUATIONS_TEST_DB_PATH")
+        effective_db_path = _override_db or db_path
+        self.db = EvaluationsDatabase(effective_db_path)
         
         # Initialize evaluation runner for async processing (lazy import)
         from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
-        self.runner = EvaluationRunner(db_path)
+        self.runner = EvaluationRunner(effective_db_path)
         
         # Initialize evaluation engines (lazy loading)
         self._rag_evaluator = None
@@ -112,7 +115,7 @@ class UnifiedEvaluationService:
         # Initialize per-service webhook manager bound to this DB
         try:
             from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
-            self.webhook_manager = WebhookManager(db_path=db_path)
+            self.webhook_manager = WebhookManager(db_path=effective_db_path)
         except Exception:
             self.webhook_manager = None
         

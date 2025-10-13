@@ -26,7 +26,7 @@ class WebhookRegistrationRequest(BaseModel):
     events: List[WebhookEventType] = Field(
         ..., 
         description="List of events to subscribe to",
-        min_items=1
+        min_length=1
     )
     secret: Optional[str] = Field(
         None,

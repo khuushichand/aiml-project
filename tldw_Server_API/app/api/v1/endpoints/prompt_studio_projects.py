@@ -23,7 +23,7 @@ See also
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
 from loguru import logger
 
 # Local imports
@@ -36,7 +36,7 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_db, get_prompt_studio_user, require_project_access,
     require_project_write_access, check_rate_limit, get_security_config,
-    PromptStudioDatabase
+    PromptStudioDatabase, SecurityConfig
 )
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     DatabaseError, InputError, ConflictError
@@ -81,6 +81,12 @@ async def create_project_simple(
     if hasattr(data, "model_dump"):
         return data.model_dump()
     return data
+
+async def _rl_create_project(
+    user_context: Dict = Depends(get_prompt_studio_user),
+    security_config: SecurityConfig = Depends(get_security_config),
+) -> bool:
+    return await check_rate_limit("create_project", user_context=user_context, security_config=security_config)
 
 @router.post(
     "/",
@@ -135,7 +141,8 @@ async def create_project(
     project_data: ProjectCreate,
     user_context: Dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    _: bool = Depends(lambda: check_rate_limit("create_project"))
+    _: bool = Depends(_rl_create_project),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
 ) -> StandardResponse:
     """
     Create a new Prompt Studio project.
@@ -149,16 +156,35 @@ async def create_project(
         Created project details
     """
     try:
+        # Idempotency: return existing project when the same key is reused
+        user_id_str = str(user_context.get("user_id", "anonymous"))
+        if idempotency_key:
+            try:
+                existing_id = db.lookup_idempotency("project", idempotency_key, user_id_str)
+                if existing_id:
+                    existing = db.get_project(existing_id)
+                    if existing:
+                        return StandardResponse(success=True, data=ProjectResponse(**existing))
+            except Exception:
+                pass
+
         # Create project
         project = db.create_project(
             name=project_data.name,
             description=project_data.description,
             status=project_data.status.value,
             metadata=project_data.metadata,
-            user_id=str(user_context.get("user_id", "anonymous"))
+            user_id=user_id_str
         )
-        
+
         logger.info(f"User {user_context['user_id']} created project: {project['name']}")
+
+        # Record idempotency mapping
+        if idempotency_key and project.get("id"):
+            try:
+                db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
+            except Exception:
+                pass
         
         return StandardResponse(
             success=True,

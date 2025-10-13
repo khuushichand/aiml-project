@@ -23,9 +23,18 @@ async def create_organization(
                 VALUES ($1, $2, $3, $4)
                 RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
                 """,
-                name, slug, owner_user_id, json.dumps(metadata) if metadata else None,
+                name, slug, owner_user_id, (metadata if metadata is not None else None),
             )
-            return dict(row)
+            d = dict(row)
+            try:
+                from datetime import datetime
+                if isinstance(d.get('created_at'), datetime):
+                    d['created_at'] = d['created_at'].isoformat()
+                if isinstance(d.get('updated_at'), datetime):
+                    d['updated_at'] = d['updated_at'].isoformat()
+            except Exception:
+                pass
+            return d
         else:
             cur = await conn.execute(
                 "INSERT INTO organizations (name, slug, owner_user_id, metadata) VALUES (?, ?, ?, ?)",
@@ -85,9 +94,18 @@ async def create_team(
                 VALUES ($1, $2, $3, $4, $5)
                 RETURNING id, org_id, name, slug, description, is_active, created_at, updated_at
                 """,
-                org_id, name, slug, description, json.dumps(metadata) if metadata else None,
+                org_id, name, slug, description, (metadata if metadata is not None else None),
             )
-            return dict(row)
+            d = dict(row)
+            try:
+                from datetime import datetime
+                if isinstance(d.get('created_at'), datetime):
+                    d['created_at'] = d['created_at'].isoformat()
+                if isinstance(d.get('updated_at'), datetime):
+                    d['updated_at'] = d['updated_at'].isoformat()
+            except Exception:
+                pass
+            return d
         else:
             cur = await conn.execute(
                 "INSERT INTO teams (org_id, name, slug, description, metadata) VALUES (?, ?, ?, ?, ?)",

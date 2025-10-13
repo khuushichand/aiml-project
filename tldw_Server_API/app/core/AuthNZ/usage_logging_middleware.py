@@ -23,11 +23,11 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app):
         super().__init__(app)
-        self._settings = get_settings()
 
     def _is_excluded(self, path: str) -> bool:
         try:
-            for prefix in (self._settings.USAGE_LOG_EXCLUDE_PREFIXES or []):
+            settings = get_settings()
+            for prefix in (getattr(settings, "USAGE_LOG_EXCLUDE_PREFIXES", []) or []):
                 if path.startswith(prefix):
                     return True
         except Exception:
@@ -35,7 +35,9 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
         return False
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if not getattr(self._settings, "USAGE_LOG_ENABLED", False):
+        # Evaluate settings at request time to honor test env changes
+        settings = get_settings()
+        if not getattr(settings, "USAGE_LOG_ENABLED", False):
             return await call_next(request)
 
         path = request.url.path
@@ -101,4 +103,3 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
             except Exception as e:
                 # Never fail request due to logging
                 logger.debug(f"Usage logging skipped/failed: {e}")
-

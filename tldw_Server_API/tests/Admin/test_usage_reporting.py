@@ -13,12 +13,22 @@ def _setup_env():
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
     os.environ["USAGE_LOG_ENABLED"] = "true"
+    # Exclude all paths from middleware usage logging to avoid NULL user_id rows
+    # interfering with FK-constrained aggregation during this test.
+    os.environ["USAGE_LOG_EXCLUDE_PREFIXES"] = "[\"/\"]"
 
 
 async def _insert_usage_rows_sqlite():
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
     pool = await get_db_pool()
+    # Create a test user to satisfy FK on usage_daily.user_id
+    import uuid as _uuid
+    await pool.execute(
+        "INSERT OR IGNORE INTO users (uuid, username, email, password_hash, is_active) VALUES (?,?,?,?,1)",
+        str(_uuid.uuid4()), "usageuser", "usageuser@example.com", "x"
+    )
+    user_id = await pool.fetchval("SELECT id FROM users WHERE username = ?", "usageuser")
     # Ensure usage tables exist (migrations may be skipped in some single-user SQLite setups)
     await pool.execute(
         """
@@ -53,7 +63,7 @@ async def _insert_usage_rows_sqlite():
     # Use SQLite parameter placeholders
     await pool.execute(
         "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        None,
+        int(user_id),
         None,
         "/api/v1/chat/completions",
         200,
@@ -63,7 +73,7 @@ async def _insert_usage_rows_sqlite():
     )
     await pool.execute(
         "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        None,
+        int(user_id),
         None,
         "/api/v1/embeddings",
         500,
@@ -71,6 +81,7 @@ async def _insert_usage_rows_sqlite():
         300,
         None,
     )
+    return int(user_id)
 
 
 @pytest.mark.asyncio
@@ -92,7 +103,7 @@ async def test_admin_usage_endpoints_sqlite_smoke(monkeypatch):
     # Start app to run lifespan and ensure migrations
     with TestClient(app, headers=headers) as client:
         # Seed usage_log rows (SQLite)
-        await _insert_usage_rows_sqlite()
+        u_id = await _insert_usage_rows_sqlite()
 
         # Trigger aggregation for today
         day_str = datetime.now(timezone.utc).date().isoformat()
@@ -104,8 +115,8 @@ async def test_admin_usage_endpoints_sqlite_smoke(monkeypatch):
         assert r_daily.status_code == 200, r_daily.text
         daily = r_daily.json()
         assert "items" in daily and isinstance(daily["items"], list)
-        # Expect at least one row (user_id 0 due to NULL in usage_log)
-        assert any(int(row["user_id"]) == 0 for row in daily["items"]), daily
+        # Expect at least one row for our created user
+        assert any(int(row["user_id"]) == int(u_id) for row in daily["items"]), daily
 
         # Query top users
         r_top = client.get(f"/api/v1/admin/usage/top?start={day_str}&end={day_str}&limit=5")

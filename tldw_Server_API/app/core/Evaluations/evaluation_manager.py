@@ -41,36 +41,75 @@ class EvaluationManager:
         self._recent_created_ids: list[str] = []
     
     def _get_db_path(self) -> Path:
-        """Get evaluation database path with security validation"""
-        # Use the same path as the OpenAI-compatible evaluations DB
+        """Get a safe evaluations database path.
+
+        Rules:
+        - Default to the per-user evaluations DB under the project `Databases` tree
+        - If a path is provided in config, only accept it when it resolves within the
+          allowed evaluations directory for the current (single) user
+        - Reject absolute paths outside the allowed directory and any traversal attempts
+          by falling back to the default path
+        - Strip any null bytes
+        """
+        # Default safe location anchored to the project 'Databases' directory
+        # Tests expect fallback paths like '<project>/tldw_Server_API/Databases/evaluations.db'
+        project_root = Path(__file__).resolve().parents[4]  # .../tldw_Server_API
+        allowed_root: Path = (project_root / "Databases").resolve()
+        default_path: Path = (allowed_root / "evaluations.db").resolve()
+
+        # Read candidate from config if present
+        candidate_str: Optional[str] = None
         if self.config and self.config.has_section("Database"):
-            db_path = self.config.get(
+            candidate_str = self.config.get(
                 "Database",
                 "evaluations_db_path",
-                fallback=str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()))
+                fallback=str(default_path)
             )
         else:
-            # Default to per-user path (single-user by default)
-            db_path = str(DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()))
-        
-        # Sanitize path to prevent directory traversal and null byte injection
-        # Remove any directory traversal attempts
-        db_path = db_path.replace("..", "")
-        # Remove null bytes to prevent null byte injection attacks
-        db_path = db_path.replace("\x00", "")
-        db_path = os.path.normpath(db_path)
-        
-        # Ensure Path object
-        db_path = Path(db_path)
-        
-        # Resolve to absolute path and check it's within project boundaries
-        db_path = db_path.resolve()
-        # For security, ensure directory exists inside computed path
-        # Default DatabasePaths already points inside project Databases/user_databases
-        
-        # Ensure directory exists
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        return db_path
+            candidate_str = str(default_path)
+
+        # Basic sanitization: remove null bytes
+        candidate_str = candidate_str.replace("\x00", "") if candidate_str else str(default_path)
+
+        try:
+            candidate = Path(candidate_str)
+        except (TypeError, ValueError):
+            # If it's not a valid path-like, fall back
+            candidate = default_path
+
+        def _is_within(child: Path, parent: Path) -> bool:
+            try:
+                child_resolved = child.resolve()
+                parent_resolved = parent.resolve()
+                # Python 3.9+: Path.is_relative_to
+                return child_resolved.is_relative_to(parent_resolved)
+            except AttributeError:
+                # Fallback for older Python (not expected here)
+                try:
+                    child_resolved.relative_to(parent_resolved)
+                    return True
+                except Exception:
+                    return False
+            except Exception:
+                return False
+
+        safe_path: Path
+        try:
+            if not candidate.is_absolute():
+                # Treat as relative to allowed_root and normalize
+                tentative = (allowed_root / candidate).resolve()
+                safe_path = tentative if _is_within(tentative, allowed_root) else default_path
+            else:
+                # Absolute path: only accept if it lives under allowed_root
+                candidate_resolved = candidate.resolve()
+                safe_path = candidate_resolved if _is_within(candidate_resolved, allowed_root) else default_path
+        except Exception:
+            # Any resolution error → fall back
+            safe_path = default_path
+
+        # Ensure directory exists for the chosen safe path
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        return safe_path
     
     def _init_database(self):
         """Initialize evaluation database using migration system"""

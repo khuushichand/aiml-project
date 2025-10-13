@@ -142,8 +142,8 @@ class PromptConfigResponse(BaseModel):
 
 class BulkGenerateRequest(BaseModel):
     """Request schema for bulk document generation."""
-    conversation_ids: List[int] = Field(..., min_items=1, max_items=50, description="List of conversation IDs")
-    document_types: List[DocumentType] = Field(..., min_items=1, description="Types of documents to generate")
+    conversation_ids: List[int] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
+    document_types: List[DocumentType] = Field(..., min_length=1, description="Types of documents to generate")
     provider: str = Field(..., min_length=1, description="LLM provider name")
     model: str = Field(..., min_length=1, description="Model name")
     api_key: str = Field(..., min_length=1, description="API key for the provider")

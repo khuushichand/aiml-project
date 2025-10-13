@@ -929,6 +929,18 @@ Override config.txt with environment variables:
 - `ANTHROPIC_API_KEY`
 - `DATABASE_PATH`
 
+Test/CI (Prompt Studio)
+- `TLDW_PS_BACKEND` = `sqlite` | `postgres` — select backend for the heavy optimization suite (default: `sqlite`).
+- `TLDW_PS_STRESS` = `1` — enable larger datasets/iterations in heavy tests.
+- `TLDW_PS_TC_COUNT` — override test-case volume (default 250; stress 1000).
+- `TLDW_PS_ITERATIONS` — override iteration count (default 5; stress 10).
+- `TLDW_PS_OPT_COUNT` — override concurrent optimizations (default 3; stress 8).
+- `TLDW_TEST_POSTGRES_REQUIRED` = `1` — fail fast if Postgres probe fails; otherwise Postgres tests are skipped when unreachable.
+- `TLDW_PS_SQLITE_WAL` = `1` — opt-in to WAL for per-test SQLite DBs; default is DELETE mode to reduce CI file churn.
+- `DISABLE_HEAVY_STARTUP` = `1` — skip unrelated heavy app startup (MCP, TTS, chat workers, background loops) during tests; `TEST_MODE=true` also enables this.
+- `TLDW_PS_JOB_LEASE_SECONDS` — lease window (seconds) for Prompt Studio job processing; expired processing jobs are reclaimed on the next acquire (default: 60).
+- `TLDW_PS_HEARTBEAT_SECONDS` — heartbeat interval (seconds) for renewing job leases (default: half of lease window, up to 30).
+
 </details>
 
 ---
@@ -1010,6 +1022,19 @@ python -m pytest -m "property" tldw_Server_API/tests/Embeddings_NEW/property -v
 Notes
 - Legacy RAG tests under `tldw_Server_API/tests/RAG` are deprecated and skipped by default. The unified pipeline lives under `tldw_Server_API/tests/RAG_NEW`.
 - Integration tests should not mock internal components; prefer local, real fixtures (e.g., a local HTTP webhook server) for deterministic behavior.
+
+#### Prompt Studio tests
+- Heavy optimization suite is marked `slow` and runs against a single backend per run.
+- Select backend with `TLDW_PS_BACKEND=sqlite|postgres` (default sqlite).
+- Useful env vars: `TLDW_PS_STRESS=1`, `TLDW_PS_TC_COUNT`, `TLDW_PS_ITERATIONS`, `TLDW_PS_OPT_COUNT`, `TLDW_TEST_POSTGRES_REQUIRED=1`, `TLDW_PS_SQLITE_WAL=1`, `DISABLE_HEAVY_STARTUP=1`.
+
+### Prompt Studio Metrics (quick reference)
+- Gauges/counters: `prompt_studio.jobs.queued{job_type}`, `prompt_studio.jobs.processing{job_type}`, `prompt_studio.jobs.backlog{job_type}`, `prompt_studio.jobs.stale_processing`.
+- Histograms: `prompt_studio.jobs.duration_seconds{job_type}`, `prompt_studio.jobs.queue_latency_seconds{job_type}`.
+- Counters: `prompt_studio.jobs.retries_total{job_type}`, `prompt_studio.jobs.failures_total{job_type,reason}`, `prompt_studio.jobs.lease_renewals_total{job_type}`, `prompt_studio.jobs.reclaims_total{job_type}`.
+- Idempotency counters: `prompt_studio.idempotency.hit_total{entity_type}`, `prompt_studio.idempotency.miss_total{entity_type}`.
+- Postgres advisory locks: `prompt_studio.pg_advisory.lock_attempts_total`, `locks_acquired_total`, `unlocks_total`.
+- See Docs: `Docs/API-related/Prompt_Studio_API.md` and `Docs/Postgres_Support_Status_and_Testing.md` for details.
 </details>
 
 

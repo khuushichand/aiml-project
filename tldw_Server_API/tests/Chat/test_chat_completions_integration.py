@@ -289,13 +289,13 @@ def test_commercial_provider_non_streaming_no_template(
 
     model_map = {
         "openai": "gpt-4o-mini",
-        "anthropic": "claude-3-haiku-20240307",
-        "cohere": "command-r",
-        "groq": "llama3-8b-8192",
-        "openrouter": "mistralai/mistral-7b-instruct:free",
+        "anthropic": "claude-4-sonnet",
+        "cohere": "command-a",
+        "groq": "llama-3.1-8b-instant",
+        "openrouter": "deepseek/deepseek-chat-v3.1:free",
         "deepseek": "deepseek-chat",
         "mistral": "mistral-tiny",
-        "google": "gemini-1.5-flash-latest",
+        "google": "gemini-flash-2.5",
         "huggingface": os.getenv("HF_TEST_MODEL", "mistralai/Mistral-7B-Instruct-v0.1")
     }
     default_test_model = "test-model-default"  # Fallback, though ideally map should cover all in COMMERCIAL_PROVIDERS_FOR_TEST

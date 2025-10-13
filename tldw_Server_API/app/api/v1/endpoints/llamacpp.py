@@ -157,7 +157,7 @@ class LlamaCppRerankItem(BaseModel):
 
 class LlamaCppRerankRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Query to rank against passages")
-    passages: List[LlamaCppRerankItem] = Field(..., min_items=1, description="Candidate passages to rerank")
+    passages: List[LlamaCppRerankItem] = Field(..., min_length=1, description="Candidate passages to rerank")
     top_k: Optional[int] = Field(default=None, ge=1, le=100, description="Top-K results to return (defaults to len(passages))")
     # Optional overrides for llama.cpp and model selection
     model: Optional[str] = Field(default=None, description="GGUF model path (overrides config)")
@@ -253,7 +253,16 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
 
     # Execute reranking
     try:
-        scored = await reranker.rerank(payload.query, documents)
+        # Support both async and sync reranker implementations
+        rerank_fn = getattr(reranker, "rerank", None)
+        if rerank_fn is None:
+            raise RuntimeError("Invalid reranker: missing rerank() method")
+        scored = rerank_fn(payload.query, documents)
+        if hasattr(scored, "__await__"):
+            scored = await scored
+        # Enforce top_k even if underlying reranker returns more
+        if isinstance(scored, list) and cfg.top_k:
+            scored = scored[: cfg.top_k]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reranking failed: {e}")
 
@@ -281,7 +290,7 @@ public_router = APIRouter()
 class PublicRerankRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="Reranker model id/path (GGUF for llama.cpp or HF id for transformers)")
     query: str = Field(..., min_length=1)
-    documents: List[str] = Field(..., min_items=1, description="Documents (plain text) to rank")
+    documents: List[str] = Field(..., min_length=1, description="Documents (plain text) to rank")
     top_n: Optional[int] = Field(default=None, ge=1, le=100)
     backend: Optional[str] = Field(default="auto", description="Reranker backend: auto|llamacpp|transformers")
     model_config = ConfigDict(json_schema_extra={
@@ -335,7 +344,16 @@ async def _run_public_rerank(query: str, docs: List[str], model_override: Option
         model_name=model_name,
     )
     reranker = create_reranker(strategy, cfg)
-    scored = await reranker.rerank(query, documents)
+    # Support both async and sync reranker implementations
+    rerank_fn = getattr(reranker, "rerank", None)
+    if rerank_fn is None:
+        raise HTTPException(status_code=500, detail="Invalid reranker: missing rerank() method")
+    scored = rerank_fn(query, documents)
+    if hasattr(scored, "__await__"):
+        scored = await scored
+    # Enforce top_k even if underlying reranker returns more
+    if isinstance(scored, list) and cfg.top_k:
+        scored = scored[: cfg.top_k]
     out: List[LlamaCppRerankResult] = []
     for sd in scored:
         idx = int(getattr(sd.document, 'id', '0')) if str(getattr(sd.document, 'id', '0')).isdigit() else 0

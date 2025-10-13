@@ -397,7 +397,9 @@ class StreamingResponseHandler:
                             "conversation_id": self.conversation_id
                         }
                         yield f"data: {json.dumps(done_payload)}\n\n"
+                    # Emit terminal DONE sentinel and mark it as sent to avoid duplicates
                     yield "data: [DONE]\n\n"
+                    self.done_sent = True
                 
                 # Save the full response if callback provided (only when not cancelled)
                 if (

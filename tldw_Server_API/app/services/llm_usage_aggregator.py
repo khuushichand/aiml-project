@@ -30,7 +30,7 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
                 )
                 SELECT
                     $1::date as day,
-                    COALESCE(user_id, 0) as user_id,
+                    user_id as user_id,
                     COALESCE(operation,'') as operation,
                     COALESCE(provider,'') as provider,
                     COALESCE(model,'') as model,
@@ -42,8 +42,8 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
                     COALESCE(SUM(COALESCE(total_cost_usd,0)),0) as total_cost_usd,
                     AVG(latency_ms)::float as latency_avg_ms
                 FROM llm_usage_log
-                WHERE date(ts AT TIME ZONE 'UTC') = $1::date
-                GROUP BY COALESCE(user_id,0), COALESCE(operation,''), COALESCE(provider,''), COALESCE(model,'')
+                WHERE user_id IS NOT NULL AND date(ts AT TIME ZONE 'UTC') = $1::date
+                GROUP BY user_id, COALESCE(operation,''), COALESCE(provider,''), COALESCE(model,'')
                 ON CONFLICT (day, user_id, operation, provider, model) DO UPDATE SET
                     requests = EXCLUDED.requests,
                     errors = EXCLUDED.errors,
@@ -65,7 +65,7 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
                 )
                 SELECT
                     ? as day,
-                    IFNULL(user_id, 0) as user_id,
+                    user_id as user_id,
                     IFNULL(operation,'') as operation,
                     IFNULL(provider,'') as provider,
                     IFNULL(model,'') as model,
@@ -77,8 +77,8 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
                     IFNULL(SUM(IFNULL(total_cost_usd,0)),0) as total_cost_usd,
                     AVG(latency_ms) as latency_avg_ms
                 FROM llm_usage_log
-                WHERE DATE(ts) = ?
-                GROUP BY IFNULL(user_id,0), IFNULL(operation,''), IFNULL(provider,''), IFNULL(model,'')
+                WHERE user_id IS NOT NULL AND DATE(ts) = ?
+                GROUP BY user_id, IFNULL(operation,''), IFNULL(provider,''), IFNULL(model,'')
                 """
             )
             await pool.execute(query, day_str, day_str)
@@ -86,4 +86,3 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
         logger.debug(f"llm_usage_daily aggregated for {day_str}")
     except Exception as e:
         logger.debug(f"llm_usage_daily aggregation skipped/failed: {e}")
-

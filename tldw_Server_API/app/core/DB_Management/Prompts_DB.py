@@ -1592,12 +1592,17 @@ class PromptsDatabase:
                 # Attach keywords to each result
                 for res_dict in results_list:
                     res_dict['keywords'] = self.fetch_keywords_for_prompt(res_dict['id'], include_deleted=False)
-            # Naive fallback only if FTS errored (or FTS not used and no fields specified)
+            # Naive fallback conditions:
+            # - FTS errored
+            # - Prefer naive in test mode or when no fields were specified (original_fields None)
+            # - FTS was used but returned zero matches (defensive fallback to avoid false negatives)
             do_naive = False
             if search_query:
                 if fts_error:
                     do_naive = True
                 elif prefer_naive or (not used_fts and (not search_fields or len(search_fields) == 0)):
+                    do_naive = True
+                elif used_fts and total_matches == 0:
                     do_naive = True
             if do_naive:
                 try:
@@ -1622,8 +1627,9 @@ class PromptsDatabase:
                         if q in ' '.join(haystack_parts):
                             rowd['keywords'] = kws
                             fallback_items.append(rowd)
-                    # Merge unique by id with any existing results
-                    by_id = {item['id']: item for item in results_list}
+                    # Merge unique by id. If running in prefer_naive mode,
+                    # ignore any prior unfiltered SQL results to avoid overcounting.
+                    by_id = {} if prefer_naive else {item['id']: item for item in results_list}
                     for item in fallback_items:
                         by_id[item['id']] = item
                     combined = list(by_id.values())

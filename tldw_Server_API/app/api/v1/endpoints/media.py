@@ -555,7 +555,8 @@ def invalidate_cache(media_id: int):
 # =============================================================================
 def get_add_media_form(
     # Replicate ALL Form(...) fields from the endpoint signature
-    media_type: MediaType = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
+    # Accept string here so AddMediaForm can control error messaging for invalid values
+    media_type: str = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
     urls: Optional[List[str]] = Form(None, description="List of URLs of the media items to add"),
     title: Optional[str] = Form(None, description="Optional title (applied if only one item processed)"),
     author: Optional[str] = Form(None, description="Optional author (applied similarly to title)"),
@@ -3544,91 +3545,94 @@ async def _process_document_like_item(
                     if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
                         children = final_result.get('children') or []
                         if isinstance(children, list) and children:
-                            child_db_results = []
-                            for child in children:
-                                try:
-                                    c_content = child.get('content')
-                                    c_meta = child.get('metadata') or {}
-                                    if not c_content:
-                                        continue
-                                    # Safe metadata subset for child
-                                    allowed_keys = {
-                                        'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
-                                        'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
-                                        'publisher','source','creators','rights','parent_media_uuid'
-                                    }
-                                    safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
-                                    safe_c_meta['parent_media_uuid'] = media_uuid_result
-                                    safe_c_meta_json = None
+                            # If any child is not a Success (e.g., guardrail), do not persist any children
+                            if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
+                                final_result['child_db_results'] = None
+                            else:
+                                child_db_results = []
+                                for child in children:
                                     try:
-                                        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
-                                        safe_c_meta = normalize_safe_metadata(safe_c_meta)
-                                        safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
-                                    except Exception:
-                                        pass
-
-                                    # Child chunking
-                                    c_chunks_for_sql = None
-                                    try:
-                                        _opts = chunk_options or {}
-                                        if _opts:
-                                            from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
-                                            _ck = _Chunker()
-                                            _flat = _ck.chunk_text_hierarchical_flat(
-                                                c_content,
-                                                method=_opts.get('method') or 'sentences',
-                                                max_size=_opts.get('max_size') or 500,
-                                                overlap=_opts.get('overlap') or 50,
-                                            )
-                                            _kind_map = {
-                                                'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
-                                                'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
-                                            }
-                                            c_chunks_for_sql = []
-                                            for _it in _flat:
-                                                _md = _it.get('metadata') or {}
-                                                _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
-                                                _small = {}
-                                                if _md.get('ancestry_titles'):
-                                                    _small['ancestry_titles'] = _md.get('ancestry_titles')
-                                                if _md.get('section_path'):
-                                                    _small['section_path'] = _md.get('section_path')
-                                                c_chunks_for_sql.append({
-                                                    'text': _it.get('text',''),
-                                                    'start_char': _md.get('start_offset'),
-                                                    'end_char': _md.get('end_offset'),
-                                                    'chunk_type': _ctype,
-                                                    'metadata': _small,
-                                                })
-                                    except Exception:
-                                        c_chunks_for_sql = None
-
-                                    c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (child)')
-                                    c_author = c_meta.get('author') or form_data.author or 'Unknown'
-                                    c_url = f"{item_input_ref}::child::{c_meta.get('filename') or c_title}"
-
-                                    def _db_child_worker():
-                                        worker_db = None
+                                        c_content = child.get('content')
+                                        c_meta = child.get('metadata') or {}
+                                        if not c_content:
+                                            continue
+                                        # Safe metadata subset for child
+                                        allowed_keys = {
+                                            'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
+                                            'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
+                                            'publisher','source','creators','rights','parent_media_uuid'
+                                        }
+                                        safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
+                                        safe_c_meta['parent_media_uuid'] = media_uuid_result
                                         try:
-                                            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                                            return worker_db.add_media_with_keywords(
-                                                url=c_url, title=c_title, media_type=media_type,
-                                                content=c_content, keywords=final_keywords_list,
-                                                prompt=form_data.custom_prompt, analysis_content=None,
-                                                safe_metadata=safe_c_meta_json, transcription_model=model_used,
-                                                author=c_author, overwrite=form_data.overwrite_existing,
-                                                chunk_options=chunk_options, chunks=c_chunks_for_sql,
-                                            )
-                                        finally:
-                                            if worker_db:
-                                                worker_db.close_connection()
+                                            from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+                                            safe_c_meta = normalize_safe_metadata(safe_c_meta)
+                                            safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
+                                        except Exception:
+                                            safe_c_meta_json = None
 
-                                    c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_worker)
-                                    child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
-                                except Exception as child_db_err:
-                                    logging.warning(f"Child email persistence failed: {child_db_err}")
-                            if child_db_results:
-                                final_result['child_db_results'] = child_db_results
+                                        # Child chunking (optional)
+                                        c_chunks_for_sql = None
+                                        try:
+                                            _opts = chunk_options or {}
+                                            if _opts:
+                                                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
+                                                _ck = _Chunker()
+                                                _flat = _ck.chunk_text_hierarchical_flat(
+                                                    c_content,
+                                                    method=_opts.get('method') or 'sentences',
+                                                    max_size=_opts.get('max_size') or 500,
+                                                    overlap=_opts.get('overlap') or 50,
+                                                )
+                                                _kind_map = {
+                                                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
+                                                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
+                                                }
+                                                c_chunks_for_sql = []
+                                                for _it in _flat:
+                                                    _md = _it.get('metadata') or {}
+                                                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
+                                                    _small = {}
+                                                    if _md.get('ancestry_titles'):
+                                                        _small['ancestry_titles'] = _md.get('ancestry_titles')
+                                                    if _md.get('section_path'):
+                                                        _small['section_path'] = _md.get('section_path')
+                                                    c_chunks_for_sql.append({
+                                                        'text': _it.get('text',''),
+                                                        'start_char': _md.get('start_offset'),
+                                                        'end_char': _md.get('end_offset'),
+                                                        'chunk_type': _ctype,
+                                                        'metadata': _small,
+                                                    })
+                                        except Exception:
+                                            c_chunks_for_sql = None
+
+                                        c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (child)')
+                                        c_author = c_meta.get('author') or form_data.author or 'Unknown'
+                                        c_url = f"{item_input_ref}::child::{c_meta.get('filename') or c_title}"
+
+                                        def _db_child_worker():
+                                            worker_db = None
+                                            try:
+                                                worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                                                return worker_db.add_media_with_keywords(
+                                                    url=c_url, title=c_title, media_type=media_type,
+                                                    content=c_content, keywords=final_keywords_list,
+                                                    prompt=form_data.custom_prompt, analysis_content=None,
+                                                    safe_metadata=safe_c_meta_json, transcription_model=model_used,
+                                                    author=c_author, overwrite=form_data.overwrite_existing,
+                                                    chunk_options=chunk_options, chunks=c_chunks_for_sql,
+                                                )
+                                            finally:
+                                                if worker_db:
+                                                    worker_db.close_connection()
+
+                                        c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_worker)
+                                        child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
+                                    except Exception as child_db_err:
+                                        logging.warning(f"Child email persistence failed: {child_db_err}")
+                                if child_db_results:
+                                    final_result['child_db_results'] = child_db_results
                 except Exception:
                     pass
 
@@ -3662,7 +3666,12 @@ async def _process_document_like_item(
                  try:
                      children = final_result.get('children') or []
                      if isinstance(children, list) and children:
-                         child_db_results = []
+                         # If any child failed (e.g., guardrail error), skip child persistence entirely
+                         if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
+                             final_result['child_db_results'] = None
+                             persisted_any_children = False
+                         else:
+                             child_db_results = []
                          for child in children:
                              try:
                                  c_content = child.get('content')
@@ -3744,8 +3753,11 @@ async def _process_document_like_item(
                                  persisted_any_children = True
                              except Exception as child_db_err:
                                  logging.warning(f"Archive child email persistence failed: {child_db_err}")
-                         if child_db_results:
-                             final_result['child_db_results'] = child_db_results
+                         try:
+                             if child_db_results:
+                                 final_result['child_db_results'] = child_db_results
+                         except Exception:
+                             pass
                  except Exception:
                      pass
 
@@ -6061,7 +6073,7 @@ async def process_documents_endpoint(
         "results": []
     }
     # Map to track original ref -> temp path
-    source_map: Dict[str, Path] = {} # Store Path objects
+    source_map: Dict[str, FilePath] = {} # Store Path objects
 
     loop = asyncio.get_running_loop()
     # Use TempDirManager for reliable cleanup
@@ -6069,7 +6081,7 @@ async def process_documents_endpoint(
         temp_dir = FilePath(temp_dir_path)
         logger.info(f"Using temporary directory: {temp_dir}")
 
-        local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
+        local_paths_to_process: List[Tuple[str, FilePath]] = [] # (original_ref, local_path)
 
         # --- Handle Uploads ---
         if files:
@@ -6119,9 +6131,9 @@ async def process_documents_endpoint(
                         target_dir=temp_dir,
                         allowed_extensions=allowed_ext_set,
                         check_extension=True,
+                        # Disallow only clearly unsupported/generic types. Allow HTML/XHTML/XML types here
+                        # because this endpoint handles .html/.htm/.xml content.
                         disallow_content_types={
-                            "text/html",
-                            "application/xhtml+xml",
                             "application/msword",
                             "application/octet-stream",
                         }
@@ -6200,7 +6212,7 @@ async def process_documents_endpoint(
         processing_tasks = []
         for original_ref, doc_path in local_paths_to_process:
             partial_func = functools.partial(
-                process_document_content,
+                docs.process_document_content,
                 doc_path=doc_path,
                 # Pass relevant options from form_data
                 perform_chunking=form_data.perform_chunking,
@@ -6459,7 +6471,7 @@ def get_process_pdfs_form(
         )
 
 async def _single_pdf_worker(
-    pdf_path: Path,
+    pdf_path: FilePath,
     form,                      # ProcessPDFsForm instance
     chunk_opts: Dict[str, Any]
 ) -> Dict[str, Any]:

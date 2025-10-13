@@ -202,7 +202,7 @@ class MCPProtocol:
                 )
             
             # Check authorization
-            if not await self._check_authorization(request.method, context):
+            if not await self._check_authorization(request, context):
                 # Provide a short hint for common denied operations
                 hint_data = None
                 try:
@@ -275,12 +275,13 @@ class MCPProtocol:
     
     async def _check_authorization(
         self,
-        method: str,
+        request: MCPRequest,
         context: RequestContext
     ) -> bool:
         """Check if user is authorized for method"""
         # Public methods that don't require auth
         public_methods = ["initialize", "ping"]
+        method = request.method
         if method in public_methods:
             return True
         
@@ -309,9 +310,19 @@ class MCPProtocol:
             fn = getattr(self.rbac_policy, 'check_permission', None)
             if fn is None:
                 return False
+            # Provide resource_id (e.g., tool name) when applicable
+            resource_id = None
+            try:
+                if resource == Resource.TOOL and action == Action.EXECUTE:
+                    params = request.params or {}
+                    name = params.get("name") if isinstance(params, dict) else None
+                    if isinstance(name, str) and name:
+                        resource_id = name
+            except Exception:
+                resource_id = None
             if inspect.iscoroutinefunction(fn):
-                return await fn(context.user_id, resource, action)
-            return fn(context.user_id, resource, action)
+                return await fn(context.user_id, resource, action, resource_id)
+            return fn(context.user_id, resource, action, resource_id)
         
         # Unknown method - deny by default
         return False

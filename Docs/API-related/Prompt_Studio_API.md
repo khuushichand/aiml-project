@@ -24,6 +24,36 @@ Auth headers
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
 
+### Test/CI Environment Variables (Prompt Studio)
+- `TLDW_PS_BACKEND=sqlite|postgres` — for the heavy optimization suite, pick a single backend per run (default: sqlite).
+- `TLDW_PS_STRESS=1` — enable larger datasets/iterations in heavy tests.
+- `TLDW_PS_TC_COUNT` — override test-case volume (default 250; stress 1000).
+- `TLDW_PS_ITERATIONS` — override iteration count (default 5; stress 10).
+- `TLDW_PS_OPT_COUNT` — override concurrent optimizations (default 3; stress 8).
+- `TLDW_TEST_POSTGRES_REQUIRED=1` — fail fast if Postgres probe fails (otherwise Postgres tests are skipped when unreachable).
+- `TLDW_PS_SQLITE_WAL=1` — opt-in to WAL for per-test SQLite DBs (default: DELETE mode for CI tidiness).
+- `DISABLE_HEAVY_STARTUP=1` — skip unrelated heavy startup (MCP, TTS, chat workers) in tests to reduce startup time; `TEST_MODE=true` also triggers this.
+- `TLDW_PS_JOB_LEASE_SECONDS` — lease window for processing jobs in the Prompt Studio queue (default: 60). Expired processing jobs are reclaimed.
+- `TLDW_PS_HEARTBEAT_SECONDS` — heartbeat interval override for renewing job leases during processing (default: lease/2 up to 30s).
+
+### Strategy Parameters (validation highlights)
+- `beam_search`:
+  - `beam_width` ≥ 2, `max_candidates` ≥ `beam_width` (if both provided)
+  - `diversity_rate` in [0, 1], `prune_threshold` in [0, 1]
+  - `length_penalty` in [0, 2]
+  - `candidate_reranker`: one of `none|score|diversity|hybrid`
+- `anneal` (simulated annealing):
+  - `cooling_rate` in (0, 1], `initial_temp` > 0, `min_temp` ≥ 0 and ≤ `initial_temp`
+  - Optional schedule: `exponential|linear|cosine`
+  - If `schedule=linear` and `step_size`/`epochs` provided, enforce `step_size * epochs ≤ (initial_temp - min_temp)`
+- `genetic`:
+  - `population_size` ≥ 2, `mutation_rate` in [0, 1], `crossover_rate` in [0, 1], `elitism` ≥ 0
+  - `selection`: `tournament|roulette|rank`
+  - `crossover_operator`: `one_point|two_point|uniform`
+- `hyperparameter`, `random_search`:
+  - `max_trials` ≥ 1 (if provided)
+  - `max_tokens_range`: `[min, max]` with `1 ≤ min < max ≤ 100000`
+
 ## More Examples
 
 ### Update Project
@@ -165,6 +195,7 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 - Cancel: `POST /api/v1/prompt-studio/optimizations/cancel/{optimization_id}`
 - Strategies: `GET /api/v1/prompt-studio/optimizations/strategies`
 - Compare: `POST /api/v1/prompt-studio/optimizations/compare`
+- Status/Health: `GET /api/v1/prompt-studio/status?warn_seconds=30` — queue depth, processing count, and lease health (active, expiring soon, stale processing)
 
 ### Real‑time API
 - WebSocket base: `WS /api/v1/prompt-studio/ws`
@@ -183,6 +214,25 @@ Notes
 - TestCaseCreate, TestCaseUpdate, TestCaseResponse, TestCaseBulkCreate, TestCaseImportRequest, TestCaseExportRequest, TestCaseGenerateRequest
 - EvaluationCreate, EvaluationResponse, EvaluationMetrics
 - OptimizationCreate, OptimizationResponse, OptimizationConfig
+  - Note: `OptimizationConfig.strategy_params` allows optional strategy-specific knobs (e.g., `beam_width`, `cooling_rate`, `mutation_rate`). These parameters are validated when provided for supported strategies.
+  - Additional optional knobs currently validated when present:
+    - `beam_search`: `beam_width>=2`, `prune_threshold` in [0,1], `max_candidates>=beam_width`
+    - `anneal`: `cooling_rate` in (0,1], `initial_temp>0`, `min_temp>=0` and `<=initial_temp` (if both set), `schedule` one of `exponential|linear|cosine`
+    - `genetic`: `population_size>=2`, `mutation_rate` in [0,1], `crossover_rate` in [0,1], `elitism>=0`, `selection` one of `tournament|roulette|rank`
+
+### Metrics (Prometheus)
+- The status endpoint updates the following Prometheus gauges with label `backend=sqlite|POSTGRESQL`:
+  - `prompt_studio_queue_depth`
+  - `prompt_studio_processing`
+  - `prompt_studio_leases_active`
+  - `prompt_studio_leases_expiring_soon`
+  - `prompt_studio_leases_stale_processing`
+- Scrape via `GET /api/v1/metrics/text`.
+
+### Idempotency
+- Create endpoints (projects, prompts, optimizations) accept `Idempotency-Key` header.
+- The idempotency map enforces uniqueness per user: `(entity_type, idempotency_key, user_id)`.
+- Duplicate submits with the same key and user return the canonical entity without enqueuing new work.
 
 ## Quick Examples
 
@@ -342,3 +392,31 @@ ws.onmessage = (evt) => console.log("event", evt.data);
 - Evaluations can run synchronously or as background tasks
 - Real‑time updates support both WebSocket and SSE fallback
 - Real‑time updates support both WebSocket and SSE fallback
+## Metrics
+
+Prompt Studio emits the following metrics (names, labels) and when they are updated:
+
+- Job queue gauges/counters
+  - `prompt_studio.jobs.queued{job_type}`: updated on job create/acquire/status refresh.
+  - `prompt_studio.jobs.processing{job_type}`: updated on acquire/complete/fail/retry/status refresh.
+  - `prompt_studio.jobs.backlog{job_type}`: computed as queued − processing; updated alongside gauges.
+  - `prompt_studio.jobs.stale_processing`: aggregate gauge from lease stats.
+  - `prompt_studio.jobs.duration_seconds{job_type}`: histogram observed when a job finishes (success/failure).
+  - `prompt_studio.jobs.queue_latency_seconds{job_type}`: histogram observed on acquire (started_at − created_at).
+  - `prompt_studio.jobs.retries_total{job_type}`: increments when a job is rescheduled for retry.
+  - `prompt_studio.jobs.failures_total{job_type,reason}`: increments on terminal failure with exception type.
+  - `prompt_studio.jobs.lease_renewals_total{job_type}`: increments on each lease heartbeat renewal.
+  - `prompt_studio.jobs.reclaims_total{job_type}`: increments when a processing job with expired lease is reclaimed.
+
+- Idempotency
+  - `prompt_studio.idempotency.hit_total{entity_type}`: increments when a duplicated request (same Idempotency-Key) returns the canonical entity.
+  - `prompt_studio.idempotency.miss_total{entity_type}`: increments when a new mapping is recorded for a request.
+
+- Postgres advisory locks
+  - `prompt_studio.pg_advisory.lock_attempts_total`: increments per acquire attempt on Postgres.
+  - `prompt_studio.pg_advisory.locks_acquired_total`: increments when a job row is selected with `pg_try_advisory_lock`.
+  - `prompt_studio.pg_advisory.unlocks_total`: increments when the advisory lock is released.
+
+The `/api/v1/prompt-studio/status` endpoint also updates generic gauges for Prometheus scraping:
+`prompt_studio_queue_depth`, `prompt_studio_processing`, and lease gauges (`prompt_studio_leases_*`),
+and refreshes the per-type Prompt Studio gauges (`queued`, `processing`, `backlog`, `stale_processing`).

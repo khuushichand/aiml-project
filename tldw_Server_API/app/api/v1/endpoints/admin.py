@@ -70,6 +70,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_storage_service_dep
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
@@ -530,6 +531,10 @@ async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) 
         wanted = {
             'id','key_prefix','name','description','scope','status','created_at','expires_at','usage_count','last_used_at','last_used_ip'
         }
+        # Defensive: ensure user_id is a plain int (some callers might pass (id,))
+        if isinstance(user_id, (tuple, list)):
+            user_id = user_id[0]
+        user_id = int(user_id)
         if hasattr(db, 'fetch'):
             rows = await db.fetch("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = $1 AND COALESCE(is_virtual,FALSE) = TRUE ORDER BY created_at DESC", user_id)
             items = [APIKeyMetadata(**dict(r)) for r in rows]
@@ -1834,6 +1839,10 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
     try:
         # Fetch role information
         role_name: Optional[str] = None
+        # Defensive: normalize role_id to plain int
+        if isinstance(role_id, (tuple, list)):
+            role_id = role_id[0]
+        role_id = int(role_id)
         if hasattr(db, 'fetchrow'):
             r = await db.fetchrow("SELECT id, name FROM roles WHERE id = $1", role_id)
             if not r:
@@ -2461,7 +2470,8 @@ async def get_usage_daily(
         conditions: list[str] = []
         params: list = []
 
-        is_pg = hasattr(db, 'fetchrow')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
 
         if user_id is not None:
             if is_pg:
@@ -2528,8 +2538,8 @@ async def get_usage_daily(
                 )
 
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
-    except Exception as e:
-        logger.error(f"Failed to query usage_daily: {e}")
+    except Exception:
+        logger.exception("Failed to query usage_daily")
         raise HTTPException(status_code=500, detail="Failed to load usage daily data")
 
 
@@ -2543,7 +2553,8 @@ async def get_usage_top(
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
     try:
-        is_pg = hasattr(db, 'fetch')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
         conditions: list[str] = []
         params: list = []
 
@@ -2646,7 +2657,8 @@ async def get_llm_usage(
         offset = (page - 1) * limit
         conditions: list[str] = []
         params: list = []
-        is_pg = hasattr(db, 'fetchrow')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
 
         def add_cond(sql: str, value):
             if value is None:
@@ -2681,27 +2693,39 @@ async def get_llm_usage(
             items = [LLMUsageLogRow(**dict(r)) for r in rows]
         else:
             count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
-            cur = await db.execute(count_sql, params)
-            total = (await cur.fetchone())[0]
+            total = await db.fetchval(count_sql, params)
             data_sql = (
                 f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
                 f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
                 f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"
             )
-            cur = await db.execute(data_sql, params + [limit, offset])
-            rows = await cur.fetchall()
+            rows = await db.fetch(data_sql, params + [limit, offset])
             items = [
                 LLMUsageLogRow(
-                    id=row[0], ts=row[1], user_id=row[2], key_id=row[3], endpoint=row[4], operation=row[5],
-                    provider=row[6], model=row[7], status=row[8], latency_ms=row[9], prompt_tokens=row[10],
-                    completion_tokens=row[11], total_tokens=row[12], total_cost_usd=row[13], currency=row[14],
-                    estimated=bool(row[15]), request_id=row[16]
+                    id=row["id"] if isinstance(row, dict) else row[0],
+                    ts=row["ts"] if isinstance(row, dict) else row[1],
+                    user_id=row.get("user_id") if isinstance(row, dict) else row[2],
+                    key_id=row.get("key_id") if isinstance(row, dict) else row[3],
+                    endpoint=row.get("endpoint") if isinstance(row, dict) else row[4],
+                    operation=row.get("operation") if isinstance(row, dict) else row[5],
+                    provider=row.get("provider") if isinstance(row, dict) else row[6],
+                    model=row.get("model") if isinstance(row, dict) else row[7],
+                    status=row.get("status") if isinstance(row, dict) else row[8],
+                    latency_ms=row.get("latency_ms") if isinstance(row, dict) else row[9],
+                    prompt_tokens=row.get("prompt_tokens") if isinstance(row, dict) else row[10],
+                    completion_tokens=row.get("completion_tokens") if isinstance(row, dict) else row[11],
+                    total_tokens=row.get("total_tokens") if isinstance(row, dict) else row[12],
+                    total_cost_usd=row.get("total_cost_usd") if isinstance(row, dict) else row[13],
+                    currency=row.get("currency") if isinstance(row, dict) else row[14],
+                    estimated=bool(row.get("estimated")) if isinstance(row, dict) else bool(row[15]),
+                    request_id=row.get("request_id") if isinstance(row, dict) else row[16],
                 ) for row in rows
             ]
 
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
-    except Exception as e:
-        logger.error(f"Failed to query llm_usage_log: {e}")
+    except Exception:
+        # Log full stack to aid debugging in tests
+        logger.exception("Failed to query llm_usage_log")
         raise HTTPException(status_code=500, detail="Failed to load LLM usage data")
 
 
@@ -2713,7 +2737,8 @@ async def get_llm_usage_summary(
     db=Depends(get_db_transaction)
 ) -> LLMUsageSummaryResponse:
     try:
-        is_pg = hasattr(db, 'fetch')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
         conditions: list[str] = []
         params: list = []
         if start:
@@ -2743,6 +2768,7 @@ async def get_llm_usage_summary(
             # day
             key_expr = "CAST(date(ts) AS TEXT)" if not is_pg else "CAST(date(ts) AS TEXT)"
 
+        # Build SQL using str.format placeholders; avoid mixing with f-strings
         sql = (
             "SELECT {key} as group_value, "
             "COUNT(*) as requests, "
@@ -2752,7 +2778,7 @@ async def get_llm_usage_summary(
             "COALESCE(SUM(COALESCE(total_tokens,0)),0) as total_tokens, "
             "COALESCE(SUM(COALESCE(total_cost_usd,0)),0) as total_cost_usd, "
             "AVG(latency_ms) as latency_avg_ms "
-            f"FROM llm_usage_log{where} GROUP BY {key} ORDER BY total_cost_usd DESC" 
+            "FROM llm_usage_log{where} GROUP BY {key} ORDER BY total_cost_usd DESC"
         ).format(key=key_expr, where=where_clause)
 
         if is_pg:
@@ -2783,7 +2809,8 @@ async def get_llm_top_spenders(
     db=Depends(get_db_transaction)
 ) -> LLMTopSpendersResponse:
     try:
-        is_pg = hasattr(db, 'fetch')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
         conditions: list[str] = []
         params: list = []
         if start:
@@ -2838,7 +2865,8 @@ async def export_llm_usage_csv(
 ) -> PlainTextResponse:
     """Export filtered llm_usage_log rows as CSV."""
     try:
-        is_pg = hasattr(db, 'fetch')
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
         conditions: list[str] = []
         params: list = []
 

@@ -3866,7 +3866,7 @@ UPDATE db_schema_version
                 msg_id, msg_data['conversation_id'], msg_data.get('parent_message_id'),
                 msg_data['sender'], msg_data.get('content', ''),
                 msg_data.get('image_data'), msg_data.get('image_mime_type'),
-                timestamp, msg_data.get('ranking'), now, client_id
+                timestamp, msg_data.get('ranking'), now, client_id, 1, 0
             )
         try:
             with self.transaction():

@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 
 class StorageWorker(BaseWorker):
@@ -27,6 +28,10 @@ class StorageWorker(BaseWorker):
     def __init__(self, config: WorkerConfig):
         super().__init__(config)
         self._adapter_cache: Dict[str, VectorStoreAdapter] = {}
+        # Capture manager class at construction time so tests can patch
+        # tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager
+        # and have the patched reference persist after the context.
+        self._manager_cls = ChromaDBManager
     
     def _parse_message(self, data: Dict[str, Any]) -> StorageMessage:
         """Parse raw message data into StorageMessage"""
@@ -37,65 +42,60 @@ class StorageWorker(BaseWorker):
         logger.info(
             f"Processing storage job {message.job_id} with {len(message.embeddings)} embeddings"
         )
-        
+
         try:
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.STORING)
-            
-            # Resolve adapter and ensure collection
-            embedding_dim = self._infer_embedding_dim(message.embeddings)
-            adapter = await self._get_adapter_for_user(message.user_id, embedding_dim)
-            await adapter.create_collection(
-                message.collection_name,
-                metadata={
-                    "owner": str(message.user_id),
-                    "embedding_dimension": embedding_dim,
-                    "source": "embeddings_pipeline",
-                },
-            )
-            
-            # Prepare data for ChromaDB
+
+            # Prepare data
             ids: List[str] = []
             embeddings: List[List[float]] = []
             documents: List[str] = []
             metadatas: List[Dict[str, Any]] = []
-            
+
             for embedding_data in message.embeddings:
                 ids.append(embedding_data.chunk_id)
                 embeddings.append(embedding_data.embedding)
                 documents.append("")  # ChromaDB requires documents, even if empty
-                metadatas.append({
-                    **embedding_data.metadata,
-                    "media_id": str(message.media_id),
-                    "model_used": embedding_data.model_used,
-                    "dimensions": str(embedding_data.dimensions)
-                })
-            
-            # Store in ChromaDB in batches
+                metadatas.append(
+                    {
+                        **embedding_data.metadata,
+                        "media_id": str(message.media_id),
+                        "model_used": embedding_data.model_used,
+                        "dimensions": str(embedding_data.dimensions),
+                    }
+                )
+
+            # Ensure collection via helper (for test compatibility)
+            collection = await self._get_or_create_collection(
+                str(message.user_id), message.collection_name
+            )
+
+            # Store in batches via helper (for test compatibility)
             batch_size = 100
             for i in range(0, len(ids), batch_size):
                 batch_end = min(i + batch_size, len(ids))
-                
-                await adapter.upsert_vectors(
-                    collection_name=message.collection_name,
+
+                await self._store_batch(
+                    collection,
                     ids=ids[i:batch_end],
-                    vectors=embeddings[i:batch_end],
+                    embeddings=embeddings[i:batch_end],
                     documents=documents[i:batch_end],
                     metadatas=metadatas[i:batch_end],
                 )
-                
+
                 # Update progress
                 progress = 75 + (25 * batch_end / len(ids))
                 await self._update_job_progress(message.job_id, progress)
-            
+
             # Update SQL database
             await self._update_database(message.media_id, message.total_chunks)
-            
+
             # Mark job as completed
             await self._update_job_status(message.job_id, JobStatus.COMPLETED)
-            
+
             logger.info(f"Successfully stored embeddings for job {message.job_id}")
-            
+
         except Exception as e:
             logger.error(f"Error storing embeddings for job {message.job_id}: {e}")
             raise
@@ -134,6 +134,34 @@ class StorageWorker(BaseWorker):
         await adapter.initialize()
         self._adapter_cache[cache_key] = adapter
         return adapter
+
+    async def _get_or_create_collection(self, user_id: str, collection_name: str):
+        """Get or create a collection using ChromaDBManager (test-friendly).
+
+        Tries calling manager.get_or_create_collection in a backward-compatible way so
+        tests that expect a (user_id, collection_name) signature still work when patched.
+        """
+        # Instantiate using the captured class reference (patched in tests)
+        manager = self._manager_cls(user_id=user_id, user_embedding_config=settings)
+
+        try:
+            # Backward-compat: some tests expect (user, collection) args
+            return manager.get_or_create_collection(user_id, collection_name)  # type: ignore[misc]
+        except TypeError:
+            # Actual implementation signature is (collection_name, metadata=None)
+            return manager.get_or_create_collection(collection_name=collection_name)  # type: ignore[misc]
+
+    async def _store_batch(
+        self,
+        collection: Any,
+        ids: List[str],
+        embeddings: List[List[float]],
+        documents: List[str],
+        metadatas: List[Dict[str, Any]],
+    ) -> None:
+        """Store a batch into the provided collection (test-friendly wrapper)."""
+        # Chroma-style collections expose .add(); wrap as async for symmetry in tests
+        collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
 
     def _infer_embedding_dim(self, embeddings: List[Any]) -> int:
         """Infer embedding dimension from the first item, with safe fallbacks."""

@@ -82,6 +82,7 @@ async def reset_singletons():
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
     
     # Disable CSRF protection for tests
     original_csrf_setting = settings.get('CSRF_ENABLED')
@@ -93,6 +94,7 @@ async def reset_singletons():
     reset_jwt_service()
     await reset_registration_service()
     await shutdown_audit_service()
+    await reset_api_key_manager()
     
     # Clear any FastAPI dependency overrides
     try:
@@ -141,6 +143,7 @@ async def reset_singletons():
     reset_jwt_service()
     await reset_registration_service()
     await shutdown_audit_service()
+    await reset_api_key_manager()
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()

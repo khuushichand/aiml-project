@@ -333,7 +333,7 @@ class CreateDatasetRequest(BaseModel):
     """Create dataset request"""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
-    samples: List[DatasetSample] = Field(..., min_items=1)
+    samples: List[DatasetSample] = Field(..., min_length=1)
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -449,7 +449,7 @@ class GEvalResponse(BaseModel):
 class RAGEvaluationRequest(BaseModel):
     """RAG evaluation request"""
     query: str = Field(..., min_length=1, max_length=10000)
-    retrieved_contexts: List[str] = Field(..., min_items=1, max_items=20)
+    retrieved_contexts: List[str] = Field(..., min_length=1, max_length=20)
     generated_response: str = Field(..., min_length=1, max_length=50000)
     ground_truth: Optional[str] = Field(None, max_length=50000)
     metrics: Optional[List[str]] = Field(
@@ -469,8 +469,8 @@ class RAGEvaluationRequest(BaseModel):
 
 class PropositionEvaluationRequest(BaseModel):
     """Evaluate proposition extraction quality"""
-    extracted: List[str] = Field(..., min_items=1, description="Extracted propositions/claims")
-    reference: List[str] = Field(..., min_items=1, description="Reference propositions/claims")
+    extracted: List[str] = Field(..., min_length=1, description="Extracted propositions/claims")
+    reference: List[str] = Field(..., min_length=1, description="Reference propositions/claims")
     method: Optional[Literal['semantic', 'jaccard']] = Field('semantic', description="Matching method")
     threshold: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Match threshold")
 
@@ -695,7 +695,7 @@ class QA3Item(BaseModel):
 
 
 class QA3Request(BaseModel):
-    items: List[QA3Item] = Field(..., min_items=1)
+    items: List[QA3Item] = Field(..., min_length=1)
     allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"]) 
     label_mapping: Optional[Dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
     generate_predictions: Optional[bool] = Field(False, description="If true, call LLM to predict; else expect item.prediction and score-only")
@@ -723,7 +723,7 @@ class QA3Response(BaseModel):
 class BatchEvaluationRequest(BaseModel):
     """Batch evaluation request"""
     evaluation_type: Literal["geval", "rag", "response_quality"]
-    items: List[Dict[str, Any]] = Field(..., min_items=1, max_items=1000)
+    items: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     parallel_workers: int = Field(4, ge=1, le=20)
     continue_on_error: bool = Field(True)
 
@@ -758,7 +758,7 @@ class CustomMetricResponse(BaseModel):
 
 class EvaluationComparisonRequest(BaseModel):
     """Evaluation comparison request"""
-    evaluation_ids: List[str] = Field(..., min_items=2, max_items=10)
+    evaluation_ids: List[str] = Field(..., min_length=2, max_length=10)
     metrics_to_compare: Optional[List[str]] = None
 
 
@@ -793,7 +793,7 @@ class EvaluationHistoryResponse(BaseModel):
 class WebhookRegistrationRequest(BaseModel):
     """Webhook registration request"""
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
-    events: List[WebhookEventType] = Field(..., min_items=1)
+    events: List[WebhookEventType] = Field(..., min_length=1)
     secret: Optional[str] = Field(None, min_length=32)
 
 

@@ -502,8 +502,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     _SCHEMA_VERSION = 1
     _MIGRATION_FILES_SQL = [
         "001_prompt_studio_schema.sql",
-        "002_prompt_studio_indexes.sql",
         "003_prompt_studio_iterations.sql",
+        "002_prompt_studio_indexes.sql",
         # 003 triggers file intentionally omitted (no-op placeholder)
         # 004 FTS handled via backend abstraction
         "005_add_chunking_templates.sql",
@@ -573,6 +573,68 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             self._ensure_extensions(conn)
             if not self.backend.table_exists('prompt_studio_projects', connection=conn):
                 self._apply_postgres_migrations(conn)
+            # Ensure auxiliary tables exist even on existing DBs (idempotency mapping)
+            try:
+                self.backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS prompt_studio_idempotency ("
+                        " id BIGSERIAL PRIMARY KEY,"
+                        " entity_type TEXT NOT NULL,"
+                        " idempotency_key TEXT NOT NULL,"
+                        " entity_id BIGINT NOT NULL,"
+                        " user_id TEXT,"
+                        " created_at TIMESTAMPTZ DEFAULT NOW()"
+                        ")"
+                    ),
+                    connection=conn,
+                )
+                # Composite uniqueness per user
+                self.backend.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_ps_idem_user ON prompt_studio_idempotency(entity_type, idempotency_key, user_id)",
+                    connection=conn,
+                )
+                self.backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ps_idem_entity ON prompt_studio_idempotency(entity_type, user_id)",
+                    connection=conn,
+                )
+                # TODO(PS-IDEMPOTENCY-PG): Add _idem_lookup/_idem_record methods for Postgres backend
+                # mirroring the SQLite implementation. Scope lookups by (entity_type, idempotency_key, user_id)
+                # to avoid cross-user collisions in multi-user mode. Update endpoints/tests accordingly.
+            except BackendDatabaseError as exc:
+                raise SchemaError(f"Failed to ensure idempotency table: {exc}") from exc
+            # Ensure leasing columns exist on job queue
+            try:
+                self.backend.execute(
+                    "ALTER TABLE prompt_studio_job_queue ADD COLUMN IF NOT EXISTS leased_until TIMESTAMPTZ",
+                    connection=conn,
+                )
+                self.backend.execute(
+                    "ALTER TABLE prompt_studio_job_queue ADD COLUMN IF NOT EXISTS lease_owner TEXT",
+                    connection=conn,
+                )
+            except BackendDatabaseError:
+                # Older Postgres versions may not support IF NOT EXISTS on ADD COLUMN; fall back
+                try:
+                    # Probe column existence; if missing, add without IF NOT EXISTS
+                    self.backend.execute(
+                        "SELECT leased_until FROM prompt_studio_job_queue LIMIT 1",
+                        connection=conn,
+                    )
+                except BackendDatabaseError:
+                    self.backend.execute(
+                        "ALTER TABLE prompt_studio_job_queue ADD COLUMN leased_until TIMESTAMPTZ",
+                        connection=conn,
+                    )
+                try:
+                    self.backend.execute(
+                        "SELECT lease_owner FROM prompt_studio_job_queue LIMIT 1",
+                        connection=conn,
+                    )
+                except BackendDatabaseError:
+                    self.backend.execute(
+                        "ALTER TABLE prompt_studio_job_queue ADD COLUMN lease_owner TEXT",
+                        connection=conn,
+                    )
         self._ensure_postgres_fts()
 
     def _ensure_extensions(self, conn) -> None:
@@ -668,6 +730,35 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         return statements
 
+    # --- Idempotency helpers (Postgres) ---
+    def _idem_lookup(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[int]:
+        try:
+            cursor = self._execute(
+                """
+                SELECT entity_id
+                FROM prompt_studio_idempotency
+                WHERE entity_type = ?
+                  AND idempotency_key = ?
+                  AND (user_id = ? OR user_id IS NULL)
+                LIMIT 1
+                """,
+                (entity_type, key, user_id),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else None
+        except BackendDatabaseError:
+            return None
+
+    def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
+        try:
+            # INSERT OR IGNORE is translated to ON CONFLICT DO NOTHING for Postgres by the query adapter
+            self._execute(
+                "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
+                (entity_type, key, entity_id, user_id),
+            )
+        except BackendDatabaseError:
+            pass
+
     def _transform_sqlite_statement_for_postgres(self, statement: str) -> Optional[str]:
         stmt = statement.strip()
         if not stmt:
@@ -732,6 +823,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             stmt = f"{stmt};"
 
         return stmt
+
+    # NOTE: Removed a duplicated, misplaced idempotency helpers block here.
+    # The correct implementations exist within the PromptStudioDatabase class
+    # later in this file. Keeping only one canonical definition avoids
+    # indentation/scope issues during import.
 
     # --- Data helpers ---
     def _row_to_dict(self, cursor, row: Optional[Any] = None) -> Optional[Dict[str, Any]]:
@@ -2205,8 +2301,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         if status == "processing":
             updates.append("started_at = CURRENT_TIMESTAMP")
+            # Extend lease window when explicitly setting processing
+            updates.append("leased_until = NOW() + INTERVAL '60 seconds'")
         elif status in {"completed", "failed", "cancelled"}:
             updates.append("completed_at = CURRENT_TIMESTAMP")
+            # Clear lease on terminal states
+            updates.append("leased_until = NULL")
+            updates.append("lease_owner = NULL")
 
         if error_message is not None:
             updates.append("error_message = ?")
@@ -2230,7 +2331,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 row = cursor.fetchone()
-                return self._row_to_dict(cursor, row) if row else None
+                record = self._row_to_dict(cursor, row) if row else None
+                # Release advisory lock on terminal states
+                if record and status in {"completed", "failed", "cancelled"}:
+                    try:
+                        self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
+                    except BackendDatabaseError:
+                        pass
+                return record
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc
 
@@ -2239,27 +2347,113 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             with self.transaction() as conn:
                 cursor = conn.cursor()
                 if self.backend_type == BackendType.POSTGRESQL:
+                    import os as _os
+                    try:
+                        _lease_secs = max(5, min(3600, int(_os.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
+                    except Exception:
+                        _lease_secs = 60
+                    # Acquire using advisory lock as a gate to avoid double-processing across processes
+                    # Metrics: advisory lock attempt
+                    try:
+                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm
+                        _psm.metrics_manager.increment("prompt_studio.pg_advisory.lock_attempts_total")
+                    except Exception:
+                        pass
                     cursor.execute(
-                        """
-                        UPDATE prompt_studio_job_queue
-                        SET status = 'processing', started_at = CURRENT_TIMESTAMP
-                        WHERE id = (
-                            SELECT id
+                        f"""
+                        WITH candidate AS (
+                            SELECT id,
+                                   (status = 'processing' AND (leased_until IS NULL OR leased_until < NOW())) AS was_reclaim
                             FROM prompt_studio_job_queue
-                            WHERE status = 'queued'
+                            WHERE (status = 'queued'
+                                   OR (status = 'processing' AND (leased_until IS NULL OR leased_until < NOW())))
                             ORDER BY priority DESC, created_at ASC
+                            LIMIT 10
+                        ), locked AS (
+                            SELECT id, was_reclaim
+                            FROM candidate
+                            WHERE pg_try_advisory_lock(id)
                             LIMIT 1
-                            FOR UPDATE SKIP LOCKED
                         )
-                        RETURNING *
+                        UPDATE prompt_studio_job_queue AS q
+                        SET status = 'processing',
+                            started_at = CURRENT_TIMESTAMP,
+                            leased_until = NOW() + INTERVAL '{_lease_secs} seconds'
+                        FROM locked
+                        WHERE q.id = locked.id
+                        RETURNING q.*, locked.was_reclaim
                         """,
                     )
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    # Metrics: locks acquired
+                    try:
+                        _psm.metrics_manager.increment("prompt_studio.pg_advisory.locks_acquired_total")
+                    except Exception:
+                        pass
+                    # Release advisory lock immediately; we rely on leased_until+heartbeat for visibility timeout
+                    try:
+                        job_id_val = None
+                        try:
+                            job_id_val = row["id"]
+                        except Exception:
+                            job_id_val = row[0]
+                        cursor.execute("SELECT pg_advisory_unlock(?)", (job_id_val,))
+                        try:
+                            _psm.metrics_manager.increment("prompt_studio.pg_advisory.unlocks_total")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                    record = self._row_to_dict(cursor, row)
+                    # Record queue latency for Postgres
+                    try:
+                        from datetime import datetime
+                        created = record.get("created_at")
+                        started = record.get("started_at")
+                        def _parse(v):
+                            if v is None:
+                                return None
+                            if isinstance(v, datetime):
+                                return v
+                            try:
+                                return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                            except Exception:
+                                return None
+                        cdt = _parse(created)
+                        sdt = _parse(started)
+                        if cdt and sdt:
+                            qlat = max(0.0, (sdt - cdt).total_seconds())
+                            try:
+                                _psm.metrics_manager.observe(
+                                    "prompt_studio.jobs.queue_latency_seconds",
+                                    qlat,
+                                    labels={"job_type": str(record.get("job_type", ""))},
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    # Increment reclaims if applicable
+                    try:
+                        was_reclaim = False
+                        try:
+                            was_reclaim = bool(row["was_reclaim"])  # dict_row in pg
+                        except Exception:
+                            # positional
+                            was_reclaim = bool(row[-1])
+                        if was_reclaim:
+                            _psm.metrics_manager.increment("prompt_studio.jobs.reclaims_total", labels={"job_type": str(record.get("job_type", ""))})
+                    except Exception:
+                        pass
+                    return record
                 else:
                     cursor.execute(
                         """
                         SELECT id
                         FROM prompt_studio_job_queue
-                        WHERE status = 'queued'
+                        WHERE (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)))
                         ORDER BY priority DESC, created_at ASC
                         LIMIT 1
                         """,
@@ -2268,11 +2462,22 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     if not job_row:
                         return None
                     job_id = job_row[0]
+                    import os as _os2
+                    try:
+                        _lease_secs2 = max(5, min(3600, int(_os2.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
+                    except Exception:
+                        _lease_secs2 = 60
                     cursor.execute(
-                        """
+                        f"""
                         UPDATE prompt_studio_job_queue
-                        SET status = 'processing', started_at = CURRENT_TIMESTAMP
+                        SET status = 'processing',
+                            started_at = CURRENT_TIMESTAMP,
+                            leased_until = DATETIME('now', '+{_lease_secs2} seconds')
                         WHERE id = ?
+                          AND (
+                              status = 'queued'
+                              OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP))
+                          )
                         RETURNING *
                         """,
                         (job_id,),
@@ -2282,6 +2487,35 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 if not row:
                     return None
                 job = self._row_to_dict(cursor, row)
+                # Record queue latency for SQLite
+                try:
+                    from datetime import datetime
+                    created = job.get("created_at")
+                    started = job.get("started_at")
+                    def _parse(v):
+                        if v is None:
+                            return None
+                        if isinstance(v, datetime):
+                            return v
+                        try:
+                            return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                        except Exception:
+                            return None
+                    cdt = _parse(created)
+                    sdt = _parse(started)
+                    if cdt and sdt:
+                        qlat = max(0.0, (sdt - cdt).total_seconds())
+                        try:
+                            from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                            _psm2.metrics_manager.observe(
+                                "prompt_studio.jobs.queue_latency_seconds",
+                                qlat,
+                                labels={"job_type": str(job.get("job_type", ""))},
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         return job
 
     def retry_job_record(self, job_id: int) -> bool:
@@ -2295,14 +2529,22 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         retry_count = retry_count + 1,
                         error_message = NULL,
                         started_at = NULL,
-                        completed_at = NULL
+                        completed_at = NULL,
+                        leased_until = NULL,
+                        lease_owner = NULL
                     WHERE id = ?
                     RETURNING retry_count, max_retries
                     """,
                     (job_id,),
                 )
                 row = cursor.fetchone()
-                return row is not None
+                success = row is not None
+                if success:
+                    try:
+                        self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
+                    except BackendDatabaseError:
+                        pass
+                return success
 
     def get_job_stats(self) -> Dict[str, Any]:
         stats: Dict[str, Any] = {}
@@ -2361,6 +2603,72 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             return stats
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to compute job statistics: {exc}") from exc
+
+    def count_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> int:
+        """Return count of jobs filtered by optional status and job_type."""
+        try:
+            with self.transaction() as conn:
+                cursor = conn.cursor()
+                query = "SELECT COUNT(*) AS c FROM prompt_studio_job_queue WHERE 1=1"
+                params: List[Any] = []
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+                if job_type:
+                    query += " AND job_type = ?"
+                    params.append(job_type)
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                return int(row[0]) if row else 0
+        except BackendDatabaseError as exc:
+            raise DatabaseError(f"Failed to count jobs: {exc}") from exc
+
+    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
+        """Return basic lease health: active, expiring soon, and stale processing counts."""
+        try:
+            warn_seconds = max(1, min(3600, int(warn_seconds)))
+        except Exception:
+            warn_seconds = 30
+        try:
+            result: Dict[str, int] = {}
+            # Active leases: processing with future leased_until
+            cursor = self._execute(
+                """
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > NOW()
+                """,
+            )
+            result["active"] = int(cursor.fetchone()[0])
+
+            # Expiring soon: processing with lease expiring within warn_seconds
+            cursor = self._execute(
+                f"""
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing'
+                  AND leased_until IS NOT NULL
+                  AND leased_until > NOW()
+                  AND leased_until <= NOW() + INTERVAL '{warn_seconds} seconds'
+                """,
+            )
+            result["expiring_soon"] = int(cursor.fetchone()[0])
+
+            # Stale processing: processing with missing/expired lease
+            cursor = self._execute(
+                """
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing'
+                  AND (leased_until IS NULL OR leased_until < NOW())
+                """,
+            )
+            result["stale_processing"] = int(cursor.fetchone()[0])
+            return result
+        except BackendDatabaseError as exc:
+            raise DatabaseError(f"Failed to compute lease stats: {exc}") from exc
 
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
@@ -3133,8 +3441,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             conn = self.get_connection()
             cursor = conn.cursor()
             # Keep SQLite lock wait short to avoid long blocking during concurrent tests
+            # By default, avoid WAL for per-test temp DBs to reduce file artifact churn in CI.
+            # Allow opting into WAL to mimic production via TLDW_PS_SQLITE_WAL=1
             try:
-                cursor.execute("PRAGMA journal_mode=DELETE")  # Avoid WAL for per-test temp DBs
+                import os as _ps_os
+                _wal_requested = _ps_os.getenv("TLDW_PS_SQLITE_WAL", "0").lower() in {"1", "true", "yes", "on"}
+                _mode = "WAL" if _wal_requested else "DELETE"
+                cursor.execute(f"PRAGMA journal_mode={_mode}")
             except Exception:
                 pass
             cursor.execute("PRAGMA busy_timeout=1000")  # 1 second timeout for locked database
@@ -3159,7 +3472,49 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if not cursor.fetchone():
                 logger.info("Initializing Prompt Studio schema...")
                 self._apply_prompt_studio_migrations(conn)
-                
+            # Ensure auxiliary tables exist even on existing DBs
+            try:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompt_studio_idempotency (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        entity_type TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        entity_id INTEGER NOT NULL,
+                        user_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                # Composite uniqueness per user; SQLite treats NULLs as distinct, which is acceptable here
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_ps_idem_user ON prompt_studio_idempotency(entity_type, idempotency_key, user_id)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ps_idem_entity ON prompt_studio_idempotency(entity_type, user_id)"
+                )
+                conn.commit()
+            except Exception as _e:
+                logger.warning(f"Failed ensuring idempotency table: {_e}")
+
+            # Ensure leasing columns exist on job queue (SQLite)
+            try:
+                cursor.execute("SELECT leased_until FROM prompt_studio_job_queue LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN leased_until TIMESTAMP")
+                    conn.commit()
+                except Exception:
+                    pass
+            try:
+                cursor.execute("SELECT lease_owner FROM prompt_studio_job_queue LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN lease_owner TEXT")
+                    conn.commit()
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"Error initializing Prompt Studio schema: {e}")
             raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")
@@ -3168,12 +3523,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         """Apply Prompt Studio migration scripts."""
         migrations_dir = Path(__file__).parent / "migrations"
         
-        # List of migration files in order
+        # List of migration files in order (ensure iterations table exists before indexes)
         migration_files = [
             "001_prompt_studio_schema.sql",
+            "003_prompt_studio_iterations.sql",
             "002_prompt_studio_indexes.sql",
             "003_prompt_studio_triggers.sql",
-            "004_prompt_studio_fts.sql"
+            "004_prompt_studio_fts.sql",
         ]
         # Allow explicitly skipping FTS migrations when requested, but default to running them
         try:
@@ -3200,6 +3556,41 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     raise SchemaError(f"Migration {migration_file} failed: {e}")
             else:
                 logger.warning(f"Migration file not found: {migration_path}")
+
+    # --- Idempotency helpers (SQLite) ---
+    def _idem_lookup(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[int]:
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            # Scoped lookup by entity_type and (user_id or NULL-scope). This prevents returning
+            # mappings created by other users while preserving existing keys created without user scope.
+            cursor.execute(
+                """
+                SELECT entity_id
+                FROM prompt_studio_idempotency
+                WHERE entity_type = ?
+                  AND idempotency_key = ?
+                  AND (user_id = ? OR user_id IS NULL)
+                LIMIT 1
+                """,
+                (entity_type, key, user_id),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else None
+        except Exception:
+            return None
+
+    def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
+                (entity_type, key, entity_id, user_id),
+            )
+            conn.commit()
+        except Exception:
+            pass
     
     ####################################################################################################################
     # Project Management
@@ -5065,8 +5456,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
                     if status == "processing":
                         updates.append("started_at = CURRENT_TIMESTAMP")
+                        # Extend lease window on explicit processing state
+                        updates.append("leased_until = DATETIME('now', '+60 seconds')")
                     elif status in {"completed", "failed", "cancelled"}:
                         updates.append("completed_at = CURRENT_TIMESTAMP")
+                        updates.append("leased_until = NULL")
+                        updates.append("lease_owner = NULL")
 
                     if error_message is not None:
                         updates.append("error_message = ?")
@@ -5127,6 +5522,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         SELECT id
                         FROM prompt_studio_job_queue
                         WHERE status = 'queued'
+                          AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)
                         ORDER BY priority DESC, created_at ASC
                         LIMIT 1
                         """,
@@ -5139,15 +5535,52 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     cursor.execute(
                         """
                         UPDATE prompt_studio_job_queue
-                        SET status = 'processing', started_at = CURRENT_TIMESTAMP
+                        SET status = 'processing',
+                            started_at = CURRENT_TIMESTAMP,
+                            leased_until = DATETIME('now', '+60 seconds')
                         WHERE id = ?
+                          AND (
+                              status = 'queued'
+                              OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP))
+                          )
                         """,
                         (job_id,),
                     )
 
                     if cursor.rowcount > 0:
                         conn.commit()
-                        return self.get_job(job_id)
+                        job = self.get_job(job_id)
+                        # Record queue latency (started_at - created_at)
+                        try:
+                            from datetime import datetime
+                            if job:
+                                created = job.get("created_at")
+                                started = job.get("started_at")
+                                def _parse(v):
+                                    if v is None:
+                                        return None
+                                    if isinstance(v, datetime):
+                                        return v
+                                    try:
+                                        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                                    except Exception:
+                                        return None
+                                cdt = _parse(created)
+                                sdt = _parse(started)
+                                if cdt and sdt:
+                                    qlat = max(0.0, (sdt - cdt).total_seconds())
+                                    try:
+                                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                                        _psm2.metrics_manager.observe(
+                                            "prompt_studio.jobs.queue_latency_seconds",
+                                            qlat,
+                                            labels={"job_type": str(job.get("job_type", ""))},
+                                        )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                        return job
                     return None
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
@@ -5182,7 +5615,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             retry_count = retry_count + 1,
                             error_message = NULL,
                             started_at = NULL,
-                            completed_at = NULL
+                            completed_at = NULL,
+                            leased_until = NULL,
+                            lease_owner = NULL
                         WHERE id = ?
                         """,
                         (job_id,),
@@ -5262,6 +5697,75 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         except sqlite3.Error as exc:  # noqa: BLE001
             raise DatabaseError(f"Failed to compute job stats: {exc}") from exc
 
+    def count_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> int:
+        """Return count of jobs filtered by optional status and job_type."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) FROM prompt_studio_job_queue WHERE 1=1"
+            params: List[Any] = []
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            if job_type:
+                query += " AND job_type = ?"
+                params.append(job_type)
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.Error as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to count jobs: {exc}") from exc
+
+    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
+        """Return basic lease health: active, expiring soon, and stale processing counts."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            try:
+                warn_seconds = max(1, min(3600, int(warn_seconds)))
+            except Exception:
+                warn_seconds = 30
+
+            # Active leases: processing with future leased_until
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > CURRENT_TIMESTAMP
+                """,
+            )
+            active = int(cursor.fetchone()[0])
+
+            # Expiring soon within warn_seconds
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing'
+                  AND leased_until IS NOT NULL
+                  AND leased_until > CURRENT_TIMESTAMP
+                  AND leased_until <= DATETIME('now', '+{warn_seconds} seconds')
+                """,
+            )
+            expiring_soon = int(cursor.fetchone()[0])
+
+            # Stale: missing or expired lease
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM prompt_studio_job_queue
+                WHERE status = 'processing'
+                  AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)
+                """,
+            )
+            stale = int(cursor.fetchone()[0])
+
+            return {"active": active, "expiring_soon": expiring_soon, "stale_processing": stale}
+        except sqlite3.Error as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to compute lease stats: {exc}") from exc
+
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         try:
             conn = self.get_connection()
@@ -5326,6 +5830,45 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             raise DatabaseError(
                 f"Failed listing jobs for entity {entity_id}: {exc}"
             ) from exc
+
+    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+        import random
+        import time
+        try:
+            seconds = max(5, min(3600, int(seconds)))
+        except Exception:
+            seconds = 60
+
+        conn = self.get_connection()
+        base_delay = 0.05
+        for attempt in range(5):
+            should_retry = False
+            with self._write_lock:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"""
+                        UPDATE prompt_studio_job_queue
+                        SET leased_until = DATETIME('now', '+{seconds} seconds')
+                        WHERE id = ? AND status = 'processing'
+                        """,
+                        (job_id,),
+                    )
+                    success = cursor.rowcount > 0
+                    if success:
+                        conn.commit()
+                    return success
+                except sqlite3.OperationalError as exc:
+                    if "database is locked" in str(exc).lower() and attempt < 4:
+                        should_retry = True
+                        delay = base_delay * (2 ** attempt) * (0.5 + random.random())
+                    else:
+                        raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+                except sqlite3.Error as exc:  # noqa: BLE001
+                    raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+            if should_retry:
+                time.sleep(delay)
+        raise DatabaseError("Failed to renew job lease due to database locks")
 
     def list_prompts(
         self,
@@ -5917,6 +6460,28 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         stats["top_tags"] = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
         return stats
 
+    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+        try:
+            seconds = max(5, min(3600, int(seconds)))
+        except Exception:
+            seconds = 60
+        try:
+            with self.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE prompt_studio_job_queue
+                    SET leased_until = NOW() + INTERVAL '{seconds} seconds'
+                    WHERE id = ? AND status = 'processing'
+                    RETURNING id
+                    """,
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+                return bool(row)
+        except BackendDatabaseError as exc:
+            raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+
     def get_golden_test_cases(self, project_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -5931,7 +6496,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             (project_id, limit, offset),
         )
         return [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
-    
+
     ####################################################################################################################
     # Transaction Management
     
@@ -5948,6 +6513,65 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         except Exception:
             conn.rollback()
             raise
+
+    ####################################################################################################################
+    # Optimization helpers (SQLite)
+
+    def create_optimization(
+        self,
+        *,
+        project_id: int,
+        name: Optional[str],
+        initial_prompt_id: Optional[int],
+        optimizer_type: str,
+        optimization_config: Optional[Dict[str, Any]] = None,
+        max_iterations: Optional[int] = None,
+        bootstrap_samples: Optional[int] = None,
+        status: str = "pending",
+        client_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        optimization_uuid = str(uuid.uuid4())
+        payload = (
+            optimization_uuid,
+            project_id,
+            name,
+            initial_prompt_id,
+            None,  # optimized_prompt_id
+            optimizer_type,
+            json.dumps(optimization_config) if optimization_config is not None else None,
+            None,
+            None,
+            None,
+            0,
+            max_iterations,
+            bootstrap_samples,
+            status,
+            None,
+            None,
+            None,
+            client_id or self.client_id,
+        )
+
+        insert_sql = """
+            INSERT INTO prompt_studio_optimizations (
+                uuid, project_id, name, initial_prompt_id, optimized_prompt_id,
+                optimizer_type, optimization_config, initial_metrics, final_metrics,
+                improvement_percentage, iterations_completed, max_iterations,
+                bootstrap_samples, status, error_message, total_tokens, total_cost,
+                client_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING *
+        """
+
+        try:
+            with self._write_lock:
+                with self.transaction() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(insert_sql, payload)
+                    row = cursor.fetchone()
+            return self._row_to_dict(cursor, row) if row else {}
+        except Exception as exc:
+            raise DatabaseError(f"Failed to create prompt studio optimization: {exc}") from exc
 
 
 class PromptStudioDatabase:
@@ -5988,6 +6612,19 @@ class PromptStudioDatabase:
     @property
     def backend(self) -> Optional[DatabaseBackend]:
         return getattr(self._impl, 'backend', None)
+
+    # Idempotency helpers (public facade)
+    def lookup_idempotency(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[int]:
+        if hasattr(self._impl, '_idem_lookup'):
+            return self._impl._idem_lookup(entity_type, key, user_id)  # type: ignore[attr-defined]
+        return None
+
+    def record_idempotency(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
+        if hasattr(self._impl, '_idem_record'):
+            try:
+                self._impl._idem_record(entity_type, key, entity_id, user_id)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def update_project(self, project_id: int, updates: Optional[Dict[str, Any]] = None, **fields: Any) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
@@ -6081,6 +6718,15 @@ class PromptStudioDatabase:
     def retry_job_record(self, job_id: int) -> bool:
         return self._impl.retry_job_record(job_id)
 
+    # Optional: renew job lease
+    def renew_job_lease(self, job_id: int, seconds: int = 60) -> bool:
+        if hasattr(self._impl, 'renew_job_lease'):
+            try:
+                return bool(self._impl.renew_job_lease(job_id, seconds))  # type: ignore[attr-defined]
+            except Exception:
+                return False
+        return False
+
     def get_job_stats(self) -> Dict[str, Any]:
         return self._impl.get_job_stats()
 
@@ -6092,6 +6738,17 @@ class PromptStudioDatabase:
 
     def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
         return self._impl.list_jobs_for_entity(*args, **kwargs)
+    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
+        return self._impl.get_lease_stats(warn_seconds)
+
+    # Job counters --------------------------------------------------------
+    def count_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> int:
+        return self._impl.count_jobs(status=status, job_type=job_type)
 
     # Test case delegation -------------------------------------------------
 

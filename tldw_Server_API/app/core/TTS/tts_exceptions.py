@@ -121,7 +121,13 @@ class TTSAuthenticationError(TTSProviderError):
 
 class TTSRateLimitError(TTSProviderError):
     """Rate limit exceeded for TTS provider"""
-    pass
+    @property
+    def retry_after(self) -> Optional[int]:
+        try:
+            ra = self.details.get("retry_after") if hasattr(self, "details") else None
+            return int(ra) if ra is not None else None
+        except Exception:
+            return None
 
 
 class TTSQuotaExceededError(TTSProviderError):

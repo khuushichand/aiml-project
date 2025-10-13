@@ -27,7 +27,219 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_processor import JobProcessor
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+# Local override: run this heavy suite against a single backend only.
+# Select with env TLDW_PS_BACKEND=sqlite|postgres (default sqlite).
+from fastapi.testclient import TestClient
+from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+try:  # local optional PG driver detect
+    import psycopg as _psycopg_v3  # type: ignore
+    _PG_DRIVER = "psycopg"
+except Exception:
+    try:
+        import psycopg2 as _psycopg2  # type: ignore
+        _PG_DRIVER = "psycopg2"
+    except Exception:
+        _PG_DRIVER = None
+
+_HAS_POSTGRES = (_PG_DRIVER is not None)
+
+def _probe_postgres(config: DatabaseConfig, timeout: int = 2) -> bool:
+    if _PG_DRIVER is None:
+        return False
+    try:
+        if _PG_DRIVER == "psycopg":
+            conn = _psycopg_v3.connect(
+                host=config.pg_host,
+                port=config.pg_port,
+                dbname="postgres",
+                user=config.pg_user,
+                password=config.pg_password,
+                connect_timeout=timeout,
+            )
+        else:
+            conn = _psycopg2.connect(
+                host=config.pg_host,
+                port=config.pg_port,
+                database="postgres",
+                user=config.pg_user,
+                password=config.pg_password,
+                connect_timeout=timeout,
+            )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        return False
+
+def _create_temp_postgres_database(config: DatabaseConfig) -> DatabaseConfig:
+    import uuid as _uuid
+    if _PG_DRIVER is None:
+        raise RuntimeError("psycopg/psycopg2 required for Postgres-backed tests")
+    db_name = f"tldw_test_{_uuid.uuid4().hex[:8]}"
+    if _PG_DRIVER == "psycopg":
+        admin = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+            connect_timeout=2,
+        )
+    else:
+        admin = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+            connect_timeout=2,
+        )
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE DATABASE {db_name} OWNER {config.pg_user};")
+    finally:
+        admin.close()
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=config.pg_host,
+        pg_port=config.pg_port,
+        pg_database=db_name,
+        pg_user=config.pg_user,
+        pg_password=config.pg_password,
+    )
+
+def _drop_postgres_database(config: DatabaseConfig) -> None:
+    if _PG_DRIVER is None:
+        return
+    if _PG_DRIVER == "psycopg":
+        admin = _psycopg_v3.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            dbname="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+            connect_timeout=2,
+        )
+    else:
+        admin = _psycopg2.connect(
+            host=config.pg_host,
+            port=config.pg_port,
+            database="postgres",
+            user=config.pg_user,
+            password=config.pg_password,
+            connect_timeout=2,
+        )
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
+                (config.pg_database,),
+            )
+            cur.execute(f"DROP DATABASE IF EXISTS {config.pg_database};")
+    finally:
+        admin.close()
+
+
+@pytest.fixture
+def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
+    """Module-local override: choose exactly one backend for this heavy suite.
+
+    Backend is selected via env TLDW_PS_BACKEND (sqlite|postgres), default sqlite.
+    No cross-backend parameterization here to avoid mixing backends in one run.
+    """
+    from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as ps_deps
+
+    backend_choice = os.getenv("TLDW_PS_BACKEND", "sqlite").strip().lower()
+    if backend_choice not in {"sqlite", "postgres"}:
+        backend_choice = "sqlite"
+
+    backend = None
+    config = None
+
+    if backend_choice == "sqlite":
+        db_instance = PromptStudioDatabase(str(tmp_path / "prompt_studio_sqlite_heavy.sqlite"), "heavy-sqlite")
+    else:
+        if not _HAS_POSTGRES:
+            pytest.skip("psycopg not available; skipping Postgres backend for heavy suite")
+        base_config = DatabaseConfig(
+            backend_type=BackendType.POSTGRESQL,
+            pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
+            pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
+            pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
+            pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
+            pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        )
+        if not _probe_postgres(base_config, timeout=2):
+            if os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "0").lower() in {"1", "true", "yes", "on"}:
+                pytest.fail("Postgres required for heavy suite but not reachable")
+            pytest.skip("Postgres not reachable; skipping Postgres backend for heavy suite")
+        config = _create_temp_postgres_database(base_config)
+        backend = DatabaseBackendFactory.create_backend(config)
+        db_instance = PromptStudioDatabase(
+            db_path=str(tmp_path / "prompt_studio_pg_placeholder.sqlite"),
+            client_id="heavy-postgres",
+            backend=backend,
+        )
+
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setitem(app_settings, "USER_DB_BASE_DIR", tmp_path)
+
+    async def override_user():
+        return User(
+            id=mock_current_user.get("id", "test-user-123"),
+            username=mock_current_user.get("username", "testuser"),
+            email=mock_current_user.get("email", "test@example.com"),
+            is_active=True,
+        )
+
+    async def override_db():
+        return db_instance
+
+    _app = fastapi_app
+    _app.dependency_overrides[get_request_user] = override_user
+    _app.dependency_overrides[get_prompt_studio_db] = override_db
+    monkeypatch.setattr(ps_deps, "get_current_active_user", lambda: mock_current_user, raising=False)
+
+    try:
+        with TestClient(_app) as client:
+            yield backend_choice, client, db_instance
+    finally:
+        _app.dependency_overrides.clear()
+        if hasattr(db_instance, "close"):
+            try:
+                db_instance.close()
+            except Exception:
+                pass
+        elif hasattr(db_instance, "close_connection"):
+            try:
+                db_instance.close_connection()
+            except Exception:
+                pass
+        if backend is not None:
+            try:
+                backend.get_pool().close_all()
+            except Exception:
+                pass
+        if backend_choice == "postgres" and config is not None:
+            # Drop the ephemeral database
+            try:
+                from tldw_Server_API.tests.prompt_studio.conftest import _drop_postgres_database
+                _drop_postgres_database(config)
+            except Exception:
+                pass
 
 
 def _should_stress() -> bool:
