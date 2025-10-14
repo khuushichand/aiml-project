@@ -17,6 +17,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 from .pricing_catalog import get_pricing_catalog
+from tldw_Server_API.app.core.Metrics import increment_counter
 
 
 def _enabled() -> bool:
@@ -78,6 +79,94 @@ async def log_llm_usage(
         p_cost, c_cost, t_cost, est_flag = compute_costs(provider, model, pt, ct)
         if estimated is None:
             estimated = est_flag
+
+        # Record cost and tokens in Prometheus metrics (best-effort)
+        try:
+            increment_counter(
+                "llm_cost_dollars",
+                float(t_cost),
+                labels={"provider": str(provider or "unknown"), "model": str(model or "unknown")},
+            )
+            # Per-user and per-operation breakdowns
+            if user_id is not None:
+                increment_counter(
+                    "llm_cost_dollars_by_user",
+                    float(t_cost),
+                    labels={
+                        "provider": str(provider or "unknown"),
+                        "model": str(model or "unknown"),
+                        "user_id": str(user_id),
+                    },
+                )
+            if operation:
+                increment_counter(
+                    "llm_cost_dollars_by_operation",
+                    float(t_cost),
+                    labels={
+                        "provider": str(provider or "unknown"),
+                        "model": str(model or "unknown"),
+                        "operation": str(operation or ""),
+                    },
+                )
+            if pt:
+                increment_counter(
+                    "llm_tokens_used_total",
+                    float(pt),
+                    labels={"provider": str(provider or "unknown"), "model": str(model or "unknown"), "type": "prompt"},
+                )
+                if user_id is not None:
+                    increment_counter(
+                        "llm_tokens_used_total_by_user",
+                        float(pt),
+                        labels={
+                            "provider": str(provider or "unknown"),
+                            "model": str(model or "unknown"),
+                            "type": "prompt",
+                            "user_id": str(user_id),
+                        },
+                    )
+                if operation:
+                    increment_counter(
+                        "llm_tokens_used_total_by_operation",
+                        float(pt),
+                        labels={
+                            "provider": str(provider or "unknown"),
+                            "model": str(model or "unknown"),
+                            "type": "prompt",
+                            "operation": str(operation or ""),
+                        },
+                    )
+            if ct:
+                increment_counter(
+                    "llm_tokens_used_total",
+                    float(ct),
+                    labels={"provider": str(provider or "unknown"), "model": str(model or "unknown"), "type": "completion"},
+                )
+                if user_id is not None:
+                    increment_counter(
+                        "llm_tokens_used_total_by_user",
+                        float(ct),
+                        labels={
+                            "provider": str(provider or "unknown"),
+                            "model": str(model or "unknown"),
+                            "type": "completion",
+                            "user_id": str(user_id),
+                        },
+                    )
+                if operation:
+                    increment_counter(
+                        "llm_tokens_used_total_by_operation",
+                        float(ct),
+                        labels={
+                            "provider": str(provider or "unknown"),
+                            "model": str(model or "unknown"),
+                            "type": "completion",
+                            "operation": str(operation or ""),
+                        },
+                    )
+        except Exception:
+            # Metrics must never impact request flow
+            pass
 
         db_pool: DatabasePool = await get_db_pool()
         if db_pool.pool:
@@ -153,4 +242,3 @@ async def log_llm_usage(
     except Exception as e:
         # Never break request processing due to logging errors
         logger.debug(f"LLM usage logging skipped/failed: {e}")
-

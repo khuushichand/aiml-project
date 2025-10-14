@@ -33,6 +33,14 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
     # JS/TS
     JSTYPE_FUNC_RE = re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(")
     JSTYPE_CLASS_RE = re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z_][\w]*)\b")
+    JSTYPE_EXPORT_DEFAULT_CLASS_RE = re.compile(r"^\s*export\s+default\s+class\s+([A-Za-z_][\w]*)\b")
+    JSTYPE_CONST_ARROW_RE = re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_]\w*)\s*=\s*\([^;{}]*\)\s*=>\s*\{\s*$")
+    JSTYPE_CONST_FUNC_RE = re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_]\w*)\s*=\s*function\s*\(")
+    JSTYPE_EXPORT_DEFAULT_FUNC_NAMED_RE = re.compile(r"^\s*export\s+default\s+(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(")
+    JSTYPE_EXPORT_DEFAULT_FUNC_ANON_RE = re.compile(r"^\s*export\s+default\s+(?:async\s+)?function\s*\(")
+    JSTYPE_EXPORT_DEFAULT_ARROW_RE = re.compile(r"^\s*export\s+default\s*\([^;{}]*\)\s*=>\s*\{\s*$")
+    TSTYPE_INTERFACE_RE = re.compile(r"^\s*(?:export\s+)?interface\s+([A-Za-z_][\w]*)\b")
+    TSTYPE_TYPE_RE = re.compile(r"^\s*(?:export\s+)?type\s+([A-Za-z_][\w]*)\s*=")
     JSTYPE_METHOD_RE = re.compile(r"^\s*(?:public|private|protected|static|async)?\s*([A-Za-z_][\w]*)\s*\([^;{}]*\)\s*\{\s*$")
     # C/C++/Java/C# (very heuristic)
     C_LIKE_FUNC_RE = re.compile(r"^\s*(?:template\s*<[^>]+>\s*)?(?:[\w:\*\&\[\]<>]+\s+)+([A-Za-z_][\w]*)\s*\([^;{]*\)\s*(?:const\s*)?\{\s*$")
@@ -63,12 +71,36 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     headers.append(_Header(m.group(1), m.group(2), idx))
                     continue
             if lang in ('javascript', 'typescript', 'tsx', 'jsx'):
+                m = self.JSTYPE_EXPORT_DEFAULT_CLASS_RE.match(line)
+                if m:
+                    headers.append(_Header('class', m.group(1), idx)); continue
                 m = self.JSTYPE_CLASS_RE.match(line)
                 if m:
                     headers.append(_Header('class', m.group(1), idx)); continue
                 m = self.JSTYPE_FUNC_RE.match(line)
                 if m:
                     headers.append(_Header('function', m.group(1), idx)); continue
+                m = self.JSTYPE_EXPORT_DEFAULT_FUNC_NAMED_RE.match(line)
+                if m:
+                    headers.append(_Header('function', m.group(1), idx)); continue
+                m = self.JSTYPE_EXPORT_DEFAULT_FUNC_ANON_RE.match(line)
+                if m:
+                    headers.append(_Header('function', 'default', idx)); continue
+                m = self.JSTYPE_EXPORT_DEFAULT_ARROW_RE.match(line)
+                if m:
+                    headers.append(_Header('function', 'default', idx)); continue
+                m = self.JSTYPE_CONST_ARROW_RE.match(line)
+                if m:
+                    headers.append(_Header('function', m.group(1), idx)); continue
+                m = self.JSTYPE_CONST_FUNC_RE.match(line)
+                if m:
+                    headers.append(_Header('function', m.group(1), idx)); continue
+                m = self.TSTYPE_INTERFACE_RE.match(line)
+                if m:
+                    headers.append(_Header('interface', m.group(1), idx)); continue
+                m = self.TSTYPE_TYPE_RE.match(line)
+                if m:
+                    headers.append(_Header('type', m.group(1), idx)); continue
                 # methods will be handled inside class blocks via braces
             if lang in ('c', 'cpp', 'csharp', 'java'):
                 m = self.C_LIKE_CLASS_RE.match(line)

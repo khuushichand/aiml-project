@@ -2500,42 +2500,83 @@ async def get_usage_daily(
             count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
             total = await db.fetchval(count_sql, *params)
 
-            data_sql = (
-                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                f"FROM usage_daily{where_clause} "
-                f"ORDER BY day DESC, user_id ASC "
-                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-            )
-            rows = await db.fetch(data_sql, *params, limit, offset)
+            # Try including bytes_in_total; fallback if column absent
+            try:
+                data_sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} "
+                    f"ORDER BY day DESC, user_id ASC "
+                    f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+                )
+                rows = await db.fetch(data_sql, *params, limit, offset)
+                rows_mode = 'pg_with_in'
+            except Exception:
+                data_sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} "
+                    f"ORDER BY day DESC, user_id ASC "
+                    f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+                )
+                rows = await db.fetch(data_sql, *params, limit, offset)
+                rows_mode = 'pg_legacy'
         else:
             count_sql = f"SELECT COUNT(*) FROM usage_daily{where_clause}"
             cur = await db.execute(count_sql, params)
             total = (await cur.fetchone())[0]
 
-            data_sql = (
-                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
-                f"FROM usage_daily{where_clause} "
-                f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
-            )
-            params2 = list(params) + [limit, offset]
-            cur = await db.execute(data_sql, params2)
-            rows = await cur.fetchall()
+            try:
+                data_sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} "
+                    f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
+                )
+                params2 = list(params) + [limit, offset]
+                cur = await db.execute(data_sql, params2)
+                rows = await cur.fetchall()
+                rows_mode = 'sqlite_with_in'
+            except Exception:
+                data_sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} "
+                    f"ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
+                )
+                params2 = list(params) + [limit, offset]
+                cur = await db.execute(data_sql, params2)
+                rows = await cur.fetchall()
+                rows_mode = 'sqlite_legacy'
 
         items: list[UsageDailyRow] = []
         for r in rows:
             if isinstance(r, dict):
+                # In legacy mode, bytes_in_total may be absent
+                if 'bytes_in_total' not in r:
+                    r = {**r, 'bytes_in_total': None}
                 items.append(UsageDailyRow(**r))
             else:
-                items.append(
-                    UsageDailyRow(
-                        user_id=int(r[0]),
-                        day=str(r[1]),
-                        requests=int(r[2] or 0),
-                        errors=int(r[3] or 0),
-                        bytes_total=int(r[4] or 0),
-                        latency_avg_ms=float(r[5]) if r[5] is not None else None,
+                if rows_mode in ('pg_with_in','sqlite_with_in'):
+                    items.append(
+                        UsageDailyRow(
+                            user_id=int(r[0]),
+                            day=str(r[1]),
+                            requests=int(r[2] or 0),
+                            errors=int(r[3] or 0),
+                            bytes_total=int(r[4] or 0),
+                            bytes_in_total=int(r[5] or 0),
+                            latency_avg_ms=float(r[6]) if r[6] is not None else None,
+                        )
                     )
-                )
+                else:
+                    items.append(
+                        UsageDailyRow(
+                            user_id=int(r[0]),
+                            day=str(r[1]),
+                            requests=int(r[2] or 0),
+                            errors=int(r[3] or 0),
+                            bytes_total=int(r[4] or 0),
+                            bytes_in_total=None,
+                            latency_avg_ms=float(r[5]) if r[5] is not None else None,
+                        )
+                    )
 
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:
@@ -2548,7 +2589,7 @@ async def get_usage_top(
     start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(10, ge=1, le=100),
-    metric: str = Query("requests", pattern="^(requests|bytes_total|errors)$"),
+    metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
     db=Depends(get_db_transaction)
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
@@ -2572,42 +2613,83 @@ async def get_usage_top(
             params.append(end)
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
-        order_by = {
-            "requests": "SUM(requests) DESC",
-            "bytes_total": "SUM(bytes_total) DESC",
-            "errors": "SUM(errors) DESC",
-        }[metric]
+        def _build_order(m: str) -> str:
+            mapping = {
+                "requests": "SUM(requests) DESC",
+                "bytes_total": "SUM(bytes_total) DESC",
+                "bytes_in_total": "COALESCE(SUM(bytes_in_total),0) DESC",
+                "errors": "SUM(errors) DESC",
+            }
+            return mapping[m]
+
+        order_by = _build_order(metric)
 
         if is_pg:
-            sql = (
-                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
-                f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
-            ).replace('$ ', '$')
-            rows = await db.fetch(sql, *params, limit)
+            try:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                rows_mode = 'pg_with_in'
+            except Exception:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                rows_mode = 'pg_legacy'
         else:
-            sql = (
-                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
-                f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
-                f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
-            )
-            cur = await db.execute(sql, params + [limit])
-            rows = await cur.fetchall()
+            try:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                rows_mode = 'sqlite_with_in'
+            except Exception:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                rows_mode = 'sqlite_legacy'
 
         items: list[UsageTopRow] = []
         for r in rows:
             if isinstance(r, dict):
+                if 'bytes_in_total' not in r:
+                    r = {**r, 'bytes_in_total': None}
                 items.append(UsageTopRow(**r))
             else:
-                items.append(
-                    UsageTopRow(
-                        user_id=int(r[0]),
-                        requests=int(r[1] or 0),
-                        errors=int(r[2] or 0),
-                        bytes_total=int(r[3] or 0),
-                        latency_avg_ms=float(r[4]) if r[4] is not None else None,
+                if rows_mode in ('pg_with_in','sqlite_with_in'):
+                    items.append(
+                        UsageTopRow(
+                            user_id=int(r[0]),
+                            requests=int(r[1] or 0),
+                            errors=int(r[2] or 0),
+                            bytes_total=int(r[3] or 0),
+                            bytes_in_total=int(r[4] or 0),
+                            latency_avg_ms=float(r[5]) if r[5] is not None else None,
+                        )
                     )
-                )
+                else:
+                    items.append(
+                        UsageTopRow(
+                            user_id=int(r[0]),
+                            requests=int(r[1] or 0),
+                            errors=int(r[2] or 0),
+                            bytes_total=int(r[3] or 0),
+                            bytes_in_total=None,
+                            latency_avg_ms=float(r[4]) if r[4] is not None else None,
+                        )
+                    )
 
         return UsageTopResponse(items=items)
     except Exception as e:
@@ -2625,6 +2707,219 @@ async def run_usage_aggregate(day: Optional[str] = Query(None, description="YYYY
         logger.warning(f"Manual usage aggregation failed/skipped: {e}")
         # Non-fatal: e.g., table absent in PG during partial setups
         return {"status": "skipped", "reason": str(e), "day": day}
+
+
+@router.get("/usage/daily/export.csv", response_class=PlainTextResponse)
+async def export_usage_daily_csv(
+    user_id: Optional[int] = None,
+    start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    limit: int = Query(1000, ge=1, le=10000),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    db=Depends(get_db_transaction)
+) -> PlainTextResponse:
+    """Export usage_daily rows as CSV (includes bytes_in_total when available)."""
+    try:
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
+        conditions: list[str] = []
+        params: list = []
+
+        if user_id is not None:
+            if is_pg:
+                conditions.append(f"user_id = ${len(params) + 1}")
+            else:
+                conditions.append("user_id = ?")
+            params.append(user_id)
+        if start:
+            if is_pg:
+                conditions.append(f"day >= ${len(params) + 1}::date")
+            else:
+                conditions.append("day >= ?")
+            params.append(start)
+        if end:
+            if is_pg:
+                conditions.append(f"day <= ${len(params) + 1}::date")
+            else:
+                conditions.append("day <= ?")
+            params.append(end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        header = ["user_id","day","requests","errors","bytes_total","bytes_in_total","latency_avg_ms"]
+        rows_data = []
+
+        if is_pg:
+            try:
+                sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                for r in rows:
+                    rows_data.append((r["user_id"], str(r["day"]), r["requests"], r["errors"], r["bytes_total"], r["bytes_in_total"], r["latency_avg_ms"]))
+            except Exception:
+                sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                for r in rows:
+                    rows_data.append((r["user_id"], str(r["day"]), r["requests"], r["errors"], r["bytes_total"], None, r["latency_avg_ms"]))
+        else:
+            try:
+                sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                for r in rows:
+                    rows_data.append((r[0], str(r[1]), r[2], r[3], r[4], r[5], r[6]))
+            except Exception:
+                sql = (
+                    f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                    f"FROM usage_daily{where_clause} ORDER BY day DESC, user_id ASC LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                for r in rows:
+                    rows_data.append((r[0], str(r[1]), r[2], r[3], r[4], None, r[5]))
+
+        def _fmt(x):
+            if x is None:
+                return ""
+            s = str(x)
+            if "," in s or "\n" in s:
+                return '"' + s.replace('"', '""') + '"'
+            return s
+
+        lines = [",".join(header)]
+        for row in rows_data:
+            lines.append(",".join(_fmt(c) for c in row))
+        content = "\n".join(lines) + "\n"
+        resp = PlainTextResponse(content=content, media_type="text/csv")
+        # Default filename when not provided
+        if not filename:
+            _start = start or "all"
+            _end = end or "all"
+            filename = f"usage_daily_{_start}_{_end}.csv"
+        if filename:
+            safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+            resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+        return resp
+    except Exception as e:
+        logger.error(f"Failed to export usage daily CSV: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export usage daily CSV")
+
+
+@router.get("/usage/top/export.csv", response_class=PlainTextResponse)
+async def export_usage_top_csv(
+    start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
+    limit: int = Query(100, ge=1, le=10000),
+    metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    db=Depends(get_db_transaction)
+) -> PlainTextResponse:
+    try:
+        pool = await get_db_pool()
+        is_pg = bool(getattr(pool, 'pool', None))
+        conditions: list[str] = []
+        params: list = []
+        if start:
+            if is_pg:
+                conditions.append(f"day >= ${len(params) + 1}::date")
+            else:
+                conditions.append("day >= ?")
+            params.append(start)
+        if end:
+            if is_pg:
+                conditions.append(f"day <= ${len(params) + 1}::date")
+            else:
+                conditions.append("day <= ?")
+            params.append(end)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        def _build_order(m: str) -> str:
+            mapping = {
+                "requests": "SUM(requests) DESC",
+                "bytes_total": "SUM(bytes_total) DESC",
+                "bytes_in_total": "COALESCE(SUM(bytes_in_total),0) DESC",
+                "errors": "SUM(errors) DESC",
+            }
+            return mapping[m]
+
+        order_by = _build_order(metric)
+
+        header = ["user_id","requests","errors","bytes_total","bytes_in_total","latency_avg_ms"]
+        data = []
+
+        if is_pg:
+            try:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                for r in rows:
+                    data.append((r["user_id"], r["requests"], r["errors"], r["bytes_total"], r["bytes_in_total"], r["latency_avg_ms"]))
+            except Exception:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                ).replace('$ ', '$')
+                rows = await db.fetch(sql, *params, limit)
+                for r in rows:
+                    data.append((r["user_id"], r["requests"], r["errors"], r["bytes_total"], None, r["latency_avg_ms"]))
+        else:
+            try:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                for r in rows:
+                    data.append((r[0], r[1], r[2], r[3], r[4], r[5]))
+            except Exception:
+                sql = (
+                    f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, "
+                    f"SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms "
+                    f"FROM usage_daily{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+                )
+                cur = await db.execute(sql, params + [limit])
+                rows = await cur.fetchall()
+                for r in rows:
+                    data.append((r[0], r[1], r[2], r[3], None, r[4]))
+
+        def _fmt(x):
+            if x is None:
+                return ""
+            s = str(x)
+            if "," in s or "\n" in s:
+                return '"' + s.replace('"', '""') + '"'
+            return s
+
+        lines = [",".join(header)]
+        for row in data:
+            lines.append(",".join(_fmt(c) for c in row))
+        content = "\n".join(lines) + "\n"
+        resp = PlainTextResponse(content=content, media_type="text/csv")
+        # Default filename when not provided
+        if not filename:
+            _start = start or "all"
+            _end = end or "all"
+            filename = f"usage_top_{metric}_{_start}_{_end}.csv"
+        if filename:
+            safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+            resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+        return resp
+    except Exception as e:
+        logger.error(f"Failed to export usage top CSV: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export usage top CSV")
 
 
 @router.post("/llm-usage/aggregate")
@@ -2693,34 +2988,41 @@ async def get_llm_usage(
             items = [LLMUsageLogRow(**dict(r)) for r in rows]
         else:
             count_sql = f"SELECT COUNT(*) FROM llm_usage_log{where_clause}"
-            total = await db.fetchval(count_sql, params)
+            cur = await db.execute(count_sql, params)
+            total_row = await cur.fetchone()
+            total = int(total_row[0] if total_row else 0)
+
             data_sql = (
                 f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, "
                 f"prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id "
                 f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"
             )
-            rows = await db.fetch(data_sql, params + [limit, offset])
-            items = [
-                LLMUsageLogRow(
-                    id=row["id"] if isinstance(row, dict) else row[0],
-                    ts=row["ts"] if isinstance(row, dict) else row[1],
-                    user_id=row.get("user_id") if isinstance(row, dict) else row[2],
-                    key_id=row.get("key_id") if isinstance(row, dict) else row[3],
-                    endpoint=row.get("endpoint") if isinstance(row, dict) else row[4],
-                    operation=row.get("operation") if isinstance(row, dict) else row[5],
-                    provider=row.get("provider") if isinstance(row, dict) else row[6],
-                    model=row.get("model") if isinstance(row, dict) else row[7],
-                    status=row.get("status") if isinstance(row, dict) else row[8],
-                    latency_ms=row.get("latency_ms") if isinstance(row, dict) else row[9],
-                    prompt_tokens=row.get("prompt_tokens") if isinstance(row, dict) else row[10],
-                    completion_tokens=row.get("completion_tokens") if isinstance(row, dict) else row[11],
-                    total_tokens=row.get("total_tokens") if isinstance(row, dict) else row[12],
-                    total_cost_usd=row.get("total_cost_usd") if isinstance(row, dict) else row[13],
-                    currency=row.get("currency") if isinstance(row, dict) else row[14],
-                    estimated=bool(row.get("estimated")) if isinstance(row, dict) else bool(row[15]),
-                    request_id=row.get("request_id") if isinstance(row, dict) else row[16],
-                ) for row in rows
-            ]
+            cur = await db.execute(data_sql, params + [limit, offset])
+            rows = await cur.fetchall()
+            items = []
+            for row in rows:
+                # aiosqlite.Row supports both key and index access; normalize to indices
+                items.append(
+                    LLMUsageLogRow(
+                        id=(row["id"] if hasattr(row, "keys") else row[0]),
+                        ts=(row["ts"] if hasattr(row, "keys") else row[1]),
+                        user_id=(row["user_id"] if hasattr(row, "keys") else row[2]),
+                        key_id=(row["key_id"] if hasattr(row, "keys") else row[3]),
+                        endpoint=(row["endpoint"] if hasattr(row, "keys") else row[4]),
+                        operation=(row["operation"] if hasattr(row, "keys") else row[5]),
+                        provider=(row["provider"] if hasattr(row, "keys") else row[6]),
+                        model=(row["model"] if hasattr(row, "keys") else row[7]),
+                        status=(row["status"] if hasattr(row, "keys") else row[8]),
+                        latency_ms=(row["latency_ms"] if hasattr(row, "keys") else row[9]),
+                        prompt_tokens=(row["prompt_tokens"] if hasattr(row, "keys") else row[10]),
+                        completion_tokens=(row["completion_tokens"] if hasattr(row, "keys") else row[11]),
+                        total_tokens=(row["total_tokens"] if hasattr(row, "keys") else row[12]),
+                        total_cost_usd=(row["total_cost_usd"] if hasattr(row, "keys") else row[13]),
+                        currency=(row["currency"] if hasattr(row, "keys") else row[14]),
+                        estimated=bool(row["estimated"] if hasattr(row, "keys") else row[15]),
+                        request_id=(row["request_id"] if hasattr(row, "keys") else row[16]),
+                    )
+                )
 
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:

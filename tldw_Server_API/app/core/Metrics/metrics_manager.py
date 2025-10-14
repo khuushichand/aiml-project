@@ -159,6 +159,41 @@ class MetricsRegistry:
                 labels=["provider", "model"]
             )
         )
+        # Detailed LLM usage variants for dashboards
+        self.register_metric(
+            MetricDefinition(
+                name="llm_cost_dollars_by_user",
+                type=MetricType.COUNTER,
+                description="Cumulative LLM API cost in dollars by user",
+                unit="$",
+                labels=["provider", "model", "user_id"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_cost_dollars_by_operation",
+                type=MetricType.COUNTER,
+                description="Cumulative LLM API cost in dollars by operation",
+                unit="$",
+                labels=["provider", "model", "operation"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_tokens_used_total_by_user",
+                type=MetricType.COUNTER,
+                description="Total number of tokens used by user",
+                labels=["provider", "model", "type", "user_id"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="llm_tokens_used_total_by_operation",
+                type=MetricType.COUNTER,
+                description="Total number of tokens used by operation",
+                labels=["provider", "model", "type", "operation"],
+            )
+        )
         
         # RAG metrics
         self.register_metric(

@@ -121,7 +121,10 @@ class PricingCatalog:
 
         # File overrides
         try:
-            cfg_path = Path(__file__).parents[4] / "tldw_Server_API" / "Config_Files" / "model_pricing.json"
+            # Resolve to repo_root/tldw_Server_API/Config_Files/model_pricing.json
+            # __file__ = .../tldw_Server_API/app/core/Usage/pricing_catalog.py
+            # parents[3] = .../tldw_Server_API
+            cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
             if cfg_path.exists():
                 data = json.loads(cfg_path.read_text())
                 self._merge_overrides(_lower_keys(data))
@@ -160,8 +163,9 @@ class PricingCatalog:
             if mk in mdl or mdl in mk:
                 return float(r.get("prompt", 0.0)), float(r.get("completion", 0.0)), True
 
-        # Provider baseline fallback (tiny sentinel)
-        return 0.0001, 0.0001, True
+        # Provider baseline fallback (conservative): avoid under-estimating unknown models
+        # Defaults approximate a mid/high rate similar to GPT-4o/4.1 tiers
+        return 0.01, 0.03, True
 
 
 _DEFAULT_CATALOG = PricingCatalog()

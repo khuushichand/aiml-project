@@ -1,6 +1,8 @@
 [Setup]
 enable_first_time_setup = true
 setup_completed = true
+# When true, bypasses the local-only guard for setup API requests.
+allow_remote_setup_access = false
 
 [Server]
 disable_cors = false

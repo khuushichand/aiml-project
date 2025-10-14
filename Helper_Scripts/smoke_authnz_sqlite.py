@@ -56,11 +56,15 @@ def main():
                         encrypted_token TEXT,
                         encrypted_refresh TEXT,
                         expires_at TIMESTAMP NOT NULL,
+                        refresh_expires_at TIMESTAMP,
                         ip_address TEXT,
                         user_agent TEXT,
                         device_id TEXT,
                         is_active INTEGER DEFAULT 1,
+                        is_revoked INTEGER DEFAULT 0,
                         revoked_at TIMESTAMP,
+                        access_jti TEXT,
+                        refresh_jti TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )

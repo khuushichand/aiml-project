@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -15,6 +16,7 @@ from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
@@ -124,10 +126,7 @@ async def mark_setup_complete(
     plan_requested = False
     if payload.install_plan and not payload.install_plan.is_empty():
         plan_requested = True
-        try:
-            plan_dict = payload.install_plan.model_dump()
-        except Exception:
-            plan_dict = payload.install_plan.dict()
+        plan_dict = model_dump_compat(payload.install_plan)
         background_tasks.add_task(execute_install_plan, plan_dict)
 
     if payload.disable_first_time_setup:
@@ -206,20 +205,38 @@ async def setup_self_verify(
     if not user_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 
+    raw_conn = getattr(db, "_conn", db)
+
+    def _conn_module_name(conn: Any) -> str:
+        module = getattr(conn.__class__, "__module__", "")
+        return module or ""
+
+    async def _maybe_commit(conn: Any) -> None:
+        commit = getattr(conn, "commit", None)
+        if not commit:
+            return
+        result = commit()
+        if inspect.isawaitable(result):
+            await result
+
     try:
-        if hasattr(db, 'execute'):
-            # PostgreSQL
+        module_name = _conn_module_name(raw_conn)
+        is_asyncpg = module_name.startswith("asyncpg")
+
+        if is_asyncpg:
             await db.execute(
                 "UPDATE users SET is_verified = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                True, user_id
+                True,
+                user_id,
             )
         else:
-            # SQLite
             await db.execute(
                 "UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?",
-                (1, user_id)
+                (1, user_id),
             )
-            await db.commit()
+            await _maybe_commit(db)
+            if raw_conn is not db:
+                await _maybe_commit(raw_conn)
         return {"success": True, "user_id": user_id, "message": "Account marked as verified."}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to self-verify during setup")

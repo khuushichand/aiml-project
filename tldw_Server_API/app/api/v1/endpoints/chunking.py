@@ -49,6 +49,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_use
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+from tldw_Server_API.app.core.Chunking import Chunker
 #
 #######################################################################################################################
 #
@@ -401,6 +402,7 @@ async def process_file_for_chunking(
     overlap: Optional[int] = Form(default_chunk_options_from_lib.get('overlap')),
     language: Optional[str] = Form(None), # Default to None for auto-detection
     tokenizer_name_or_path: Optional[str] = Form(default_chunk_options_from_lib.get('tokenizer_name_or_path', "gpt2")),
+    code_mode: Optional[str] = Form(None, description="For method='code': 'auto' | 'ast' | 'heuristic'"),
     adaptive: Optional[bool] = Form(default_chunk_options_from_lib.get('adaptive')),
     multi_level: Optional[bool] = Form(default_chunk_options_from_lib.get('multi_level')),
     custom_chapter_pattern: Optional[str] = Form(None),
@@ -448,6 +450,8 @@ async def process_file_for_chunking(
 
     # Filter out None values from the top level to allow library defaults
     form_options_cleaned = {k: v for k, v in form_options_dict.items() if v is not None}
+    if code_mode is not None:
+        form_options_cleaned['code_mode'] = code_mode
 
     effective_processing_options = default_chunk_options_from_lib.copy()
     effective_processing_options.update(form_options_cleaned)
@@ -543,7 +547,14 @@ async def process_file_for_chunking(
 async def get_chunking_capabilities(
     current_user: User = Depends(get_request_user),
 ):
-    methods = [m.value for m in ChunkingMethod]
+    # Prefer runtime registry from Chunker to include non-enum methods like 'structure_aware'
+    try:
+        runtime_methods = Chunker().get_available_methods()
+    except Exception:
+        runtime_methods = []
+    enum_methods = [m.value for m in ChunkingMethod]
+    # Merge and de-duplicate
+    methods = sorted(set(enum_methods + runtime_methods))
     llm_required = [m for m in ["rolling_summarize", "propositions"] if m in methods]
     return {
         "methods": methods,

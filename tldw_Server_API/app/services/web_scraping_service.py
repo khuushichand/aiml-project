@@ -222,7 +222,8 @@ async def process_web_scraping_task(
                         # Build plaintext chunks for FTS-first retrieval
                         try:
                             ck = Chunker()
-                            flat = ck.chunk_text_hierarchical_flat(content_text, method=chunk_method or 'sentences', max_size=chunk_size, overlap=chunk_overlap)
+                            # Use sane defaults in fallback path
+                            flat = ck.chunk_text_hierarchical_flat(content_text, method='sentences')
                             kind_map = {
                                 'paragraph': 'text',
                                 'list_unordered': 'list',

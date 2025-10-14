@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 def _set_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "sk-test")
+    # Remove API key so settings provides deterministic test key
+    monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     # Force domain-scoped RBAC path even in single-user mode
     monkeypatch.setenv("JOBS_DOMAIN_SCOPED_RBAC", "true")
     monkeypatch.setenv("JOBS_RBAC_FORCE", "true")
@@ -17,9 +18,11 @@ def test_rbac_requires_domain_filter_and_allowlist(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         # Missing domain should be rejected when required
         r = client.get("/api/v1/jobs/stats")
@@ -59,4 +62,3 @@ def test_rbac_requires_domain_filter_and_allowlist(monkeypatch, tmp_path):
         body3 = {"statuses": ["completed"], "older_than_days": 30, "dry_run": True, "domain": "chatbooks"}
         rp3 = client.post("/api/v1/jobs/prune", json=body3)
         assert rp3.status_code == 200
-

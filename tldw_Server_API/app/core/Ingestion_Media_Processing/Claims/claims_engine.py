@@ -104,6 +104,46 @@ def _first_n_snippets(docs: List[Document], n: int = 3, snippet_len: int = 480) 
     return out
 
 
+def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> Tuple[int, int]:
+    """Best-effort exact offsets into the full document.
+
+    Strategy:
+    1) Directly find claim_text in doc_text
+    2) Else, find snippet (without ellipsis) in doc_text
+    3) Else, sliding window over snippet (sizes 96, 64, 48, 32) to find a unique anchor
+    4) Fallback to (0, min(len(doc_text), len(snippet)))
+    """
+    if not isinstance(doc_text, str) or not doc_text:
+        return (0, 0)
+    # 1) claim_text exact
+    ct = (claim_text or "").strip()
+    if ct:
+        i = doc_text.find(ct)
+        if i >= 0:
+            return (i, i + len(ct))
+
+    # 2) snippet without trailing ellipsis
+    snip = (snippet or "")
+    if snip.endswith("..."):
+        snip = snip[:-3]
+    if snip:
+        i = doc_text.find(snip)
+        if i >= 0:
+            return (i, i + len(snip))
+
+    # 3) sliding window
+    for k in (96, 64, 48, 32):
+        if len(snip) >= k:
+            mid = max(0, (len(snip) - k) // 2)
+            window = snip[mid : mid + k]
+            j = doc_text.find(window)
+            if j >= 0:
+                return (j, j + k)
+
+    # 4) fallback
+    return (0, min(len(doc_text), max(len(ct), len(snip))))
+
+
 # --------------------------- Extractors ---------------------------
 
 class HeuristicSentenceExtractor:
@@ -141,9 +181,16 @@ class LLMBasedClaimExtractor:
         base = load_prompt("ingestion", "claims_extractor_prompt") or (
             "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
             "Each proposition should stand alone without the surrounding context, be specific and checkable. "
-            "Return JSON: {\"claims\":[{\"text\":str}]}. Do not include explanations.\n\nANSWER:\n{answer}"
+            "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\nANSWER:\n{answer}"
         )
-        prompt = base.format(max_claims=max_claims, answer=answer)
+        # Safely format template that may contain JSON braces
+        try:
+            prompt = base.format(max_claims=max_claims, answer=answer)
+        except Exception:
+            # Escape all braces then restore placeholders
+            _tmpl = base.replace('{', '{{').replace('}', '}}')
+            _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
+            prompt = _tmpl.format(max_claims=max_claims, answer=answer)
 
         try:
             # Resolve provider/model/temperature from [Claims] with sensible fallbacks
@@ -202,11 +249,19 @@ class LLMBasedClaimExtractor:
                 model_override=model_override,
             )
             text = raw if isinstance(raw, str) else str(raw)
-            # find JSON block
-            jtxt = text
-            m = re.search(r"\{[\s\S]*\}\s*$", text)
-            if m:
-                jtxt = m.group(0)
+            # find JSON block (support fenced blocks)
+            jtxt = None
+            fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+            for block in fence_json or []:
+                try:
+                    _ = json.loads(block)
+                    jtxt = block
+                    break
+                except Exception:
+                    continue
+            if jtxt is None:
+                m = re.search(r"\{[\s\S]*\}\s*$", text)
+                jtxt = m.group(0) if m else text
             data = json.loads(jtxt)
             out: List[Claim] = []
             for i, c in enumerate((data.get("claims") or [])[:max_claims]):
@@ -296,6 +351,13 @@ class HybridClaimVerifier:
         candidate_docs = sorted(candidate_docs, key=_score_doc, reverse=True)
         evidence_snips = _first_n_snippets(candidate_docs, n=min(3, top_k))
         evidence_text = "\n\n".join([f"[doc:{e.doc_id}] {e.snippet}" for e in evidence_snips])
+        # Map doc_id -> full text for citation offsets
+        _doc_map: Dict[str, str] = {}
+        try:
+            for d in candidate_docs:
+                _doc_map[str(getattr(d, "id", ""))] = getattr(d, "content", "") or ""
+        except Exception:
+            _doc_map = {}
 
         # NLI verification path (optional depending on mode)
         nli = None
@@ -312,12 +374,19 @@ class HybridClaimVerifier:
                             if sc > best_tuple[1]:
                                 best_tuple = (lab, sc, i)
                     if best_tuple[1] >= conf_threshold:
+                        # Populate citations only for supported/refuted with best-effort exact offsets
+                        cit: List[Dict[str, Any]] = []
+                        if best_tuple[0] in {"supported", "refuted"}:
+                            for ev in evidence_snips:
+                                full = _doc_map.get(ev.doc_id, "")
+                                s, e = _find_offsets(full, claim_text, ev.snippet)
+                                cit.append({"doc_id": ev.doc_id, "start": int(s), "end": int(e)})
                         return ClaimVerification(
                             claim=claim,
                             label=best_tuple[0],
                             confidence=best_tuple[1],
                             evidence=evidence_snips,
-                            citations=[],
+                            citations=cit,
                             rationale=f"NLI-{best_tuple[0]} {best_tuple[1]:.2f}",
                         )
                     else:
@@ -352,10 +421,70 @@ class HybridClaimVerifier:
         confidence = 0.5
         rationale = None
         try:
-            raw = await asyncio.to_thread(self._analyze, "openai", claim_text, judge_prompt, None, system, 0.1)
+            # Resolve provider/model/temp from settings with sensible fallbacks (align with extractor)
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+            except Exception:
+                _settings = {}
+
+            provider = None
+            model_override = None
+            temperature = 0.1
+            try:
+                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
+            except Exception:
+                provider = None
+            try:
+                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+            except Exception:
+                model_override = None
+            try:
+                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
+            except Exception:
+                temperature = 0.1
+
+            if provider is None:
+                try:
+                    rag_cfg = _settings.get("RAG", {}) or {}
+                    provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
+                except Exception:
+                    provider = None
+            if provider is None:
+                try:
+                    provider = str(_settings.get("default_api", "openai")).strip() or "openai"
+                except Exception:
+                    provider = "openai"
+            if model_override is None:
+                try:
+                    rag_cfg = _settings.get("RAG", {}) or {}
+                    model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
+                except Exception:
+                    model_override = None
+
+            raw = await asyncio.to_thread(
+                self._analyze,
+                provider or "openai",
+                claim_text,
+                judge_prompt,
+                None,
+                system,
+                temperature,
+                model_override=model_override,
+            )
             text = raw if isinstance(raw, str) else str(raw)
-            m = re.search(r"\{[\s\S]*\}\s*$", text)
-            jtxt = m.group(0) if m else text
+            # Parse fenced JSON if present
+            jtxt = None
+            fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+            for block in fence_json or []:
+                try:
+                    _ = json.loads(block)
+                    jtxt = block
+                    break
+                except Exception:
+                    continue
+            if jtxt is None:
+                m = re.search(r"\{[\s\S]*\}\s*$", text)
+                jtxt = m.group(0) if m else text
             data = json.loads(jtxt)
             lab = str(data.get("label", "nei")).lower().strip()
             if lab in {"supported", "refuted", "nei"}:
@@ -364,12 +493,20 @@ class HybridClaimVerifier:
             rationale = data.get("rationale")
         except Exception as e:
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
+        # Construct citations for traceability (doc IDs with snippet offsets)
+        citations: List[Dict[str, Any]] = []
+        if label in {"supported", "refuted"}:
+            for ev in evidence_snips:
+                full = _doc_map.get(ev.doc_id, "")
+                s, e = _find_offsets(full, claim_text, ev.snippet)
+                citations.append({"doc_id": ev.doc_id, "start": int(s), "end": int(e)})
+
         return ClaimVerification(
             claim=claim,
             label=label,
             confidence=max(0.0, min(1.0, confidence)),
             evidence=evidence_snips,
-            citations=[],
+            citations=citations,
             rationale=rationale,
         )
 
@@ -520,9 +657,11 @@ class ClaimsEngine:
             claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
         verifications: List[ClaimVerification] = []
 
+        # Initialize verifier once if a specific NLI model is requested
+        if nli_model:
+            self.verifier = HybridClaimVerifier(self._analyze, nli_model=nli_model)
+
         async def _verify_one(c: Claim) -> ClaimVerification:
-            if nli_model:
-                self.verifier = HybridClaimVerifier(self._analyze, nli_model=nli_model)
             return await self.verifier.verify(
                 claim=c,
                 query=query,

@@ -5,11 +5,10 @@
 import asyncio
 import json
 from html import unescape
-import pytest
 import random
 import re
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
 # 3rd-Party Imports
@@ -39,8 +38,6 @@ from App_Function_Libraries.Chat.Chat_Functions import chat_api_call
 # Functions:
 
 ######################### Main Orchestration Workflow #########################
-#
-# FIXME - Add Logging
 
 def initialize_web_search_results_dict(search_params: Dict) -> Dict:
     """
@@ -130,7 +127,6 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
 
     # 3. Perform searches and accumulate all raw results
     for q in all_queries:
-        sleep_time = random.uniform(1, 1.5)  # Add a random delay to avoid rate limiting
         logging.info(f"Performing web search for query: {q}")
         raw_results = perform_websearch(
             search_engine=search_params.get('engine'),
@@ -156,7 +152,6 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
         # Check for errors or invalid data
         if not isinstance(raw_results, dict) or raw_results.get("processing_error"):
             logging.error(f"Error or invalid data returned for query '{q}': {raw_results}")
-            print(f"Error or invalid data returned for query '{q}': {raw_results}")
             continue
 
         logging.info(f"Search results found for query '{q}': {len(raw_results.get('results', []))}")
@@ -173,7 +168,12 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
     }
 
 
-async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: Dict, search_params: Dict) -> Dict:
+async def analyze_and_aggregate(
+        web_search_results_dict: Dict,
+        sub_query_dict: Dict,
+        search_params: Dict,
+        cancel_event: Optional[asyncio.Event] = None
+) -> Dict:
     logging.info("Starting analyze_and_aggregate")
 
     # 4. Score/filter results
@@ -183,9 +183,9 @@ async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: D
         web_search_results_dict["results"],
         sub_query_dict["main_goal"],
         sub_questions,
-        search_params.get('relevance_analysis_llm')
+        search_params.get('relevance_analysis_llm'),
+        cancel_event=cancel_event,
     )
-    # FIXME
     logging.debug("Relevant results returned by search_result_relevance:")
     logging.debug(json.dumps(relevant_results, indent=2))
 
@@ -203,6 +203,9 @@ async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: D
         search_params.get('final_answer_llm')
     )
 
+    if not isinstance(final_answer.get("text"), str):
+        raise ValueError("Aggregation produced an invalid final_answer payload")
+
     # 7. Return the final data
     logging.info("Returning final websearch results")
     return {
@@ -212,35 +215,6 @@ async def analyze_and_aggregate(web_search_results_dict: Dict, sub_query_dict: D
     }
 
 
-@pytest.mark.asyncio
-async def test_perplexity_pipeline():
-    # Phase 1: Generate sub-queries and perform web searches
-    search_params = {
-        "engine": "google",
-        "content_country": "countryUS",
-        "search_lang": "en",
-        "output_lang": "en",
-        "result_count": 10,
-        "date_range": None,
-        "safesearch": "active",
-        "site_blacklist": ["spam-site.com"],
-        "exactTerms": None,
-        "excludeTerms": None,
-        "filter": None,
-        "geolocation": None,
-        "search_result_language": None,
-        "sort_results_by": None,
-        "subquery_generation": True,
-        "subquery_generation_llm": "openai",
-        "relevance_analysis_llm": "openai",
-        "final_answer_llm": "openai"
-    }
-    phase1_results = generate_and_search("What is the capital of France?", search_params)
-    # Review the results here if needed
-    # Phase 2: Analyze relevance and aggregate final answer
-    phase2_results = await analyze_and_aggregate(phase1_results["web_search_results_dict"],
-                                                 phase1_results["sub_query_dict"], search_params)
-    print(phase2_results["final_answer"])
 
 
 ######################### Question Analysis #########################
@@ -336,12 +310,13 @@ def analyze_question(question: str, api_endpoint) -> Dict:
 
 ######################### Relevance Analysis #########################
 #
-# FIXME - Ensure edge cases are handled properly / Structured outputs?
+# TODO(websearch): Transition relevance parsing to structured outputs to reduce regex fragility.
 async def search_result_relevance(
         search_results: List[Dict],
         original_question: str,
         sub_questions: List[str],
-        api_endpoint: str
+        api_endpoint: str,
+        cancel_event: Optional[asyncio.Event] = None
 ) -> Dict[str, Dict]:
     """
     Evaluate whether each search result is relevant to the original question and sub-questions.
@@ -372,6 +347,9 @@ async def search_result_relevance(
     """
 
     for idx, result in enumerate(search_results):
+        if cancel_event and cancel_event.is_set():
+            logging.info("Cancellation requested; stopping relevance evaluation")
+            break
         content = result.get("content", "")
         if not content:
             logging.error("No Content found in search results array!")
@@ -402,6 +380,10 @@ async def search_result_relevance(
             sleep_time = random.uniform(0.2, 0.6)
             await asyncio.sleep(sleep_time)
 
+            if cancel_event and cancel_event.is_set():
+                logging.info("Cancellation detected after delay; aborting relevance evaluation")
+                break
+
             # Evaluate relevance
             relevancy_result = chat_api_call(
                 api_endpoint=api_endpoint,
@@ -418,12 +400,11 @@ async def search_result_relevance(
                 topp=None,
             )
 
-            # FIXME
             logging.debug(f"[DEBUG] Relevancy LLM response for index {idx}:\n{relevancy_result}\n---")
 
             if relevancy_result:
                 # Extract the selected answer and reasoning via regex
-                logging.debug(f"LLM Relevancy Response for item:", relevancy_result)
+                logging.debug("LLM relevancy response for item %s: %s", idx, relevancy_result)
                 selected_answer_match = re.search(
                     r"Selected Answer:\s*(True|False)",
                     relevancy_result,
@@ -511,12 +492,20 @@ def review_and_select_results(web_search_results_dict: Dict) -> Dict:
 
 ######################### Result Aggregation & Combination #########################
 #
+class FinalAnswerDict(TypedDict):
+    """Structured payload returned by the aggregation phase."""
+    text: str
+    evidence: List[Dict[str, Any]]
+    confidence: float
+    chunks: List[Dict[str, Any]]
+
+
 def aggregate_results(
         relevant_results: Dict[str, Dict],
         question: str,
         sub_questions: List[str],
-        api_endpoint: str
-) -> Dict:
+        api_endpoint: Optional[str]
+) -> FinalAnswerDict:
     """
     Combines and summarizes relevant results into a final answer.
 
@@ -534,23 +523,161 @@ def aggregate_results(
     """
     logging.info("Aggregating and summarizing relevant results")
     if not relevant_results:
-        return {
-            "Report": "No relevant results found. Unable to provide an answer.",
+        no_results: FinalAnswerDict = {
+            "text": "No relevant results found. Unable to provide an answer.",
             "evidence": [],
-            "confidence": 0.0
+            "confidence": 0.0,
+            "chunks": [],
         }
+        return no_results
 
-    # FIXME - Add summarization loop
     logging.info("Summarizing relevant results")
-    # ADD Code here to summarize the relevant results
 
-    # FIXME - Validate and test thoroughly, also structured generation
-    # Concatenate relevant contents for final analysis
-    concatenated_texts = "\n\n".join(
-        f"ID: {rid}\nContent: {res['content']}\nReasoning: {res['reasoning']}"
-        for rid, res in relevant_results.items()
-    )
+    def _build_chunk_infos(
+            items: List[tuple[str, Dict[str, Any]]],
+            max_chars: int = 6000
+    ) -> List[Dict[str, Any]]:
+        chunk_infos: List[Dict[str, Any]] = []
+        current_entries: List[tuple[str, str]] = []
+        current_length = 0
 
+        def flush_entries() -> None:
+            nonlocal current_entries, current_length
+            if not current_entries:
+                return
+            text = "\n\n".join(entry for _, entry in current_entries)
+            chunk_infos.append({
+                "index": len(chunk_infos) + 1,
+                "result_ids": [rid for rid, _ in current_entries],
+                "text": text,
+                "truncated": False,
+            })
+            current_entries = []
+            current_length = 0
+
+        for rid, res in items:
+            entry = f"ID: {rid}\nContent: {res.get('content', '')}\nReasoning: {res.get('reasoning', '')}"
+            entry_length = len(entry)
+            if entry_length >= max_chars:
+                flush_entries()
+                chunk_infos.append({
+                    "index": len(chunk_infos) + 1,
+                    "result_ids": [rid],
+                    "text": entry[:max_chars],
+                    "truncated": True,
+                })
+                continue
+
+            if current_length + entry_length > max_chars and current_entries:
+                flush_entries()
+
+            current_entries.append((rid, entry))
+            current_length += entry_length
+
+        flush_entries()
+        return chunk_infos
+
+    def _estimate_confidence(
+            relevant_count: int,
+            chunk_count: int,
+            failed_chunks: int,
+            has_llm: bool
+    ) -> float:
+        if relevant_count <= 0:
+            return 0.0
+        coverage = min(relevant_count, 10) / 10.0
+        chunk_success = 1.0 if chunk_count == 0 else (chunk_count - failed_chunks) / chunk_count
+        base = 0.35 + 0.45 * coverage
+        modifier = 0.6 + 0.4 * chunk_success
+        llm_bonus = 0.1 if has_llm and failed_chunks == 0 else (0.05 if has_llm else 0.0)
+        confidence = base * modifier + llm_bonus
+        return max(0.1, min(0.99, round(confidence, 3)))
+
+    result_items = list(relevant_results.items())
+    chunk_infos = _build_chunk_infos(result_items)
+    chunk_assignments: Dict[str, int] = {}
+    for info in chunk_infos:
+        for rid in info["result_ids"]:
+            chunk_assignments[rid] = info["index"]
+
+    chunk_metadata: List[Dict[str, Any]] = []
+    evidence_payload: List[Dict[str, Any]] = []
+
+    for rid, res in relevant_results.items():
+        evidence_payload.append({
+            "id": rid,
+            "content": res.get("content"),
+            "original_content": res.get("original_content"),
+            "reasoning": res.get("reasoning"),
+            "chunk_index": chunk_assignments.get(rid),
+        })
+
+    if not api_endpoint:
+        logging.warning("No final answer LLM configured; returning evidence summaries only.")
+        for info in chunk_infos:
+            preview = info["text"][:1500]
+            chunk_metadata.append({
+                "chunk_index": info["index"],
+                "result_ids": info["result_ids"],
+                "summary": preview,
+                "generated": False,
+                "source_characters": len(info["text"]),
+                "truncated_source": info["truncated"],
+            })
+        combined_text = "\n\n".join(entry.get("content", "") or "" for entry in relevant_results.values())
+        fallback_answer: FinalAnswerDict = {
+            "text": combined_text or "Unable to generate a final answer without an LLM.",
+            "evidence": evidence_payload,
+            "confidence": _estimate_confidence(len(evidence_payload), len(chunk_infos), 0, has_llm=False),
+            "chunks": chunk_metadata,
+        }
+        return fallback_answer
+
+    summarized_chunks: List[str] = []
+    failed_chunks = 0
+
+    for info in chunk_infos:
+        chunk_prompt = f"""
+            Summarize the following set of relevant search snippets into a concise digest that preserves
+            high-signal facts for answering the question: "{question}".
+
+            Requirements:
+            1. Keep the summary under 1500 characters.
+            2. Focus on verifiable facts and key statistics.
+            3. Mention the reasoning tags when helpful.
+
+            <chunk id="{info['index']}">
+            {info['text']}
+            </chunk>
+            """
+        try:
+            chunk_summary = summarize(
+                input_data=info["text"],
+                custom_prompt_arg=chunk_prompt,
+                api_name=api_endpoint,
+                api_key=None,
+                temp=0.3,
+                system_message=None,
+                streaming=False
+            )
+            generated = True
+        except Exception as chunk_error:
+            failed_chunks += 1
+            logging.warning(f"Chunk summarization failed for chunk {info['index']}: {chunk_error}")
+            chunk_summary = info["text"][:1500]
+            generated = False
+
+        chunk_metadata.append({
+            "chunk_index": info["index"],
+            "result_ids": info["result_ids"],
+            "summary": chunk_summary,
+            "generated": generated,
+            "source_characters": len(info["text"]),
+            "truncated_source": info["truncated"],
+        })
+        summarized_chunks.append(f"Chunk {info['index']} Summary:\n{chunk_summary}")
+
+    context_payload = "\n\n".join(summarized_chunks)
     current_date = time.strftime("%Y-%m-%d")
 
     # Aggregation Prompt #1
@@ -582,7 +709,7 @@ def aggregate_results(
         3. **Conclusion**: Climate change poses significant challenges to global agriculture [1, 2, 3].
 
         <context>
-        {concatenated_texts}
+        {context_payload}
         </context>
         ---------------------
 
@@ -593,7 +720,7 @@ def aggregate_results(
         """
 
     # Aggregation Prompt #2
-    analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {concatenated_texts}. Read these carefully, as you will be asked a Query about them.
+    analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
         # General Instructions
 
         Write an accurate, detailed, and comprehensive response to the user's query located at INITIAL_QUERY. Additional context is provided as "USER_INPUT" after specific questions. Your answer should be informed by the provided "Search results". Your answer must be precise, of high-quality, and written by an expert using an unbiased and journalistic tone. Your answer must be written in the same language as the query, even if language preference is different.
@@ -655,11 +782,11 @@ def aggregate_results(
         ## Science and Math
 
         If the user query is about some simple calculation, only answer with the final result. Follow these rules for writing formulas:
-        - Always use \( and\) for inline formulas and\[ and\] for blocks, for example\(x^4 = x - 3 \)
-        - To cite a formula add citations to the end, for example\[ \sin(x) \] [1][2] or \(x^2-2\) [4].
+        - Always use \\( and\\) for inline formulas and\\[ and\\] for blocks, for example\\(x^4 = x - 3 \\)
+        - To cite a formula add citations to the end, for example\\[ \\sin(x) \\] [1][2] or \\(x^2-2\\) [4].
         - Never use $ or $$ to render LaTeX, even if it is present in the user query.
         - Never use unicode to render math expressions, ALWAYS use LaTeX.
-        - Never use the \label instruction for LaTeX.
+        - Never use the \\label instruction for LaTeX.
 
         ## URL Lookup
 
@@ -694,23 +821,36 @@ def aggregate_results(
             topk=None,
             topp=None,
         )
-        logging.debug(f"Returned response from LLM: {returned_response}")
+        logging.debug("Returned response from LLM for aggregation: %s", returned_response)
         if returned_response:
-            # You could do further parsing or confidence estimation here
-            return {
-                "Report": returned_response,
-                "evidence": list(relevant_results.values()),
-                "confidence": 0.9  # Hardcoded or computed as needed
+            success_answer: FinalAnswerDict = {
+                "text": returned_response,
+                "evidence": evidence_payload,
+                "confidence": _estimate_confidence(
+                    len(evidence_payload),
+                    len(chunk_infos),
+                    failed_chunks,
+                    has_llm=True,
+                ),
+                "chunks": chunk_metadata,
             }
+            return success_answer
     except Exception as e:
         logging.error(f"Error aggregating results: {e}")
 
     logging.error("Could not create the report due to an error.")
-    return {
-        "summary": "Could not create the report due to an error.",
-        "evidence": list(relevant_results.values()),
-        "confidence": 0.0
+    failure_answer: FinalAnswerDict = {
+        "text": "Could not create the report due to an error.",
+        "evidence": evidence_payload,
+        "confidence": _estimate_confidence(
+            len(evidence_payload),
+            len(chunk_infos),
+            failed_chunks=len(chunk_infos),
+            has_llm=False,
+        ),
+        "chunks": chunk_metadata,
     }
+    return failure_answer
 
 
 #
@@ -721,15 +861,15 @@ def aggregate_results(
 #######################################################################################################################
 #
 # Search Engine Functions
-
-# FIXME
 def perform_websearch(search_engine, search_query, content_country, search_lang, output_lang, result_count,
                       date_range=None,
                       safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None,
                       geolocation=None, search_result_language=None, sort_results_by=None):
     try:
+        search_engines_cfg = loaded_config_data.get('search_engines', {})
+
         if search_engine.lower() == "baidu":
-            web_search_results = search_web_baidu(search_query, None, None)
+            raise NotImplementedError("Baidu search is not implemented")
 
         elif search_engine.lower() == "bing":
             # Prepare the arguments for search_web_bing
@@ -738,7 +878,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 "bing_lang": search_lang,
                 "bing_country": content_country,
                 "result_count": result_count,
-                "bing_api_key": loaded_config_data['search_engines'].get('bing_api_key'),
+                "bing_api_key": search_engines_cfg.get('bing_search_api_key'),
                 # Fetch Bing API key from config
                 "date_range": date_range,
             }
@@ -747,9 +887,16 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_bing(**bing_args)
 
         elif search_engine.lower() == "brave":
-            web_search_results = search_web_brave(search_query, content_country, search_lang, output_lang, result_count,
-                                                  safesearch,
-                                                  site_blacklist, date_range)
+            web_search_results = search_web_brave(
+                search_term=search_query,
+                country=content_country,
+                search_lang=search_lang,
+                ui_lang=output_lang,
+                result_count=result_count,
+                safesearch=safesearch or "moderate",
+                date_range=date_range,
+                site_blacklist=site_blacklist,
+            )
 
         elif search_engine.lower() == "duckduckgo":
             # Prepare the arguments for search_web_duckduckgo
@@ -819,129 +966,25 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_kagi(search_query, content_country)
 
         elif search_engine.lower() == "serper":
-            web_search_results = search_web_serper()
+            raise NotImplementedError("Serper search is not implemented")
 
         elif search_engine.lower() == "tavily":
-            web_search_results = search_web_tavily(search_query, result_count, site_blacklist)
+            raise NotImplementedError("Tavily search is not implemented")
 
         elif search_engine.lower() == "searx":
-            web_search_results = search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1,
-                                                  categories='general')
+            raise NotImplementedError("Searx search is not implemented")
 
         elif search_engine.lower() == "yandex":
-            web_search_results = search_web_yandex()
+            raise NotImplementedError("Yandex search is not implemented")
 
         else:
             return f"Error: Invalid Search Engine Name {search_engine}"
 
-        # Process the raw search results
         web_search_results_dict = process_web_search_results(web_search_results, search_engine)
-        # FIXME
-        # logging.debug("After process_web_search_results:")
-        # logging.debug(json.dumps(web_search_results_dict, indent=2))
         return web_search_results_dict
 
     except Exception as e:
         return {"processing_error": f"Error performing web search: {str(e)}"}
-
-
-def test_perform_websearch_google():
-    # Google Searches
-    try:
-        test_1 = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 1: {test_1}")
-        # FIXME - Fails. Need to fix arg formatting
-        test_2 = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10, date_range="y",
-                                   safesearch="active", site_blacklist=["spam-site.com"])
-        print(f"Test 2: {test_2}")
-        test_3 = results = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 3: {test_3}")
-    except Exception as e:
-        print(f"Error performing google searches: {str(e)}")
-    pass
-
-
-def test_perform_websearch_bing():
-    # Bing Searches
-    try:
-        test_4 = perform_websearch("bing", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 4: {test_4}")
-        test_5 = perform_websearch("bing", "What is the capital of France?", "US", "en", "en", 10, date_range="y")
-        print(f"Test 5: {test_5}")
-    except Exception as e:
-        print(f"Error performing bing searches: {str(e)}")
-
-
-def test_perform_websearch_brave():
-    # Brave Searches
-    try:
-        test_7 = perform_websearch("brave", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 7: {test_7}")
-    except Exception as e:
-        print(f"Error performing brave searches: {str(e)}")
-
-
-def test_perform_websearch_ddg():
-    # DuckDuckGo Searches
-    try:
-        test_6 = perform_websearch("duckduckgo", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 6: {test_6}")
-        test_7 = perform_websearch("duckduckgo", "What is the capital of France?", "US", "en", "en", 10, date_range="y")
-        print(f"Test 7: {test_7}")
-    except Exception as e:
-        print(f"Error performing duckduckgo searches: {str(e)}")
-
-
-# FIXME
-def test_perform_websearch_kagi():
-    # Kagi Searches
-    try:
-        test_8 = perform_websearch("kagi", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 8: {test_8}")
-    except Exception as e:
-        print(f"Error performing kagi searches: {str(e)}")
-
-
-# FIXME
-def test_perform_websearch_serper():
-    # Serper Searches
-    try:
-        test_9 = perform_websearch("serper", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 9: {test_9}")
-    except Exception as e:
-        print(f"Error performing serper searches: {str(e)}")
-
-
-# FIXME
-def test_perform_websearch_tavily():
-    # Tavily Searches
-    try:
-        test_10 = perform_websearch("tavily", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 10: {test_10}")
-    except Exception as e:
-        print(f"Error performing tavily searches: {str(e)}")
-
-
-# FIXME
-def test_perform_websearch_searx():
-    # Searx Searches
-    try:
-        test_11 = perform_websearch("searx", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 11: {test_11}")
-    except Exception as e:
-        print(f"Error performing searx searches: {str(e)}")
-
-
-# FIXME
-def test_perform_websearch_yandex():
-    # Yandex Searches
-    try:
-        test_12 = perform_websearch("yandex", "What is the capital of France?", "US", "en", "en", 10)
-        print(f"Test 12: {test_12}")
-    except Exception as e:
-        print(f"Error performing yandex searches: {str(e)}")
-    pass
-
 
 #
 ######################### Search Result Parsing ##################################################################
@@ -1079,11 +1122,6 @@ def search_web_baidu(arg1, arg2, arg3):
     pass
 
 
-def test_baidu_search(arg1, arg2, arg3):
-    result = search_web_baidu(arg1, arg2, arg3)
-    return result
-
-
 def search_parse_baidu_results():
     pass
 
@@ -1149,24 +1187,6 @@ def search_web_bing(search_query, bing_lang, bing_country, result_count=None, bi
         return bing_search_results
     except Exception as ex:
         raise ex
-
-
-def test_search_web_bing():
-    search_query = "How can I get started learning machine learning?"
-    bing_lang = "en"
-    bing_country = "US"
-    result_count = 10
-    bing_api_key = None
-    date_range = None
-    result = search_web_bing(search_query, bing_lang, bing_country, result_count, bing_api_key, date_range)
-    # Unparsed results
-    print("Bing Search Results:")
-    print(result)
-    # Parsed results
-    output_dict = {"results": []}
-    parse_bing_results(result, output_dict)
-    print("Parsed Bing Results:")
-    print(json.dumps(output_dict, indent=2))
 
 
 def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
@@ -1242,64 +1262,67 @@ def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
 #
 # https://brave.com/search/api/
 # https://github.com/run-llama/llama_index/blob/main/llama-index-integrations/tools/llama-index-tools-brave-search/README.md
-def search_web_brave(search_term, country, search_lang, ui_lang, result_count, safesearch="moderate",
-                     brave_api_key=None, result_filter=None, search_type="ai", date_range=None):
+def search_web_brave(
+        search_term: str,
+        country: Optional[str],
+        search_lang: Optional[str],
+        ui_lang: Optional[str],
+        result_count: Optional[int],
+        safesearch: Optional[str] = "moderate",
+        brave_api_key: Optional[str] = None,
+        result_filter: Optional[str] = None,
+        search_type: str = "ai",
+        date_range: Optional[str] = None,
+        site_blacklist: Optional[List[str]] = None
+) -> Dict[str, Any]:
     search_url = "https://api.search.brave.com/res/v1/web/search"
-    if not brave_api_key and search_type == "web":
-        # load key from config file
-        brave_api_key = loaded_config_data['search_engines']['brave_search_api_key']
-        if not brave_api_key:
-            raise ValueError("Please provide a valid Brave Search API subscription key")
-    if not country:
-        brave_country = loaded_config_data['search_engines']['search_engine_country_code_brave']
-    else:
-        country = "US"
-    if not search_lang:
-        search_lang = "en"
-    if not ui_lang:
-        ui_lang = "en"
-    if not result_count:
-        result_count = 10
-    # if not date_range:
-    #     date_range = "month"
-    if not result_filter:
-        result_filter = "webpages"
-    if search_type == "ai":
-        brave_api_key = loaded_config_data['search_engines']['brave_search_ai_api_key']
-    else:
+
+    search_engines_cfg = loaded_config_data.get("search_engines", {})
+    if search_type not in {"ai", "web"}:
         raise ValueError("Invalid search type. Please choose 'ai' or 'web'.")
 
-    headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": brave_api_key}
+    if not brave_api_key:
+        key_name = "brave_search_ai_api_key" if search_type == "ai" else "brave_search_api_key"
+        brave_api_key = search_engines_cfg.get(key_name)
+    if not brave_api_key:
+        raise ValueError("Please provide a valid Brave Search API subscription key")
 
-    # https://api.search.brave.com/app/documentation/web-search/query#WebSearchAPIQueryParameters
-    params = {"q": search_term, "textDecorations": True, "textFormat": "HTML", "count": result_count,
-              "freshness": date_range, "promote": "webpages", "safeSearch": "Moderate"}
+    country = country or search_engines_cfg.get("search_engine_country_code_brave", "US")
+    search_lang = search_lang or "en"
+    ui_lang = ui_lang or "en"
+    result_count = result_count or search_engines_cfg.get("search_result_max_per_query", 10)
+    safesearch = (safesearch or "moderate").capitalize()
+    result_filter = result_filter or "webpages"
 
-    response = requests.get(search_url, headers=headers, params=params)
+    headers = {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": brave_api_key
+    }
+
+    params: Dict[str, Any] = {
+        "q": search_term,
+        "count": result_count,
+        "freshness": date_range,
+        "promote": result_filter,
+        "safeSearch": safesearch,
+        "source": search_type,
+        "country": country,
+        "search_lang": search_lang,
+        "ui_lang": ui_lang,
+    }
+
+    if site_blacklist:
+        params["exclude_sites"] = ",".join(site_blacklist)
+
+    # Drop None values to keep the request clean
+    filtered_params = {key: value for key, value in params.items() if value is not None}
+
+    response = requests.get(search_url, headers=headers, params=filtered_params)
     response.raise_for_status()
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     brave_search_results = response.json()
     return brave_search_results
-
-
-def test_search_brave():
-    search_term = "How can I bake a cherry cake"
-    country = "US"
-    search_lang = "en"
-    ui_lang = "en"
-    result_count = 10
-    safesearch = "moderate"
-    date_range = None
-    result_filter = None
-    result = search_web_brave(search_term, country, search_lang, ui_lang, result_count, safesearch, date_range,
-                              result_filter)
-    print("Brave Search Results:")
-    print(result)
-
-    output_dict = {"results": []}
-    parse_brave_results(result, output_dict)
-    print("Parsed Brave Results:")
-    print(json.dumps(output_dict, indent=2))
 
 
 def parse_brave_results(raw_results: Dict, output_dict: Dict) -> None:
@@ -1359,10 +1382,6 @@ def parse_brave_results(raw_results: Dict, output_dict: Dict) -> None:
     except Exception as e:
         logging.error(f"Error processing Brave results: {str(e)}")
         output_dict["processing_error"] = f"Error processing Brave results: {str(e)}"
-
-
-def test_parse_brave_results():
-    pass
 
 
 ######################### DuckDuckGo Search #########################
@@ -1459,31 +1478,7 @@ def search_web_duckduckgo(
     return results
 
 
-def test_search_duckduckgo():
-    try:
-        results = search_web_duckduckgo(
-            keywords="How can I bake a cherry cake?",
-            region="us-en",
-            timelimit="w",
-            max_results=10
-        )
-        print(f"Number of results: {len(results)}")
-        for result in results:
-            print(f"Title: {result['title']}")
-            print(f"URL: {result['href']}")
-            print(f"Snippet: {result['body']}")
-            print("---")
 
-        # Parse the results
-        output_dict = {"results": []}
-        parse_duckduckgo_results({"results": results}, output_dict)
-        print("Parsed DuckDuckGo Results:")
-        print(json.dumps(output_dict, indent=2))
-
-    except ValueError as e:
-        print(f"Invalid input: {str(e)}")
-    except requests.RequestException as e:
-        print(f"Request error: {str(e)}")
 
 
 def parse_duckduckgo_results(raw_results: Dict, output_dict: Dict) -> None:
@@ -1561,8 +1556,6 @@ def extract_domain(url: str) -> str:
         return url
 
 
-def test_parse_duckduckgo_results():
-    pass
 
 
 ######################### Google Search #########################
@@ -1692,43 +1685,6 @@ def search_web_google(
         raise
 
 
-def test_search_google():
-    search_query = "How can I bake a cherry cake?"
-    google_search_api_key = loaded_config_data['search_engines']['google_search_api_key']
-    google_search_engine_id = loaded_config_data['search_engines']['google_search_engine_id']
-    result_count = 10
-    c2coff = "1"
-    results_origin_country = "countryUS"
-    date_range = None
-    exactTerms = None
-    excludeTerms = None
-    filter = None
-    geolocation = "us"
-    ui_language = "en"
-    search_result_language = "lang_en"
-    safesearch = "off"
-    site_blacklist = None
-    sort_results_by = None
-    result = search_web_google(search_query,
-                               google_search_api_key,
-                               google_search_engine_id,
-                               result_count,
-                               c2coff,
-                               results_origin_country,
-                               date_range,
-                               exactTerms,
-                               excludeTerms,
-                               filter,
-                               geolocation,
-                               ui_language,
-                               search_result_language,
-                               safesearch,
-                               site_blacklist,
-                               sort_results_by
-                               )
-    print(result)
-    return result
-
 
 def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
     """
@@ -1739,7 +1695,6 @@ def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
         output_dict (Dict): Dictionary to store processed results.
     """
     logging.info(f"Raw results received: {json.dumps(raw_results, indent=2)}")
-    # For debugging only FIXME
     logging.debug("Raw web_search_results from Google:")
     logging.debug(json.dumps(raw_results, indent=2))
     try:
@@ -1826,13 +1781,7 @@ def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
         output_dict["processing_error"] = f"Error processing Google results: {str(e)}"
 
 
-def test_parse_google_results():
-    parsed_results = {}
-    raw_results = {}
-    raw_results = test_search_google()
-    parse_google_results(raw_results, parsed_results)
-    print(f"Parsed search results: {parsed_results}")
-    pass
+
 
 
 ######################### Kagi Search #########################
@@ -1862,11 +1811,7 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     return response.json()
 
 
-def test_search_kagi():
-    search_term = "How can I bake a cherry cake"
-    result_count = 10
-    result = search_web_kagi(search_term, result_count)
-    print(result)
+
 
 
 def parse_kagi_results(raw_results: Dict, output_dict: Dict) -> None:
@@ -1922,8 +1867,6 @@ def parse_kagi_results(raw_results: Dict, output_dict: Dict) -> None:
         output_dict["processing_error"] = f"Error processing Kagi results: {str(e)}"
 
 
-def test_parse_kagi_results():
-    pass
 
 
 ######################### SearX Search #########################
@@ -2037,19 +1980,13 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         return json.dumps({"error": f"There was an error searching for content. {str(e)}"})
 
 
-def test_search_searx():
-    # Use a different Searx instance to avoid rate limiting
-    searx_url = "https://searx.be"  # Example of a different Searx instance
-    result = search_web_searx("What goes into making a cherry cake?", searx_url=searx_url)
-    print(result)
+
 
 
 def parse_searx_results(searx_search_results, web_search_results_dict):
     pass
 
 
-def test_parse_searx_results():
-    pass
 
 
 ######################### Serper.dev Search #########################
@@ -2059,8 +1996,6 @@ def search_web_serper():
     pass
 
 
-def test_search_serper():
-    pass
 
 
 def parse_serper_results(serper_search_results, web_search_results_dict):
@@ -2103,17 +2038,11 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
         return f"There was an error searching for content. {str(e)}"
 
 
-def test_search_tavily():
-    result = search_web_tavily("How can I bake a cherry cake?")
-    print(result)
-
 
 def parse_tavily_results(tavily_search_results, web_search_results_dict):
     pass
 
 
-def test_parse_tavily_results():
-    pass
 
 
 ######################### Yandex Search #########################
@@ -2126,8 +2055,6 @@ def search_web_yandex():
     pass
 
 
-def test_search_yandex():
-    pass
 
 
 def parse_yandex_results(yandex_search_results, web_search_results_dict):

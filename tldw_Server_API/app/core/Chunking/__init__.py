@@ -98,6 +98,7 @@ def improved_chunking_process(text: str,
     max_size = options.get('max_size', 400)
     overlap = options.get('overlap', 200)
     language = options.get('language', 'en')
+    code_mode = str(options.get('code_mode', 'auto')).lower() if str(method).lower() == 'code' else None
     
     # Create chunker with LLM support if provided
     chunker = Chunker(llm_call_func=llm_call_func, llm_config=llm_api_config)
@@ -124,6 +125,11 @@ def improved_chunking_process(text: str,
                 'end_index': chunk.metadata.end_char,
                 'word_count': chunk.metadata.word_count,
                 'language': chunk.metadata.language,
+                # Standardized keys for consistency across endpoints
+                'chunk_method': method,
+                'max_size': max_size,
+                'overlap': overlap,
+                **({'code_mode_used': code_mode} if code_mode is not None else {}),
             }
         })
     

@@ -659,7 +659,7 @@ class APIKeyManager:
             # Update rotation references
             async with self.db_pool.transaction() as conn:
                 # Mark old key as rotated
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
                         UPDATE api_keys 
@@ -922,7 +922,7 @@ class APIKeyManager:
         try:
             import json
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if hasattr(conn, 'fetchrow'):
                     import json as _json
                     _details = _json.dumps(details) if details is not None else None
                     await conn.execute(

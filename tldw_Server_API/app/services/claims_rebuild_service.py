@@ -30,6 +30,9 @@ class ClaimsRebuildService:
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
         self._worker_threads = max(1, int(worker_threads))
+        # Stats
+        self._stats_lock = threading.Lock()
+        self._stats = {"enqueued": 0, "processed": 0, "failed": 0}
 
     def start(self) -> None:
         if self._threads:
@@ -51,10 +54,19 @@ class ClaimsRebuildService:
                 pass
         self._threads.clear()
         self._stop.clear()
-        logger.info("ClaimsRebuildService stopped")
+        stats = self.get_stats()
+        logger.info(
+            "ClaimsRebuildService stopped (enqueued={enq}, processed={proc}, failed={fail}, queue_len={q})",
+            enq=stats.get("enqueued", 0),
+            proc=stats.get("processed", 0),
+            fail=stats.get("failed", 0),
+            q=self._queue.qsize(),
+        )
 
     def submit(self, media_id: int, db_path: str) -> None:
         self._queue.put_nowait(ClaimsRebuildTask(media_id=int(media_id), db_path=str(db_path)))
+        with self._stats_lock:
+            self._stats["enqueued"] += 1
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
@@ -66,9 +78,18 @@ class ClaimsRebuildService:
                 # sentinel
                 continue
             try:
+                logger.debug(
+                    "Processing claims rebuild task media_id={mid}, queue_size={qsize}",
+                    mid=task.media_id,
+                    qsize=self._queue.qsize(),
+                )
                 self._process_task(task)
+                with self._stats_lock:
+                    self._stats["processed"] += 1
             except Exception as e:
                 logger.error(f"Claims rebuild failed for media_id={task.media_id}: {e}")
+                with self._stats_lock:
+                    self._stats["failed"] += 1
             finally:
                 self._queue.task_done()
 
@@ -106,6 +127,13 @@ class ClaimsRebuildService:
             except Exception:
                 pass
 
+    def get_stats(self) -> Dict[str, int]:
+        with self._stats_lock:
+            return dict(self._stats)
+
+    def get_queue_length(self) -> int:
+        return self._queue.qsize()
+
 
 # Module-level singleton for convenience
 _service_singleton: Optional[ClaimsRebuildService] = None
@@ -117,4 +145,3 @@ def get_claims_rebuild_service() -> ClaimsRebuildService:
         _service_singleton = ClaimsRebuildService(worker_threads=1)
         _service_singleton.start()
     return _service_singleton
-

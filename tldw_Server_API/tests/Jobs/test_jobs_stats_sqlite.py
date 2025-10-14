@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "sk-test")
+    monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
+    import os as _os
+    monkeypatch.setenv("JOBS_DB_PATH", _os.path.join(_os.getcwd(), "Databases", "jobs.db"))
 
 
 def _map_by_key(rows):
@@ -25,6 +27,8 @@ def test_jobs_stats_shape_and_counts_sqlite(monkeypatch, tmp_path):
     _set_env(monkeypatch)
 
     # Import app after env is set
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
     jm = JobManager()
@@ -49,7 +53,7 @@ def test_jobs_stats_shape_and_counts_sqlite(monkeypatch, tmp_path):
     jc = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     jm.complete_job(int(jc["id"]))
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         r = client.get("/api/v1/jobs/stats")
         assert r.status_code == 200, r.text
@@ -78,6 +82,8 @@ def test_jobs_stats_filters_sqlite(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
     jm = JobManager()
@@ -87,7 +93,7 @@ def test_jobs_stats_filters_sqlite(monkeypatch, tmp_path):
     jm.create_job(domain="chatbooks", queue="high", job_type="export", payload={}, owner_user_id="1")
     jm.create_job(domain="other", queue="default", job_type="import", payload={}, owner_user_id="2")
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         # Filter by domain
         r = client.get("/api/v1/jobs/stats", params={"domain": "chatbooks"})
@@ -119,4 +125,3 @@ def test_jobs_stats_filters_sqlite(monkeypatch, tmp_path):
         assert only["domain"] == "chatbooks"
         assert only["queue"] == "high"
         assert only["job_type"] == "export"
-

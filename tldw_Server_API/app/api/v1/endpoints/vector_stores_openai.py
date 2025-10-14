@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
@@ -44,6 +45,7 @@ from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
@@ -1038,8 +1040,23 @@ async def list_vectors(
     returned = len(items)
     if returned == limit and (offset + returned) < total:
         next_offset = offset + returned
+
+    serialized_items: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            serialized_items.append(item)
+            continue
+        try:
+            serialized_items.append(model_dump_compat(item))
+        except TypeError:
+            fallback = jsonable_encoder(item)
+            if isinstance(fallback, dict):
+                serialized_items.append(fallback)
+            else:
+                serialized_items.append({"value": fallback})
+
     return {
-        "data": [item.model_dump() if hasattr(item, "model_dump") else item.dict() for item in items],
+        "data": serialized_items,
         "pagination": {
             "limit": limit,
             "offset": offset,

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day: Optional[str] = None) -> None:
@@ -86,3 +88,44 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
         logger.debug(f"llm_usage_daily aggregated for {day_str}")
     except Exception as e:
         logger.debug(f"llm_usage_daily aggregation skipped/failed: {e}")
+
+
+async def _aggregator_loop(stop_event: asyncio.Event):
+    settings = get_settings()
+    if not getattr(settings, "LLM_USAGE_AGGREGATOR_ENABLED", True):
+        logger.info("LLM usage aggregator disabled (LLM_USAGE_AGGREGATOR_ENABLED is false)")
+        return
+    interval_minutes = int(getattr(settings, "LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES", 60) or 60)
+    logger.info(f"Starting LLM usage aggregator task (interval: {interval_minutes} min)")
+    try:
+        while not stop_event.is_set():
+            await aggregate_llm_usage_daily()
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_minutes * 60)
+            except asyncio.TimeoutError:
+                continue
+    except Exception as e:
+        logger.warning(f"LLM usage aggregator loop exited: {e}")
+
+
+async def start_llm_usage_aggregator() -> Optional[asyncio.Task]:
+    """Start background LLM aggregator if enabled; return task or None."""
+    settings = get_settings()
+    if not getattr(settings, "LLM_USAGE_AGGREGATOR_ENABLED", True):
+        return None
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(_aggregator_loop(stop_event))
+    task._tldw_stop_event = stop_event  # type: ignore[attr-defined]
+    return task
+
+
+async def stop_llm_usage_aggregator(task: Optional[asyncio.Task]) -> None:
+    if not task:
+        return
+    try:
+        stop_event = getattr(task, "_tldw_stop_event", None)
+        if isinstance(stop_event, asyncio.Event):
+            stop_event.set()
+        task.cancel()
+    except Exception:
+        pass

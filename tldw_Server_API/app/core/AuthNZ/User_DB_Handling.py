@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_use
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 # Utils
 from loguru import logger
 # API Dependencies
@@ -119,6 +120,18 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise credentials_exception
     
     logger.debug(f"Token decoded successfully for user_id: {user_id}")
+
+    # Enforce blacklist revocation (fail-closed)
+    try:
+        session_manager = await get_session_manager()
+        if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+            logger.warning("Token has been revoked according to blacklist/session state")
+            raise credentials_exception
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error checking token blacklist: {exc}")
+        raise credentials_exception
 
     # --- Fetch and Validate User Data ---
     user_data: Optional[dict] = None # Initialize to satisfy linters potentially

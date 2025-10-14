@@ -20,6 +20,14 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import HTTPException
+
+
+def _ensure_placeholder_enabled():
+    s = get_settings()
+    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
+        raise HTTPException(status_code=503, detail="Document placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
 
 async def process_documents(
     doc_urls: Optional[List[str]],
@@ -50,6 +58,7 @@ async def process_documents(
     4) Return a structured dict describing results
     """
 
+    _ensure_placeholder_enabled()
     start_time = time.time()
     processed_count = 0
     failed_count = 0
@@ -119,6 +128,16 @@ async def process_documents(
             # pypandoc can handle RTF -> plain
             return pypandoc.convert_file(file_path, "plain", format="rtf")
 
+        elif ext == ".pdf":
+            # Minimal placeholder for PDF — prefer the dedicated PDF pipeline elsewhere
+            try:
+                return pypandoc.convert_file(file_path, 'plain', format='pdf')
+            except Exception:
+                return "[PDF format not handled here - use a separate PDF pipeline?]"
+
+        else:
+            return "[Unsupported file extension or not recognized]"
+
     def build_plaintext_chunks(text: str, method: Optional[str] = None, max_size: int = 500, overlap: int = 50,
                                language: Optional[str] = None) -> List[Dict[str, Any]]:
         """Chunk plaintext and return items ready for UnvectorizedMediaChunks persistence.
@@ -165,15 +184,6 @@ async def process_documents(
                 "metadata": meta_small,
             })
         return chunks_out
-
-        elif ext == ".pdf":
-            # If you want partial PDF support here (rather than a separate pdf codepath):
-            # return pypandoc.convert_file(file_path, 'plain', format='pdf')
-            # or use your PDF parsing approach
-            return "[PDF format not handled here - use a separate PDF pipeline?]"
-
-        else:
-            return "[Unsupported file extension or not recognized]"
 
     # Helper for chunking + summarization
     def summarize_text_if_needed(full_text: str) -> str:

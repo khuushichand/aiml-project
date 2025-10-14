@@ -2,12 +2,15 @@ import os
 
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app
-
 
 def test_config_jobs_endpoint_shape(monkeypatch):
     # Force test mode to avoid heavy startup
     monkeypatch.setenv("TEST_MODE", "true")
+    # Reset settings and import app after env is set
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+
     with TestClient(app) as client:
         r = client.get("/api/v1/config/jobs")
         assert r.status_code == 200

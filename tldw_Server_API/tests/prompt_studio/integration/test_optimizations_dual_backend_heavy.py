@@ -4,13 +4,13 @@ These tests seed larger test corpora and run the optimization job handler
 with mocked LLM/execution calls, validating that both SQLite and Postgres
 backends complete multi-iteration optimizations on bigger datasets.
 
-By default, sizes are moderate to keep runtime acceptable. Set
+By default, sizes are trimmed to keep runtime acceptable. Set
 TLDW_PS_STRESS=1 to enable a heavier variant with more test cases and
 iterations. You can further tune sizes via env vars:
 
-- TLDW_PS_TC_COUNT: total test cases to seed (default 250; stress 1000)
-- TLDW_PS_ITERATIONS: iterations per optimization (default 5; stress 10)
-- TLDW_PS_OPT_COUNT: number of parallel optimizations (default 3; stress 8)
+- TLDW_PS_TC_COUNT: total test cases to seed (default 120; stress 600)
+- TLDW_PS_ITERATIONS: iterations per optimization (default 3; stress 8)
+- TLDW_PS_OPT_COUNT: number of parallel optimizations (default 2; stress 5)
 """
 
 from __future__ import annotations
@@ -152,8 +152,8 @@ def _drop_postgres_database(config: DatabaseConfig) -> None:
         admin.close()
 
 
-@pytest.fixture
-def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
+@pytest.fixture(scope="module")
+def prompt_studio_dual_backend_client(tmp_path_factory):
     """Module-local override: choose exactly one backend for this heavy suite.
 
     Backend is selected via env TLDW_PS_BACKEND (sqlite|postgres), default sqlite.
@@ -169,8 +169,11 @@ def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
     backend = None
     config = None
 
+    # Use a module-scoped temporary directory so DB and seed can be shared
+    tmp_dir = tmp_path_factory.mktemp("ps_heavy")
+
     if backend_choice == "sqlite":
-        db_instance = PromptStudioDatabase(str(tmp_path / "prompt_studio_sqlite_heavy.sqlite"), "heavy-sqlite")
+        db_instance = PromptStudioDatabase(str(tmp_dir / "prompt_studio_sqlite_heavy.sqlite"), "heavy-sqlite")
     else:
         if not _HAS_POSTGRES:
             pytest.skip("psycopg not available; skipping Postgres backend for heavy suite")
@@ -189,19 +192,29 @@ def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
         config = _create_temp_postgres_database(base_config)
         backend = DatabaseBackendFactory.create_backend(config)
         db_instance = PromptStudioDatabase(
-            db_path=str(tmp_path / "prompt_studio_pg_placeholder.sqlite"),
+            db_path=str(tmp_dir / "prompt_studio_pg_placeholder.sqlite"),
             client_id="heavy-postgres",
             backend=backend,
         )
 
-    monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setitem(app_settings, "USER_DB_BASE_DIR", tmp_path)
+    prev_test_mode = os.environ.get("TEST_MODE")
+    os.environ["TEST_MODE"] = "true"
+    prev_user_base = app_settings.get("USER_DB_BASE_DIR")
+    app_settings["USER_DB_BASE_DIR"] = tmp_dir
+
+    # Static test user for this module-scoped client
+    test_user = {
+        "id": "test-user-123",
+        "username": "testuser",
+        "email": "test@example.com",
+        "is_active": True,
+    }
 
     async def override_user():
         return User(
-            id=mock_current_user.get("id", "test-user-123"),
-            username=mock_current_user.get("username", "testuser"),
-            email=mock_current_user.get("email", "test@example.com"),
+            id=test_user["id"],
+            username=test_user["username"],
+            email=test_user["email"],
             is_active=True,
         )
 
@@ -211,7 +224,10 @@ def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
     _app = fastapi_app
     _app.dependency_overrides[get_request_user] = override_user
     _app.dependency_overrides[get_prompt_studio_db] = override_db
-    monkeypatch.setattr(ps_deps, "get_current_active_user", lambda: mock_current_user, raising=False)
+    # Patch dependency directly and restore in finally
+    had_attr = hasattr(ps_deps, "get_current_active_user")
+    prev_get_user = getattr(ps_deps, "get_current_active_user", None)
+    setattr(ps_deps, "get_current_active_user", lambda: test_user)
 
     try:
         with TestClient(_app) as client:
@@ -240,6 +256,25 @@ def prompt_studio_dual_backend_client(tmp_path, monkeypatch, mock_current_user):
                 _drop_postgres_database(config)
             except Exception:
                 pass
+        # Restore patched settings/env
+        if prev_test_mode is None:
+            try:
+                del os.environ["TEST_MODE"]
+            except Exception:
+                pass
+        else:
+            os.environ["TEST_MODE"] = prev_test_mode
+        try:
+            app_settings["USER_DB_BASE_DIR"] = prev_user_base
+        except Exception:
+            pass
+        try:
+            if had_attr:
+                setattr(ps_deps, "get_current_active_user", prev_get_user)
+            else:
+                delattr(ps_deps, "get_current_active_user")
+        except Exception:
+            pass
 
 
 def _should_stress() -> bool:
@@ -286,13 +321,66 @@ async def _seed_test_cases(client, project_id: int, total: int) -> List[int]:
     return created_ids
 
 
-@pytest.mark.parametrize(
-    "optimizer_type",
-    ["iterative", "mipro"],
-)
+@pytest.fixture(scope="module")
+def ps_seeded_project(prompt_studio_dual_backend_client):
+    """Create one project and seed test cases once per module to share across tests.
+
+    Honors TLDW_PS_TC_COUNT with lower defaults; use TLDW_PS_STRESS=1 for larger sizes.
+    """
+    backend_label, client, db = prompt_studio_dual_backend_client
+
+    # Create shared project
+    proj = client.post(
+        "/api/v1/prompt-studio/projects/",
+        json={"name": f"Seed Proj ({backend_label})", "description": "", "status": "active", "metadata": {}},
+    )
+    assert proj.status_code in (200, 201), proj.text
+    project_id = proj.json()["data"]["id"]
+
+    # Lower default corpus size; allow stress mode to scale up
+    total_cases = _int_from_env("TLDW_PS_TC_COUNT", 600 if _should_stress() else 120)
+
+    # Seed synchronously in batches to avoid async fixture complexity
+    created_ids: List[int] = []
+    batch_size = 100
+    remaining = total_cases
+    counter = 0
+    while remaining > 0:
+        n = min(batch_size, remaining)
+        payload = {
+            "project_id": project_id,
+            "test_cases": [
+                {
+                    "name": f"TC-{counter + i}",
+                    "inputs": {"q": f"Question {counter + i}"},
+                    "expected_outputs": {"answer": "ok"},
+                    "tags": ["bulk"],
+                    "is_golden": (i % 10 == 0),
+                }
+                for i in range(n)
+            ],
+        }
+        resp = client.post("/api/v1/prompt-studio/test-cases/bulk", json=payload)
+        assert resp.status_code in (200, 201), resp.text
+        data = resp.json().get("data", [])
+        created_ids.extend([row.get("id") for row in data if row.get("id") is not None])
+        remaining -= n
+        counter += n
+
+    return {
+        "backend_label": backend_label,
+        "client": client,
+        "db": db,
+        "project_id": project_id,
+        "test_case_ids": created_ids,
+    }
+
+
+@pytest.mark.parametrize("optimizer_type", ["iterative", "mipro"])
+@pytest.mark.timeout(120)
 @pytest.mark.asyncio
 async def test_long_running_optimization_dual_backend(
-    prompt_studio_dual_backend_client,
+    ps_seeded_project,
     optimizer_type: str,
     monkeypatch,
 ):
@@ -305,7 +393,10 @@ async def test_long_running_optimization_dual_backend(
     - Asserts that the optimization completes with recorded iterations
     """
 
-    backend_label, client, db = prompt_studio_dual_backend_client
+    backend_label = ps_seeded_project["backend_label"]
+    client = ps_seeded_project["client"]
+    db = ps_seeded_project["db"]
+    project_id = ps_seeded_project["project_id"]
 
     # Mock out LLM calls and speed up sleeps
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import prompt_executor as _pe
@@ -321,14 +412,6 @@ async def test_long_running_optimization_dual_backend(
 
     monkeypatch.setattr(_jp.asyncio, "sleep", _fast_sleep)
 
-    # Create project
-    project_resp = client.post(
-        "/api/v1/prompt-studio/projects/",
-        json={"name": f"Opt Proj ({backend_label})", "description": "", "status": "active", "metadata": {}},
-    )
-    assert project_resp.status_code in (200, 201), project_resp.text
-    project_id = project_resp.json()["data"]["id"]
-
     # Create base prompt
     prompt_resp = client.post(
         "/api/v1/prompt-studio/prompts/create",
@@ -342,13 +425,12 @@ async def test_long_running_optimization_dual_backend(
     assert prompt_resp.status_code in (200, 201), prompt_resp.text
     prompt_id = prompt_resp.json()["data"]["id"]
 
-    # Seed a larger number of test cases
-    total_cases = _int_from_env("TLDW_PS_TC_COUNT", 1000 if _should_stress() else 250)
-    created_ids = await _seed_test_cases(client, project_id, total_cases)
-    assert len(created_ids) == total_cases
+    # Use pre-seeded test cases with lower defaults by default
+    created_ids = ps_seeded_project["test_case_ids"]
+    total_cases = len(created_ids)
 
-    # Create an optimization job
-    iterations = _int_from_env("TLDW_PS_ITERATIONS", 10 if _should_stress() else 5)
+    # Create an optimization job with fewer default iterations
+    iterations = _int_from_env("TLDW_PS_ITERATIONS", 8 if _should_stress() else 3)
     opt_resp = client.post(
         "/api/v1/prompt-studio/optimizations/create",
         json={
@@ -360,7 +442,7 @@ async def test_long_running_optimization_dual_backend(
                 "target_metric": "accuracy",
                 "early_stopping": True,
             },
-            "test_case_ids": created_ids[:200],
+            "test_case_ids": created_ids[: min(100, total_cases)],
             "name": f"LongRun-{optimizer_type}",
         },
     )
@@ -394,9 +476,10 @@ async def test_long_running_optimization_dual_backend(
     assert len(history) >= 1
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.asyncio
 async def test_many_optimizations_concurrent_dual_backend(
-    prompt_studio_dual_backend_client,
+    ps_seeded_project,
     monkeypatch,
 ):
     """Spawn multiple optimizations and process them concurrently on both backends.
@@ -405,7 +488,10 @@ async def test_many_optimizations_concurrent_dual_backend(
     This expands coverage for queueing, processing, and iteration logging
     under higher concurrency while staying deterministic via mocks.
     """
-    backend_label, client, db = prompt_studio_dual_backend_client
+    backend_label = ps_seeded_project["backend_label"]
+    client = ps_seeded_project["client"]
+    db = ps_seeded_project["db"]
+    pid = ps_seeded_project["project_id"]
 
     # Mock LLM + sleep to keep this fast and deterministic
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import prompt_executor as _pe
@@ -421,14 +507,6 @@ async def test_many_optimizations_concurrent_dual_backend(
 
     monkeypatch.setattr(_jp.asyncio, "sleep", _fast_sleep)
 
-    # Create project + base prompt
-    proj = client.post(
-        "/api/v1/prompt-studio/projects/",
-        json={"name": f"Many Opt Proj ({backend_label})", "description": "", "status": "active", "metadata": {}},
-    )
-    assert proj.status_code in (200, 201), proj.text
-    pid = proj.json()["data"]["id"]
-
     pr = client.post(
         "/api/v1/prompt-studio/prompts/create",
         json={"project_id": pid, "name": f"Many Opt Prompt ({backend_label})", "system_prompt": "S", "user_prompt": "{{q}}"},
@@ -436,18 +514,18 @@ async def test_many_optimizations_concurrent_dual_backend(
     assert pr.status_code in (200, 201), pr.text
     prompt_id = pr.json()["data"]["id"]
 
-    # Seed a moderate dataset
-    total_cases = _int_from_env("TLDW_PS_TC_COUNT", 500 if _should_stress() else 200)
-    created_ids = await _seed_test_cases(client, pid, total_cases)
-    assert len(created_ids) == total_cases
+    # Use pre-seeded dataset
+    created_ids = ps_seeded_project["test_case_ids"]
+    total_cases = len(created_ids)
 
     # Create multiple optimizations
-    opt_count = _int_from_env("TLDW_PS_OPT_COUNT", 8 if _should_stress() else 3)
-    iterations = _int_from_env("TLDW_PS_ITERATIONS", 6 if _should_stress() else 3)
+    opt_count = _int_from_env("TLDW_PS_OPT_COUNT", 5 if _should_stress() else 2)
+    iterations = _int_from_env("TLDW_PS_ITERATIONS", 5 if _should_stress() else 2)
     strategies = ["iterative", "mipro", "random_search", "hill_climb", "beam_search", "greedy", "anneal", "genetic"]
     strategies = strategies[:max(1, opt_count)]
 
     created_opt_ids: List[int] = []
+    subset_size = min(120 if _should_stress() else 60, total_cases)
     for i, strat in enumerate(strategies):
         resp = client.post(
             "/api/v1/prompt-studio/optimizations/create",
@@ -460,7 +538,7 @@ async def test_many_optimizations_concurrent_dual_backend(
                     "target_metric": "accuracy",
                     "early_stopping": True,
                 },
-                "test_case_ids": created_ids[(i * 50) % total_cases : ((i * 50) % total_cases) + 120],
+                "test_case_ids": created_ids[(i * 20) % total_cases : ((i * 20) % total_cases) + subset_size],
                 "name": f"Concurrent-{strat}",
             },
         )
@@ -484,9 +562,10 @@ async def test_many_optimizations_concurrent_dual_backend(
         assert len(history) >= 1
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.asyncio
 async def test_strategy_comparison_and_concurrent_jobs_dual_backend(
-    prompt_studio_dual_backend_client,
+    ps_seeded_project,
     monkeypatch,
 ):
     """Create a strategy comparison across multiple optimizers and process all jobs concurrently.
@@ -494,7 +573,10 @@ async def test_strategy_comparison_and_concurrent_jobs_dual_backend(
     Validates that the compare endpoint spawns multiple optimization jobs and that
     the JobProcessor can process all of them concurrently on both SQLite and Postgres.
     """
-    backend_label, client, db = prompt_studio_dual_backend_client
+    backend_label = ps_seeded_project["backend_label"]
+    client = ps_seeded_project["client"]
+    db = ps_seeded_project["db"]
+    pid = ps_seeded_project["project_id"]
 
     # Mock LLM + test runner + sleep for speed/determinism
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import prompt_executor as _pe
@@ -510,13 +592,7 @@ async def test_strategy_comparison_and_concurrent_jobs_dual_backend(
 
     monkeypatch.setattr(_jp.asyncio, "sleep", _fast_sleep)
 
-    # Create project + prompt
-    proj = client.post(
-        "/api/v1/prompt-studio/projects/",
-        json={"name": f"Compare Proj ({backend_label})", "description": "", "status": "active", "metadata": {}},
-    )
-    assert proj.status_code in (200, 201)
-    pid = proj.json()["data"]["id"]
+    # Create prompt on shared project
     pr = client.post(
         "/api/v1/prompt-studio/prompts/create",
         json={"project_id": pid, "name": f"Compare Prompt ({backend_label})", "system_prompt": "S", "user_prompt": "{{q}}"},
@@ -524,9 +600,8 @@ async def test_strategy_comparison_and_concurrent_jobs_dual_backend(
     assert pr.status_code in (200, 201)
     prompt_id = pr.json()["data"]["id"]
 
-    # Seed test cases (moderate)
-    created_ids = await _seed_test_cases(client, pid, 150)
-    assert len(created_ids) == 150
+    # Use pre-seeded test cases, limit to moderate subset
+    created_ids = ps_seeded_project["test_case_ids"]
 
     # Compare strategies; this should spawn one optimization/job per strategy
     strategies = ["iterative", "mipro", "random_search"]
@@ -536,8 +611,8 @@ async def test_strategy_comparison_and_concurrent_jobs_dual_backend(
             "project_id": pid,
             "prompt_id": prompt_id,
             "strategies": strategies,
-            "test_case_ids": created_ids[:100],
-            "config": {"max_iterations": 6, "target_metric": "accuracy"},
+            "test_case_ids": created_ids[: min(80, len(created_ids))],
+            "config": {"max_iterations": 3, "target_metric": "accuracy"},
         },
     )
     assert cmp.status_code == 200, cmp.text

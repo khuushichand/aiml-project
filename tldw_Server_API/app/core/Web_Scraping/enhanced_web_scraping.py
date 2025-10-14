@@ -30,7 +30,7 @@ import aiofiles
 from bs4 import BeautifulSoup
 import trafilatura
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-import redis
+import atexit
 #
 # Import existing components
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
@@ -145,10 +145,12 @@ class RateLimiter:
 class CookieManager:
     """Manages cookies and sessions for scraping"""
     
-    def __init__(self, storage_path: Optional[Path] = None):
+    def __init__(self, storage_path: Optional[Path] = None, *, connector_limit: int = 10, per_host_limit: int = 2):
         self.storage_path = storage_path or Path("./scraping_cookies.json")
         self._cookies: Dict[str, List[Dict[str, Any]]] = {}
         self._sessions: Dict[str, aiohttp.ClientSession] = {}
+        self._connector_limit = int(connector_limit)
+        self._per_host_limit = int(per_host_limit)
         self._load_cookies()
     
     def _load_cookies(self):
@@ -215,7 +217,7 @@ class CookieManager:
         session_key = self._build_session_key(domain, effective_user_agent, header_copy)
 
         if session_key not in self._sessions:
-            connector = aiohttp.TCPConnector(limit=10, limit_per_host=2)
+            connector = aiohttp.TCPConnector(limit=self._connector_limit, limit_per_host=self._per_host_limit)
             timeout = aiohttp.ClientTimeout(total=30)
             base_headers = {"User-Agent": effective_user_agent}
             if header_copy:
@@ -231,7 +233,11 @@ class CookieManager:
             cookies = self.get_cookies(url)
             if cookies:
                 for cookie in cookies:
-                    self._sessions[session_key].cookie_jar.update_cookies(cookie)
+                    # Support Playwright-style dicts and plain mappings
+                    if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                        self._sessions[session_key].cookie_jar.update_cookies({cookie["name"]: cookie["value"]})
+                    elif isinstance(cookie, dict):
+                        self._sessions[session_key].cookie_jar.update_cookies(cookie)
 
         return self._sessions[session_key]
     
@@ -303,6 +309,13 @@ class ContentDeduplicator:
         if content_hash in self._hashes:
             self._hashes[content_hash]["last_seen"] = datetime.now().isoformat()
             self._save_hashes()
+
+    def flush(self):
+        """Force a save to disk"""
+        try:
+            self._save_hashes()
+        except Exception as e:
+            logger.error(f"Failed to flush content hashes: {e}")
 
 
 class ScrapingJobQueue:
@@ -468,19 +481,32 @@ class EnhancedWebScraper:
     """Main enhanced web scraping class"""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.config = config or load_and_log_configs().get('web_scraper', {})
+        raw_cfg = config or load_and_log_configs().get('web_scraper', {})
+        # Normalize config values
+        def _as_float(v, d):
+            try:
+                return float(v)
+            except Exception:
+                return float(d)
+        def _as_int(v, d):
+            try:
+                return int(v)
+            except Exception:
+                return int(d)
+        self.config = raw_cfg
         
         # Initialize components
         self.rate_limiter = RateLimiter(
-            max_requests_per_second=self.config.get('max_rps', 2.0),
-            max_requests_per_minute=self.config.get('max_rpm', 60),
-            max_requests_per_hour=self.config.get('max_rph', 1000)
+            max_requests_per_second=_as_float(self.config.get('max_rps', 2.0), 2.0),
+            max_requests_per_minute=_as_int(self.config.get('max_rpm', 60), 60),
+            max_requests_per_hour=_as_int(self.config.get('max_rph', 1000), 1000)
         )
-        
-        self.cookie_manager = CookieManager()
+        connector_limit = _as_int(self.config.get('connector_limit', 10), 10)
+        per_host_limit = _as_int(self.config.get('connector_limit_per_host', 2), 2)
+        self.cookie_manager = CookieManager(connector_limit=connector_limit, per_host_limit=per_host_limit)
         self.deduplicator = ContentDeduplicator()
         self.job_queue = ScrapingJobQueue(
-            max_concurrent=self.config.get('max_concurrent', 5),
+            max_concurrent=_as_int(self.config.get('max_concurrent', 5), 5),
             parent_scraper=self  # Pass self reference to job queue
         )
         
@@ -514,6 +540,8 @@ class EnhancedWebScraper:
             self._playwright = None
             self._browser = None
         
+        # Ensure dedup flush on process exit
+        atexit.register(lambda: self.deduplicator.flush())
         logger.info("Enhanced web scraper started")
     
     async def stop(self):
@@ -525,6 +553,8 @@ class EnhancedWebScraper:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
+        # Final flush
+        self.deduplicator.flush()
         
         logger.info("Enhanced web scraper stopped")
     
@@ -646,6 +676,14 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Scrape using Playwright for JavaScript-heavy sites"""
+        # Fallback gracefully if browser isn't initialized
+        if not self._browser:
+            return await self._scrape_with_trafilatura(
+                url,
+                custom_cookies=custom_cookies,
+                user_agent=user_agent,
+                custom_headers=custom_headers,
+            )
         headers_copy = dict(custom_headers) if custom_headers else {}
         effective_user_agent = user_agent or headers_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
 

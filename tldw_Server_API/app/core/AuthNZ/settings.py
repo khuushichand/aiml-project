@@ -301,6 +301,57 @@ class Settings(BaseSettings):
         le=24 * 60,
         description="Background usage aggregator interval in minutes"
     )
+    # Disable capturing IP/User-Agent in usage_log.meta entirely
+    USAGE_LOG_DISABLE_META: bool = Field(
+        default=False,
+        description="When true, do not store IP/User-Agent in usage_log meta (stores '{}')"
+    )
+
+    # ===== LLM Usage Logging =====
+    LLM_USAGE_ENABLED: bool = Field(
+        default=True,
+        description="If true, record per-request LLM usage into llm_usage_log (can be overridden by env)"
+    )
+
+    # ===== LLM Usage Aggregation =====
+    LLM_USAGE_AGGREGATOR_ENABLED: bool = Field(
+        default=True,
+        description="Enable background aggregation of llm_usage_log into llm_usage_daily"
+    )
+    LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES: int = Field(
+        default=60,
+        ge=1,
+        le=24 * 60,
+        description="Background LLM usage aggregator interval in minutes"
+    )
+
+    # ===== Usage Log Retention =====
+    USAGE_LOG_RETENTION_DAYS: int = Field(
+        default=180,
+        ge=1,
+        le=3650,
+        description="Retention window for usage_log rows (days)"
+    )
+    LLM_USAGE_LOG_RETENTION_DAYS: int = Field(
+        default=180,
+        ge=1,
+        le=3650,
+        description="Retention window for llm_usage_log rows (days)"
+    )
+
+    # Optional: retention for daily aggregates
+    USAGE_DAILY_RETENTION_DAYS: int = Field(
+        default=365,
+        ge=1,
+        le=3650,
+        description="Retention window for usage_daily rows (days)"
+    )
+    LLM_USAGE_DAILY_RETENTION_DAYS: int = Field(
+        default=365,
+        ge=1,
+        le=3650,
+        description="Retention window for llm_usage_daily rows (days)"
+    )
 
     # ===== Virtual Keys / LLM Budgeting =====
     VIRTUAL_KEYS_ENABLED: bool = Field(

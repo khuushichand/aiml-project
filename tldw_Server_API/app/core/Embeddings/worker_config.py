@@ -4,6 +4,7 @@
 import os
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 class RedisConfig(BaseModel):
@@ -109,5 +110,5 @@ class OrchestrationConfig(BaseModel):
         import yaml
         
         with open(path, 'w') as f:
-            dump_obj = self.model_dump() if hasattr(self, "model_dump") else self.dict()
+            dump_obj = model_dump_compat(self)
             yaml.dump(dump_obj, f, default_flow_style=False)

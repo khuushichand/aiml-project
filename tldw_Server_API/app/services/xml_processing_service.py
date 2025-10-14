@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 from typing import Optional, List
 
 from fastapi import HTTPException
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Utils.Utils import logger
 
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
@@ -32,6 +33,9 @@ async def process_xml_task(
     Reads & chunks an XML file, optionally runs summarization,
     and returns a dict with final data.
     """
+    s = get_settings()
+    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
+        raise HTTPException(status_code=503, detail="XML placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
 
     try:
         logger.info(f"Processing XML file: {filename}")

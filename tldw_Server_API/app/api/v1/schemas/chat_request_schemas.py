@@ -20,7 +20,11 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 # --- Pydantic Models for OpenAI Chat Completion Request ---
 # Based on https://platform.openai.com/docs/api-reference/chat/create
 
-DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai") # Default if not set
+# In TEST_MODE default to local-llm to avoid external dependencies
+if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") and not os.getenv("DEFAULT_LLM_PROVIDER"):
+    DEFAULT_LLM_PROVIDER = "local-llm"
+else:
+    DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai")  # Default if not set
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading

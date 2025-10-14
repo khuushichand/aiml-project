@@ -362,11 +362,20 @@ async function loadProviderVoices() {
                 voiceList.innerHTML = '<span class="text-muted">No voices reported by provider.</span>';
             } else {
                 const items = voices.map(v => {
+                    const id = v.id || v.name || 'voice';
+                    const name = v.name || v.id || 'Voice';
                     const meta = [v.language, v.gender].filter(Boolean).join(' · ');
-                    return `<div class="voice-item" style="padding:4px 0; border-bottom: 1px dashed var(--color-border);">
-                        <strong>${v.name || v.id}</strong>
-                        <div class="text-muted" style="font-size: 0.85em;">${meta || ''}</div>
-                        <div style="font-size: 0.85em;">${v.description || ''}</div>
+                    return `<div class="voice-item" style="padding:6px 0; border-bottom: 1px dashed var(--color-border); display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <div class="voice-meta">
+                            <strong>${name}</strong>
+                            <div class="text-muted" style="font-size: 0.85em;">${meta || ''}</div>
+                            <div style="font-size: 0.85em;">${v.description || ''}</div>
+                        </div>
+                        <div class="voice-actions">
+                            <button class="btn-small" onclick="apiTTSUseVoice('${provider}','${id}','${name.replace(/"/g, '&quot;')}')">
+                                <i class="icon-check"></i> Use Voice
+                            </button>
+                        </div>
                     </div>`;
                 }).join('');
                 voiceList.innerHTML = items;
@@ -379,6 +388,49 @@ async function loadProviderVoices() {
             voiceList.style.display = 'block';
             voiceList.innerHTML = `<span class="error">Error loading voices: ${err?.message || err}</span>`;
         }
+    }
+}
+
+// Use voice helper for Audio → Text to Speech panel
+async function apiTTSUseVoice(provider, voiceId, name) {
+    try {
+        const providerSelect = document.getElementById('audioTTS_provider');
+        if (providerSelect) {
+            providerSelect.value = provider;
+            if (typeof updateTTSProviderOptions === 'function') {
+                try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+            }
+        }
+        // Reload the provider voices to keep dropdown consistent
+        try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+        const voiceSelect = document.getElementById('audioTTS_voice');
+        if (voiceSelect) {
+            let opt = Array.from(voiceSelect.options).find(o => o.value === voiceId || o.text === name || o.text === voiceId);
+            if (!opt) {
+                const o = document.createElement('option');
+                o.value = voiceId;
+                o.textContent = name || voiceId;
+                voiceSelect.appendChild(o);
+            }
+            voiceSelect.value = voiceId;
+            try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+        }
+        // Brief inline confirmation
+        const voiceList = document.getElementById('audioTTS_voiceList');
+        if (voiceList) {
+            const msg = document.createElement('div');
+            msg.className = 'text-success';
+            msg.style.marginBottom = '6px';
+            msg.textContent = `Selected voice ${name || voiceId} (${provider})`;
+            voiceList.prepend(msg);
+            setTimeout(() => { try { msg.remove(); } catch (_) {} }, 2000);
+        }
+        // Sync selection into TTS tab as well
+        if (window.TTS && typeof TTS._selectProviderVoice === 'function') {
+            try { TTS._selectProviderVoice(provider, voiceId, name, false); } catch (_) { /* ignore */ }
+        }
+    } catch (e) {
+        console.error('apiTTSUseVoice failed:', e);
     }
 }
 

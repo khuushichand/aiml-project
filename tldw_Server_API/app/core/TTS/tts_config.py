@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, validator
 #
 # Local Imports
 from .adapters.base import AudioFormat
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 #
 #######################################################################################################################
 #
@@ -59,6 +60,9 @@ class PerformanceConfig(BaseModel):
     cache_enabled: bool = False
     cache_ttl_seconds: int = 3600
     stream_chunk_size: int = 1024
+    # Compatibility flag: when true, embed error messages as audio bytes in streams
+    # Recommended to set false in production to use HTTP errors instead
+    stream_errors_as_audio: bool = True
     memory_warning_threshold: int = 80
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5
@@ -348,7 +352,7 @@ class TTSConfigManager:
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
         cfg = self.get_config()
-        return cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
+        return model_dump_compat(cfg)
     
     def save_yaml(self, path: Optional[Path] = None):
         """Save current configuration to YAML file"""
@@ -363,7 +367,7 @@ class TTSConfigManager:
             for provider_name in config_dict['providers']:
                 if isinstance(config_dict['providers'][provider_name], ProviderConfig):
                     cfg = config_dict['providers'][provider_name]
-                    config_dict['providers'][provider_name] = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
+                    config_dict['providers'][provider_name] = model_dump_compat(cfg)
         
         with open(path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)

@@ -340,17 +340,49 @@ class TestErrorHandling:
         
         with pytest.raises((TTSGenerationError, Exception)):
             await adapter.generate(request)
+
+    @pytest.mark.unit
+    @patch('httpx.AsyncClient.post')
+    async def test_handle_auth_error_401(self, mock_post):
+        """Test handling of 401 maps to TTSAuthenticationError."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.aread = AsyncMock(return_value=b'{"error":{"message":"Invalid API key"}}')
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=Mock(), response=mock_response
+        )
+        mock_post.return_value = mock_response
+
+        adapter = OpenAITTSAdapter({"openai_api_key": "bad-key"})
+        request = TTSRequest(text="Test", voice="alloy", stream=False)
+
+        from tldw_Server_API.app.core.TTS.tts_exceptions import TTSAuthenticationError
+        with pytest.raises(TTSAuthenticationError):
+            await adapter.generate(request)
     
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_handle_network_error(self, mock_post):
-        """Test handling of network errors."""
+        """Test handling of network errors maps to TTSNetworkError."""
         mock_post.side_effect = httpx.ConnectError("Connection failed")
         
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=False)
         
-        with pytest.raises((TTSNetworkError, TTSGenerationError)) as exc_info:
+        with pytest.raises(TTSNetworkError):
+            await adapter.generate(request)
+
+    @pytest.mark.unit
+    @patch('httpx.AsyncClient.post')
+    async def test_handle_timeout_error(self, mock_post):
+        """Test handling of timeout errors maps to TTSTimeoutError."""
+        mock_post.side_effect = httpx.TimeoutException("Request timed out")
+        
+        adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
+        request = TTSRequest(text="Test", voice="alloy", stream=False)
+        
+        from tldw_Server_API.app.core.TTS.tts_exceptions import TTSTimeoutError
+        with pytest.raises(TTSTimeoutError):
             await adapter.generate(request)
 
 # ========================================================================

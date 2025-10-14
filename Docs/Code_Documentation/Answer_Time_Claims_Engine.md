@@ -28,6 +28,19 @@ Verifier: `HybridClaimVerifier` (per claim)
 - NLI first: attempts a local NLI model (default `roberta-large-mnli`, override with `RAG_NLI_MODEL`/`RAG_NLI_MODEL_PATH`). If confidence ≥ `conf_threshold` (default 0.7), returns `supported|refuted|nei` immediately.
 - LLM judge fallback: calls the provided `analyze` function with a strict-JSON judging prompt to return `{ label, confidence, rationale }`.
 
+### Provider Configuration
+
+Both the extractor and the LLM judge resolve provider, model, and temperature using the same strategy:
+
+- Read from top-level Claims settings when provided:
+  - `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE`
+- Otherwise fall back to RAG defaults (if present):
+  - `RAG.default_llm_provider`, `RAG.default_llm_model`
+- Finally fall back to global default API:
+  - `default_api` (e.g., `openai`), with conservative temperature (`0.1`–`0.2`)
+
+The engine accepts an injected `analyze` function and passes through `model_override` and temperature as resolved above for consistency across paths.
+
 ## Output
 
 `ClaimsEngine.run(...)` returns:
@@ -41,7 +54,7 @@ Verifier: `HybridClaimVerifier` (per claim)
       "label": "supported|refuted|nei",
       "confidence": 0.0,
       "evidence": [{"doc_id": "...", "snippet": "...", "score": 0.0}],
-      "citations": [],
+    "citations": [{"doc_id": "...", "start": 0, "end": 120}],
       "rationale": "..."
     }
   ],
@@ -93,4 +106,4 @@ print(result["summary"])
 - `claim_extractor="auto"` currently prefers the LLM extractor with heuristic fallback; APS requires an LLM.
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.
-
+ - Citations are populated for supported/refuted decisions using the selected evidence snippets (document IDs with best‑effort character ranges).

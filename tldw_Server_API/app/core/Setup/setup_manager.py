@@ -7,19 +7,21 @@ file handling logic across routers or UI layers.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from configparser import ConfigParser
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 SETUP_SECTION = "Setup"
 CONFIG_FILENAME = "config.txt"
 CONFIG_RELATIVE_PATH = Path("Config_Files") / CONFIG_FILENAME
+REMOTE_ACCESS_FIELD = "allow_remote_setup_access"
 
 SENSITIVE_KEY_MARKERS = ("key", "token", "secret", "password", "api_key")
 PLACEHOLDER_VALUES = {
@@ -32,6 +34,15 @@ PLACEHOLDER_VALUES = {
     "ChangeMeStrong123!",
     "change-me-in-production",
 }
+
+_remote_access_hook: Optional[Callable[[bool], None]] = None
+
+
+def register_remote_access_hook(callback: Callable[[bool], None]) -> None:
+    """Register a callback fired whenever remote setup access toggles."""
+    global _remote_access_hook
+    _remote_access_hook = callback
+
 
 SECTION_LABELS: Dict[str, str] = {
     "API": "API Providers",
@@ -90,6 +101,7 @@ SECTION_DESCRIPTIONS: Dict[str, str] = {
 FIELD_HINTS: Dict[Tuple[str, str], str] = {
     ("AuthNZ", "single_user_api_key"): "Strong secret used for X-API-KEY requests in single-user mode.",
     ("AuthNZ", "auth_mode"): "Use 'single_user' for local setups or 'multi_user' for JWT-based auth.",
+    ("Setup", "allow_remote_setup_access"): "Permit the setup API outside localhost. Only enable on trusted networks.",
     ("API", "openai_api_key"): "Personal or organisational OpenAI key.",
     ("API", "anthropic_api_key"): "Anthropic Claude API key.",
     ("API", "google_api_key"): "Google Generative AI key.",
@@ -293,6 +305,10 @@ def get_status_snapshot() -> Dict[str, Any]:
     parser = _load_config_parser()
     flags = get_setup_flags(parser)
 
+    remote_flag = parser.getboolean(SETUP_SECTION, REMOTE_ACCESS_FIELD, fallback=False)
+    env_override = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
+    remote_active = remote_flag or env_override
+
     placeholder_fields: List[Dict[str, str]] = []
     for section in parser.sections():
         for key, value in parser.items(section):
@@ -308,6 +324,9 @@ def get_status_snapshot() -> Dict[str, Any]:
         "setup_completed": flags["completed"],
         "needs_setup": flags["needs_setup"],
         "config_path": str(get_config_file_path()),
+        "allow_remote_setup_access": remote_flag,
+        "remote_access_env_override": env_override,
+        "remote_access_active": remote_active,
         "placeholder_fields": placeholder_fields,
     }
 
@@ -400,6 +419,18 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
         parser.write(stream, space_around_delimiters=True)
 
     logger.info("Configuration file updated via setup manager")
+
+    if (
+        _remote_access_hook
+        and SETUP_SECTION in updates
+        and REMOTE_ACCESS_FIELD in updates[SETUP_SECTION]
+    ):
+        try:
+            new_value = parser.getboolean(SETUP_SECTION, REMOTE_ACCESS_FIELD, fallback=False)
+            _remote_access_hook(new_value)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to propagate remote setup access change")
+
     return backup_path
 
 

@@ -201,6 +201,7 @@ class UsageDailyRow(BaseModel):
     requests: int
     errors: int
     bytes_total: int
+    bytes_in_total: int | None = None
     latency_avg_ms: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -222,6 +223,7 @@ class UsageTopRow(BaseModel):
     requests: int
     errors: int
     bytes_total: int
+    bytes_in_total: int | None = None
     latency_avg_ms: float | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -134,6 +134,8 @@ format_preferences:
 # Performance settings
 performance:
   max_concurrent_generations: 4
+  # When true, embed error messages as audio (compat); when false, use HTTP errors
+  stream_errors_as_audio: false
   cache_enabled: false  # Future: Enable response caching
   cache_ttl_seconds: 3600
   stream_chunk_size: 1024

@@ -4,6 +4,7 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
 
 ## Overview
 - Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, …).
+- Entry point: `Chunker` in `chunker.py` (methods: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `code`, …).
 - Template pipeline: `TemplateProcessor` and `TemplateManager` in `templates.py`.
 - Built-in templates: JSON files under `template_library/`, seeded into DB by `template_initialization.py`.
 - New: Seed-driven templates via learned “boundary” rules inferred from example (“seed/template”) documents.
@@ -118,3 +119,21 @@ These environment variables harden regex-based detection used by the eBook chapt
 - `CHUNKING_REGEX_SIMPLE_ONLY`
   - Purpose: Restrict custom chapter regex to a safe subset.
   - Effect: When set (`1`/`true`/`yes`), disallows grouping `()`, alternation `|`, wildcard `.`, `?`, `*`. Allows literals, anchors `^`/`$`, character classes `[A-Z]`, escapes `\d`/`\w`, and `+` after safe atoms. Unsafe patterns are rejected during validation.
+## Code Chunking (Python + JavaScript)
+
+- Method: `code` with optional `code_mode` for routing.
+  - `code_mode=auto` (default): If `language` starts with `py`, uses AST-based Python chunking; otherwise uses heuristic chunking.
+  - `code_mode=ast`: Force AST-based Python chunking (for `.py`).
+  - `code_mode=heuristic`: Force heuristic chunking (works across JS/TS, C-like languages, etc.).
+
+- Python (AST-based) produces chunks aligned to import block, top-level classes, and top-level functions with accurate character offsets.
+- JavaScript/TypeScript (heuristic) recognizes:
+  - `export default class Name`, `class Name`
+  - `export function name(...)`, `function name(...)`
+  - `export const name = (...) => { ... }`, `const name = function (...)`
+  - `export default function name(...)`, `export default function (...)`
+  - `export default (...) => { ... }`
+  - `export interface Name { ... }`, `export type Name = ...`
+
+Example:
+  chunker.process_text(code, options={"method": "code", "language": "python", "code_mode": "ast", "max_size": 800})

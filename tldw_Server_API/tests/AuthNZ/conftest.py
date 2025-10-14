@@ -28,6 +28,8 @@ from tldw_Server_API.app.services.registration_service import RegistrationServic
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.scheduler import reset_authnz_scheduler
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import reset_token_blacklist
 
 # Test database configuration
 TEST_DB_NAME = "tldw_test"
@@ -90,6 +92,8 @@ async def reset_singletons():
     
     await reset_db_pool()
     await reset_session_manager()
+    await reset_token_blacklist()
+    await reset_authnz_scheduler()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
@@ -139,6 +143,8 @@ async def reset_singletons():
     # Reset after test
     await reset_db_pool()
     await reset_session_manager()
+    await reset_token_blacklist()
+    await reset_authnz_scheduler()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
@@ -243,6 +249,9 @@ async def isolated_test_environment(monkeypatch):
                 encrypted_token TEXT,
                 encrypted_refresh TEXT,
                 expires_at TIMESTAMP NOT NULL,
+                refresh_expires_at TIMESTAMP,
+                access_jti VARCHAR(255),
+                refresh_jti VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ip_address VARCHAR(45),
@@ -360,6 +369,7 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
 
     # 5. Reset ALL singletons to force fresh initialization with new DB
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
@@ -395,6 +405,8 @@ async def isolated_test_environment(monkeypatch):
     # 8. Cleanup: reset singletons again
     await reset_db_pool()
     await reset_session_manager()
+    await reset_token_blacklist()
+    await reset_authnz_scheduler()
     reset_settings()
     await reset_registration_service()
     await shutdown_audit_service()
@@ -494,6 +506,7 @@ async def setup_test_database():
                 encrypted_token TEXT,
                 encrypted_refresh TEXT,
                 expires_at TIMESTAMP NOT NULL,
+                refresh_expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ip_address VARCHAR(45),
@@ -503,7 +516,9 @@ async def setup_test_database():
                 is_revoked BOOLEAN DEFAULT FALSE,
                 revoked_at TIMESTAMP,
                 revoked_by INTEGER REFERENCES users(id),
-                revoke_reason TEXT
+                revoke_reason TEXT,
+                access_jti VARCHAR(255),
+                refresh_jti VARCHAR(255)
             )
         """)
         
@@ -564,6 +579,7 @@ async def setup_test_database():
     os.environ["DATABASE_URL"] = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
     os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only")
     os.environ["RATE_LIMIT_ENABLED"] = "false"
+    os.environ["AUTHNZ_FORCE_REAL_SESSION_MANAGER"] = "1"
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import setup_database as _authnz_setup_db
         await _authnz_setup_db()

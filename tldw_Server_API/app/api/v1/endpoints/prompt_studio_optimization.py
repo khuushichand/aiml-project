@@ -45,6 +45,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engin
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager, JobType
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
@@ -438,17 +439,22 @@ async def create_optimization(
         optimizer_type = opt_cfg.optimizer_type
         max_iters = opt_cfg.max_iterations
 
-        combined_config: Dict[str, Any] = (
-            json.loads(opt_cfg.model_dump_json())
-            if hasattr(opt_cfg, "model_dump_json")
-            else (opt_cfg.model_dump() if hasattr(opt_cfg, "model_dump") else opt_cfg.dict())
-        )
+        if hasattr(opt_cfg, "model_dump_json"):
+            try:
+                combined_config: Dict[str, Any] = json.loads(opt_cfg.model_dump_json())
+            except Exception:
+                combined_config = model_dump_compat(opt_cfg)
+        else:
+            combined_config = model_dump_compat(opt_cfg)
         if optimization_data.bootstrap_config is not None:
-            combined_config["bootstrap_config"] = (
-                json.loads(optimization_data.bootstrap_config.model_dump_json())
-                if hasattr(optimization_data.bootstrap_config, "model_dump_json")
-                else (optimization_data.bootstrap_config.model_dump() if hasattr(optimization_data.bootstrap_config, "model_dump") else optimization_data.bootstrap_config.dict())
-            )
+            bootstrap_cfg = optimization_data.bootstrap_config
+            if hasattr(bootstrap_cfg, "model_dump_json"):
+                try:
+                    combined_config["bootstrap_config"] = json.loads(bootstrap_cfg.model_dump_json())
+                except Exception:
+                    combined_config["bootstrap_config"] = model_dump_compat(bootstrap_cfg)
+            else:
+                combined_config["bootstrap_config"] = model_dump_compat(bootstrap_cfg)
 
         bootstrap_samples = (
             getattr(optimization_data.bootstrap_config, "num_samples", None)

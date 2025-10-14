@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..queue_schemas import EmbeddingJobMessage, JobInfo, JobStatus, WorkerMetrics
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 T = TypeVar('T', bound=EmbeddingJobMessage)
@@ -214,7 +215,7 @@ class BaseWorker(ABC):
                 
                 await self.redis_client.xadd(
                     self.config.queue_name,
-                    (message.model_dump() if hasattr(message, "model_dump") else message.dict())
+                    model_dump_compat(message)
                 )
                 
                 logger.warning(f"Requeued message {message.job_id} (retry {message.retry_count})")

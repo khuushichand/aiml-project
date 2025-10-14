@@ -14,6 +14,7 @@ import re
 
 from .base import ChunkerConfig
 from .regex_safety import check_pattern as _rx_check
+from .regex_safety import compile_flags as _rx_flags
 from .chunker import Chunker
 from .exceptions import TemplateError
 
@@ -293,19 +294,48 @@ class TemplateProcessor:
         """Remove headers/footers from text."""
         patterns = options.get("patterns", [])
         for pattern in patterns:
-            text = re.sub(pattern, '', text, flags=re.MULTILINE)
+            try:
+                # Validate and compile safely
+                err = _rx_check(pattern, max_len=256)
+                if err:
+                    logger.warning(f"Skipping unsafe header pattern: {err}")
+                    continue
+                flags, ferr = _rx_flags("m")  # multiline by default
+                if ferr is not None:
+                    flags = re.MULTILINE
+                text = re.sub(pattern, '', text, flags=flags)
+            except Exception as e:
+                logger.warning(f"Failed to apply header removal pattern; skipping. Error: {e}")
         return text
     
     def _extract_sections(self, text: str, options: Dict[str, Any]) -> Dict[str, Any]:
         """Extract sections from text and store as metadata."""
-        section_pattern = options.get("pattern", r'^#+\s+(.+)$')
+        raw_pat = options.get("pattern", r'^#+\s+(.+)$')
+        section_pattern = r'^#+\s+(.+)$'
+        try:
+            err = _rx_check(raw_pat, max_len=256)
+            if not err:
+                section_pattern = str(raw_pat)
+            else:
+                logger.warning(f"Unsafe section pattern provided; using default. Reason: {err}")
+        except Exception:
+            # Fall back to default
+            pass
         sections = []
         
-        for match in re.finditer(section_pattern, text, re.MULTILINE):
-            sections.append({
-                "title": match.group(1),
-                "position": match.start()
-            })
+        try:
+            for match in re.finditer(section_pattern, text, re.MULTILINE):
+                try:
+                    title = match.group(1)
+                except Exception:
+                    # If no capture group provided, use whole match
+                    title = match.group(0)
+                sections.append({
+                    "title": title,
+                    "position": match.start()
+                })
+        except Exception as e:
+            logger.warning(f"Section extraction regex failed; returning empty sections. Error: {e}")
         
         return {
             "text": text,

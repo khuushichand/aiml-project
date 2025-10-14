@@ -17,7 +17,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_password_service_dep,
     get_jwt_service_dep,
     get_current_user,
-    get_current_active_user
+    get_current_active_user,
+    get_session_manager_dep
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
@@ -562,6 +563,7 @@ async def logout(
     data: LogoutRequest,
     request: Request,
     current_user=Depends(get_current_active_user),
+    session_manager=Depends(get_session_manager_dep)
 ) -> Dict[str, str]:
     """
     Logout current session or all sessions
@@ -579,11 +581,17 @@ async def logout(
             blacklist = get_token_blacklist()
             
             if data.all_devices:
-                # Revoke all tokens
+                # Revoke all tokens and sessions
                 count = await blacklist.revoke_all_user_tokens(
                     user_id=current_user.id,
                     reason="User requested logout from all devices"
                 )
+                try:
+                    await session_manager.revoke_all_user_sessions(
+                        user_id=current_user.id
+                    )
+                except Exception as cleanup_exc:
+                    logger.error(f"Failed to revoke user sessions during logout-all: {cleanup_exc}")
                 logger.info(f"User {current_user.id} logged out from {count} devices")
                 return {"message": f"Logged out from {count} device(s)"}
             else:
@@ -600,6 +608,16 @@ async def logout(
                         token_type="access",
                         reason="User logout"
                     )
+                    session_id = payload.get("session_id")
+                    if session_id is not None:
+                        try:
+                            await session_manager.revoke_session(
+                                session_id=session_id,
+                                revoked_by=current_user.id,
+                                reason="User logout"
+                            )
+                        except Exception as cleanup_exc:
+                            logger.error(f"Failed to revoke session {session_id} during logout: {cleanup_exc}")
                 
                 logger.info(f"User {current_user.id} logged out")
                 return {"message": "Logged out successfully"}

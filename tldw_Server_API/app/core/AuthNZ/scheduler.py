@@ -29,15 +29,35 @@ class AuthNZScheduler:
     
     def __init__(self):
         """Initialize the scheduler"""
-        self.scheduler = AsyncIOScheduler()
+        self.scheduler: Optional[AsyncIOScheduler] = None
         self.settings = get_settings()
         self._started = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
     async def start(self):
         """Start the scheduler and register all jobs"""
-        if self._started:
-            logger.warning("AuthNZ scheduler already started")
+        loop = asyncio.get_running_loop()
+
+        if self._started and self._loop is loop and self.scheduler and self.scheduler.running:
+            logger.warning("AuthNZ scheduler already started on current event loop")
             return
+
+        # If we were previously started on a different loop or have a stale scheduler, tear it down
+        if self.scheduler and self._loop is not loop:
+            logger.info("Restarting AuthNZ scheduler on new event loop")
+            try:
+                self.scheduler.shutdown(wait=True)
+            except Exception as e:
+                logger.debug(f"Ignoring scheduler shutdown error during restart: {e}")
+            finally:
+                self.scheduler = None
+                self._started = False
+                self._loop = None
+
+        # Always create a fresh scheduler when starting to avoid stale loop bindings
+        if not self.scheduler:
+            self.scheduler = AsyncIOScheduler(event_loop=loop)
+            self._loop = loop
         
         # Register cleanup jobs
         self._register_session_cleanup()
@@ -52,19 +72,36 @@ class AuthNZScheduler:
         self._register_rate_limit_monitor()
         # Evaluations: idempotency keys cleanup
         self._register_evaluations_idempotency_cleanup()
+
+        # Usage log pruning jobs
+        self._register_usage_log_cleanup()
+        self._register_llm_usage_log_cleanup()
+        # Daily aggregates pruning jobs
+        self._register_usage_daily_cleanup()
+        self._register_llm_usage_daily_cleanup()
         
         # Start the scheduler
         self.scheduler.start()
         self._started = True
+        self._loop = loop
         logger.info("AuthNZ scheduler started with all jobs registered")
     
     async def stop(self):
         """Stop the scheduler"""
-        if not self._started:
+        if not self.scheduler:
+            self._started = False
+            self._loop = None
             return
-        
-        self.scheduler.shutdown(wait=True)
+
+        if self.scheduler.running:
+            try:
+                self.scheduler.shutdown(wait=True)
+            except Exception as e:
+                logger.debug(f"Ignoring scheduler shutdown error: {e}")
+
         self._started = False
+        self._loop = None
+        self.scheduler = None
         logger.info("AuthNZ scheduler stopped")
     
     def _register_session_cleanup(self):
@@ -123,6 +160,54 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered audit log cleanup job (monthly)")
+
+    def _register_usage_log_cleanup(self):
+        """Register job to prune old usage_log rows"""
+        self.scheduler.add_job(
+            self._prune_usage_logs,
+            trigger=CronTrigger(hour=3, minute=15),  # Daily at 03:15
+            id='usage_log_cleanup',
+            name='Prune old usage logs',
+            replace_existing=True,
+            max_instances=1
+        )
+        logger.debug("Registered usage log cleanup job (daily at 03:15)")
+
+    def _register_llm_usage_log_cleanup(self):
+        """Register job to prune old llm_usage_log rows"""
+        self.scheduler.add_job(
+            self._prune_llm_usage_logs,
+            trigger=CronTrigger(hour=3, minute=30),  # Daily at 03:30
+            id='llm_usage_log_cleanup',
+            name='Prune old LLM usage logs',
+            replace_existing=True,
+            max_instances=1
+        )
+        logger.debug("Registered LLM usage log cleanup job (daily at 03:30)")
+
+    def _register_usage_daily_cleanup(self):
+        """Register job to prune old usage_daily rows"""
+        self.scheduler.add_job(
+            self._prune_usage_daily,
+            trigger=CronTrigger(hour=3, minute=40),  # Daily at 03:40
+            id='usage_daily_cleanup',
+            name='Prune old usage_daily rows',
+            replace_existing=True,
+            max_instances=1
+        )
+        logger.debug("Registered usage_daily cleanup job (daily at 03:40)")
+
+    def _register_llm_usage_daily_cleanup(self):
+        """Register job to prune old llm_usage_daily rows"""
+        self.scheduler.add_job(
+            self._prune_llm_usage_daily,
+            trigger=CronTrigger(hour=3, minute=45),  # Daily at 03:45
+            id='llm_usage_daily_cleanup',
+            name='Prune old llm_usage_daily rows',
+            replace_existing=True,
+            max_instances=1
+        )
+        logger.debug("Registered llm_usage_daily cleanup job (daily at 03:45)")
     
     def _register_expired_registration_cleanup(self):
         """Register job to clean up expired registration codes"""
@@ -287,6 +372,94 @@ class AuthNZScheduler:
                 logger.info(f"Pruned {count} audit log entries older than {retention_days} days")
         except Exception as e:
             logger.error(f"Failed to prune audit logs: {e}")
+
+    async def _prune_usage_logs(self):
+        """Prune usage_log rows older than retention period."""
+        try:
+            db_pool = await get_db_pool()
+            cutoff = datetime.utcnow() - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
+            async with db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    result = await conn.execute(
+                        "DELETE FROM usage_log WHERE ts < $1",
+                        cutoff
+                    )
+                    count = int(result.split()[-1]) if isinstance(result, str) else 0
+                else:
+                    cursor = await conn.execute(
+                        "DELETE FROM usage_log WHERE ts < ?",
+                        (cutoff.isoformat(),)
+                    )
+                    count = cursor.rowcount
+                    await conn.commit()
+            if count:
+                logger.info(f"Pruned {count} usage_log rows older than {self.settings.USAGE_LOG_RETENTION_DAYS} days")
+        except Exception as e:
+            logger.error(f"Failed to prune usage_log: {e}")
+
+    async def _prune_llm_usage_logs(self):
+        """Prune llm_usage_log rows older than retention period."""
+        try:
+            db_pool = await get_db_pool()
+            cutoff = datetime.utcnow() - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
+            async with db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    result = await conn.execute(
+                        "DELETE FROM llm_usage_log WHERE ts < $1",
+                        cutoff
+                    )
+                    count = int(result.split()[-1]) if isinstance(result, str) else 0
+                else:
+                    cursor = await conn.execute(
+                        "DELETE FROM llm_usage_log WHERE ts < ?",
+                        (cutoff.isoformat(),)
+                    )
+                    count = cursor.rowcount
+                    await conn.commit()
+            if count:
+                logger.info(f"Pruned {count} llm_usage_log rows older than {self.settings.LLM_USAGE_LOG_RETENTION_DAYS} days")
+        except Exception as e:
+            logger.error(f"Failed to prune llm_usage_log: {e}")
+
+    async def _prune_usage_daily(self):
+        """Prune usage_daily rows older than retention period"""
+        try:
+            db_pool = await get_db_pool()
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
+            retention_days = _gs().USAGE_DAILY_RETENTION_DAYS
+            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            async with db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    result = await conn.execute("DELETE FROM usage_daily WHERE day < $1::date", cutoff_date.date())
+                    count = int(result.split()[-1]) if isinstance(result, str) else 0
+                else:
+                    cursor = await conn.execute("DELETE FROM usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
+                    count = cursor.rowcount
+                    await conn.commit()
+            if count:
+                logger.info(f"Pruned {count} usage_daily rows older than {retention_days} days")
+        except Exception as e:
+            logger.error(f"Failed to prune usage_daily: {e}")
+
+    async def _prune_llm_usage_daily(self):
+        """Prune llm_usage_daily rows older than retention period"""
+        try:
+            db_pool = await get_db_pool()
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
+            retention_days = _gs().LLM_USAGE_DAILY_RETENTION_DAYS
+            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            async with db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    result = await conn.execute("DELETE FROM llm_usage_daily WHERE day < $1::date", cutoff_date.date())
+                    count = int(result.split()[-1]) if isinstance(result, str) else 0
+                else:
+                    cursor = await conn.execute("DELETE FROM llm_usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
+                    count = cursor.rowcount
+                    await conn.commit()
+            if count:
+                logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
+        except Exception as e:
+            logger.error(f"Failed to prune llm_usage_daily: {e}")
     
     async def _cleanup_expired_registration_codes(self):
         """Clean up expired registration codes"""
@@ -561,9 +734,22 @@ async def start_authnz_scheduler():
 
 async def stop_authnz_scheduler():
     """Stop the AuthNZ scheduler"""
-    scheduler = await get_authnz_scheduler()
-    await scheduler.stop()
+    global _scheduler
+    if not _scheduler:
+        return
+    await _scheduler.stop()
     logger.info("AuthNZ scheduled jobs stopped")
+
+async def reset_authnz_scheduler():
+    """Reset scheduler singleton (primarily for tests)."""
+    global _scheduler
+    if _scheduler:
+        try:
+            await _scheduler.stop()
+        except Exception as e:
+            logger.debug(f"Ignoring scheduler stop error during reset: {e}")
+        finally:
+            _scheduler = None
 
 #
 # End of scheduler.py

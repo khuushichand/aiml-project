@@ -16,6 +16,26 @@ pytestmark = pytest.mark.skipif(
     not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
 )
 
+@pytest.fixture(scope="module", autouse=True)
+def _pg_schema_and_cleanup():
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("AUTH_MODE", "single_user")
+    try:
+        base = pg_dsn.rsplit("/", 1)[0] + "/postgres"
+        db_name = pg_dsn.rsplit("/", 1)[1].split("?")[0]
+        with psycopg.connect(base, autocommit=True) as _conn:
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
+                if _cur.fetchone() is None:
+                    _cur.execute(f"CREATE DATABASE {db_name}")
+    except Exception:
+        pass
+    ensure_jobs_tables_pg(pg_dsn)
+    with psycopg.connect(pg_dsn) as conn:
+        with conn, conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE jobs RESTART IDENTITY")
+    yield
+
 
 def _map_by_key(rows):
     out: Dict[Tuple[str, str, str], Dict] = {}
@@ -28,7 +48,7 @@ def test_jobs_stats_shape_and_filters_postgres(monkeypatch):
     # Configure env for single-user and Postgres backend
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "sk-test")
+    monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
 
     ensure_jobs_tables_pg(pg_dsn)
@@ -53,9 +73,11 @@ def test_jobs_stats_shape_and_filters_postgres(monkeypatch):
     jm.complete_job(int(jc["id"]))
 
     from fastapi.testclient import TestClient
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         # No filters
         r = client.get("/api/v1/jobs/stats")
@@ -97,4 +119,3 @@ def test_jobs_stats_shape_and_filters_postgres(monkeypatch):
         assert only["domain"] == "chatbooks"
         assert only["queue"] == "default"
         assert only["job_type"] == "export"
-

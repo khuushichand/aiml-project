@@ -19,11 +19,11 @@ from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import FIELDS_OF_STUD
 # Functions:
 # --- Pydantic Models for arXiv Search ---
 class ArxivPaper(BaseModel):
-    id: str
-    title: str
-    authors: str
-    published_date: str
-    abstract: str
+    id: Optional[str] = None
+    title: Optional[str] = None
+    authors: Optional[str] = None
+    published_date: Optional[str] = None
+    abstract: Optional[str] = None
     pdf_url: Optional[str] = None
 
 

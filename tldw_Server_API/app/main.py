@@ -216,6 +216,7 @@ async def lifespan(app: FastAPI):
     _is_test_mode = _startup_os.getenv("TEST_MODE", "").lower() == "true"
     _disable_heavy_startup = _startup_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}
     _skip_heavy = _is_test_mode or _disable_heavy_startup
+    chat_config = {}
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
     try:
@@ -547,14 +548,45 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
     
-    # Start usage aggregator (if enabled)
+    # Start usage aggregator (if enabled, and not disabled via env)
     try:
-        from tldw_Server_API.app.services.usage_aggregator import start_usage_aggregator
-        usage_task = await start_usage_aggregator()
-        if usage_task:
-            logger.info("Usage aggregator started")
+        _disable_usage_agg = _env_os.getenv("DISABLE_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
+        if _disable_usage_agg:
+            logger.info("Usage aggregator disabled via DISABLE_USAGE_AGGREGATOR env var")
+        else:
+            from tldw_Server_API.app.services.usage_aggregator import start_usage_aggregator
+            usage_task = await start_usage_aggregator()
+            if usage_task:
+                logger.info("Usage aggregator started")
     except Exception as e:
         logger.warning(f"Failed to start usage aggregator: {e}")
+
+    # Start LLM usage aggregator (if enabled, and not disabled via env)
+    try:
+        _disable_llm_usage_agg = _env_os.getenv("DISABLE_LLM_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
+        if _disable_llm_usage_agg:
+            logger.info("LLM usage aggregator disabled via DISABLE_LLM_USAGE_AGGREGATOR env var")
+        else:
+            from tldw_Server_API.app.services.llm_usage_aggregator import start_llm_usage_aggregator
+            llm_usage_task = await start_llm_usage_aggregator()
+            if llm_usage_task:
+                logger.info("LLM usage aggregator started")
+    except Exception as e:
+        logger.warning(f"Failed to start LLM usage aggregator: {e}")
+
+    # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
+    _authnz_sched_started = False
+    try:
+        _disable_authnz_sched = _env_os.getenv("DISABLE_AUTHNZ_SCHEDULER", "").lower() in {"1", "true", "yes", "on"}
+        if _disable_authnz_sched:
+            logger.info("AuthNZ scheduler disabled via DISABLE_AUTHNZ_SCHEDULER env var")
+        else:
+            from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
+            await start_authnz_scheduler()
+            _authnz_sched_started = True
+            logger.info("AuthNZ scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start AuthNZ scheduler: {e}")
 
     # Display authentication mode (mask API key in production)
     try:
@@ -666,6 +698,25 @@ async def lifespan(app: FastAPI):
                 core_jobs_task.cancel()
         if 'claims_task' in locals() and claims_task:
             claims_task.cancel()
+        # Stop usage aggregators gracefully
+        try:
+            if 'usage_task' in locals() and usage_task:
+                from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator as _stop_usage
+                await _stop_usage(usage_task)
+        except Exception:
+            try:
+                usage_task.cancel()
+            except Exception:
+                pass
+        try:
+            if 'llm_usage_task' in locals() and llm_usage_task:
+                from tldw_Server_API.app.services.llm_usage_aggregator import stop_llm_usage_aggregator as _stop_llm
+                await _stop_llm(llm_usage_task)
+        except Exception:
+            try:
+                llm_usage_task.cancel()
+            except Exception:
+                pass
         # Jobs metrics gauges worker shutdown
         if 'jobs_metrics_task' in locals() and jobs_metrics_task:
             try:
@@ -775,6 +826,14 @@ async def lifespan(app: FastAPI):
 
     # Shutdown telemetry
     try:
+        # Stop AuthNZ scheduler if started
+        try:
+            if '_authnz_sched_started' in locals() and _authnz_sched_started:
+                from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
+                await stop_authnz_scheduler()
+                logger.info("AuthNZ scheduler stopped")
+        except Exception as _e:
+            logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")
     except Exception as e:

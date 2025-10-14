@@ -43,6 +43,7 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
     UnifiedBatchRequest,
     UnifiedBatchResponse
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
@@ -618,11 +619,8 @@ async def unified_batch_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
-        # Convert request to kwargs, excluding queries (Pydantic v2+ compat)
-        try:
-            kwargs = request.model_dump(exclude={"queries", "max_concurrent"})
-        except Exception:
-            kwargs = request.dict(exclude={"queries", "max_concurrent"})
+        # Convert request to kwargs, excluding queries (Pydantic compat)
+        kwargs = model_dump_compat(request, exclude={"queries", "max_concurrent"})
         kwargs.update(db_paths)
         kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
         

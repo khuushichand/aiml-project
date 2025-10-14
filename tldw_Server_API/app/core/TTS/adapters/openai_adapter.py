@@ -276,11 +276,13 @@ class OpenAIAdapter(TTSAdapter):
 
         except httpx.TimeoutException as e:
             logger.error(f"{self.provider_name} timeout error: {e}")
-            raise timeout_error(self.provider_name, timeout_duration=60.0)
+            # Use correct kwarg name to avoid TypeError
+            raise timeout_error(self.provider_name, timeout_seconds=60.0)
 
         except httpx.NetworkError as e:
             logger.error(f"{self.provider_name} network error: {e}")
-            raise network_error(f"Network error communicating with {self.provider_name}", self.provider_name)
+            # Preserve original exception context and correct argument order
+            raise network_error(self.provider_name, e)
 
         except Exception as e:
             if not isinstance(e, (TTSProviderError, TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError)):

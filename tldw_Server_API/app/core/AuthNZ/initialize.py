@@ -169,21 +169,30 @@ async def setup_database():
                             encrypted_token TEXT,
                             encrypted_refresh TEXT,
                             expires_at TIMESTAMP NOT NULL,
+                            refresh_expires_at TIMESTAMP,
                             ip_address VARCHAR(45),
                             user_agent TEXT,
                             device_id TEXT,
                             is_active BOOLEAN DEFAULT TRUE,
+                            is_revoked BOOLEAN DEFAULT FALSE,
                             revoked_at TIMESTAMP,
                             revoked_by INTEGER,
                             revoke_reason TEXT,
+                            access_jti VARCHAR(128),
+                            refresh_jti VARCHAR(128),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMP")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_jti VARCHAR(128)")
+                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_jti VARCHAR(128)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
 
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS registration_codes (
@@ -389,9 +398,21 @@ async def setup_database():
                             status INTEGER,
                             latency_ms INTEGER,
                             bytes BIGINT,
-                            meta JSONB
+                            bytes_in BIGINT,
+                            meta JSONB,
+                            request_id TEXT
                         )
                     """)
+                    # Extend existing table (if created before) with request_id column
+                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS request_id TEXT")
+                    # Extend existing table with bytes_in if missing
+                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS bytes_in BIGINT")
+                    # Helpful indexes
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_endpoint ON usage_log(endpoint)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS usage_daily (
                             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -399,10 +420,15 @@ async def setup_database():
                             requests INTEGER DEFAULT 0,
                             errors INTEGER DEFAULT 0,
                             bytes_total BIGINT DEFAULT 0,
+                            bytes_in_total BIGINT DEFAULT 0,
                             latency_avg_ms DOUBLE PRECISION,
                             PRIMARY KEY (user_id, day)
                         )
                     """)
+                    # Indexes for reporting
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
+                    # Extend existing table with bytes_in_total
+                    await conn.execute("ALTER TABLE usage_daily ADD COLUMN IF NOT EXISTS bytes_in_total BIGINT")
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS llm_usage_log (
                             id SERIAL PRIMARY KEY,
@@ -426,6 +452,12 @@ async def setup_database():
                             request_id TEXT
                         )
                     """)
+                    # Helpful indexes
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)")
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS llm_usage_daily (
                             day DATE NOT NULL,
@@ -443,6 +475,7 @@ async def setup_database():
                             PRIMARY KEY (day, user_id, operation, provider, model)
                         )
                     """)
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)")
 
             print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:

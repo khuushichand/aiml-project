@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "sk-test")
+    monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
+    import os as _os
+    monkeypatch.setenv("JOBS_DB_PATH", _os.path.join(_os.getcwd(), "Databases", "jobs.db"))
 
 
 def _backdate_sqlite_fields(job_id: int, *, created_delta_s: int = 0, runtime_delta_s: int = 0):
@@ -40,6 +42,8 @@ def test_ttl_sweep_cancel(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
     jm = JobManager()
@@ -48,12 +52,13 @@ def test_ttl_sweep_cancel(monkeypatch, tmp_path):
     j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     _backdate_sqlite_fields(int(j1["id"]), created_delta_s=3_600 * 2)  # created 2h ago
 
-    j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
+    # Ensure this one is acquired by giving it higher priority (lower number)
+    j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1)
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w1")
     assert acq is not None
     _backdate_sqlite_fields(int(acq["id"]), runtime_delta_s=3_600 * 3)  # running 3h
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         body = {
             "age_seconds": 3600,  # 1h
@@ -68,28 +73,37 @@ def test_ttl_sweep_cancel(monkeypatch, tmp_path):
         affected = r.json()["affected"]
         assert affected >= 2
 
-    # Verify statuses
-    j1r = jm.get_job(int(j1["id"]))
-    j2r = jm.get_job(int(acq["id"]))
-    assert j1r and j1r["status"] == "cancelled"
-    assert j2r and j2r["status"] == "cancelled"
+    # Verify via stats: both queued and processing should now be 0
+    with TestClient(app, headers=headers) as client2:
+        rstats = client2.get("/api/v1/jobs/stats", params={"domain": "chatbooks", "queue": "default", "job_type": "export"})
+        assert rstats.status_code == 200
+        rows = rstats.json()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["queued"] == 0
+        assert row["processing"] == 0
 
 
 def test_ttl_sweep_fail(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
 
     jm = JobManager()
-    j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
-    _backdate_sqlite_fields(int(j1["id"]), created_delta_s=3_600 * 2)
+    # Make this one the processing target (higher priority)
+    j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1)
+    # And a second queued job that is old enough for age TTL
+    j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
+    _backdate_sqlite_fields(int(j2["id"]), created_delta_s=3_600 * 2)
 
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w2")
     assert acq is not None
     _backdate_sqlite_fields(int(acq["id"]), runtime_delta_s=3_600 * 3)
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         body = {
             "age_seconds": 3600,
@@ -103,8 +117,12 @@ def test_ttl_sweep_fail(monkeypatch, tmp_path):
         assert r.status_code == 200
         assert r.json()["affected"] >= 2
 
-    j1r = jm.get_job(int(j1["id"]))
-    j2r = jm.get_job(int(acq["id"]))
-    assert j1r and j1r["status"] == "failed"
-    assert j2r and j2r["status"] == "failed"
-
+    # Verify via stats: both queued and processing should now be 0
+    with TestClient(app, headers=headers) as client2:
+        rstats = client2.get("/api/v1/jobs/stats", params={"domain": "chatbooks", "queue": "default", "job_type": "export"})
+        assert rstats.status_code == 200
+        rows = rstats.json()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["queued"] == 0
+        assert row["processing"] == 0

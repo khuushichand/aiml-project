@@ -68,7 +68,8 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSValidationError,
     TTSProviderNotConfiguredError,
     TTSAuthenticationError,
-    TTSRateLimitError
+    TTSRateLimitError,
+    TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
 
@@ -187,6 +188,12 @@ async def create_speech(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later."
             )
+        except TTSQuotaExceededError as e:
+            logger.warning(f"TTS quota exceeded: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="TTS quota exceeded. Please review your plan or quota."
+            )
         except TTSError as e:
             # Handle other TTS-specific errors
             logger.error(f"TTS error during streaming: {e}")
@@ -252,6 +259,12 @@ async def create_speech(
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later."
+            )
+        except TTSQuotaExceededError as e:
+            logger.warning(f"TTS quota exceeded: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="TTS quota exceeded. Please review your plan or quota."
             )
         except TTSError as e:
             # Handle other TTS-specific errors

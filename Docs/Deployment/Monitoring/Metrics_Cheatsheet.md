@@ -27,10 +27,21 @@ Note: DB metrics are available when the corresponding operations use the instrum
 - `llm_tokens_used_total{provider,model,type}`: Counter of tokens by type `prompt|completion`.
 - `llm_request_duration_seconds{provider,model}`: Histogram of call latency.
 - `llm_cost_dollars{provider,model}`: Counter of cumulative cost (USD).
+- `llm_cost_dollars_by_user{provider,model,user_id}`: Cost counter labeled by user.
+- `llm_cost_dollars_by_operation{provider,model,operation}`: Cost counter labeled by operation, e.g., `chat|embeddings|tts|stt`.
+- `llm_tokens_used_total_by_user{provider,model,type,user_id}`: Tokens labeled by user.
+- `llm_tokens_used_total_by_operation{provider,model,type,operation}`: Tokens labeled by operation.
 
 Example PromQL:
 - P95 latency per model: `histogram_quantile(0.95, sum by (le,provider,model) (rate(llm_request_duration_seconds_bucket[5m])))`
 - Cost per minute by provider: `sum by (provider) (rate(llm_cost_dollars[5m]))`
+- Today’s total cost (00:00 → now): set panel Relative time to `Today` and use `sum(increase(llm_cost_dollars[$__range]))`
+- Today’s total tokens (00:00 → now): set Relative time to `Today` and use `sum(increase(llm_tokens_used_total[$__range]))`
+- Today’s cost by provider: panel Relative time `Today`, `topk(10, sum by (provider) (increase(llm_cost_dollars[$__range])))`
+- Top users by cost (range): `topk(5, sum by (user_id) (increase(llm_cost_dollars_by_user[$__range])))`
+- Top users by tokens (range): `topk(5, sum by (user_id) (increase(llm_tokens_used_total_by_user[$__range])))`
+- Cost rate by operation: `sum by (operation) (rate(llm_cost_dollars_by_operation[$__rate_interval]))`
+- Token rate by operation: `sum by (operation,type) (rate(llm_tokens_used_total_by_operation[$__rate_interval]))`
 
 ## RAG
 - `rag_queries_total{pipeline,status}`: Counter of RAG queries.
@@ -64,6 +75,21 @@ Example PromQL:
 - Upload throughput (bytes/s): `rate(upload_bytes_total[1m])`
 - Top users by bytes (1h): `sum by (user_id) (increase(upload_bytes_total[1h]))`
 - Users near quota: `user_storage_used_mb / user_storage_quota_mb > 0.9`
+
+## Web Scraping
+- `webscraping.persist.last_batch_articles{method}`: Gauge of articles processed in last persistence batch.
+- `webscraping.persist.stored_total{method}`: Counter of successfully stored articles.
+- `webscraping.persist.failed_total{method}`: Counter of failed article stores.
+- `webscraping.persist.article_duration_seconds{method}`: Histogram of per-article persistence time.
+- `webscraping.persist.batch_duration_seconds{method}`: Histogram of batch persistence time.
+
+Labels
+- `method`: Scrape method string, e.g., `"Individual URLs" | "Sitemap" | "URL Level" | "Recursive Scraping"`.
+
+PromQL examples
+- Success rate (5m): `sum(rate(webscraping.persist.stored_total[5m])) / (sum(rate(webscraping.persist.stored_total[5m])) + sum(rate(webscraping.persist.failed_total[5m])))`
+- P95 per-article persistence (by method): `histogram_quantile(0.95, sum by (le,method) (rate(webscraping.persist.article_duration_seconds_bucket[5m])))`
+- P95 batch persistence (overall): `histogram_quantile(0.95, sum by (le) (rate(webscraping.persist.batch_duration_seconds_bucket[5m])))`
 
 ## System
 - `system_cpu_usage_percent`: Gauge of CPU usage percent.
@@ -142,6 +168,8 @@ datasources:
 Copy these files to a mounted path, e.g., `/var/lib/grafana/dashboards`:
 - `Samples/Grafana/app-observability-dashboard.json`
 - `Samples/Grafana/mcp-dashboard.json`
+- `Samples/Grafana/web-scraping-dashboard.json`
+- `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json` (LLM cost/tokens dashboard)
 
 Create `provisioning/dashboards/dashboards.yml`:
 ```yaml

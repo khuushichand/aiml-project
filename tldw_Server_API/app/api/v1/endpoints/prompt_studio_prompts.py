@@ -38,6 +38,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     DatabaseError, InputError, ConflictError
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
@@ -163,11 +164,11 @@ async def create_prompt(
 
         few_shot_payload = None
         if prompt_data.few_shot_examples:
-            few_shot_payload = [ex.model_dump() if hasattr(ex, "model_dump") else ex.dict() for ex in prompt_data.few_shot_examples]
+            few_shot_payload = [model_dump_compat(ex) for ex in prompt_data.few_shot_examples]
 
         modules_payload = None
         if prompt_data.modules_config:
-            modules_payload = [mod.model_dump() if hasattr(mod, "model_dump") else mod.dict() for mod in prompt_data.modules_config]
+            modules_payload = [model_dump_compat(mod) for mod in prompt_data.modules_config]
 
         # Idempotency: if provided, return existing prompt for this key
         user_id_str = str(user_context.get("user_id", "anonymous"))
@@ -495,11 +496,11 @@ async def update_prompt(
         # Create new version
         few_shot_payload = None
         if updates.few_shot_examples is not None:
-            few_shot_payload = [ex.model_dump() if hasattr(ex, "model_dump") else ex.dict() for ex in updates.few_shot_examples]
+            few_shot_payload = [model_dump_compat(ex) for ex in updates.few_shot_examples]
 
         modules_payload = None
         if updates.modules_config is not None:
-            modules_payload = [mod.model_dump() if hasattr(mod, "model_dump") else mod.dict() for mod in updates.modules_config]
+            modules_payload = [model_dump_compat(mod) for mod in updates.modules_config]
 
         new_prompt = db.create_prompt_version(
             prompt_id,

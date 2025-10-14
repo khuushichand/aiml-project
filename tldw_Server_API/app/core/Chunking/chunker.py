@@ -195,6 +195,9 @@ class Chunker:
             'code': lambda: __import__(
                 f"{__package__}.strategies.code", fromlist=["CodeChunkingStrategy"]
             ).CodeChunkingStrategy(language=lang),
+            'code_ast': lambda: __import__(
+                f"{__package__}.strategies.code_ast", fromlist=["PythonASTCodeChunkingStrategy"]
+            ).PythonASTCodeChunkingStrategy(language='python'),
             ChunkingMethod.PROPOSITIONS.value: lambda: __import__(
                 f"{__package__}.strategies.propositions", fromlist=["PropositionChunkingStrategy"]
             ).PropositionChunkingStrategy(language=lang, llm_call_func=self.llm_call_func, llm_config=self.llm_config),
@@ -873,6 +876,19 @@ class Chunker:
             pass
         language = language or self.config.language
         
+        # Handle code strategy mode routing (code_mode: auto|ast|heuristic)
+        orig_method = method
+        if (method or '').lower() == 'code':
+            try:
+                code_mode = str((options or {}).get('code_mode', 'auto')).lower()
+            except Exception:
+                code_mode = 'auto'
+            lang_opt = str((options or {}).get('language') or language or '').lower()
+            if code_mode in ('ast', 'auto') and lang_opt.startswith('py'):
+                method = 'code_ast'
+            else:
+                method = 'code'
+
         # Check cache if enabled
         cache_key = None
         cache_allowed = False
@@ -1001,6 +1017,18 @@ class Chunker:
             pass
         language = language or self.config.language
         
+        # Handle code strategy mode routing (code_mode: auto|ast|heuristic)
+        if (method or '').lower() == 'code':
+            try:
+                code_mode = str((options or {}).get('code_mode', 'auto')).lower()
+            except Exception:
+                code_mode = 'auto'
+            lang_opt = str((options or {}).get('language') or language or '').lower()
+            if code_mode in ('ast', 'auto') and lang_opt.startswith('py'):
+                method = 'code_ast'
+            else:
+                method = 'code'
+
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)
         
@@ -1313,6 +1341,7 @@ class Chunker:
                 max_size=max_size,
                 overlap=overlap,
                 language=language,
+                code_mode=str(opts.get('code_mode', 'auto')).lower() if str(method).lower() == 'code' else opts.get('code_mode'),
             )
             # Normalize and handle JSON-chunk structures
             norm_chunks: List[Dict[str, Any]] = []
@@ -1347,10 +1376,15 @@ class Chunker:
             md.setdefault('chunk_index', i + 1)
             md.setdefault('total_chunks', total)
             md.setdefault('chunk_method', method)
+            # Standardized keys while retaining legacy for compatibility
             md.setdefault('max_size_setting', max_size)
             md.setdefault('overlap_setting', overlap)
+            md.setdefault('max_size', max_size)
+            md.setdefault('overlap', overlap)
             md.setdefault('language', language)
             md.setdefault('adaptive_chunking_used', bool(opts.get('adaptive', False)))
+            if str(method).lower() in ('code', 'code_ast'):
+                md.setdefault('code_mode_used', str(opts.get('code_mode', 'auto')).lower())
 
             # Relative position using offsets when present
             try:

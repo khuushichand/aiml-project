@@ -57,10 +57,13 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
             encrypted_token TEXT,
             encrypted_refresh TEXT,
             expires_at TIMESTAMP NOT NULL,
+            refresh_expires_at TIMESTAMP,
             ip_address TEXT,
             user_agent TEXT,
             device_id TEXT,
             is_revoked INTEGER DEFAULT 0,
+            access_jti TEXT,
+            refresh_jti TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -68,9 +71,25 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
     """)
     
     # Create indexes
+    try:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col('refresh_expires_at', "refresh_expires_at TIMESTAMP")
+        add_col('access_jti', "access_jti TEXT")
+        add_col('refresh_jti', "refresh_jti TEXT")
+    except Exception:
+        pass
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
     
     conn.commit()
     logger.info("Migration 002: Created sessions table")
@@ -552,6 +571,7 @@ def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None
             status INTEGER,
             latency_ms INTEGER,
             bytes INTEGER,
+            bytes_in INTEGER,
             meta TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
@@ -844,6 +864,63 @@ def migration_017_extend_api_keys_virtual(conn: sqlite3.Connection) -> None:
     logger.info("Migration 017: Extended api_keys with virtual key fields")
 
 
+def migration_018_add_usage_indexes(conn: sqlite3.Connection) -> None:
+    """Add helpful indexes for usage tables (SQLite)."""
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 018: Added indexes for usage_log and usage_daily")
+
+
+def migration_019_usage_log_add_request_id(conn: sqlite3.Connection) -> None:
+    """Add request_id column to usage_log and index it (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
+    except Exception:
+        # Column may already exist
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 019: Added request_id column to usage_log")
+
+
+def migration_020_usage_log_add_bytes_in(conn: sqlite3.Connection) -> None:
+    """Add bytes_in column to usage_log (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
+    except Exception:
+        # Column may already exist
+        pass
+    conn.commit()
+    logger.info("Migration 020: Added bytes_in column to usage_log")
+
+
+def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> None:
+    """Add bytes_in_total column to usage_daily (SQLite)."""
+    try:
+        conn.execute("ALTER TABLE usage_daily ADD COLUMN bytes_in_total INTEGER DEFAULT 0")
+    except Exception:
+        # Column may already exist
+        pass
+    conn.commit()
+    logger.info("Migration 021: Added bytes_in_total column to usage_daily")
 #######################################################################################################################
 #
 # Migration Registry
@@ -869,6 +946,10 @@ def get_authnz_migrations() -> List[Migration]:
         Migration(15, "Create LLM usage tables", migration_015_create_llm_usage_tables),
         Migration(16, "Create organizations and teams tables", migration_016_create_orgs_teams),
         Migration(17, "Extend api_keys with virtual key fields", migration_017_extend_api_keys_virtual),
+        Migration(18, "Add indexes for usage tables", migration_018_add_usage_indexes),
+        Migration(19, "Add request_id to usage_log", migration_019_usage_log_add_request_id),
+        Migration(20, "Add bytes_in to usage_log", migration_020_usage_log_add_bytes_in),
+        Migration(21, "Add bytes_in_total to usage_daily", migration_021_usage_daily_add_bytes_in_total),
     ]
 
 

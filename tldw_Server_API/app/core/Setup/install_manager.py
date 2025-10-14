@@ -23,6 +23,7 @@ from requests import exceptions as requests_exceptions
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 CONFIG_ROOT = setup_manager.CONFIG_RELATIVE_PATH.parent
 STATUS_FILENAME = 'setup_install_status.json'
@@ -267,7 +268,7 @@ class InstallationStatus:
         self.path = _resolve_status_file()
         self._persist_failed = False
         self.data: Dict[str, Any] = {
-            'plan': (plan.model_dump() if hasattr(plan, 'model_dump') else plan.dict()),
+            'plan': model_dump_compat(plan),
             'status': 'in_progress',
             'started_at': _utc_now(),
             'completed_at': None,

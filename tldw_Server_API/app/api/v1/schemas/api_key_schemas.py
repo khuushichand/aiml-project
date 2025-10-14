@@ -1,5 +1,6 @@
 """Pydantic schemas for API key management endpoints."""
 
+from datetime import datetime
 from typing import Optional, List, Any, Dict
 from pydantic import BaseModel, Field
 
@@ -22,10 +23,10 @@ class APIKeyMetadata(BaseModel):
     description: Optional[str] = None
     scope: str
     status: Optional[str] = None
-    created_at: Optional[str] = None
-    expires_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
     usage_count: Optional[int] = 0
-    last_used_at: Optional[str] = None
+    last_used_at: Optional[datetime] = None
     last_used_ip: Optional[str] = None
 
 
@@ -47,7 +48,7 @@ class APIKeyAuditEntry(BaseModel):
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
     details: Optional[Any] = None
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class APIKeyAuditListResponse(BaseModel):

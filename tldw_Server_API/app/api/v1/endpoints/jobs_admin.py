@@ -152,6 +152,9 @@ async def prune_jobs_endpoint(
             # Never fail prune due to audit logging issues
             pass
         return PruneResponse(deleted=deleted)
+    except HTTPException:
+        # Preserve intended HTTP errors (e.g., RBAC 403)
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prune failed: {e}")
 
@@ -198,6 +201,8 @@ async def ttl_sweep_endpoint(
             job_type=req.job_type,
         )
         return TTLSweepResponse(affected=int(affected))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}")
 
@@ -236,6 +241,8 @@ async def get_jobs_stats(
         jm = JobManager()
         stats = jm.get_queue_stats(domain=domain, queue=queue, job_type=job_type)
         return [QueueStatsResponse(**s) for s in stats]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
 

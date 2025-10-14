@@ -25,6 +25,7 @@ from .workers import (
     StorageWorker,
     WorkerConfig,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 # Prometheus metrics
@@ -130,7 +131,7 @@ class WorkerPool:
                 gpu_id = self.config.gpu_allocation[worker_index % len(self.config.gpu_allocation)]
             
             embedding_config = EmbeddingWorkerConfig(
-                **(base_config.model_dump() if hasattr(base_config, 'model_dump') else base_config.dict()),
+                **model_dump_compat(base_config),
                 default_model_provider=self.config.default_model_provider,
                 default_model_name=self.config.default_model_name,
                 max_batch_size=self.config.batch_size,

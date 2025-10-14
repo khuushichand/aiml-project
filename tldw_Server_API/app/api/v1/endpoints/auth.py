@@ -639,7 +639,7 @@ async def refresh_token(
                 raise
             
             # Check if token is blacklisted
-            if await session_manager.is_token_blacklisted(request.refresh_token):
+            if await session_manager.is_token_blacklisted(request.refresh_token, payload.get("jti")):
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "blacklist"

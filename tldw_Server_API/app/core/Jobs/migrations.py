@@ -116,7 +116,10 @@ def ensure_jobs_tables(db_path: Optional[Path] = None) -> Path:
         with sqlite3.connect(db_path) as conn:
             conn.executescript(JOBS_SQLITE_DDL)
             conn.commit()
-        logger.info(f"Ensured Jobs schema at {db_path}")
+        try:
+            logger.info(f"Ensured Jobs schema at {Path(db_path).resolve()}")
+        except Exception:
+            logger.info(f"Ensured Jobs schema at {db_path}")
     except Exception as e:
         logger.warning(f"Failed to ensure Jobs schema at {db_path}: {e}")
     return db_path

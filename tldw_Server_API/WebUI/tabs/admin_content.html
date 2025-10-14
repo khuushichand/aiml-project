@@ -259,7 +259,12 @@
                 const q = _llmUsageQueryParams();
                 const url = '/api/v1/admin/llm-usage' + (q ? ('?' + q) : '');
                 const res = await apiClient.get(url);
-                document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(res, null, 2);
+                const pre = document.getElementById('adminLLMUsage_result');
+                if (!res || !Array.isArray(res.items) || res.items.length === 0) {
+                    pre.textContent = 'No data yet.';
+                } else {
+                    pre.textContent = JSON.stringify(res, null, 2);
+                }
             } catch (e) {
                 document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(e.response || e, null, 2);
                 Toast.error('Failed to fetch LLM usage');
@@ -1645,10 +1650,15 @@
                 // Top spenders
                 const topUrl = '/api/v1/admin/llm-usage/top-spenders' + (qs.toString() ? ('?' + qs.toString()) : '');
                 const top = await apiClient.get(topUrl);
-                const topPairs = (top.items || []).slice(0, topN).map(r => ({ label: String(r.user_id), value: Number(r.total_cost_usd || 0) }));
-                _renderBarChart('llmChartTopSpenders', topPairs, 'USD', _colorFromLabel);
-                _renderLegend('llmLegendTopSpenders', topPairs, _colorFromLabel);
-                _attachLegendToggle('llmLegendTopSpenders', 'llmChartTopSpenders');
+                let topPairs = (top.items || []).slice(0, topN).map(r => ({ label: String(r.user_id), value: Number(r.total_cost_usd || 0) }));
+                if (!topPairs.length) {
+                    document.getElementById('llmChartTopSpenders').innerHTML = '<p>No data yet.</p>';
+                    document.getElementById('llmLegendTopSpenders').innerHTML = '';
+                } else {
+                    _renderBarChart('llmChartTopSpenders', topPairs, 'USD', _colorFromLabel);
+                    _renderLegend('llmLegendTopSpenders', topPairs, _colorFromLabel);
+                    _attachLegendToggle('llmLegendTopSpenders', 'llmChartTopSpenders');
+                }
 
                 // Model mix by model
                 const mixUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=model';
@@ -1665,9 +1675,14 @@
                     const mapping = await _fetchProviderMappingForModels(start, end, modelMetric);
                     getColor = (label) => _colorForProvider(mapping[label]) || _colorFromLabel(mapping[label] || label);
                 }
-                _renderBarChart('llmChartModelMix', mixPairs, valueLabel, getColor);
-                _renderLegend('llmLegendModelMix', mixPairs, getColor);
-                _attachLegendToggle('llmLegendModelMix', 'llmChartModelMix');
+                if (!mixPairs.length) {
+                    document.getElementById('llmChartModelMix').innerHTML = '<p>No data yet.</p>';
+                    document.getElementById('llmLegendModelMix').innerHTML = '';
+                } else {
+                    _renderBarChart('llmChartModelMix', mixPairs, valueLabel, getColor);
+                    _renderLegend('llmLegendModelMix', mixPairs, getColor);
+                    _attachLegendToggle('llmLegendModelMix', 'llmChartModelMix');
+                }
 
                 // Provider mix by total cost
                 const provUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=provider';
@@ -1678,9 +1693,14 @@
                 let provPairs = (prov.items || []).map(r => ({ label: String(r.group_value || 'unknown'), value: Number(r[provKey] || 0) }));
                 provPairs.sort((a,b) => b.value - a.value);
                 provPairs = provPairs.slice(0, topN);
-                _renderBarChart('llmChartProviderMix', provPairs, provLabel, _colorForProvider);
-                _renderLegend('llmLegendProviderMix', provPairs, _colorForProvider);
-                _attachLegendToggle('llmLegendProviderMix', 'llmChartProviderMix');
+                if (!provPairs.length) {
+                    document.getElementById('llmChartProviderMix').innerHTML = '<p>No data yet.</p>';
+                    document.getElementById('llmLegendProviderMix').innerHTML = '';
+                } else {
+                    _renderBarChart('llmChartProviderMix', provPairs, provLabel, _colorForProvider);
+                    _renderLegend('llmLegendProviderMix', provPairs, _colorForProvider);
+                    _attachLegendToggle('llmLegendProviderMix', 'llmChartProviderMix');
+                }
                 Toast.success('LLM charts loaded');
             } catch (e) {
                 console.error('Failed to load LLM charts', e);
@@ -2877,14 +2897,28 @@
 
         <div class="btn-group">
             <button class="api-button" onclick="adminLoadUsageDaily()">Load Daily</button>
+            <button class="api-button" onclick="adminDownloadUsageDailyCSV()">Download Daily CSV</button>
+            <label style="margin-left:10px; display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox" id="usage_show_bytes_in" /> Show Bytes In
+            </label>
+            <span style="margin-left: 20px;"></span>
+            <select id="usage_top_metric" title="Top metric">
+                <option value="requests" selected>requests</option>
+                <option value="bytes_total">bytes_total</option>
+                <option value="bytes_in_total">bytes_in_total</option>
+                <option value="errors">errors</option>
+            </select>
             <button class="api-button" onclick="adminLoadUsageTop()">Top Users</button>
+            <button class="api-button" onclick="adminDownloadUsageTopCSV()">Download Top CSV</button>
         </div>
 
         <h3>Daily Usage</h3>
+        <div id="adminUsageDaily_summary" class="muted"></div>
         <pre id="adminUsageDaily_raw" style="display:none">---</pre>
         <div id="adminUsageDaily_table"></div>
 
         <h3>Top Users</h3>
+        <div id="adminUsageTop_summary" class="muted"></div>
         <pre id="adminUsageTop_raw" style="display:none">---</pre>
         <div id="adminUsageTop_table"></div>
 
@@ -2923,10 +2957,11 @@
 
             function _renderDailyTable(items) {
                 if (!Array.isArray(items) || items.length === 0) {
-                    return '<p>No data.</p>';
+                    return '<p>No data yet.</p>';
                 }
+                const showIn = !!(document.getElementById('usage_show_bytes_in') && document.getElementById('usage_show_bytes_in').checked);
                 let html = '<table class="simple-table"><thead><tr>' +
-                    '<th>User ID</th><th>Day</th><th>Requests</th><th>Errors</th><th>Bytes</th><th>Avg Latency (ms)</th>' +
+                    '<th>User ID</th><th>Day</th><th>Requests</th><th>Errors</th><th>Bytes</th>' + (showIn ? '<th>Bytes In</th>' : '') + '<th>Avg Latency (ms)</th>' +
                     '</tr></thead><tbody>';
                 for (const r of items) {
                     html += `<tr>
@@ -2935,6 +2970,7 @@
                         <td>${r.requests}</td>
                         <td>${r.errors}</td>
                         <td>${r.bytes_total}</td>
+                        ${showIn ? `<td>${(r.bytes_in_total ?? '')}</td>` : ''}
                         <td>${r.latency_avg_ms ?? ''}</td>
                     </tr>`;
                 }
@@ -2944,7 +2980,7 @@
 
             function _renderTopTable(items) {
                 if (!Array.isArray(items) || items.length === 0) {
-                    return '<p>No data.</p>';
+                    return '<p>No data yet.</p>';
                 }
                 let html = '<table class="simple-table"><thead><tr>' +
                     '<th>User ID</th><th>Requests</th><th>Errors</th><th>Bytes</th><th>Avg Latency (ms)</th>' +
@@ -2967,12 +3003,43 @@
                     const qs = _usageQS();
                     const res = await apiClient.get(`/api/v1/admin/usage/daily?${qs}`);
                     document.getElementById('adminUsageDaily_raw').textContent = JSON.stringify(res, null, 2);
-                    document.getElementById('adminUsageDaily_table').innerHTML = _renderDailyTable(res.items || []);
+                    const items = Array.isArray(res.items) ? res.items : [];
+                    document.getElementById('adminUsageDaily_table').innerHTML = _renderDailyTable(items);
+                    // Update summary with selected range/page/limit
+                    const start = (document.getElementById('usage_start').value || '').trim() || 'all';
+                    const end = (document.getElementById('usage_end').value || '').trim() || 'all';
+                    const page = (document.getElementById('usage_page').value || '1');
+                    const limit = (document.getElementById('usage_limit').value || '50');
+                    // Compute basic totals for current page
+                    const totalRows = items.length;
+                    const sumRequests = items.reduce((a, r) => a + (Number(r.requests) || 0), 0);
+                    const sumErrors = items.reduce((a, r) => a + (Number(r.errors) || 0), 0);
+                    const sumBytes = items.reduce((a, r) => a + (Number(r.bytes_total) || 0), 0);
+                    const hasBytesIn = items.some(r => r.bytes_in_total !== undefined && r.bytes_in_total !== null);
+                    const sumBytesIn = hasBytesIn ? items.reduce((a, r) => a + (Number(r.bytes_in_total) || 0), 0) : null;
+                    const totalsPart = hasBytesIn
+                        ? `| Rows: ${totalRows} | Requests: ${sumRequests} | Errors: ${sumErrors} | Bytes: ${sumBytes} | Bytes In: ${sumBytesIn}`
+                        : `| Rows: ${totalRows} | Requests: ${sumRequests} | Errors: ${sumErrors} | Bytes: ${sumBytes}`;
+                    const s = `Range: ${start} to ${end} | Page: ${page} | Limit: ${limit} ${totalsPart}`;
+                    const el = document.getElementById('adminUsageDaily_summary');
+                    if (el) el.textContent = s;
                     Toast.success('Loaded daily usage');
                 } catch (e) {
                     document.getElementById('adminUsageDaily_table').innerHTML = '';
                     Toast.error('Failed to load daily usage');
                 }
+            }
+
+            function adminDownloadUsageDailyCSV() {
+                const params = new URLSearchParams(_usageQS());
+                const start = (document.getElementById('usage_start').value || '').trim() || 'all';
+                const end = (document.getElementById('usage_end').value || '').trim() || 'all';
+                const showIn = !!(document.getElementById('usage_show_bytes_in') && document.getElementById('usage_show_bytes_in').checked);
+                const suffix = showIn ? '_with-bytes-in' : '';
+                const fname = `usage_daily_${start}_${end}${suffix}.csv`;
+                params.set('filename', fname);
+                const url = `/api/v1/admin/usage/daily/export.csv?${params.toString()}`;
+                window.open(url, '_blank');
             }
 
             async function adminLoadUsageTop() {
@@ -2981,17 +3048,39 @@
                     const start = document.getElementById('usage_start').value.trim();
                     const end = document.getElementById('usage_end').value.trim();
                     const topLimit = parseInt(document.getElementById('usage_top_limit').value || '10', 10);
+                    const metric = (document.getElementById('usage_top_metric') || {}).value || 'requests';
                     if (start) params.set('start', start);
                     if (end) params.set('end', end);
                     if (topLimit) params.set('limit', String(topLimit));
+                    if (metric) params.set('metric', metric);
                     const res = await apiClient.get(`/api/v1/admin/usage/top?${params.toString()}`);
                     document.getElementById('adminUsageTop_raw').textContent = JSON.stringify(res, null, 2);
                     document.getElementById('adminUsageTop_table').innerHTML = _renderTopTable(res.items || []);
+                    // Update summary for top users
+                    const s = `Top metric: ${metric} | Limit: ${topLimit}`;
+                    const el = document.getElementById('adminUsageTop_summary');
+                    if (el) el.textContent = s;
                     Toast.success('Loaded top users');
                 } catch (e) {
                     document.getElementById('adminUsageTop_table').innerHTML = '';
                     Toast.error('Failed to load top users');
                 }
+            }
+
+            function adminDownloadUsageTopCSV() {
+                const params = new URLSearchParams();
+                const start = (document.getElementById('usage_start').value || '').trim() || 'all';
+                const end = (document.getElementById('usage_end').value || '').trim() || 'all';
+                const topLimit = parseInt(document.getElementById('usage_top_limit').value || '10', 10);
+                const metric = (document.getElementById('usage_top_metric') || {}).value || 'requests';
+                if (start && start !== 'all') params.set('start', start);
+                if (end && end !== 'all') params.set('end', end);
+                if (topLimit) params.set('limit', String(topLimit));
+                if (metric) params.set('metric', metric);
+                const fname = `usage_top_${metric}_${start}_${end}.csv`;
+                params.set('filename', fname);
+                const url = `/api/v1/admin/usage/top/export.csv?${params.toString()}`;
+                window.open(url, '_blank');
             }
 
             async function adminRunUsageAggregate() {

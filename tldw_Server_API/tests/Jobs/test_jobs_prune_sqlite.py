@@ -9,7 +9,11 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "sk-test")
+    # Do not set SINGLE_USER_API_KEY so tests use deterministic key from settings
+    monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
+    # Ensure API endpoints use the same SQLite DB as this test (per tmp CWD)
+    import os as _os
+    monkeypatch.setenv("JOBS_DB_PATH", _os.path.join(_os.getcwd(), "Databases", "jobs.db"))
 
 
 def _backdate_sqlite(job_id: int, days: int = 2):
@@ -35,7 +39,14 @@ def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
     _set_env(monkeypatch)
 
     # Import app after env is set
+    # Reset settings before importing app to pick up TEST_MODE
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
+    try:
+        app.dependency_overrides.clear()
+    except Exception:
+        pass
 
     jm = JobManager()
     # Seed: 2 completed + 1 failed (old), 1 failed (recent)
@@ -54,7 +65,8 @@ def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
     j4 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     jm.fail_job(int(j4["id"]), error="x", retryable=False)  # recent (should not be pruned with older_than_days=1)
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    # Use the deterministic single-user key from settings
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         body = {
             "statuses": ["completed", "failed"],
@@ -86,7 +98,13 @@ def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
     from tldw_Server_API.app.main import app
+    try:
+        app.dependency_overrides.clear()
+    except Exception:
+        pass
 
     jm = JobManager()
     # Seed one job in a different domain/queue
@@ -94,7 +112,7 @@ def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
     jm.complete_job(int(jx["id"]))
     _backdate_sqlite(int(jx["id"]))
 
-    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         # Scoped to chatbooks/default/export — should not match the seeded job
         body = {
@@ -108,4 +126,3 @@ def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
         r = client.post("/api/v1/jobs/prune", json=body)
         assert r.status_code == 200
         assert r.json()["deleted"] == 0
-

@@ -1838,7 +1838,7 @@ class MediaDatabase:
             )
         return len(rows)
 
-    def get_claims_by_media(self, media_id: int, *, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_claims_by_media(self, media_id: int, *, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """
         Fetch claims for a media item (excluding soft-deleted), ordered by chunk_index then id.
         """
@@ -1850,9 +1850,9 @@ class MediaDatabase:
             FROM Claims
             WHERE media_id = ? AND deleted = 0
             ORDER BY chunk_index ASC, id ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (media_id, int(limit)),
+            (media_id, int(limit), int(max(0, offset))),
         )
         rows = cur.fetchall()
         return [dict(row) for row in rows]

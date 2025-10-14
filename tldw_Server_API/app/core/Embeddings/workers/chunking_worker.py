@@ -22,6 +22,7 @@ from ..queue_schemas import (
     ChunkingConfig,
 )
 from .base_worker import BaseWorker, WorkerConfig
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 class ChunkingWorker(BaseWorker):
@@ -117,7 +118,7 @@ class ChunkingWorker(BaseWorker):
         """Send chunked data to embedding queue"""
         await self.redis_client.xadd(
             self.embedding_queue,
-            (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+            model_dump_compat(result)
         )
         logger.debug(f"Sent job {result.job_id} to embedding queue")
     

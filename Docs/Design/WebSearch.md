@@ -14,15 +14,14 @@ This page serves as documentation regarding the web search functionality within 
 
 
 ### Current Status
-- Bing, Brave, DDG, Google work for simple searches. Advanced search options are not fully working yet.
+- Google, Bing, DuckDuckGo, and Brave are the only providers wired through the public API. Advanced options (filters, date ranges, blacklists) are still limited.
     - Brave: https://api.search.brave.com/app/documentation/web-search/query#WebSearchAPIQueryParameters
     - Bing: https://docs.microsoft.com/en-us/rest/api/cognitiveservices-bingsearch/bing-web-api-v7-reference
     - DuckDuckGo: https://duckduckgo.com/
     - Google: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
-- Baidu, SearX, Serper, Tavily, Yandex are not implemented yet.
-- Kagi & SearX are implemented but not working (Kagi because API access and SearX because I'm not sure why)
-- Parsing works for Bing, Brave, DDG, Google.
-- Currently no use of Structured outputs (to-do...)
+- Baidu, Kagi, SearX, Serper, Tavily, and Yandex remain unimplemented or experimental. They are excluded from the API request validator until production-ready implementations exist.
+- Parsing is implemented for Google, Bing, DuckDuckGo, and Brave.
+- Aggregation now produces a structured payload `{text, evidence, confidence}` to satisfy the API contract.
 - Full Pipeline works.
     1. User enters query + Search options
     2. Query is processed, sub-queries are generated(if specified)

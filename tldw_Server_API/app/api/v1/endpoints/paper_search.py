@@ -6,6 +6,7 @@ import math
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.research_schemas import (
@@ -54,6 +55,7 @@ from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
 from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -3108,9 +3110,12 @@ async def ingest_batch(
 
     for it in payload.items:
         try:
-            item_dict = it.model_dump() if hasattr(it, "model_dump") else it.dict()
-        except Exception:
-            item_dict = it.dict()
+            item_dict = model_dump_compat(it)
+        except TypeError:
+            encoded_item = jsonable_encoder(it)
+            if not isinstance(encoded_item, dict):
+                raise HTTPException(status_code=400, detail="Invalid batch ingest payload")
+            item_dict = encoded_item
         results.append(await _process_one(item_dict))
 
     succeeded = sum(1 for r in results if r.success)

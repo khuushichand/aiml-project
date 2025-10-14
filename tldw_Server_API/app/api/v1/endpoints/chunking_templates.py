@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Chunking.chunker import Chunker
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
 
@@ -287,11 +288,7 @@ async def create_template(
     """
     try:
         # Convert template config to JSON string
-        # Pydantic v2: use model_dump; keep compatibility if older
-        try:
-            tmpl_dict = template_data.template.model_dump()
-        except Exception:
-            tmpl_dict = template_data.template.dict()
+        tmpl_dict = model_dump_compat(template_data.template)
         template_json = json.dumps(tmpl_dict)
         
         # Emit DB capability headers for diagnostics
@@ -435,9 +432,13 @@ async def update_template(
         template_json = None
         if template_update.template:
             try:
-                tmpl_dict = template_update.template.model_dump()
-            except Exception:
-                tmpl_dict = template_update.template.dict()
+                tmpl_dict = model_dump_compat(template_update.template)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Failed to serialise chunking template update payload")
+                raise HTTPException(
+                    status_code=400,
+                    detail={"success": False, "error": "Invalid template payload", "error_code": "BAD_TEMPLATE"},
+                ) from exc
             template_json = json.dumps(tmpl_dict)
         
         # Update template

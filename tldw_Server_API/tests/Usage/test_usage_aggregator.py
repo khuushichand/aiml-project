@@ -155,15 +155,10 @@ async def test_aggregate_sqlite(monkeypatch):
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("DATABASE_URL", "").startswith("postgresql"), reason="PostgreSQL DATABASE_URL not set")
 @pytest.mark.asyncio
-async def test_aggregate_postgres_branch(isolated_test_environment):
-    # Skip unless DATABASE_URL is postgres
-    import os
-    dsn = os.getenv("DATABASE_URL", "")
-    if not dsn.startswith("postgresql"):
-        pytest.skip("PostgreSQL DATABASE_URL not set")
-
-    client, db_name = isolated_test_environment
+async def test_aggregate_postgres_branch():
+    # In Postgres environment, verify PG-specific branch works without requiring cross-package fixtures
 
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     pool = await get_db_pool()

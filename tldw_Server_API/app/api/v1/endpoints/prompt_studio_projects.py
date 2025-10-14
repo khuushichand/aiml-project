@@ -24,6 +24,7 @@ See also
 
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
+from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 # Local imports
@@ -38,6 +39,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     require_project_write_access, check_rate_limit, get_security_config,
     PromptStudioDatabase, SecurityConfig
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     DatabaseError, InputError, ConflictError
 )
@@ -396,11 +398,16 @@ async def update_project(
         Updated project details
     """
     try:
-        # Filter out None values
+        # Filter out None values using compatibility helper
         try:
-            update_data = updates.model_dump(exclude_none=True)
-        except Exception:
-            update_data = {k: v for k, v in updates.dict().items() if v is not None}
+            update_data = model_dump_compat(updates, exclude_none=True)
+        except TypeError:
+            encoded_updates = jsonable_encoder(updates)
+            update_data = (
+                {k: v for k, v in encoded_updates.items() if v is not None}
+                if isinstance(encoded_updates, dict)
+                else {}
+            )
         
         if not update_data:
             raise HTTPException(

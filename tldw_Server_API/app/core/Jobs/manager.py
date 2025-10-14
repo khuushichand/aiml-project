@@ -79,7 +79,15 @@ class JobManager:
             ensure_jobs_tables_pg(self.db_url)
             self.db_path = Path(":memory:")  # unused
         else:
-            self.db_path = ensure_jobs_tables(db_path)
+            # Prefer explicit db_path, then env override for tests (JOBS_DB_PATH), otherwise default
+            if db_path is not None:
+                self.db_path = ensure_jobs_tables(db_path)
+            else:
+                env_db_path = os.getenv("JOBS_DB_PATH")
+                if env_db_path:
+                    self.db_path = ensure_jobs_tables(Path(env_db_path))
+                else:
+                    self.db_path = ensure_jobs_tables(db_path)
         self._conn = None  # Lazily opened per operation
         try:
             ensure_jobs_metrics_registered()
@@ -129,21 +137,24 @@ class JobManager:
                     with self._pg_cursor(conn) as cur:
                         # ready queued (available_at <= now or null)
                         cur.execute(
-                            "SELECT COUNT(*) FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='queued' AND (available_at IS NULL OR available_at <= NOW())",
+                            "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='queued' AND (available_at IS NULL OR available_at <= NOW())",
                             (domain, queue, job_type),
                         )
-                        q_ready = int(cur.fetchone()[0])
+                        q_ready_row = cur.fetchone()
+                        q_ready = int(q_ready_row["c"]) if q_ready_row is not None else 0
                         # scheduled queued (available_at in future)
                         cur.execute(
-                            "SELECT COUNT(*) FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW())",
+                            "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW())",
                             (domain, queue, job_type),
                         )
-                        q_sched = int(cur.fetchone()[0])
+                        q_sched_row = cur.fetchone()
+                        q_sched = int(q_sched_row["c"]) if q_sched_row is not None else 0
                         cur.execute(
-                            "SELECT COUNT(*) FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='processing'",
+                            "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND queue=%s AND job_type=%s AND status='processing'",
                             (domain, queue, job_type),
                         )
-                        p = int(cur.fetchone()[0])
+                        p_row = cur.fetchone()
+                        p = int(p_row["c"]) if p_row is not None else 0
                 else:
                     q_ready = int(
                         conn.execute(
@@ -220,16 +231,23 @@ class JobManager:
 
         conn = self._connect()
         try:
-            now = datetime.utcnow().isoformat()
+            # Use SQLite-compatible timestamp formatting for reliable comparisons
+            now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             uuid_val = str(_uuid.uuid4())
+            # Ensure PG receives timezone-aware timestamps
+            from datetime import timezone as _tz
+            avail_param = available_at
+            if avail_param is not None and getattr(avail_param, "tzinfo", None) is None:
+                avail_param = avail_param.replace(tzinfo=_tz.utc)
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
                         if idempotency_key:
+                            # Cast payload to jsonb explicitly to avoid adapter issues
                             cur.execute(
                                 (
                                     "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at) "
-                                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW()) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW()) "
                                     "ON CONFLICT (idempotency_key) DO NOTHING RETURNING *"
                                 ),
                                 (
@@ -240,10 +258,10 @@ class JobManager:
                                     owner_user_id,
                                     project_id,
                                     idempotency_key,
-                                    json.loads(payload_json),
+                                    payload_json,
                                     priority,
                                     max_retries,
-                                    available_at if available_at else None,
+                                    avail_param if avail_param else None,
                                 ),
                             )
                             row = cur.fetchone()
@@ -260,7 +278,7 @@ class JobManager:
                         cur.execute(
                             (
                                 "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW()) RETURNING *"
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW()) RETURNING *"
                             ),
                             (
                                 uuid_val,
@@ -270,10 +288,10 @@ class JobManager:
                                 owner_user_id,
                                 project_id,
                                 idempotency_key,
-                                json.loads(payload_json),
+                                payload_json,
                                 priority,
                                 max_retries,
-                                available_at if available_at else None,
+                                avail_param if avail_param else None,
                             ),
                         )
                         row = cur.fetchone()
@@ -524,7 +542,7 @@ class JobManager:
                         row = cur.fetchone()
                         if not row:
                             return None
-                        job_id = int(row[0])
+                        job_id = int(row["id"])  # dict_row
                         # Acquire and start lease
                         cur.execute(
                             (
@@ -674,7 +692,7 @@ class JobManager:
                 with conn:
                     with self._pg_cursor(conn) as cur:
                         if enforce:
-                            sets = ["leased_until = NOW() + (%s || ' seconds')::interval"]
+                            sets = ["leased_until = GREATEST(COALESCE(leased_until, NOW()), NOW() + (%s || ' seconds')::interval)"]
                             params: List[Any] = [int(seconds)]
                             if progress_percent is not None:
                                 sets.append("progress_percent = %s")
@@ -689,27 +707,29 @@ class JobManager:
                             )
                             return cur.rowcount > 0
                         else:
-                            sets = ["leased_until = NOW() + (%s || ' seconds')::interval"]
-                            params2: List[Any] = [int(seconds), int(job_id)]
+                            sets = ["leased_until = GREATEST(COALESCE(leased_until, NOW()), NOW() + (%s || ' seconds')::interval)"]
+                            params2: List[Any] = [int(seconds)]
                             if progress_percent is not None:
                                 sets.append("progress_percent = %s")
-                                params2.insert(1, float(progress_percent))
+                                params2.append(float(progress_percent))
                             if progress_message is not None:
                                 sets.append("progress_message = %s")
-                                if progress_percent is None:
-                                    params2.insert(1, str(progress_message))
-                                else:
-                                    params2.insert(2, str(progress_message))
+                                params2.append(str(progress_message))
                             cur.execute(
                                 f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing'",
-                                tuple(params2),
+                                tuple(params2 + [int(job_id)]),
                             )
                             return cur.rowcount > 0
             else:
                 with conn:
+                    interval = f"+{seconds} seconds"
                     if enforce:
-                        sql = "UPDATE jobs SET leased_until = DATETIME('now', ?)"
-                        params3: List[Any] = [f"+{seconds} seconds"]
+                        # Do not shorten; cap to max(now+cap, current leased_until)
+                        sql = (
+                            "UPDATE jobs SET "
+                            "leased_until = MAX(COALESCE(leased_until, DATETIME('now')), DATETIME('now', ?))"
+                        )
+                        params3: List[Any] = [interval]
                         if progress_percent is not None:
                             sql += ", progress_percent = ?"
                             params3.append(float(progress_percent))
@@ -718,23 +738,24 @@ class JobManager:
                             params3.append(str(progress_message))
                         sql += " WHERE id = ? AND status = 'processing' AND worker_id = ? AND lease_id = ?"
                         params3.extend([job_id, worker_id, lease_id])
-                        conn.execute(sql, tuple(params3))
-                        return conn.total_changes > 0
+                        cur = conn.execute(sql, tuple(params3))
+                        return (cur.rowcount or 0) > 0
                     else:
-                        sql = "UPDATE jobs SET leased_until = DATETIME('now', ?)"
-                        params4: List[Any] = [f"+{seconds} seconds", job_id]
+                        sql = (
+                            "UPDATE jobs SET "
+                            "leased_until = MAX(COALESCE(leased_until, DATETIME('now')), DATETIME('now', ?))"
+                        )
+                        params4: List[Any] = [interval]
                         if progress_percent is not None:
                             sql += ", progress_percent = ?"
-                            params4.insert(1, float(progress_percent))
+                            params4.append(float(progress_percent))
                         if progress_message is not None:
                             sql += ", progress_message = ?"
-                            if progress_percent is None:
-                                params4.insert(1, str(progress_message))
-                            else:
-                                params4.insert(2, str(progress_message))
+                            params4.append(str(progress_message))
                         sql += " WHERE id = ? AND status = 'processing'"
-                        conn.execute(sql, tuple(params4))
-                        return conn.total_changes > 0
+                        params4.append(job_id)
+                        cur = conn.execute(sql, tuple(params4))
+                        return (cur.rowcount or 0) > 0
         finally:
             conn.close()
 
@@ -868,7 +889,7 @@ class JobManager:
                         if retryable:
                             cur.execute("SELECT retry_count FROM jobs WHERE id = %s", (int(job_id),))
                             row = cur.fetchone()
-                            current = int(row[0]) if row else 0
+                            current = int(row["retry_count"]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2 ** current)))
                             if exp_backoff <= 2 or (str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}):
                                 jitter = 0
@@ -1184,87 +1205,99 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with self._pg_cursor(conn) as cur:
-                    affected = 0
-                    if age_seconds:
-                        where = ["status='queued'", f"created_at <= NOW() - ({int(age_seconds)} || ' seconds')::interval"]
-                        params: List[Any] = []
-                        if domain:
-                            where.append("domain = %s")
-                            params.append(domain)
-                        if queue:
-                            where.append("queue = %s")
-                            params.append(queue)
-                        if job_type:
-                            where.append("job_type = %s")
-                            params.append(job_type)
-                        if action == "cancel":
-                            cur.execute(
-                                f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",
-                                tuple(params),
-                            )
-                        else:
-                            cur.execute(
-                                f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = NOW() WHERE {' AND '.join(where)}",
-                                tuple(params),
-                            )
-                        affected += cur.rowcount or 0
-                    if runtime_seconds:
-                        where = ["status='processing'", f"COALESCE(started_at, acquired_at) <= NOW() - ({int(runtime_seconds)} || ' seconds')::interval"]
-                        params2: List[Any] = []
-                        if domain:
-                            where.append("domain = %s")
-                            params2.append(domain)
-                        if queue:
-                            where.append("queue = %s")
-                            params2.append(queue)
-                        if job_type:
-                            where.append("job_type = %s")
-                            params2.append(job_type)
-                        if action == "cancel":
-                            cur.execute(
-                                f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",
-                                tuple(params2),
-                            )
-                        else:
-                            cur.execute(
-                                f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = NOW(), leased_until = NULL WHERE {' AND '.join(where)}",
-                                tuple(params2),
-                            )
-                        affected += cur.rowcount or 0
-                    return affected
+                # Ensure updates are committed
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        affected = 0
+                        if age_seconds:
+                            where = ["status='queued'", f"created_at <= NOW() - ({int(age_seconds)} || ' seconds')::interval"]
+                            params: List[Any] = []
+                            if domain:
+                                where.append("domain = %s")
+                                params.append(domain)
+                            if queue:
+                                where.append("queue = %s")
+                                params.append(queue)
+                            if job_type:
+                                where.append("job_type = %s")
+                                params.append(job_type)
+                            if action == "cancel":
+                                cur.execute(
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",
+                                    tuple(params),
+                                )
+                            else:
+                                cur.execute(
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = NOW() WHERE {' AND '.join(where)}",
+                                    tuple(params),
+                                )
+                            affected += cur.rowcount or 0
+                        if runtime_seconds:
+                            where = ["status='processing'", f"COALESCE(started_at, acquired_at) <= NOW() - ({int(runtime_seconds)} || ' seconds')::interval"]
+                            params2: List[Any] = []
+                            if domain:
+                                where.append("domain = %s")
+                                params2.append(domain)
+                            if queue:
+                                where.append("queue = %s")
+                                params2.append(queue)
+                            if job_type:
+                                where.append("job_type = %s")
+                                params2.append(job_type)
+                            if action == "cancel":
+                                cur.execute(
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",
+                                    tuple(params2),
+                                )
+                            else:
+                                cur.execute(
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = NOW(), leased_until = NULL WHERE {' AND '.join(where)}",
+                                    tuple(params2),
+                                )
+                            affected += cur.rowcount or 0
+                        return affected
             else:
+                # Ensure updates are committed by using an explicit transaction block
                 affected2 = 0
-                if age_seconds:
-                    where = ["status='queued'", "created_at <= DATETIME('now', ?)" ]
-                    params3: List[Any] = [f"-{int(age_seconds)} seconds"]
-                    if domain:
-                        where.append("domain = ?")
-                        params3.append(domain)
-                    if queue:
-                        where.append("queue = ?")
-                        params3.append(queue)
-                    if job_type:
-                        where.append("job_type = ?")
-                        params3.append(job_type)
-                    sql = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'" if action == "cancel" else "status='failed', error_message='ttl_age', completed_at = DATETIME('now')") + f" WHERE {' AND '.join(where)}"
-                    conn.execute(sql, tuple(params3))
-                    affected2 += conn.total_changes or 0
-                if runtime_seconds:
-                    where = ["status='processing'", "COALESCE(started_at, acquired_at) <= DATETIME('now', ?)"]
-                    params4: List[Any] = [f"-{int(runtime_seconds)} seconds"]
-                    if domain:
-                        where.append("domain = ?")
-                        params4.append(domain)
-                    if queue:
-                        where.append("queue = ?")
-                        params4.append(queue)
-                    if job_type:
-                        where.append("job_type = ?")
-                        params4.append(job_type)
-                    sql2 = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL" if action == "cancel" else "status='failed', error_message='ttl_runtime', completed_at = DATETIME('now'), leased_until = NULL") + f" WHERE {' AND '.join(where)}"
-                    conn.execute(sql2, tuple(params4))
-                    affected2 += conn.total_changes or 0
+                with conn:
+                    if age_seconds:
+                        where = ["status='queued'", "created_at <= DATETIME('now', ?)" ]
+                        params3: List[Any] = [f"-{int(age_seconds)} seconds"]
+                        if domain:
+                            where.append("domain = ?")
+                            params3.append(domain)
+                        if queue:
+                            where.append("queue = ?")
+                            params3.append(queue)
+                        if job_type:
+                            where.append("job_type = ?")
+                            params3.append(job_type)
+                        sql = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'" if action == "cancel" else "status='failed', error_message='ttl_age', completed_at = DATETIME('now')") + f" WHERE {' AND '.join(where)}"
+                        cur = conn.execute(sql, tuple(params3))
+                        try:
+                            logger.debug(f"TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}")
+                        except Exception:
+                            pass
+                        affected2 += cur.rowcount or 0
+                    if runtime_seconds:
+                        where = ["status='processing'", "COALESCE(started_at, acquired_at) <= DATETIME('now', ?)"]
+                        params4: List[Any] = [f"-{int(runtime_seconds)} seconds"]
+                        if domain:
+                            where.append("domain = ?")
+                            params4.append(domain)
+                        if queue:
+                            where.append("queue = ?")
+                            params4.append(queue)
+                        if job_type:
+                            where.append("job_type = ?")
+                            params4.append(job_type)
+                        sql2 = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL" if action == "cancel" else "status='failed', error_message='ttl_runtime', completed_at = DATETIME('now'), leased_until = NULL") + f" WHERE {' AND '.join(where)}"
+                        cur2 = conn.execute(sql2, tuple(params4))
+                        try:
+                            logger.debug(f"TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}")
+                        except Exception:
+                            pass
+                        affected2 += cur2.rowcount or 0
                 return affected2
         finally:
             conn.close()
@@ -1326,12 +1359,12 @@ class JobManager:
                     rows = cur.fetchall()
                 return [
                     {
-                        "domain": r[0],
-                        "queue": r[1],
-                        "job_type": r[2],
-                        "queued": int(r[3] or 0),
-                        "scheduled": int(r[4] or 0),
-                        "processing": int(r[5] or 0),
+                        "domain": r["domain"],
+                        "queue": r["queue"],
+                        "job_type": r["job_type"],
+                        "queued": int((r.get("queued") if isinstance(r, dict) else 0) or 0),
+                        "scheduled": int((r.get("scheduled") if isinstance(r, dict) else 0) or 0),
+                        "processing": int((r.get("processing") if isinstance(r, dict) else 0) or 0),
                     }
                     for r in rows
                 ]

@@ -116,7 +116,7 @@ This tool is designed for:
 
 ### Audio Endpoints
 - `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
-- `GET  /api/v1/audio/voices` — List available TTS voices (supports `?provider=elevenlabs`)
+- `GET  /api/v1/audio/voices/catalog` — List available TTS voices (supports `?provider=openai|elevenlabs`)
 
 ### OCR Providers
 

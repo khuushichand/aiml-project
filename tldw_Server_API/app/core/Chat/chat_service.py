@@ -593,8 +593,9 @@ async def execute_streaming_call(
             except Exception:
                 pass
         else:
-            # Prefer async handler when available to avoid thread blocking
-            raw_stream_iter = await perform_chat_api_call_async(**cleaned_args)
+            # Execute provided LLM call function in a worker to avoid blocking the loop.
+            # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
+            raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
             metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
             try:
                 if provider_manager:
@@ -923,8 +924,10 @@ async def execute_non_stream_call(
             )
             llm_response = await fut
         else:
-            # Prefer async handler when available
-            llm_response = await perform_chat_api_call_async(**cleaned_args)
+            # Execute provided LLM call function in a worker to avoid blocking the loop.
+            # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
+            loop = asyncio.get_running_loop()
+            llm_response = await loop.run_in_executor(None, llm_call_func)
         llm_latency = time.time() - llm_start_time
         metrics.track_llm_call(provider, model, llm_latency, success=True)
         if provider_manager:

@@ -90,5 +90,17 @@ work focuses on bullet 1 while preserving model download behaviour.
 - Once the package installer is in place we can offer a "verify" button in the
   WebUI to re-run dependency checks without downloading models again.
 
+## Remote Setup Access Safety
+
+- The setup API is locked to localhost by default. To temporarily unblock remote
+  access, either export `TLDW_SETUP_ALLOW_REMOTE=1` or set
+  `allow_remote_setup_access = true` under the `[Setup]` section of `config.txt`.
+- The guard flips immediately when the config value changes. When enabled we log
+  a warning and `/api/v1/setup/status` surfaces `remote_access_active = true`
+  so operators can monitor exposure.
+- Always re-disable remote access (`allow_remote_setup_access = false`) once the
+  maintenance window closes; leaving it enabled effectively exposes
+  installation and configuration endpoints to anyone who can reach the server.
+
 With this design in place we can proceed to implement the dependency installer
 and expand test coverage to validate success, failure, and skip paths.

@@ -56,6 +56,11 @@ Env or `[Claims]` in `Config_Files/config.txt`:
 - `CLAIMS_EMBED_MODEL_ID` (string, optional)
 - `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE` (used when an LLM extractor is selected)
 
+Provider resolution for ingestion LLM extraction follows this order:
+- Use `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE` when set.
+- Otherwise use `RAG.default_llm_provider` and `RAG.default_llm_model`.
+- Finally use `default_api` with a conservative temperature (default `0.1`).
+
 ## Ingestion Hook
 
 If `ENABLE_INGESTION_CLAIMS=True`, the embeddings pipeline (`ChromaDB_Library`) will:
@@ -77,8 +82,14 @@ Exposed via API endpoints to enqueue work per media or in bulk.
 Base prefix: `/api/v1/claims`
 
 - `GET /{media_id}` — List claims for a media item
-  - Optional query params (admin only): `user_id` to select another user’s media DB
-  - Response: `List[ClaimRow]` (DB rows excluding `deleted`), ordered by `chunk_index` then `id`
+  - Optional query params:
+    - `limit` (default 100)
+    - `offset` (default 0)
+    - `envelope` (default false) — when true, returns `{ items, next_offset }` instead of a bare list
+    - `user_id` (admin only) to select another user’s media DB
+  - Response:
+    - when `envelope=false`: `List[ClaimRow]` (DB rows excluding `deleted`), ordered by `chunk_index` then `id`
+    - when `envelope=true`: `{ "items": List[ClaimRow], "next_offset": int|null }`
 
 - `POST /{media_id}/rebuild` — Enqueue rebuild for a media item
   - Optional (admin): `user_id` to target another user DB
@@ -149,4 +160,3 @@ curl -s -X POST -H "Authorization: Bearer <JWT>" \
 
 - Ingestion-time extraction can be enabled selectively; not all ingestion paths invoke it by default.
 - The answer-time Claims Engine (APS/LLM extractor + Hybrid verifier) is documented in design and is separate from these API endpoints.
-

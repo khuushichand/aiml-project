@@ -7,7 +7,7 @@ import hashlib
 import secrets
 import base64
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import asyncio
 #
 # 3rd-party imports
@@ -19,18 +19,20 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from loguru import logger
+from jose import jwt as jose_jwt
 import time
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     SessionError,
     InvalidSessionError,
     SessionRevokedException,
     DatabaseError
 )
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 
 #######################################################################################################################
 #
@@ -59,8 +61,7 @@ class SessionManager:
             return
         
         # Get database pool
-        if not self.db_pool:
-            self.db_pool = await get_db_pool()
+        self.db_pool = await self._ensure_db_pool()
         
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
@@ -99,6 +100,38 @@ class SessionManager:
         
         self._initialized = True
         logger.info("SessionManager initialized with encryption enabled")
+
+    async def _ensure_db_pool(self) -> DatabasePool:
+        """Ensure we have a database pool compatible with the current event loop."""
+        if not self.db_pool:
+            self.db_pool = await get_db_pool()
+            return self.db_pool
+
+        pool_ref = getattr(self.db_pool, "pool", None)
+        pool_closed = bool(pool_ref) and getattr(pool_ref, "closed", False)
+
+        loop_changed = False
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        stored_loop = getattr(self.db_pool, "_loop", None)
+        if pool_ref and stored_loop and current_loop and stored_loop is not current_loop:
+            loop_changed = True
+
+        if pool_closed or loop_changed:
+            logger.debug(
+                "SessionManager refreshing database pool "
+                f"(pool_closed={pool_closed}, loop_changed={loop_changed})"
+            )
+            await reset_db_pool()
+            self.db_pool = await get_db_pool()
+            return self.db_pool
+
+        if not getattr(self.db_pool, "_initialized", False):
+            await self.db_pool.initialize()
+
+        return self.db_pool
     
     def _init_encryption(self):
         """Initialize encryption for session tokens"""
@@ -156,6 +189,22 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to decrypt token: {e}")
             raise InvalidSessionError("Failed to decrypt session token")
+
+    @staticmethod
+    def _extract_token_metadata(token: Optional[str]) -> Tuple[Optional[str], Optional[datetime]]:
+        """Return (jti, expires_at) tuple without verifying signature."""
+        if not token:
+            return None, None
+        try:
+            claims = jose_jwt.get_unverified_claims(token)
+            jti = claims.get("jti")
+            exp = claims.get("exp")
+            expires_at = None
+            if isinstance(exp, (int, float)):
+                expires_at = datetime.utcfromtimestamp(exp)
+            return jti, expires_at
+        except Exception:
+            return None, None
     
     async def create_session(
         self,
@@ -195,11 +244,22 @@ class SessionManager:
         expires_at = datetime.utcnow() + timedelta(
             minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
+        refresh_expires_at = datetime.utcnow() + timedelta(
+            days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS
+        )
+
+        access_jti, access_exp_override = self._extract_token_metadata(access_token)
+        if access_exp_override:
+            expires_at = access_exp_override
+        refresh_jti, refresh_exp_override = self._extract_token_metadata(refresh_token)
+        if refresh_exp_override:
+            refresh_expires_at = refresh_exp_override
         
         session_id = None
         
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     session_id = await conn.fetchval(
@@ -207,14 +267,18 @@ class SessionManager:
                         INSERT INTO sessions (
                             user_id, token_hash, refresh_token_hash,
                             encrypted_token, encrypted_refresh,
-                            expires_at, ip_address, user_agent, device_id
+                            expires_at, refresh_expires_at,
+                            ip_address, user_agent, device_id,
+                            access_jti, refresh_jti
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                         RETURNING id
                         """,
                         user_id, access_hash, refresh_hash,
                         encrypted_access, encrypted_refresh,
-                        expires_at, ip_address, user_agent, device_id
+                        expires_at, refresh_expires_at,
+                        ip_address, user_agent, device_id,
+                        access_jti, refresh_jti
                     )
                 else:
                     # SQLite
@@ -223,13 +287,18 @@ class SessionManager:
                         INSERT INTO sessions (
                             user_id, token_hash, refresh_token_hash,
                             encrypted_token, encrypted_refresh,
-                            expires_at, ip_address, user_agent, device_id
+                            expires_at, refresh_expires_at,
+                            ip_address, user_agent, device_id,
+                            access_jti, refresh_jti
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (user_id, access_hash, refresh_hash,
                          encrypted_access, encrypted_refresh,
-                         expires_at.isoformat(), ip_address, user_agent, device_id)
+                         expires_at.isoformat(),
+                         refresh_expires_at.isoformat() if refresh_expires_at else None,
+                         ip_address, user_agent, device_id,
+                         access_jti, refresh_jti)
                     )
                     session_id = cursor.lastrowid
                     await conn.commit()
@@ -287,7 +356,8 @@ class SessionManager:
         
         # Database lookup
         try:
-            async with self.db_pool.acquire() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.acquire() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     row = await conn.fetchrow(
@@ -386,13 +456,15 @@ class SessionManager:
             await self.initialize()
         
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute(
                         """
                         UPDATE sessions
                         SET is_active = FALSE,
+                            is_revoked = TRUE,
                             revoked_at = CURRENT_TIMESTAMP,
                             revoked_by = $2,
                             revoke_reason = $3
@@ -406,6 +478,7 @@ class SessionManager:
                         """
                         UPDATE sessions
                         SET is_active = 0,
+                            is_revoked = 1,
                             revoked_at = datetime('now')
                         WHERE id = ?
                         """,
@@ -436,7 +509,8 @@ class SessionManager:
             await self.initialize()
         
         try:
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     if except_session_id:
@@ -444,6 +518,7 @@ class SessionManager:
                             """
                             UPDATE sessions
                             SET is_active = FALSE,
+                                is_revoked = TRUE,
                                 revoked_at = CURRENT_TIMESTAMP
                             WHERE user_id = $1 AND id != $2
                             """,
@@ -454,6 +529,7 @@ class SessionManager:
                             """
                             UPDATE sessions
                             SET is_active = FALSE,
+                                is_revoked = TRUE,
                                 revoked_at = CURRENT_TIMESTAMP
                             WHERE user_id = $1
                             """,
@@ -466,6 +542,7 @@ class SessionManager:
                             """
                             UPDATE sessions
                             SET is_active = 0,
+                                is_revoked = 1,
                                 revoked_at = datetime('now')
                             WHERE user_id = ? AND id != ?
                             """,
@@ -476,6 +553,7 @@ class SessionManager:
                             """
                             UPDATE sessions
                             SET is_active = 0,
+                                is_revoked = 1,
                                 revoked_at = datetime('now')
                             WHERE user_id = ?
                             """,
@@ -495,6 +573,13 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to revoke user sessions: {e}")
             raise SessionError(f"Failed to revoke sessions: {e}")
+
+        # After sessions are marked revoked, ensure associated JTIs are blacklisted
+        try:
+            blacklist = get_token_blacklist()
+            await blacklist.revoke_all_user_tokens(user_id)
+        except Exception as bl_error:
+            logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
     
     async def refresh_session(
         self,
@@ -509,123 +594,121 @@ class SessionManager:
         old_refresh_hash = self.hash_token(refresh_token)
         new_access_hash = self.hash_token(new_access_token)
         new_refresh_hash = self.hash_token(new_refresh_token) if new_refresh_token else None
+        access_jti, access_exp = self._extract_token_metadata(new_access_token)
+        refresh_jti, refresh_exp = self._extract_token_metadata(new_refresh_token) if new_refresh_token else (None, None)
+        expires_at = access_exp or (datetime.utcnow() + timedelta(
+            minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        ))
+        refresh_expires_at = None
+        if new_refresh_token:
+            refresh_expires_at = refresh_exp or (
+                datetime.utcnow() + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
+            )
         
         try:
-            async with self.db_pool.transaction() as conn:
-                # Find session by refresh token
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    session = await conn.fetchrow(
-                        """
-                        SELECT id, user_id FROM sessions
-                        WHERE refresh_token_hash = $1
-                        AND is_active = TRUE
-                        """,
-                        old_refresh_hash
-                    )
-                    
-                    if not session:
-                        raise InvalidSessionError()
-                    
-                    # Update session with new tokens
-                    expires_at = datetime.utcnow() + timedelta(
-                        minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
-                    )
-                    
-                    if new_refresh_hash:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
+                    # Find session by refresh token
+                    if hasattr(conn, 'fetchrow'):
+                        # PostgreSQL
+                        session = await conn.fetchrow(
+                            """
+                            SELECT id, user_id FROM sessions
+                            WHERE refresh_token_hash = $1
+                            AND is_active = TRUE
+                            """,
+                            old_refresh_hash
+                        )
+
+                        if not session:
+                            raise InvalidSessionError()
+
+                        # Update session with new tokens
                         await conn.execute(
                             """
                             UPDATE sessions
                             SET token_hash = $2,
-                                refresh_token_hash = $3,
+                                access_jti = COALESCE($3, access_jti),
                                 expires_at = $4,
+                                refresh_token_hash = COALESCE($5, refresh_token_hash),
+                                refresh_jti = COALESCE($6, refresh_jti),
+                                refresh_expires_at = COALESCE($7, refresh_expires_at),
                                 last_activity = CURRENT_TIMESTAMP
                             WHERE id = $1
                             """,
-                            session['id'], new_access_hash, new_refresh_hash, expires_at
+                            session['id'],
+                            new_access_hash,
+                            access_jti,
+                            expires_at,
+                            new_refresh_hash,
+                            refresh_jti,
+                            refresh_expires_at
                         )
+
+                        session_data = dict(session)
+
                     else:
-                        await conn.execute(
+                        # SQLite
+                        cursor = await conn.execute(
                             """
-                            UPDATE sessions
-                            SET token_hash = $2,
-                                expires_at = $3,
-                                last_activity = CURRENT_TIMESTAMP
-                            WHERE id = $1
+                            SELECT id, user_id FROM sessions
+                            WHERE refresh_token_hash = ?
+                            AND is_active = 1
                             """,
-                            session['id'], new_access_hash, expires_at
+                            (old_refresh_hash,)
                         )
-                    
-                    session_data = dict(session)
-                    
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, user_id FROM sessions
-                        WHERE refresh_token_hash = ?
-                        AND is_active = 1
-                        """,
-                        (old_refresh_hash,)
-                    )
-                    row = await cursor.fetchone()
-                    
-                    if not row:
-                        raise InvalidSessionError()
-                    
-                    session_data = {"id": row[0], "user_id": row[1]}
-                    
-                    # Update session
-                    expires_at = datetime.utcnow() + timedelta(
-                        minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
-                    )
-                    
-                    if new_refresh_hash:
+                        row = await cursor.fetchone()
+
+                        if not row:
+                            raise InvalidSessionError()
+
+                        session_data = {"id": row[0], "user_id": row[1]}
+
+                        # Update session
                         await conn.execute(
                             """
                             UPDATE sessions
                             SET token_hash = ?,
-                                refresh_token_hash = ?,
+                                access_jti = COALESCE(?, access_jti),
                                 expires_at = ?,
+                                refresh_token_hash = COALESCE(?, refresh_token_hash),
+                                refresh_jti = COALESCE(?, refresh_jti),
+                                refresh_expires_at = COALESCE(?, refresh_expires_at),
                                 last_activity = datetime('now')
                             WHERE id = ?
                             """,
-                            (new_access_hash, new_refresh_hash, 
-                             expires_at.isoformat(), session_data['id'])
+                            (
+                                new_access_hash,
+                                access_jti,
+                                expires_at.isoformat(),
+                                new_refresh_hash,
+                                refresh_jti,
+                                refresh_expires_at.isoformat() if refresh_expires_at else None,
+                                session_data['id'],
+                            )
                         )
+                        await conn.commit()
+
+                    # Update cache
+                    if self.redis_client:
+                        await self._cache_session(
+                            new_access_hash,
+                            session_data['user_id'],
+                            session_data['id'],
+                            expires_at
+                        )
+
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.info("Refreshed session [redacted]")
                     else:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET token_hash = ?,
-                                expires_at = ?,
-                                last_activity = datetime('now')
-                            WHERE id = ?
-                            """,
-                            (new_access_hash, expires_at.isoformat(), session_data['id'])
-                        )
-                    await conn.commit()
-                
-                # Update cache
-                if self.redis_client:
-                    await self._cache_session(
-                        new_access_hash,
-                        session_data['user_id'],
-                        session_data['id'],
-                        expires_at
-                    )
-                
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Refreshed session [redacted]")
-                else:
-                    logger.info(f"Refreshed session {session_data['id']}")
-                
-                return {
-                    "session_id": session_data['id'],
-                    "user_id": session_data['user_id'],
-                    "expires_at": expires_at.isoformat()
-                }
-                
+                        logger.info(f"Refreshed session {session_data['id']}")
+
+                    return {
+                        "session_id": session_data['id'],
+                        "user_id": session_data['user_id'],
+                        "expires_at": expires_at.isoformat()
+                    }
+
         except InvalidSessionError:
             raise
         except Exception as e:
@@ -646,28 +729,53 @@ class SessionManager:
             # Hash tokens for storage
             access_token_hash = hashlib.sha256(access_token.encode()).hexdigest()
             refresh_token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+            access_jti, access_exp = self._extract_token_metadata(access_token)
+            refresh_jti, refresh_exp = self._extract_token_metadata(refresh_token)
             
-            if self.db_pool.pool:
+            db_pool = await self._ensure_db_pool()
+            if getattr(db_pool, "pool", None):
                 # PostgreSQL
-                await self.db_pool.execute(
+                await db_pool.execute(
                     """
                     UPDATE sessions
                     SET token_hash = $1,
-                        refresh_token_hash = $2
-                    WHERE id = $3
+                        refresh_token_hash = $2,
+                        access_jti = COALESCE($3, access_jti),
+                        refresh_jti = COALESCE($4, refresh_jti),
+                        expires_at = COALESCE($5, expires_at),
+                        refresh_expires_at = COALESCE($6, refresh_expires_at)
+                    WHERE id = $7
                     """,
-                    access_token_hash, refresh_token_hash, session_id
+                    access_token_hash,
+                    refresh_token_hash,
+                    access_jti,
+                    refresh_jti,
+                    access_exp,
+                    refresh_exp,
+                    session_id
                 )
             else:
                 # SQLite
-                await self.db_pool.execute(
+                await db_pool.execute(
                     """
                     UPDATE sessions
                     SET token_hash = ?,
-                        refresh_token_hash = ?
+                        refresh_token_hash = ?,
+                        access_jti = COALESCE(?, access_jti),
+                        refresh_jti = COALESCE(?, refresh_jti),
+                        expires_at = COALESCE(?, expires_at),
+                        refresh_expires_at = COALESCE(?, refresh_expires_at)
                     WHERE id = ?
                     """,
-                    access_token_hash, refresh_token_hash, session_id
+                    (
+                        access_token_hash,
+                        refresh_token_hash,
+                        access_jti,
+                        refresh_jti,
+                        access_exp.isoformat() if access_exp else None,
+                        refresh_exp.isoformat() if refresh_exp else None,
+                        session_id,
+                    )
                 )
             
             logger.debug(f"Updated session {session_id} with token hashes")
@@ -676,12 +784,13 @@ class SessionManager:
             logger.error(f"Failed to update session tokens: {e}")
             raise SessionError(f"Failed to update session tokens: {e}")
     
-    async def is_token_blacklisted(self, token: str) -> bool:
+    async def is_token_blacklisted(self, token: str, jti: Optional[str] = None) -> bool:
         """
         Check if a token has been blacklisted/revoked
         
         Args:
             token: JWT token to check
+            jti: Optional JWT ID (if already parsed by caller)
             
         Returns:
             True if token is blacklisted, False otherwise
@@ -690,6 +799,35 @@ class SessionManager:
             await self.initialize()
         
         try:
+            # Fail-closed on missing token material
+            if not token:
+                logger.warning("is_token_blacklisted invoked without token; treating as revoked")
+                return True
+
+            # Determine JWT ID (JTI) if not provided
+            jti_value = jti
+            if not jti_value:
+                try:
+                    from jose import jwt as _jwt  # Lazy import to avoid top-level dependency
+                    claims = _jwt.get_unverified_claims(token)
+                    jti_value = claims.get("jti")
+                except Exception as exc:
+                    logger.warning(f"Failed to extract JTI from token; treating as revoked: {exc}")
+                    return True
+
+            if not jti_value:
+                logger.warning("Token missing JTI claim; treating as revoked")
+                return True
+
+            # Consult shared token blacklist (fail-closed on error)
+            try:
+                blacklist = get_token_blacklist()
+                if await blacklist.is_blacklisted(jti_value):
+                    return True
+            except Exception as exc:
+                logger.error(f"Token blacklist check failed; treating token as revoked: {exc}")
+                return True
+
             # Hash the token for storage/comparison
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             
@@ -703,9 +841,10 @@ class SessionManager:
                     pass  # Fall back to database
             
             # Check database for revoked sessions
-            if self.db_pool.pool:
+            db_pool = await self._ensure_db_pool()
+            if getattr(db_pool, "pool", None):
                 # PostgreSQL
-                result = await self.db_pool.fetchval(
+                result = await db_pool.fetchval(
                     """
                     SELECT COUNT(*) 
                     FROM sessions 
@@ -715,7 +854,7 @@ class SessionManager:
                 )
             else:
                 # SQLite
-                result = await self.db_pool.fetchval(
+                result = await db_pool.fetchval(
                     """
                     SELECT COUNT(*) 
                     FROM sessions 
@@ -727,9 +866,8 @@ class SessionManager:
             return result > 0
             
         except Exception as e:
-            logger.error(f"Error checking token blacklist: {e}")
-            # Fail open - if we can't check, assume not blacklisted
-            return False
+            logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
+            return True
     
     async def get_user_sessions(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all sessions for a user (alias for get_active_sessions)"""
@@ -741,7 +879,8 @@ class SessionManager:
             await self.initialize()
         
         try:
-            async with self.db_pool.acquire() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.acquire() as conn:
                 if hasattr(conn, 'fetch'):
                     # PostgreSQL
                     rows = await conn.fetch(
@@ -794,7 +933,8 @@ class SessionManager:
         try:
             logger.info("Starting session cleanup...")
             
-            async with self.db_pool.transaction() as conn:
+            db_pool = await self._ensure_db_pool()
+            async with db_pool.transaction() as conn:
                 # First check if the sessions table exists
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL

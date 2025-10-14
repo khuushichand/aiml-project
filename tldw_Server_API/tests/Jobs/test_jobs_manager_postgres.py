@@ -17,9 +17,37 @@ pytestmark = pytest.mark.skipif(
     not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
 )
 
+@pytest.fixture(scope="module", autouse=True)
+def _pg_schema_and_cleanup():
+    # Standardize env for this module and ensure schema once
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("AUTH_MODE", "single_user")
+    # Ensure target database exists (connect to 'postgres' and create if needed)
+    try:
+        base = pg_dsn.rsplit("/", 1)[0] + "/postgres"
+        db_name = pg_dsn.rsplit("/", 1)[1].split("?")[0]
+        with psycopg.connect(base, autocommit=True) as _conn:
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
+                if _cur.fetchone() is None:
+                    _cur.execute(f"CREATE DATABASE {db_name}")
+    except Exception:
+        pass
+    ensure_jobs_tables_pg(pg_dsn)
+    # Clean slate to avoid state bleed across modules
+    with psycopg.connect(pg_dsn) as conn:
+        with conn, conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE jobs RESTART IDENTITY")
+    # Avoid concurrent DDL during threaded acquire by no-op'ing ensure in JobManager for this module
+    try:
+        import tldw_Server_API.app.core.Jobs.manager as _jm
+        _jm.ensure_jobs_tables_pg = lambda url: url  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    yield
+
 
 def _new_pg_manager():
-    ensure_jobs_tables_pg(pg_dsn)
     return JobManager(None, backend="postgres", db_url=pg_dsn)
 
 

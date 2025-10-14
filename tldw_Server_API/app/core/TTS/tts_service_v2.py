@@ -45,6 +45,7 @@ from .tts_exceptions import (
     TTSResourceError,
     TTSInsufficientMemoryError,
     TTSGPUError,
+    TTSFallbackExhaustedError,
     categorize_error,
     is_retryable_error
 )
@@ -91,7 +92,24 @@ class TTSServiceV2:
             # Safe to ignore — tests may override `_factory` directly
             pass
         self.circuit_manager = circuit_manager
-        self._semaphore = asyncio.Semaphore(4)  # Limit concurrent generations
+        # Limit concurrent generations; honor config if available
+        max_concurrent = 4
+        stream_errors_as_audio = True
+        try:
+            if self.factory and hasattr(self.factory, "registry") and hasattr(self.factory.registry, "config"):
+                perf_cfg = self.factory.registry.config.get("performance", {})  # type: ignore[attr-defined]
+                if isinstance(perf_cfg, dict):
+                    mcg = perf_cfg.get("max_concurrent_generations", 4)
+                    # Coerce to int and clamp to at least 1
+                    max_concurrent = int(mcg) if int(mcg) > 0 else 1
+                    # Compatibility flag: stream embedded error bytes vs raising errors
+                    if "stream_errors_as_audio" in perf_cfg:
+                        stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
+        except Exception:
+            # Fallback to default on any parsing/config errors
+            max_concurrent = 4
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._stream_errors_as_audio = stream_errors_as_audio
         
         # Initialize metrics
         self.metrics = get_metrics_registry()
@@ -318,25 +336,28 @@ class TTSServiceV2:
             validate_tts_request(tts_request, provider=provider.lower() if provider else None)
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
-            yield f"ERROR: {str(e)}".encode()
-            return
+            if self._stream_errors_as_audio:
+                yield f"ERROR: {str(e)}".encode()
+                return
+            else:
+                raise
         
         # Get adapter
         adapter = await self._get_adapter(request.model, provider)
-        
+        if not adapter and fallback:
+            # Try to find any available adapter
+            adapter = await self._get_fallback_adapter(tts_request)
+
         if not adapter:
-            if fallback:
-                # Try to find any available adapter
-                adapter = await self._get_fallback_adapter(tts_request)
-            
-            if not adapter:
-                error = TTSProviderNotConfiguredError(
-                    f"No TTS adapter available for model '{request.model}'",
-                    provider=provider
-                )
-                logger.error(str(error))
+            error = TTSProviderNotConfiguredError(
+                f"No TTS adapter available for model '{request.model}'",
+                provider=provider,
+            )
+            logger.error(str(error))
+            if self._stream_errors_as_audio:
                 yield f"ERROR: {str(error)}".encode()
                 return
+            raise error
         
         # Track metrics
         start_time = time.time()
@@ -403,7 +424,10 @@ class TTSServiceV2:
                         async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
                             yield chunk
                     else:
-                        yield f"ERROR: {error_msg}".encode()
+                        if self._stream_errors_as_audio:
+                            yield f"ERROR: {error_msg}".encode()
+                        else:
+                            raise TTSGenerationError(error_msg, provider=adapter.provider_name)
                 
                 # Record success metrics
                 self._record_tts_metrics(
@@ -446,9 +470,10 @@ class TTSServiceV2:
                     yield chunk
             else:
                 # For non-recoverable errors or when fallback is disabled
-                yield f"ERROR: {error_msg}".encode()
-                if not fallback:
-                    raise
+                if self._stream_errors_as_audio:
+                    yield f"ERROR: {error_msg}".encode()
+                else:
+                    raise e
         except Exception as e:
             # Handle unexpected errors
             error_msg = f"Unexpected error generating speech with {adapter.provider_name}: {str(e)}"
@@ -479,8 +504,10 @@ class TTSServiceV2:
                 async for chunk in self._try_fallback_providers(tts_request, [adapter.provider_name]):
                     yield chunk
             else:
-                yield f"ERROR: {error_msg}".encode()
-                raise tts_error
+                if self._stream_errors_as_audio:
+                    yield f"ERROR: {error_msg}".encode()
+                else:
+                    raise tts_error
         finally:
             # Update active requests gauge (set to 0 for this provider)
             try:
@@ -510,7 +537,10 @@ class TTSServiceV2:
                 
         except Exception as e:
             logger.error(f"Fallback generation failed: {e}")
-            yield f"ERROR: All providers failed - {str(e)}".encode()
+            if self._stream_errors_as_audio:
+                yield f"ERROR: All providers failed - {str(e)}".encode()
+            else:
+                raise TTSGenerationError(f"All providers failed - {str(e)}")
     
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
         """Convert OpenAI request to unified TTS request"""
@@ -773,18 +803,33 @@ class TTSServiceV2:
                                 )
                             error_msg = f"All providers failed. Last error: {str(final_e)}"
                             logger.error(error_msg)
-                            yield f"ERROR: {error_msg}".encode()
+                            if self._stream_errors_as_audio:
+                                yield f"ERROR: {error_msg}".encode()
+                            else:
+                                raise final_e
                     else:
-                        yield f"ERROR: All fallback providers exhausted".encode()
+                        if self._stream_errors_as_audio:
+                            yield f"ERROR: All fallback providers exhausted".encode()
+                        else:
+                            raise TTSFallbackExhaustedError("All fallback providers exhausted")
                 else:
                     # Non-retryable error, don't attempt more fallbacks
-                    yield f"ERROR: {str(e)} (non-retryable)".encode()
+                    if self._stream_errors_as_audio:
+                        yield f"ERROR: {str(e)} (non-retryable)".encode()
+                    else:
+                        raise e
             except Exception as e:
                 # Handle unexpected errors
                 logger.error(f"Unexpected error in fallback: {e}", exc_info=True)
-                yield f"ERROR: Unexpected error during fallback: {str(e)}".encode()
+                if self._stream_errors_as_audio:
+                    yield f"ERROR: Unexpected error during fallback: {str(e)}".encode()
+                else:
+                    raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}")
         else:
-            yield f"ERROR: No fallback providers available".encode()
+            if self._stream_errors_as_audio:
+                yield f"ERROR: No fallback providers available".encode()
+            else:
+                raise TTSFallbackExhaustedError("No fallback providers available")
     
     async def list_voices(self) -> Dict[str, List[Dict[str, Any]]]:
         """

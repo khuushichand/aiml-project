@@ -117,6 +117,25 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - Counters: `prompt_studio.jobs.created_total{...}`, `prompt_studio.jobs.completed_total{...}`, `prompt_studio.jobs.cancelled_total{...}`, `prompt_studio.jobs.retries_total{...}`, `prompt_studio.jobs.failures_total{...,reason}`.
   - Lease tuning: `prompt_studio.jobs.time_to_expiry_seconds{...}` histogram reflects remaining time on active leases.
 
+### Docker Compose (Postgres)
+
+- The repository ships a `docker-compose.yml` with a `postgres` service. To run Jobs on Postgres when using Compose:
+  - Set the DSN using the `postgres` service hostname inside the Compose network:
+    - `export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users`
+  - Start services:
+    - `docker compose up --build`
+  - From your host, you can also connect via the published port:
+    - `export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users`
+  - The Jobs manager will auto‑provision the schema on first use.
+
+### Running Postgres Jobs tests
+
+- Ensure a Postgres instance is available (e.g., via Compose above) and set one of:
+  - `export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users`
+  - or `export POSTGRES_TEST_DSN=postgresql://...`
+- Run only PG‑marked Jobs tests:
+  - `python -m pytest -m "pg_jobs" -v tldw_Server_API/tests/Jobs`
+
 - TTL Sweep (optional):
   - Admin endpoint (admin-only): `POST /api/v1/jobs/ttl/sweep`
     - Request: `{ age_seconds?: int, runtime_seconds?: int, action: 'cancel'|'fail', domain?: string, queue?: string, job_type?: string }`

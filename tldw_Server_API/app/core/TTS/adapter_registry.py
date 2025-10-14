@@ -19,6 +19,7 @@ from .tts_exceptions import (
 )
 from .tts_resource_manager import get_resource_manager
 from .tts_config import get_tts_config_manager, TTSConfig
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 #
 #######################################################################################################################
 #
@@ -79,7 +80,7 @@ class TTSAdapterRegistry:
             self.config_manager = get_tts_config_manager()
             self.tts_config = self.config_manager.get_config()
             # Legacy config support - convert Pydantic model to dict
-            self.config = self.tts_config.model_dump() if hasattr(self.tts_config, "model_dump") else self.tts_config.dict()
+            self.config = model_dump_compat(self.tts_config)
         
         self._adapters: Dict[TTSProvider, TTSAdapter] = {}
         # Store either classes or dotted paths; resolve lazily when needed
@@ -241,7 +242,7 @@ class TTSAdapterRegistry:
             
             if provider_cfg:
                 # Convert to dict for adapter consumption
-                cfg = provider_cfg.model_dump() if hasattr(provider_cfg, "model_dump") else provider_cfg.dict()
+                cfg = model_dump_compat(provider_cfg)
                 
                 # Duplicate generic keys into provider-prefixed aliases expected by adapters
                 p = provider.value

@@ -8,13 +8,13 @@ Precompute concise, verifiable factual statements ("claims") for each chunk at i
 
 This feature is optional, gated by settings, and designed to be reversible and low-risk. It is wired into the embeddings pipeline and can also be rebuilt asynchronously.
 
-## Scope (Stage 1)
+## Scope
 
-- Add schema support for storing claims in the Media database (SQLite, default).
-- Create optional FTS table for claims. No triggers or auto-sync in Stage 1 (search integration comes later).
-- Provide minimal CRUD/helpers to insert and read claims.
+- Add schema support for storing claims in the Media database (SQLite by default; PostgreSQL supported).
+- Create FTS table for claims and keep it synchronized. SQLite uses FTS5 with triggers; PostgreSQL uses a tsvector column.
+- Provide minimal CRUD/helpers to insert, search, and rebuild the FTS index.
 
-Later stages (not in this change): background processing, embedding claims into Chroma, retriever integration, and RAG usage.
+Later stages (already partially implemented): background processing, embedding claims into Chroma, retriever integration, and RAG usage.
 
 ## Data Model
 
@@ -45,8 +45,9 @@ Indexes
 - `idx_claims_deleted` on `(deleted)`
 
 FTS
-- `claims_fts` (FTS5) with `claim_text`, `content='Claims'`, `content_rowid='id'`
+- `claims_fts` (FTS5) with `claim_text`, `content='Claims'`, `content_rowid='id'` (SQLite)
 - SQLite triggers keep `claims_fts` synchronized on INSERT/UPDATE/DELETE of `Claims`.
+- PostgreSQL maintains a `claims_fts_tsv` column (tsvector) and rebuild support is provided.
 
 ## Configuration
 

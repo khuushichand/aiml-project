@@ -28,6 +28,7 @@ from ..queue_schemas import (
 from .base_worker import BaseWorker, WorkerConfig
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 class EmbeddingWorkerConfig(WorkerConfig):
@@ -432,7 +433,7 @@ class EmbeddingWorker(BaseWorker):
         """Send embeddings to storage queue"""
         await self.redis_client.xadd(
             self.storage_queue,
-            (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+            model_dump_compat(result)
         )
         logger.debug(f"Sent job {result.job_id} to storage queue")
     

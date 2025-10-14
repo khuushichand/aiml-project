@@ -48,10 +48,10 @@ def test_claims_endpoints_list_and_rebuild():
             self.is_admin = True
 
     # Always return our seeded DB (single-user simulation)
-    async def _override_db(*_args: Any, **_kwargs: Any) -> MediaDatabase:
+    async def _override_db() -> MediaDatabase:
         return db
 
-    async def _override_user(*_args: Any, **_kwargs: Any):
+    async def _override_user():
         return _User()
 
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
@@ -90,4 +90,3 @@ def test_claims_endpoints_list_and_rebuild():
         db.close_connection()
     except Exception:
         pass
-

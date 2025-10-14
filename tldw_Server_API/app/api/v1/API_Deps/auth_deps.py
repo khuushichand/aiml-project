@@ -150,16 +150,32 @@ async def get_session_manager_dep() -> SessionManager:
     # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
     try:
         import os as _os, sys as _sys
-        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules:
+
+        force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
+        if not force_real and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules):
             from datetime import datetime  # local import for stub
 
             class _StubSessionManager:
                 enabled = True
 
-                async def is_token_blacklisted(self, token: str) -> bool:
+                async def is_token_blacklisted(
+                    self,
+                    token: str,
+                    jti: Optional[str] = None,
+                    *,
+                    token_type: Optional[str] = None,
+                    user_id: Optional[int] = None,
+                ) -> bool:
                     return False
 
-                async def create_session(self, user_id: int, access_token: str, refresh_token: str, ip_address: str = "", user_agent: str = ""):
+                async def create_session(
+                    self,
+                    user_id: int,
+                    access_token: str,
+                    refresh_token: str,
+                    ip_address: str = "",
+                    user_agent: str = "",
+                ):
                     _TEST_SESSION_STATE["sid"] += 1
                     sid = _TEST_SESSION_STATE["sid"]
                     now = datetime.utcnow()
@@ -183,7 +199,11 @@ async def get_session_manager_dep() -> SessionManager:
                     return True
 
                 async def refresh_session(self, *args, **kwargs):
-                    return {"session_id": kwargs.get("session_id") or 1, "user_id": kwargs.get("user_id") or 1, "expires_at": datetime.utcnow().isoformat()}
+                    return {
+                        "session_id": kwargs.get("session_id") or 1,
+                        "user_id": kwargs.get("user_id") or 1,
+                        "expires_at": datetime.utcnow().isoformat(),
+                    }
 
                 async def get_user_sessions(self, user_id: int):
                     return [s for s in _TEST_SESSION_STATE["sessions"].values() if s.get("user_id") == user_id]
@@ -383,9 +403,10 @@ async def get_current_user(
 
         # Decode and validate JWT
         payload = jwt_service.decode_access_token(token)
-        
-        # Check if token is blacklisted
-        if await session_manager.is_token_blacklisted(token):
+
+        # Check if token is blacklisted (fail-closed on errors)
+        jti = payload.get("jti")
+        if await session_manager.is_token_blacklisted(token, jti):
             raise InvalidTokenError("Token has been revoked")
         
         # Get user from database

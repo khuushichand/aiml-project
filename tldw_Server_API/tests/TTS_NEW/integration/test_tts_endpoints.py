@@ -216,6 +216,29 @@ class TestTTSStreamingEndpoint:
                 # Some Starlette versions propagate generator errors; accept as handled for test purposes
                 assert True
 
+    @pytest.mark.streaming
+    async def test_streaming_quota_exceeded_maps_to_402(self, test_client, auth_headers):
+        """Streaming quota exceeded should ideally map to HTTP 402."""
+        from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
+            mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Test",
+                    "voice": "rachel",
+                    "response_format": "mp3",
+                    "stream": True
+                },
+                headers=auth_headers
+            )
+
+            # Depending on streaming mechanics, frameworks may return 402 or 500
+            # when the generator raises immediately. Accept both, preferring 402.
+            assert response.status_code in [status.HTTP_402_PAYMENT_REQUIRED, status.HTTP_500_INTERNAL_SERVER_ERROR]
+
 # ========================================================================
 # Provider Management Endpoint Tests
 # ========================================================================
@@ -405,7 +428,7 @@ class TestErrorHandling:
                 headers=auth_headers
             )
             
-            assert response.status_code in [status.HTTP_402_PAYMENT_REQUIRED, status.HTTP_500_INTERNAL_SERVER_ERROR]
+            assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
             data = response.json()
             assert "quota" in str(data).lower()
     

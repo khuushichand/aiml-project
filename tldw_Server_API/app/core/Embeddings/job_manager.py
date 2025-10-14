@@ -19,6 +19,7 @@ from .queue_schemas import (
     JobStatus,
     UserTier,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
 class JobManagerConfig(BaseModel):
@@ -218,7 +219,7 @@ class EmbeddingJobManager:
         job_key = f"job:{job_id}"
         await self.redis_client.hset(
             job_key,
-            mapping=job_info.model_dump() if hasattr(job_info, "model_dump") else job_info.dict()
+            mapping=model_dump_compat(job_info)
         )
         await self.redis_client.expire(job_key, self.config.job_ttl_seconds)
         
@@ -241,7 +242,7 @@ class EmbeddingJobManager:
         # Add to chunking queue
         await self.redis_client.xadd(
             self.config.chunking_queue,
-            (chunking_message.model_dump() if hasattr(chunking_message, "model_dump") else chunking_message.dict())
+            model_dump_compat(chunking_message)
         )
         
         logger.info(f"Created job {job_id} for user {user_id} with priority {effective_priority}")

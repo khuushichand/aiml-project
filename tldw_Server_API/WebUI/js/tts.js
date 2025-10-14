@@ -10,7 +10,11 @@ const TTS = {
     isGenerating: false,
     abortController: null,
     history: [],
-    customVoices: {},
+    customVoices: [],
+    catalogVoices: [],
+    // When custom voice management is not available (501),
+    // fallback to showing provider catalog voices
+    _catalogFallback: false,
     
     // Get API token from api-client or localStorage
     getApiToken() {
@@ -600,7 +604,7 @@ const TTS = {
         this.openVoiceUpload(provider);
     },
     
-    // Refresh voice list
+    // Refresh voice list (both custom and catalog)
     async refreshVoiceList() {
         try {
             const apiToken = this.getApiToken();
@@ -610,55 +614,276 @@ const TTS = {
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
-            const response = await fetch('/api/v1/audio/voices', {
-                headers: headers
-            });
-            
-            if (response.status === 501) {
+            // Fetch custom voices (if available)
+            let customUnavailable = false;
+            try {
+                const response = await fetch('/api/v1/audio/voices', { headers });
+                if (response.status === 501) {
+                    customUnavailable = true;
+                    this.customVoices = [];
+                } else if (!response.ok) {
+                    throw new Error('Failed to fetch voices');
+                } else {
+                    const data = await response.json();
+                    this.customVoices = data.voices || [];
+                }
+            } catch (e) {
+                console.warn('Custom voice fetch failed:', e);
                 this.customVoices = [];
-                this.displayVoiceList();
-                this.showStatus('Custom voice management is not available for this provider or build.', 'warning');
-                return;
             }
-            if (!response.ok) {
-                throw new Error('Failed to fetch voices');
+
+            // Always fetch catalog voices for current provider
+            try {
+                this.catalogVoices = await this._fetchProviderCatalogVoices(this.currentProvider);
+            } catch (e) {
+                console.warn('Catalog voice fetch failed:', e);
+                this.catalogVoices = [];
             }
-            
-            const data = await response.json();
-            this.customVoices = data.voices || [];
+
+            // Catalog fallback flag only if custom unavailable and catalog present
+            this._catalogFallback = customUnavailable && this.catalogVoices.length > 0;
+
+            // Render
             this.displayVoiceList();
+            if (customUnavailable) {
+                this.showStatus('Custom voice management is not available in this build; showing provider catalog voices.', 'warning');
+            }
             
         } catch (error) {
             console.error('Error fetching voices:', error);
         }
+    },
+
+    // Helper: fetch provider catalog voices (returns an array)
+    async _fetchProviderCatalogVoices(provider) {
+        const apiToken = this.getApiToken();
+        const headers = {};
+        if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
+        const url = provider ? `/api/v1/audio/voices/catalog?provider=${encodeURIComponent(provider)}`
+                             : '/api/v1/audio/voices/catalog';
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error(`Failed to fetch voice catalog (${res.status})`);
+        const body = await res.json();
+        // If provider specified, server returns { provider: [voices] }
+        if (provider && body && typeof body === 'object') {
+            const key = provider.toLowerCase();
+            return Array.isArray(body[key]) ? body[key] : [];
+        }
+        // If no provider specified, flatten all providers into a single list with provider tag
+        const out = [];
+        for (const [prov, list] of Object.entries(body || {})) {
+            if (Array.isArray(list)) {
+                list.forEach(v => out.push({ ...v, provider: prov }));
+            }
+        }
+        return out;
     },
     
     // Display voice list
     displayVoiceList() {
         const voiceList = document.getElementById('voice-list');
         if (!voiceList) return;
-        
-        if (this.customVoices.length === 0) {
-            voiceList.innerHTML = '<p class="text-muted">No custom voices uploaded yet</p>';
-            return;
-        }
-        
-        voiceList.innerHTML = this.customVoices.map(voice => `
-            <div class="voice-item" data-voice-id="${voice.voice_id}">
-                <h5>${voice.name}</h5>
-                <p class="text-muted">${voice.provider}</p>
-                <small>${voice.description || 'No description'}</small>
-                <div class="voice-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${voice.voice_id}')">
-                        <i class="fas fa-play"></i> Preview
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${voice.voice_id}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
+
+        const renderCustom = () => {
+            if (!this.customVoices.length) {
+                return '<p class="text-muted">No custom voices uploaded yet</p>';
+            }
+            return this.customVoices.map(v => {
+                const id = v.voice_id;
+                const name = v.name || id || 'Voice';
+                const provider = v.provider || '';
+                const description = v.description || '';
+                return `
+                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
+                    <h5>${name} <span class="badge">Custom</span></h5>
+                    <p class="text-muted">${provider}</p>
+                    <small>${description || 'No description'}</small>
+                    <div class="voice-actions">
+                        <button class="btn btn-sm btn-primary" onclick="TTS.useCustomVoiceFromEl(this)">
+                            <i class="fas fa-check"></i> Use Voice
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${id}')">
+                            <i class="fas fa-play"></i> Preview
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${id}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        };
+
+        const renderCatalog = () => {
+            if (!this.catalogVoices.length) {
+                return '<p class="text-muted">No catalog voices available</p>';
+            }
+            return this.catalogVoices.map(v => {
+                const id = v.id || v.name || 'voice';
+                const name = v.name || v.id || 'Voice';
+                const provider = v.provider || this.currentProvider || '';
+                const description = v.description || 'Catalog voice';
+                const meta = [v.language, v.gender].filter(Boolean).join(' · ');
+                return `
+                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
+                    <h5>${name} <span class="badge">Catalog</span></h5>
+                    <p class="text-muted">${provider}${meta ? ` • ${meta}` : ''}</p>
+                    <small>${description}</small>
+                    <div class="voice-actions">
+                        <button class="btn btn-sm btn-primary" onclick="TTS.useCatalogVoiceFromEl(this)">
+                            <i class="fas fa-check"></i> Use Voice
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        };
+
+        // Two sections side-by-side (if space allows)
+        voiceList.innerHTML = `
+            <div class="voice-sections" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+                <div class="voice-section">
+                    <h5>Your Custom Voices</h5>
+                    ${renderCustom()}
+                </div>
+                <div class="voice-section">
+                    <h5>Provider Catalog Voices</h5>
+                    ${renderCatalog()}
                 </div>
             </div>
-        `).join('');
+        `;
+    },
+
+    // Internal helper: switch UI to provider and select a voice in the correct control
+    _selectProviderVoice(provider, voiceId, name = '', isCustom = false) {
+        // Switch provider sub-tab in TTS UI
+        this.switchProvider(provider);
+
+        const selectIdMap = {
+            vibevoice: isCustom ? 'vibevoice-custom-voice' : 'vibevoice-voice',
+            kokoro: 'kokoro-voice',
+            higgs: 'higgs-voice',
+            chatterbox: 'chatterbox-voice',
+            openai: 'openai-voice',
+            elevenlabs: 'elevenlabs-voice'
+        };
+        const sid = selectIdMap[provider] || null;
+        if (!sid) return false;
+        const sel = document.getElementById(sid);
+        if (!sel) return false;
+
+        // Determine value to set
+        let value = voiceId;
+        if (provider === 'vibevoice' && isCustom) {
+            value = `custom:${voiceId}`;
+        }
+        // Ensure option exists
+        let opt = Array.from(sel.options).find(o => o.value === value || o.text === name || o.text === voiceId);
+        if (!opt) {
+            const o = document.createElement('option');
+            o.value = value;
+            o.textContent = name || voiceId;
+            sel.appendChild(o);
+        }
+        sel.value = value;
+        try { sel.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+        return true;
+    },
+
+    // Use a catalog voice in the TTS tab
+    async useCatalogVoice(provider, voiceId, name = '') {
+        try {
+            const ok = this._selectProviderVoice(provider, voiceId, name, false);
+            if (!ok) throw new Error('Voice control not found');
+            this.showStatus(`Selected voice ${name || voiceId} (${provider})`, 'success');
+            // Also sync Audio → Text to Speech panel
+            const providerSelect = document.getElementById('audioTTS_provider');
+            if (providerSelect) {
+                providerSelect.value = provider;
+                if (typeof updateTTSProviderOptions === 'function') {
+                    try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+                }
+                if (typeof loadProviderVoices === 'function') {
+                    try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+                }
+                const voiceSelect = document.getElementById('audioTTS_voice');
+                if (voiceSelect) {
+                    let opt = Array.from(voiceSelect.options).find(o => o.value === voiceId || o.text === name || o.text === voiceId);
+                    if (!opt) {
+                        const o = document.createElement('option');
+                        o.value = voiceId;
+                        o.textContent = name || voiceId;
+                        voiceSelect.appendChild(o);
+                    }
+                    voiceSelect.value = voiceId;
+                    try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to use catalog voice:', e);
+            this.showStatus('Failed to select catalog voice', 'error');
+        }
+    },
+
+    // Use a custom voice in the TTS tab
+    async useCustomVoice(provider, voiceId, name = '') {
+        try {
+            const ok = this._selectProviderVoice(provider, voiceId, name, true);
+            if (!ok) throw new Error('Custom voice control not found');
+            this.showStatus(`Selected custom voice ${name || voiceId} (${provider})`, 'success');
+            // Sync into Audio → Text to Speech panel as a generic voice selection
+            const providerSelect = document.getElementById('audioTTS_provider');
+            if (providerSelect) {
+                providerSelect.value = provider;
+                if (typeof updateTTSProviderOptions === 'function') {
+                    try { updateTTSProviderOptions(); } catch (_) { /* ignore */ }
+                }
+                if (typeof loadProviderVoices === 'function') {
+                    try { await loadProviderVoices(); } catch (_) { /* ignore */ }
+                }
+                const voiceSelect = document.getElementById('audioTTS_voice');
+                if (voiceSelect) {
+                    // We set the base voice if detectable, otherwise append a synthetic option
+                    let opt = Array.from(voiceSelect.options).find(o => o.text === name || o.value === voiceId);
+                    if (!opt) {
+                        const o = document.createElement('option');
+                        o.value = voiceId;
+                        o.textContent = name || voiceId;
+                        voiceSelect.appendChild(o);
+                    }
+                    voiceSelect.value = voiceId;
+                    try { voiceSelect.dispatchEvent(new Event('change')); } catch (_) { /* ignore */ }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to use custom voice:', e);
+            this.showStatus('Failed to select custom voice', 'error');
+        }
+    },
+
+    // Event hooks from voice list buttons
+    useCatalogVoiceFromEl(btn) {
+        try {
+            const item = btn.closest('.voice-item');
+            if (!item) return;
+            const provider = item.getAttribute('data-provider') || this.currentProvider;
+            const voiceId = item.getAttribute('data-voice-id');
+            const name = item.getAttribute('data-voice-name') || '';
+            return this.useCatalogVoice(provider, voiceId, name);
+        } catch (e) {
+            console.error('useCatalogVoiceFromEl error:', e);
+        }
+    },
+
+    useCustomVoiceFromEl(btn) {
+        try {
+            const item = btn.closest('.voice-item');
+            if (!item) return;
+            const provider = item.getAttribute('data-provider') || this.currentProvider;
+            const voiceId = item.getAttribute('data-voice-id');
+            const name = item.getAttribute('data-voice-name') || '';
+            return this.useCustomVoice(provider, voiceId, name);
+        } catch (e) {
+            console.error('useCustomVoiceFromEl error:', e);
+        }
     },
     
     // Load custom voices for current provider

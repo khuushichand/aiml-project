@@ -10,9 +10,16 @@ header is provided.
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import time
+from configparser import ConfigParser
+from typing import Optional
+
 from fastapi import HTTPException, Request, status
 from loguru import logger
+
+from tldw_Server_API.app.core.Setup import setup_manager
 
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
@@ -20,6 +27,25 @@ LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # Include IPv6 localhost as well.
 LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "::1", "testserver"}
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
+
+_CONFIG_REMOTE_CACHE_TTL = 30.0  # seconds
+_config_remote_cached: Optional[bool] = None
+_config_remote_cached_at = 0.0
+
+
+def reset_remote_access_cache(value: Optional[bool] = None) -> None:
+    """Reset the cached remote access flag (test helper/administrative hook)."""
+    _set_remote_access_cache(value)
+
+
+def _set_remote_access_cache(value: Optional[bool]) -> None:
+    global _config_remote_cached, _config_remote_cached_at
+    if value is None:
+        _config_remote_cached = None
+        _config_remote_cached_at = 0.0
+    else:
+        _config_remote_cached = value
+        _config_remote_cached_at = time.monotonic()
 
 
 def _should_trust_proxy() -> bool:
@@ -54,18 +80,24 @@ def _first_forwarded_ip(request: Request) -> str | None:
         return None
 
 
-def _is_local_host(host: str | None, forwarded_ip: str | None) -> bool:
-    """Return True if the request originates from a local address.
-
-    When proxy trust is enabled and a forwarded IP is present, prefer the
-    forwarded IP for locality checks; otherwise fall back to the client host.
-    """
-    # Prefer forwarded IP when available and trusted
-    if forwarded_ip:
-        return forwarded_ip in LOCAL_HOSTS
+def _is_loopback_host(host: str | None) -> bool:
+    """Return True if the provided hostname/IP represents a local loopback address."""
     if not host:
         return False
-    return host in LOCAL_HOSTS
+
+    value = host.strip().lower()
+    if not value:
+        return False
+
+    if value in LOCAL_HOSTS:
+        return True
+
+    # Strip IPv6 scope identifiers before parsing
+    candidate = value.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
 
 
 def _has_proxy_headers(request: Request) -> bool:
@@ -118,61 +150,69 @@ async def require_local_setup_access(request: Request) -> None:
     This keeps the Setup UI functional behind common local reverse proxies,
     while keeping POST/PUT restricted.
     """
-    allow_remote = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
-    if allow_remote:
+    allow_remote_env = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
+    allow_remote_config = _config_allows_remote()
+    if allow_remote_env or allow_remote_config:
+        if allow_remote_config and not allow_remote_env:
+            logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
         return
 
     path = (request.url.path or "").lower()
     method = (request.method or "").upper()
 
-    # Localhost and proxy header helpers
+    has_proxy_headers = _has_proxy_headers(request)
     client_host = request.client.host if request.client else None
     forwarded_ip = _first_forwarded_ip(request)
+    client_is_local = _is_loopback_host(client_host)
+    forwarded_is_local = _is_loopback_host(forwarded_ip)
     host_header_is_local = _host_header_is_local(request)
-    client_is_local = _is_local_host(client_host, forwarded_ip)
 
     # Permit GET to setup config snapshot only if effectively local.
-    # If proxy headers are present, require forwarded IP to be local.
+    # If proxy headers are present, require both the proxy connection and forwarded IP to be loopback.
     if method == "GET" and path.endswith("/api/v1/setup/config"):
-        if host_header_is_local or client_is_local:
-            if _has_proxy_headers(request):
-                if forwarded_ip and _is_local_host(client_host, forwarded_ip):
-                    logger.debug("Allowing proxied localhost GET to /api/v1/setup/config with local forwarded IP")
-                    return
-                # Proxied but remote forwarded IP -> block
-                logger.warning("Blocked proxied GET to setup config from remote forwarded IP: %s", forwarded_ip)
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=(
-                        "Setup access is restricted to local requests. Forwarded client is not local."
-                    ),
-                )
-            # No proxy headers, treat as local GET
+        if not host_header_is_local:
+            logger.warning("Blocked GET to setup config due to non-local Host header: %s", request.headers.get("host"))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Setup access is restricted to local requests. Host header must target localhost.",
+            )
+        if not has_proxy_headers and client_is_local:
             return
+        if has_proxy_headers and client_is_local and forwarded_is_local:
+            logger.debug("Allowing proxied localhost GET to /api/v1/setup/config with loopback client and forwarded IP")
+            return
+        logger.warning(
+            "Blocked proxied GET to setup config from client=%s forwarded=%s (local=%s/%s)",
+            client_host,
+            forwarded_ip,
+            client_is_local,
+            forwarded_is_local,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Setup access is restricted to local requests. Forwarded client is not local. "
+                "Set TLDW_SETUP_ALLOW_REMOTE=1 or enable allow_remote_setup_access in config.txt to bypass."
+            ),
+        )
 
-    # For all other guarded endpoints, if behind a proxy and the forwarded IP
-    # is not local, block. If forwarded IP is local, allow as local.
-    if _has_proxy_headers(request):
-        if forwarded_ip is None:
-            # Proxy headers present but not trusted or malformed; block by default
-            logger.warning("Blocked setup access due to untrusted/missing forwarded IP under proxy")
+    if has_proxy_headers:
+        if not (client_is_local and forwarded_is_local and host_header_is_local):
+            logger.warning(
+                "Blocked setup access via proxy (client=%s, forwarded=%s, host_local=%s)",
+                client_host,
+                forwarded_ip,
+                host_header_is_local,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    "Setup changes are restricted to local requests. Set TLDW_SETUP_TRUST_PROXY=1 to honor "
-                    "X-Forwarded-For and TLDW_SETUP_ALLOW_REMOTE=1 to permit remote access temporarily."
+                    "Setup changes are restricted to local requests. Forwarded client is not local. "
+                    "Set TLDW_SETUP_ALLOW_REMOTE=1 or enable allow_remote_setup_access in config.txt to bypass."
                 ),
             )
-        if not _is_local_host(client_host, forwarded_ip):
-            logger.warning("Blocked setup access from proxied remote IP: %s", forwarded_ip)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "Setup changes are restricted to local requests. Forwarded client is not local."
-                ),
-            )
+        return
 
-    # Require both client host to be local and Host header to target local
     if client_is_local and host_header_is_local:
         return
 
@@ -181,6 +221,44 @@ async def require_local_setup_access(request: Request) -> None:
         status_code=status.HTTP_403_FORBIDDEN,
         detail=(
             "Setup changes are restricted to local requests. Set TLDW_SETUP_ALLOW_REMOTE=1 "
-            "to permit remote access temporarily."
+            "or enable allow_remote_setup_access in config.txt to permit remote access temporarily."
         ),
     )
+
+
+def _config_allows_remote() -> bool:
+    """Return True when config.txt enables remote setup access."""
+    global _config_remote_cached, _config_remote_cached_at
+
+    now = time.monotonic()
+    if (
+        _config_remote_cached is not None
+        and (now - _config_remote_cached_at) < _CONFIG_REMOTE_CACHE_TTL
+    ):
+        return _config_remote_cached
+
+    allow_remote = False
+    try:
+        config_path = setup_manager.get_config_file_path()
+        parser = ConfigParser()
+        parser.read(config_path, encoding="utf-8")
+        allow_remote = parser.getboolean("Setup", "allow_remote_setup_access", fallback=False)
+    except Exception:
+        logger.debug("Unable to read allow_remote_setup_access from config.txt", exc_info=True)
+
+    _set_remote_access_cache(allow_remote)
+    return allow_remote
+
+
+def _on_remote_access_updated(enabled: bool) -> None:
+    """Callback fired when config.txt flips remote access."""
+    _set_remote_access_cache(enabled)
+    if enabled:
+        logger.warning(
+            "Setup remote access enabled via config.txt; remote clients are now permitted to call setup APIs."
+        )
+    else:
+        logger.info("Setup remote access disabled via config.txt; setup APIs restricted to localhost.")
+
+
+setup_manager.register_remote_access_hook(_on_remote_access_updated)

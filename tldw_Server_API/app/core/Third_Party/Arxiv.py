@@ -4,11 +4,11 @@ import time
 import arxiv  # Keep this if search_arxiv is used, or for reference
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-from typing import Optional, List, Dict, Any  # Added for type hinting
+from typing import Optional, List, Dict, Any, Tuple  # Added for type hinting
 
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
+from urllib.parse import urlencode, quote_plus
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
@@ -121,11 +121,11 @@ def parse_arxiv_feed(xml_content: bytes) -> List[Dict[str, Any]]:
     for entry_tag in soup.find_all('entry'):
         # Title
         title_tag = entry_tag.find('title')
-        title = title_tag.text.strip() if title_tag and title_tag.text else "N/A"
+        title = title_tag.text.strip() if title_tag and title_tag.text else None
 
         # Paper ID
         paper_id_xml_tag = entry_tag.find('id')
-        paper_id = "N/A"
+        paper_id = None
         if paper_id_xml_tag and paper_id_xml_tag.text:
             id_text = paper_id_xml_tag.text.strip()
             if '/abs/' in id_text:
@@ -137,20 +137,20 @@ def parse_arxiv_feed(xml_content: bytes) -> List[Dict[str, Any]]:
             name_tag = author_tag.find('name')
             if name_tag and name_tag.text:
                 authors_list.append(name_tag.text.strip())
-        authors_str = ', '.join(authors_list) if authors_list else "N/A"
+        authors_str = ', '.join(authors_list) if authors_list else None
 
         # Published Date
         published_tag = entry_tag.find('published')
-        published_date = "N/A"
+        published_date = None
         if published_tag and published_tag.text:
             published_date = published_tag.text.strip().split('T')[0]
 
         # Abstract (summary)
         summary_tag = entry_tag.find('summary')
-        abstract = summary_tag.text.strip() if summary_tag and summary_tag.text else "N/A"
+        abstract = summary_tag.text.strip() if summary_tag and summary_tag.text else None
 
         # Fetch PDF link
-        pdf_url = "N/A"
+        pdf_url: Optional[str] = None
         pdf_link_tag = entry_tag.find('link', attrs={'title': 'pdf', 'type': 'application/pdf'})
         if pdf_link_tag and pdf_link_tag.has_attr('href'):
             pdf_url = pdf_link_tag['href']
@@ -161,7 +161,7 @@ def parse_arxiv_feed(xml_content: bytes) -> List[Dict[str, Any]]:
                     if link_tag.get('title') == 'pdf' and link_tag.has_attr('href'):
                         pdf_url = link_tag['href']
                         break
-                if pdf_url == "N/A" and generic_pdf_links[0].has_attr('href'): # Check if first link has href
+                if pdf_url is None and generic_pdf_links[0].has_attr('href'):  # Check if first link has href
                     pdf_url = generic_pdf_links[0]['href']
 
 
@@ -197,35 +197,39 @@ def build_query_url(query: Optional[str], author: Optional[str], year: Optional[
     # For simplicity, direct string construction (be cautious with special chars in query/author if not handled by requests).
     params = {
         "search_query": search_query_value,
-        "start": str(start),
-        "max_results": str(max_results),
+        "start": max(0, int(start)),
+        "max_results": max(1, int(max_results)),
         "sortBy": "relevance",  # Default sort
         "sortOrder": "descending"
     }
-    # This is safer if requests library is used to make the actual call
-    # query_string = requests.compat.urlencode(params)
-    # url = f"{base_url}{query_string}"
-    # Manual construction:
-    url = f"{base_url}search_query={search_query_value}&start={start}&max_results={max_results}&sortBy=relevance&sortOrder=descending"
-    return url
+    query_string = urlencode(params, quote_via=quote_plus)
+    return f"{base_url}{query_string}"
 
 
-def convert_xml_to_markdown(xml_content: str) -> tuple[str, str, List[str], List[str]]:
+def convert_xml_to_markdown(xml_content: str) -> Tuple[str, Optional[str], List[str], List[str]]:
     soup = BeautifulSoup(xml_content, 'xml')
     entry = soup.find('entry')
     if not entry:
-        return "Error: No entry found in XML.", "N/A", [], []
+        return "Error: No entry found in XML.", None, [], []
 
-    title = entry.find('title').text.strip() if entry.find('title') else "N/A"
+    title_tag = entry.find('title')
+    title = title_tag.text.strip() if title_tag and title_tag.text else None
     authors = [author.find('name').text.strip() for author in entry.find_all('author') if author.find('name')]
-    abstract = entry.find('summary').text.strip() if entry.find('summary') else "N/A"
-    published = entry.find('published').text.strip() if entry.find('published') else "N/A"
+    abstract_tag = entry.find('summary')
+    abstract = abstract_tag.text.strip() if abstract_tag and abstract_tag.text else None
+    published_tag = entry.find('published')
+    published = published_tag.text.strip() if published_tag and published_tag.text else None
     categories = [category['term'] for category in entry.find_all('category') if category.has_attr('term')]
 
-    markdown = f"# {title}\n\n"
-    markdown += f"**Authors:** {', '.join(authors)}\n\n"
-    markdown += f"**Published Date:** {published}\n\n"
-    markdown += f"**Abstract:**\n\n{abstract}\n\n"
+    title_for_md = title or "Untitled"
+    authors_for_md = ', '.join(authors) if authors else "Unknown authors"
+    published_for_md = published or "Unknown publication date"
+    abstract_for_md = abstract or "No abstract available."
+
+    markdown = f"# {title_for_md}\n\n"
+    markdown += f"**Authors:** {authors_for_md}\n\n"
+    markdown += f"**Published Date:** {published_for_md}\n\n"
+    markdown += f"**Abstract:**\n\n{abstract_for_md}\n\n"
     if categories:
         markdown += f"**Categories:** {', '.join(categories)}\n\n"
 

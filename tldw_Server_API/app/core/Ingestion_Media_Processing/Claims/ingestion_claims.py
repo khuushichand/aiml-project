@@ -102,7 +102,16 @@ def extract_claims_for_chunks(
         else:
             sents = []
             try:
-                from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call  # type: ignore
+                import concurrent.futures as _futures
+                import threading as _threading
+
+                # Resolve chat API call with a module-level override for tests
+                def _resolve_chat_call():
+                    fn = globals().get("chat_api_call")
+                    if callable(fn):
+                        return fn
+                    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _cac  # type: ignore
+                    return _cac
 
                 # Determine provider: explicit mode may be a provider name; otherwise use config
                 provider = mode if mode in {
@@ -123,21 +132,47 @@ def extract_claims_for_chunks(
                 base = load_prompt("ingestion", "claims_extractor_prompt") or (
                     "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
                     "Each proposition should stand alone without the surrounding context, be specific and checkable. "
-                    "Return JSON: {\"claims\":[{\"text\":str}]}. Do not include explanations.\n\nANSWER:\n{answer}"
+                    "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\nANSWER:\n{answer}"
                 )
-                prompt = base.format(max_claims=max_per_chunk, answer=txt)
+                # Safely format template that may contain JSON braces
+                try:
+                    prompt = base.format(max_claims=max_per_chunk, answer=txt)
+                except Exception:
+                    _tmpl = base.replace('{', '{{').replace('}', '}}')
+                    _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
+                    prompt = _tmpl.format(max_claims=max_per_chunk, answer=txt)
 
                 # Sync call to provider
                 messages = [{"role": "user", "content": prompt}]
-                resp = chat_api_call(
-                    api_endpoint=provider,
-                    messages_payload=messages,
-                    api_key=None,
-                    temp=temperature,
-                    system_message=system,
-                    streaming=False,
-                    model=model_override,
-                )
+                # Minimal timeout guard around provider call
+                timeout_sec = 8.0
+                try:
+                    timeout_sec = float(_settings.get("CLAIMS_LLM_TIMEOUT_SEC", 8.0))
+                except Exception:
+                    timeout_sec = 8.0
+
+                def _call_provider():
+                    _cac = _resolve_chat_call()
+                    return _cac(
+                        api_endpoint=provider,
+                        messages_payload=messages,
+                        api_key=None,
+                        temp=temperature,
+                        system_message=system,
+                        streaming=False,
+                        model=model_override,
+                    )
+
+                with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
+                    fut = _exec.submit(_call_provider)
+                    try:
+                        resp = fut.result(timeout=timeout_sec)
+                    except _futures.TimeoutError:
+                        try:
+                            fut.cancel()
+                        except Exception:
+                            pass
+                        raise TimeoutError(f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'.")
 
                 # Normalize response to string
                 if isinstance(resp, str):
@@ -159,10 +194,22 @@ def extract_claims_for_chunks(
                     except Exception:
                         text = str(resp)
 
-                # Extract JSON block
-                m = re.search(r"\{[\s\S]*\}\s*$", text)
-                jtxt = m.group(0) if m else text
+                # Extract JSON block (supports fenced code blocks and trailing text)
                 import json as _json
+                jtxt = None
+                # Prefer fenced blocks marked as json
+                fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+                for block in fence_json or []:
+                    try:
+                        _ = _json.loads(block)
+                        jtxt = block
+                        break
+                    except Exception:
+                        continue
+                if jtxt is None:
+                    # Fallback: last JSON-looking object in text
+                    m = re.search(r"\{[\s\S]*\}\s*$", text)
+                    jtxt = m.group(0) if m else text
                 data = _json.loads(jtxt)
                 for c in (data.get("claims") or [])[:max_per_chunk]:
                     t = (c or {}).get("text")

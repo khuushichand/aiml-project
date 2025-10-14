@@ -79,6 +79,7 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     compute_significance,
     run_abtest_full,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -964,10 +965,10 @@ async def create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
             eval_type=eval_request.eval_type,
-            eval_spec=(eval_request.eval_spec.model_dump() if hasattr(eval_request.eval_spec, 'model_dump') else eval_request.eval_spec.dict()),
+            eval_spec=model_dump_compat(eval_request.eval_spec),
             dataset_id=eval_request.dataset_id,
-            dataset=[(s.model_dump() if hasattr(s, 'model_dump') else s.dict()) for s in eval_request.dataset] if eval_request.dataset else None,
-            metadata=(eval_request.metadata.model_dump() if hasattr(eval_request.metadata, 'model_dump') else eval_request.metadata.dict()) if eval_request.metadata else None,
+            dataset=[model_dump_compat(s) for s in eval_request.dataset] if eval_request.dataset else None,
+            metadata=model_dump_compat(eval_request.metadata) if eval_request.metadata else None,
             created_by=user_id
         )
         # Record idempotency mapping
@@ -1290,8 +1291,8 @@ async def create_dataset(
         dataset_id = await svc.create_dataset(
             name=dataset_request.name,
             description=dataset_request.description,
-            samples=[(s.model_dump() if hasattr(s, 'model_dump') else s.dict()) for s in dataset_request.samples],
-            metadata=dataset_request.metadata,
+            samples=[model_dump_compat(s) for s in dataset_request.samples],
+            metadata=model_dump_compat(dataset_request.metadata) if dataset_request.metadata else None,
             created_by=user_id
         )
         
@@ -1644,10 +1645,7 @@ async def update_evaluation(
 ):
     """Update evaluation definition"""
     try:
-        try:
-            updates = update_request.model_dump(exclude_unset=True)
-        except Exception:
-            updates = update_request.dict(exclude_unset=True)
+        updates = model_dump_compat(update_request, exclude_unset=True)
         if not updates:
             raise create_error_response(
                 message="No updates provided",
@@ -1745,8 +1743,8 @@ async def create_run(
         run = await svc.create_run(
             eval_id=eval_id,
             target_model=run_request.target_model,
-            config=(run_request.config.model_dump() if hasattr(run_request.config, 'model_dump') else run_request.config.dict()) if run_request.config else None,
-            dataset_override=(run_request.dataset_override.model_dump() if hasattr(run_request.dataset_override, 'model_dump') else run_request.dataset_override.dict()) if run_request.dataset_override else None,
+            config=model_dump_compat(run_request.config) if run_request.config else None,
+            dataset_override=model_dump_compat(run_request.dataset_override) if run_request.dataset_override else None,
             webhook_url=str(run_request.webhook_url) if run_request.webhook_url else None,
             created_by=user_id
         )

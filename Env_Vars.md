@@ -93,6 +93,27 @@ Runtime overrides (non‑persistent) are available via API:
 - `GET /api/v1/config/tokenizer` → read current mode/divisor
 - `PUT /api/v1/config/tokenizer` → update mode/divisor in memory
 
+## Usage Logging & Aggregators
+- `USAGE_LOG_ENABLED`: Enable lightweight HTTP usage logging middleware (`true|false`, default `false`).
+- `USAGE_LOG_EXCLUDE_PREFIXES`: JSON array of path prefixes to skip (default includes `/docs`, `/metrics`, `/static`, `/webui`). Example: `USAGE_LOG_EXCLUDE_PREFIXES='["/docs","/metrics"]'`.
+- `USAGE_AGGREGATOR_INTERVAL_MINUTES`: Background aggregation cadence for `usage_daily` (default `60`).
+- `USAGE_LOG_RETENTION_DAYS`: Retain `usage_log` rows for this many days; daily job prunes older rows (default `180`).
+- `USAGE_LOG_DISABLE_META`: When `true`, do not store IP/User-Agent in `usage_log.meta` (stores `{}`) regardless of `PII_REDACT_LOGS`.
+- `DISABLE_USAGE_AGGREGATOR`: When `true`, skip starting the HTTP usage background aggregator at startup (env-only override).
+
+- `LLM_USAGE_ENABLED`: Enable per-request LLM usage logging (`true|false`, default `true`). Can also be set via env and respected by the tracker.
+- `LLM_USAGE_AGGREGATOR_ENABLED`: Enable background aggregation of `llm_usage_log` into `llm_usage_daily` (`true|false`, default `true`).
+- `LLM_USAGE_AGGREGATOR_INTERVAL_MINUTES`: Background LLM aggregation cadence in minutes (default `60`).
+- `LLM_USAGE_LOG_RETENTION_DAYS`: Retain `llm_usage_log` rows for this many days; daily job prunes older rows (default `180`).
+- `DISABLE_LLM_USAGE_AGGREGATOR`: When `true`, skip starting the LLM usage background aggregator at startup (env-only override).
+
+## LLM Pricing
+- `PRICING_OVERRIDES`: JSON object to override model/provider pricing used to compute costs. Example:
+  ``
+  export PRICING_OVERRIDES='{"openai":{"gpt-4o":{"prompt":0.005,"completion":0.015}}}'
+  ``
+  File-based overrides are also supported at `tldw_Server_API/Config_Files/model_pricing.json`.
+
 ## Embeddings
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma‑separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
 

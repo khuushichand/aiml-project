@@ -117,28 +117,20 @@ def search(
 ) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
     try:
         s = _mk_session()
-        params: Dict[str, Any] = {
-            "q": q or "*:*",
-            "wt": "json",
-            "start": max(0, start),
-            "rows": max(1, min(rows, 1000)),
-            "fl": fl or DEFAULT_FL,
-        }
+        params_list: List[Tuple[str, str]] = [
+            ("q", (q or "*:*")),
+            ("wt", "json"),
+            ("start", str(max(0, start))),
+            ("rows", str(max(1, min(rows, 1000)))),
+            ("fl", fl or DEFAULT_FL),
+        ]
         if sort:
-            params["sort"] = sort
-        # HAL supports multiple fq
+            params_list.append(("sort", sort))
         if fq:
-            # requests encodes lists as repeated params by default with tuples
-            pass
-        url = _build_url(scope)
-        r = s.get(url, params=params, timeout=20, params_serializer=None)
-        # For repeated fq we need to pass manually
-        if fq:
-            # rebuild with tuples
-            qp: List[Tuple[str, str]] = [(k, v) for k, v in params.items() if k != "fq"]  # type: ignore
             for f in fq:
-                qp.append(("fq", f))
-            r = s.get(url, params=qp, timeout=20)
+                params_list.append(("fq", f))
+        url = _build_url(scope)
+        r = s.get(url, params=params_list, timeout=20)
         r.raise_for_status()
         data = r.json() or {}
         resp = (data.get("response") or {}) if isinstance(data, dict) else {}
