@@ -542,9 +542,23 @@ class MCPServer:
                         pass
                     await websocket.close(code=1013, reason="Too many connections from IP")
                     return
-            
-            # Accept connection
-            await websocket.accept()
+            # Reserve a slot for this IP before accepting to avoid race conditions
+            self._ip_connection_counts[client_ip] = self._ip_connection_counts.get(client_ip, 0) + 1
+            accepted = False
+            try:
+                # Accept connection
+                await websocket.accept()
+                accepted = True
+            except Exception:
+                # Roll back reserved slot on accept failure
+                try:
+                    if client_ip in self._ip_connection_counts and self._ip_connection_counts[client_ip] > 0:
+                        self._ip_connection_counts[client_ip] -= 1
+                        if self._ip_connection_counts[client_ip] == 0:
+                            del self._ip_connection_counts[client_ip]
+                except Exception:
+                    pass
+                raise
             
             # Create connection object
             connection = WebSocketConnection(
@@ -556,8 +570,7 @@ class MCPServer:
             )
             
             self.connections[connection_id] = connection
-            # Track per-IP count
-            self._ip_connection_counts[client_ip] = self._ip_connection_counts.get(client_ip, 0) + 1
+            # per-IP count already reserved; nothing to do here
             # Update connection gauge
             try:
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))

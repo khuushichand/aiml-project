@@ -67,12 +67,16 @@ def test_media_versions_crud_flow(client_with_auth: TestClient):
     assert create_v.status_code in (201, 404, 500), create_v.text
     if create_v.status_code != 201:
         pytest.skip("Environment does not support version creation (DB backend not ready)")
+    # Endpoint now returns MediaDetailResponse (rich). Validate shape basics.
     vinfo = create_v.json()
-    # Response should include these keys
-    for key in ("message", "media_id", "version_number", "version_uuid"):
-        assert key in vinfo
-    vnum = vinfo.get("version_number")
-    assert isinstance(vnum, int)
+    assert isinstance(vinfo, dict)
+    assert "media_id" in vinfo and "versions" in vinfo and isinstance(vinfo["versions"], list)
+    # Determine the created version number by listing versions
+    lst_probe = client.get(f"/api/v1/media/{media_id}/versions", params={"page": 1, "limit": 10})
+    assert lst_probe.status_code == 200
+    probe_versions = lst_probe.json()
+    assert isinstance(probe_versions, list) and len(probe_versions) >= 1
+    vnum = max(v.get("version_number", 0) for v in probe_versions)
 
     # 3) List versions
     lst = client.get(f"/api/v1/media/{media_id}/versions", params={"page": 1, "limit": 10})
@@ -112,7 +116,12 @@ def test_get_version_strict_404_after_delete_if_enforced(client_with_auth: TestC
     )
     if cv.status_code != 201:
         pytest.skip("Version creation unsupported; skipping strict 404 test")
-    vnum = cv.json().get("version_number")
+    # Determine latest version number via list endpoint (response is now rich)
+    lst_after_create = client.get(f"/api/v1/media/{media_id}/versions", params={"page": 1, "limit": 10})
+    assert lst_after_create.status_code == 200
+    vlist_after_create = lst_after_create.json()
+    vnum = max(v.get("version_number", 0) for v in vlist_after_create) if vlist_after_create else None
+    assert isinstance(vnum, int)
 
     # Delete it
     d = client.delete(f"/api/v1/media/{media_id}/versions/{vnum}")
@@ -153,10 +162,9 @@ def test_media_versions_rollback_flow(client_with_auth: TestClient):
     if rb.status_code != 200:
         pytest.skip("Rollback not supported/eligible in this environment")
     rdata = rb.json()
-    # Rollback response should include new version details
-    for key in ("message", "new_document_version_number", "new_document_version_uuid", "new_media_version"):
-        assert key in rdata
-    assert isinstance(rdata.get("new_document_version_number"), int)
+    # Rollback now returns MediaDetailResponse (rich). Validate key presence.
+    assert isinstance(rdata, dict) and "media_id" in rdata and "versions" in rdata
+    assert isinstance(rdata.get("versions"), list)
 
     # 4) Verify current latest version is v1 again (or a new top version equivalent to v1 content)
     lst = client.get(f"/api/v1/media/{media_id}/versions", params={"page": 1, "limit": 10})

@@ -590,8 +590,9 @@ class MetricsRegistry:
         # Filter values by labels if provided
         values = list(self.values[metric_name])
         if labels:
-            values = [v for v in values if all(
-                v.labels.get(k) == v for k, v in labels.items()
+            # Filter by exact match on provided labels
+            values = [val for val in values if all(
+                val.labels.get(key) == expected for key, expected in labels.items()
             )]
         
         if not values:
@@ -647,7 +648,14 @@ class MetricsRegistry:
             
             # Add HELP and TYPE lines
             lines.append(f"# HELP {metric_name} {definition.description}")
-            lines.append(f"# TYPE {metric_name} {definition.type.value}")
+            # Map internal metric types to Prometheus types
+            prom_type = (
+                "counter" if definition.type == MetricType.COUNTER else
+                "gauge" if definition.type in (MetricType.GAUGE, MetricType.UP_DOWN_COUNTER) else
+                "histogram" if definition.type == MetricType.HISTOGRAM else
+                definition.type.value
+            )
+            lines.append(f"# TYPE {metric_name} {prom_type}")
             
             # Group values by labels
             label_groups = defaultdict(list)
@@ -694,6 +702,36 @@ class MetricsRegistry:
                         lines.append(f"{metric_name}_bucket{{le=\"+Inf\"}} {len(numeric_values)}")
                         lines.append(f"{metric_name}_sum {sum(numeric_values)}")
                         lines.append(f"{metric_name}_count {len(numeric_values)}")
+
+            # Emit alias series for cache_* metrics to rag_cache_* for consistency
+            if metric_name in {"cache_hits_total", "cache_misses_total"}:
+                alias_name = (
+                    "rag_cache_hits_total" if metric_name == "cache_hits_total" else "rag_cache_misses_total"
+                )
+                # Only emit alias if rag_* has no own values recorded
+                if alias_name not in self.values:
+                    # HELP/TYPE for alias
+                    lines.append(f"# HELP {alias_name} Aliased from {metric_name} for RAG cache consistency")
+                    lines.append(f"# TYPE {alias_name} counter")
+                    # Build alias series with label key remapped: cache -> cache_type
+                    for label_str, values in label_groups.items():
+                        # Rebuild labels mapping and rename key
+                        # label_str format: key="val",key2="val2" ...
+                        # Convert back to dict to manipulate keys
+                        if label_str:
+                            pairs = [s.split("=", 1) for s in label_str.split(",") if "=" in s]
+                            label_dict = {k: v.strip('"') for k, v in pairs}
+                        else:
+                            label_dict = {}
+                        if "cache" in label_dict:
+                            label_dict["cache_type"] = label_dict.pop("cache")
+                        # Serialize
+                        alias_labels = ",".join(f"{k}=\"{v}\"" for k, v in sorted(label_dict.items()))
+                        total = sum(v.value for v in values)
+                        if alias_labels:
+                            lines.append(f"{alias_name}{{{alias_labels}}} {total}")
+                        else:
+                            lines.append(f"{alias_name} {total}")
         
         return "\n".join(lines) + "\n"
 

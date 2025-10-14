@@ -61,6 +61,91 @@ class StorageQuotaService:
         self._initialized = True
         logger.info("StorageQuotaService initialized")
     
+    async def calculate_user_storage(
+        self,
+        user_id: int,
+        update_database: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Calculate actual storage usage for a user and optionally persist it.
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        # Check cache first
+        cache_key = f"storage_calc:{user_id}"
+        if cache_key in self.storage_cache and not update_database:
+            return self.storage_cache[cache_key]
+        
+        # Calculate storage in thread pool
+        user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
+        loop = asyncio.get_event_loop()
+        size_bytes = await loop.run_in_executor(
+            self.executor,
+            self._calculate_directory_size,
+            str(user_dir)
+        )
+        
+        # Also calculate ChromaDB if configured
+        chroma_bytes = 0
+        if self.settings.CHROMADB_BASE_PATH:
+            chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
+            chroma_bytes = await loop.run_in_executor(
+                self.executor,
+                self._calculate_directory_size,
+                str(chroma_dir)
+            )
+        
+        total_bytes = size_bytes + chroma_bytes
+        total_mb = total_bytes / (1024 * 1024)
+        
+        # Get quota from database
+        user_info = await self._get_user_storage_info(user_id)
+        if not user_info:
+            raise UserNotFoundError(f"User {user_id}")
+        quota_mb = user_info['storage_quota_mb']
+        
+        # Update database if requested
+        if update_database:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, 'execute'):
+                    # PostgreSQL
+                    await conn.execute(
+                        "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
+                        total_mb, user_id
+                    )
+                else:
+                    # SQLite
+                    await conn.execute(
+                        "UPDATE users SET storage_used_mb = ? WHERE id = ?",
+                        (total_mb, user_id)
+                    )
+                    await conn.commit()
+            
+            # Invalidate quota cache
+            self.quota_cache.pop(f"quota:{user_id}", None)
+            logger.info(
+                f"Recalculated storage for user {user_id}: {total_mb:.2f}MB / {quota_mb}MB"
+            )
+        
+        result = {
+            "user_id": user_id,
+            "user_data_bytes": size_bytes,
+            "user_data_mb": round(size_bytes / (1024 * 1024), 2),
+            "chromadb_bytes": chroma_bytes,
+            "chromadb_mb": round(chroma_bytes / (1024 * 1024), 2),
+            "total_bytes": total_bytes,
+            "total_mb": round(total_mb, 2),
+            "quota_mb": quota_mb,
+            "available_mb": round(max(0, quota_mb - total_mb), 2),
+            "usage_percentage": round((total_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
+            "calculated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Update cache
+        self.storage_cache[cache_key] = result
+        return result
+    
     async def check_quota(
         self,
         user_id: int,
@@ -246,103 +331,6 @@ def get_storage_quota_service() -> StorageQuotaService:
     if _quota_service is None:
         _quota_service = StorageQuotaService()
     return _quota_service
-    
-    async def calculate_user_storage(
-        self,
-        user_id: int,
-        update_database: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Calculate actual storage usage for a user
-        
-        Args:
-            user_id: User's database ID
-            update_database: Update database with calculated value
-            
-        Returns:
-            Storage calculation results
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        # Check cache first
-        cache_key = f"storage_calc:{user_id}"
-        if cache_key in self.storage_cache and not update_database:
-            return self.storage_cache[cache_key]
-        
-        # Calculate storage in thread pool
-        user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
-        
-        loop = asyncio.get_event_loop()
-        size_bytes = await loop.run_in_executor(
-            self.executor,
-            self._calculate_directory_size,
-            str(user_dir)
-        )
-        
-        # Also calculate ChromaDB if configured
-        chroma_bytes = 0
-        if self.settings.CHROMADB_BASE_PATH:
-            chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
-            chroma_bytes = await loop.run_in_executor(
-                self.executor,
-                self._calculate_directory_size,
-                str(chroma_dir)
-            )
-        
-        total_bytes = size_bytes + chroma_bytes
-        total_mb = total_bytes / (1024 * 1024)
-        
-        # Get quota from database
-        user_info = await self._get_user_storage_info(user_id)
-        if not user_info:
-            raise UserNotFoundError(f"User {user_id}")
-        
-        quota_mb = user_info['storage_quota_mb']
-        
-        # Update database if requested
-        if update_database:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
-                        total_mb, user_id
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET storage_used_mb = ? WHERE id = ?",
-                        (total_mb, user_id)
-                    )
-                    await conn.commit()
-            
-            # Invalidate quota cache
-            self.quota_cache.pop(f"quota:{user_id}", None)
-            
-            logger.info(
-                f"Recalculated storage for user {user_id}: "
-                f"{total_mb:.2f}MB / {quota_mb}MB"
-            )
-        
-        result = {
-            "user_id": user_id,
-            "user_data_bytes": size_bytes,
-            "user_data_mb": round(size_bytes / (1024 * 1024), 2),
-            "chromadb_bytes": chroma_bytes,
-            "chromadb_mb": round(chroma_bytes / (1024 * 1024), 2),
-            "total_bytes": total_bytes,
-            "total_mb": round(total_mb, 2),
-            "quota_mb": quota_mb,
-            "available_mb": round(max(0, quota_mb - total_mb), 2),
-            "usage_percentage": round((total_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
-            "calculated_at": datetime.utcnow().isoformat()
-        }
-        
-        # Update cache
-        self.storage_cache[cache_key] = result
-        
-        return result
     
     def _calculate_directory_size(self, path: str) -> int:
         """

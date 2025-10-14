@@ -1,0 +1,209 @@
+<!-- Admin Jobs Tab -->
+<div id="tabAdminJobs" class="tab-content" role="tabpanel">
+    <div id="adminJobs_topbar" class="text-muted" style="margin: 8px 0;">
+        No recent actions
+    </div>
+    <div class="endpoint-section" id="adminJobsStats">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/jobs/stats - Jobs Queue Stats</span>
+        </h2>
+        <p>Queue depth and processing counts per domain/queue/job_type. Supports auto-refresh.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_domain">Domain:</label>
+                    <input type="text" id="adminJobs_domain" placeholder="e.g., chatbooks">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_queue">Queue:</label>
+                    <select id="adminJobs_queue">
+                        <option value="">(any)</option>
+                        <option value="default">default</option>
+                        <option value="high">high</option>
+                        <option value="low">low</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_jobType">Job Type:</label>
+                    <input type="text" id="adminJobs_jobType" placeholder="e.g., export">
+                </div>
+            </div>
+        </div>
+
+        <div class="metrics-controls">
+            <button class="btn btn-primary" onclick="adminFetchJobsStats()">Refresh</button>
+            <button class="btn btn-secondary" onclick="adminStartJobsAutoRefresh()">Auto-Refresh (10s)</button>
+            <button class="btn btn-secondary" onclick="adminStopJobsAutoRefresh()">Stop</button>
+        </div>
+
+        <div class="table-responsive mt-2">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Queue</th>
+                        <th>Job Type</th>
+                        <th>Queued</th>
+                        <th>Processing</th>
+                    </tr>
+                </thead>
+                <tbody id="adminJobs_tableBody">
+                    <tr><td colspan="5" class="text-muted">No data</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Prune Jobs -->
+    <div class="endpoint-section" id="adminJobsPrune">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/jobs/prune - Prune Jobs</span>
+        </h2>
+        <p>Delete jobs by status older than a threshold. Use with caution in production.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label>Statuses to prune:</label>
+                    <div class="checkbox-group">
+                        <label><input type="checkbox" class="adminJobs_status" value="completed" checked> completed</label>
+                        <label><input type="checkbox" class="adminJobs_status" value="failed" checked> failed</label>
+                        <label><input type="checkbox" class="adminJobs_status" value="cancelled" checked> cancelled</label>
+                        <label><input type="checkbox" class="adminJobs_status" value="queued"> queued</label>
+                        <label><input type="checkbox" class="adminJobs_status" value="processing"> processing</label>
+                    </div>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_olderDays">Older Than (days):</label>
+                    <input type="number" id="adminJobs_olderDays" value="30" min="1" max="3650">
+                </div>
+                <div class="form-group">
+                    <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()">Prune Jobs</button>
+                </div>
+            </div>
+        </div>
+
+        <h3>Response:</h3>
+        <pre id="adminJobsPrune_result">---</pre>
+    </div>
+
+    <script>
+        let adminJobsTimer = null;
+        async function adminFetchJobsStats() {
+            const domain = document.getElementById('adminJobs_domain').value.trim();
+            const queue = document.getElementById('adminJobs_queue').value.trim();
+            const jobType = document.getElementById('adminJobs_jobType').value.trim();
+            const query = {};
+            if (domain) query.domain = domain;
+            if (queue) query.queue = queue;
+            if (jobType) query.job_type = jobType;
+            const tbody = document.getElementById('adminJobs_tableBody');
+            try {
+                Loading.show(tbody.parentElement, 'Loading jobs stats...');
+                const res = await apiClient.makeRequest('GET', '/api/v1/jobs/stats', { query });
+                const data = Array.isArray(res) ? res : (res?.data || []);
+                tbody.innerHTML = '';
+                if (!data.length) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No data</td></tr>';
+                    return;
+                }
+                for (const row of data) {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${row.domain ?? ''}</td>
+                        <td>${row.queue ?? ''}</td>
+                        <td>${row.job_type ?? ''}</td>
+                        <td>${row.queued ?? 0}</td>
+                        <td>${row.processing ?? 0}</td>
+                    `;
+                    // Make rows clickable to apply filter
+                    tr.style.cursor = 'pointer';
+                    tr.title = 'Click to filter Admin → Jobs';
+                    tr.addEventListener('click', () => {
+                        adminApplyJobsFilter(row.domain || '', row.queue || '', row.job_type || '');
+                    });
+                    tbody.appendChild(tr);
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan=\"5\" class=\"text-error\">${(e && e.message) || 'Failed to load'}</td></tr>`;
+            } finally {
+                Loading.hide(tbody.parentElement);
+            }
+        }
+        function adminStartJobsAutoRefresh() {
+            adminStopJobsAutoRefresh();
+            adminJobsTimer = setInterval(adminFetchJobsStats, 10000);
+            adminFetchJobsStats();
+        }
+        function adminStopJobsAutoRefresh() {
+            if (adminJobsTimer) {
+                clearInterval(adminJobsTimer);
+                adminJobsTimer = null;
+            }
+        }
+
+        function adminApplyJobsFilter(domain, queue, jobType) {
+            try {
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                if (d) d.value = domain || '';
+                if (q) q.value = queue || '';
+                if (jt) jt.value = jobType || '';
+                const topbar = document.getElementById('adminJobs_topbar');
+                if (topbar) {
+                    const desc = `${domain || '(any)'}/${queue || '(any)'}/${jobType || '(any)'}`;
+                    topbar.textContent = `Filter applied: ${desc}`;
+                }
+                adminFetchJobsStats();
+            } catch (e) { /* ignore */ }
+        }
+
+        async function adminPruneJobs() {
+            const btn = document.getElementById('adminJobsPrune_btn');
+            const statuses = Array.from(document.querySelectorAll('.adminJobs_status:checked')).map(cb => cb.value);
+            const olderDaysEl = document.getElementById('adminJobs_olderDays');
+            const olderThanDays = Math.max(1, parseInt(olderDaysEl && olderDaysEl.value ? olderDaysEl.value : '30', 10));
+            const resultEl = document.getElementById('adminJobsPrune_result');
+            if (!statuses.length) {
+                Toast.error('Select at least one status to prune');
+                return;
+            }
+            const confirmed = confirm(`Prune jobs with statuses [${statuses.join(', ')}] older than ${olderThanDays} days?`);
+            if (!confirmed) return;
+            try {
+                if (btn) btn.disabled = true;
+                Loading.show(resultEl, 'Pruning jobs...');
+                const res = await apiClient.makeRequest('POST', '/api/v1/jobs/prune', {
+                    body: { statuses, older_than_days: olderThanDays }
+                });
+                const deleted = (res && typeof res.deleted === 'number') ? res.deleted : (res?.data?.deleted || 0);
+                resultEl.textContent = JSON.stringify(res, null, 2);
+                Toast.success(`Pruned ${deleted} job(s)`);
+                const topbar = document.getElementById('adminJobs_topbar');
+                if (topbar) {
+                    const ts = new Date().toLocaleString();
+                    topbar.textContent = `Pruned ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days] — ${ts}`;
+                }
+                // Refresh stats after prune
+                if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
+            } catch (e) {
+                const err = e && (e.response || e);
+                resultEl.textContent = JSON.stringify(err, null, 2);
+                Toast.error('Prune failed');
+            } finally {
+                if (btn) btn.disabled = false;
+                Loading.hide(resultEl);
+            }
+        }
+    </script>
+</div>

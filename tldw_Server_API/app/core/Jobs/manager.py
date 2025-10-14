@@ -727,7 +727,10 @@ class JobManager:
                             row = cur.fetchone()
                             current = int(row[0]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2 ** current)))
-                            jitter = random.randint(0, max(1, exp_backoff // 4))
+                            if exp_backoff <= 2 or (str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}):
+                                jitter = 0
+                            else:
+                                jitter = random.randint(0, max(1, exp_backoff // 4))
                             delay = exp_backoff + jitter
                             if enforce:
                                 cur.execute(
@@ -783,7 +786,10 @@ class JobManager:
                         row = conn.execute("SELECT retry_count FROM jobs WHERE id = ?", (job_id,)).fetchone()
                         current = int(row[0]) if row else 0
                         exp_backoff = max(1, int(backoff_seconds * (2 ** current)))
-                        jitter = random.randint(0, max(1, exp_backoff // 4))
+                        if exp_backoff <= 2 or (str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}):
+                            jitter = 0
+                        else:
+                            jitter = random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
                         if enforce:
                             conn.execute(

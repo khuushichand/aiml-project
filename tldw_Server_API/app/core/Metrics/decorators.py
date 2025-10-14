@@ -20,7 +20,9 @@ from .metrics_manager import (
     get_metrics_registry,
     increment_counter,
     observe_histogram,
-    set_gauge
+    set_gauge,
+    MetricDefinition,
+    MetricType,
 )
 from .traces import get_tracing_manager
 
@@ -86,6 +88,35 @@ def track_metrics(
         duration_metric_name = duration_metric or f"{base_name}_duration_seconds"
         call_metric_name = call_metric or f"{base_name}_calls_total"
         error_metric_name = error_metric or f"{base_name}_errors_total"
+
+        # Ensure metrics are registered on first import
+        try:
+            registry = get_metrics_registry()
+            if track_calls and call_metric_name not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=call_metric_name,
+                    type=MetricType.COUNTER,
+                    description=f"Total calls to {base_name}",
+                    labels=list((labels or {}).keys())
+                ))
+            if track_duration and duration_metric_name not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=duration_metric_name,
+                    type=MetricType.HISTOGRAM,
+                    description=f"Execution duration for {base_name}",
+                    unit="s",
+                    labels=list((labels or {}).keys())
+                ))
+            if track_errors and error_metric_name not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=error_metric_name,
+                    type=MetricType.COUNTER,
+                    description=f"Errors for {base_name}",
+                    labels=list((labels or {}).keys()) + ["error_type"]
+                ))
+        except Exception:
+            # Metrics must never break the application flow
+            pass
         
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -200,6 +231,18 @@ def measure_latency(
     """
     def decorator(func: F) -> F:
         histogram_name = metric_name or f"{func.__module__}.{func.__name__}_latency_seconds"
+        # Register histogram if missing
+        try:
+            registry = get_metrics_registry()
+            if histogram_name not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=histogram_name,
+                    type=MetricType.HISTOGRAM,
+                    description=f"Latency for {func.__module__}.{func.__name__}",
+                    unit="s"
+                ))
+        except Exception:
+            pass
         
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -245,6 +288,17 @@ def count_calls(
     """
     def decorator(func: F) -> F:
         counter_name = metric_name or f"{func.__module__}.{func.__name__}_calls_total"
+        # Register counter if missing
+        try:
+            registry = get_metrics_registry()
+            if counter_name not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=counter_name,
+                    type=MetricType.COUNTER,
+                    description=f"Total calls to {func.__module__}.{func.__name__}"
+                ))
+        except Exception:
+            pass
         
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -300,6 +354,18 @@ def track_errors(
     """
     def decorator(func: F) -> F:
         error_metric = metric_name or f"{func.__module__}.{func.__name__}_errors_total"
+        # Register error counter if missing
+        try:
+            registry = get_metrics_registry()
+            if error_metric not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name=error_metric,
+                    type=MetricType.COUNTER,
+                    description=f"Errors for {func.__module__}.{func.__name__}",
+                    labels=["function", "error_type"]
+                ))
+        except Exception:
+            pass
         
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -562,6 +628,33 @@ def cache_metrics(
     def decorator(func: F) -> F:
         # Assume function returns tuple (result, cache_hit: bool)
         # or has a way to determine cache hit
+
+        # Ensure cache metrics exist
+        try:
+            registry = get_metrics_registry()
+            if "cache_hits_total" not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name="cache_hits_total",
+                    type=MetricType.COUNTER,
+                    description="Total cache hits",
+                    labels=["cache"]
+                ))
+            if "cache_misses_total" not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name="cache_misses_total",
+                    type=MetricType.COUNTER,
+                    description="Total cache misses",
+                    labels=["cache"]
+                ))
+            if "cache_hit_ratio" not in registry.metrics:
+                registry.register_metric(MetricDefinition(
+                    name="cache_hit_ratio",
+                    type=MetricType.GAUGE,
+                    description="Cache hit ratio",
+                    labels=["cache"]
+                ))
+        except Exception:
+            pass
         
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)

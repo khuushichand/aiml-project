@@ -6,7 +6,12 @@ The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, syste
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
 - Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
-- Reset metrics: `POST /api/v1/metrics/reset` (admin‑only; clears in‑memory counters)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin‑only; clears in‑memory counters; enforced by AuthNZ)
+
+Installation (optional OpenTelemetry):
+- To enable OTel exporters and auto‑instrumentation, install extras:
+  - `pip install "tldw-server[otel]"` or `pip install -r requirements-otel.txt`
+  - Set env: `OTEL_METRICS_EXPORTER=prometheus,otlp`, `OTEL_TRACES_EXPORTER=otlp`, `PROMETHEUS_PORT=9090`
 
 ## HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -96,6 +101,8 @@ Example PromQL:
 Notes:
 - Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
 - The JSON endpoint `GET /api/v1/metrics/chat` always returns `active_operations` and `token_costs`; counter/histogram stats appear only if exported.
+ - Function decorators in `app/core/Metrics/decorators.py` auto‑register their metrics on first use; no manual pre‑registration needed.
+ - General `cache_hits_total`/`cache_misses_total` are aliased to `rag_cache_hits_total`/`rag_cache_misses_total` in Prometheus exposition with label `cache_type` for consistency with RAG dashboards.
 
 ## Chunking Module
 - Requests: `chunking_requests_total{method,status}`.

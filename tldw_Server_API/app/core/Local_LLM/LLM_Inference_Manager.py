@@ -175,11 +175,20 @@ class LLMInferenceManager:
             return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
         raise InferenceError(f"Server stop not applicable or implemented for backend {backend} via this method.")
 
+    async def get_server_status(self, backend: str) -> Dict[str, Any]:
+        """Return server status for a backend if supported by its handler."""
+        handler = self.get_handler(backend)
+        # Only some handlers implement status; delegate if available
+        if hasattr(handler, "get_server_status"):
+            return await handler.get_server_status()  # type: ignore[attr-defined]
+        raise InferenceError(f"Server status not supported for backend {backend}.")
+
     def cleanup_on_exit(self):
         """Call this on application shutdown to clean up managed resources, like llamafile servers."""
         self.logger.info("LLMInferenceManager performing cleanup_on_exit...")
         if self.llamafile:
-            self.llamafile._cleanup_all_managed_servers() # This is synchronous
+            # Use the synchronous cleanup helper defined on the handler
+            self.llamafile._cleanup_all_managed_servers_sync()  # type: ignore[attr-defined]
         # Add other cleanup if needed
         self.logger.info("LLMInferenceManager cleanup_on_exit complete.")
 

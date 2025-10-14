@@ -69,7 +69,8 @@ def mock_llm_api_call_handlers_for_chat_functions_unit():
         mock_handler.__name__ = original_func_name  # Explicitly set it
         mocked_handlers_dict[provider_name_key] = mock_handler
 
-    with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict):
+    with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict), \
+         patch("tldw_Server_API.app.core.Chat.chat_orchestrator.API_CALL_HANDLERS", new=mocked_handlers_dict):
         yield mocked_handlers_dict
 
 

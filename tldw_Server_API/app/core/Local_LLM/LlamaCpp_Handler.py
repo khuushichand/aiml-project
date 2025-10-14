@@ -17,6 +17,7 @@ import httpx  # For making API calls to the Llama.cpp server
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
 from .LLM_Inference_Schemas import LlamaCppConfig
+from .http_utils import create_async_client, request_json, wait_for_http_ready
 # from .Utils import download_file, verify_checksum # If you need model downloading later
 #########################################################################################################################
 #
@@ -101,8 +102,10 @@ class LlamaCppHandler(BaseLLMHandler):
         extra_params = args.get("extra_params", [])  # e.g. ["--cont-batching", "--flash-attn"]
         command.extend(extra_params)
 
+        from .http_utils import redact_cmd_args
+        redacted_cmd = redact_cmd_args(command)
         self.logger.info(
-            f"Starting Llama.cpp server for {model_filename} on {host}:{port} with command: {' '.join(command)}")
+            f"Starting Llama.cpp server for {model_filename} on {host}:{port} with command: {' '.join(redacted_cmd)}")
 
         stdout_redir = asyncio.subprocess.PIPE
         stderr_redir = asyncio.subprocess.PIPE
@@ -124,13 +127,11 @@ class LlamaCppHandler(BaseLLMHandler):
                 stderr=stderr_redir,
                 preexec_fn=os.setsid if platform.system() != "Windows" else None
             )
+            # Poll HTTP health instead of fixed sleep
+            base_url = f"http://{host}:{port}"
+            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
 
-            # Brief pause to let the server initialize. A better way is to poll a health endpoint.
-            # Llama.cpp server prints "server listening at http://0.0.0.0:8080"
-            # You could try to read its stdout/stderr for this message if not redirecting to file.
-            await asyncio.sleep(5)  # Adjust as needed, or implement polling
-
-            if process.returncode is not None:
+            if process.returncode is not None or not is_ready:
                 # If logging to file, error might not be in stderr pipe here.
                 # Consider reading last few lines of log_output_file if it exists.
                 stderr_output = ""
@@ -138,9 +139,15 @@ class LlamaCppHandler(BaseLLMHandler):
                     err_bytes = await process.stderr.read()  # This might hang if server is still writing
                     stderr_output = err_bytes.decode(errors='ignore').strip()
                 self.logger.error(
-                    f"Llama.cpp server failed to start for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}"
+                    f"Llama.cpp server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}"
                 )
                 if log_file_handle: log_file_handle.close()
+                try:
+                    if process.returncode is None:
+                        # Stop server if it started but not ready
+                        process.terminate()
+                except Exception:
+                    pass
                 raise ServerError(f"Llama.cpp server failed to start. Stderr: {stderr_output}")
 
             self._active_server_process = process
@@ -154,7 +161,7 @@ class LlamaCppHandler(BaseLLMHandler):
 
             self.logger.info(f"Llama.cpp server started for {model_filename} on {host}:{port} with PID {process.pid}.")
             return {"status": "started", "pid": process.pid, "model": model_filename, "port": port, "host": host,
-                    "command": ' '.join(command)}
+                    "command": ' '.join(redacted_cmd)}
         except Exception as e:
             if log_file_handle: log_file_handle.close()
             self.logger.error(f"Exception starting Llama.cpp server for {model_filename}: {e}", exc_info=True)
@@ -248,7 +255,8 @@ class LlamaCppHandler(BaseLLMHandler):
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
 
         base_url = f"http://{self._active_server_host}:{self._active_server_port}"
-        target_url = f"{base_url}{api_endpoint.lstrip('/')}"  # Ensure single slash
+        # Ensure exactly one slash between base and path
+        target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
 
         # Prepare payload (OpenAI compatible)
         payload = kwargs.copy()  # n_predict, temperature, top_k, top_p, stop, etc.
@@ -264,11 +272,9 @@ class LlamaCppHandler(BaseLLMHandler):
 
         self.logger.debug(f"Sending Llama.cpp inference request to {target_url} with payload: {payload}")
 
-        async with httpx.AsyncClient(timeout=kwargs.get("timeout", 120.0)) as client:
+        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
             try:
-                response = await client.post(target_url, json=payload, headers={"Content-Type": "application/json"})
-                response.raise_for_status()
-                result = response.json()
+                result = await request_json(client, "POST", target_url, json=payload, headers={"Content-Type": "application/json"})
                 self.logger.debug("Llama.cpp inference successful.")
                 return result
             except httpx.HTTPStatusError as e:

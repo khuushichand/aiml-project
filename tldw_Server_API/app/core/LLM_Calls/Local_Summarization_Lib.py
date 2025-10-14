@@ -305,7 +305,7 @@ def summarize_with_llama(input_data, custom_prompt, api_key=None, temp=None, sys
                     logging.debug(response_data)
                     summary = response_data['content'].strip()
                     logging.debug("llama: Summarization successful")
-                    print("Summarization successful.")
+                    # Avoid printing to stdout in production
                     return summary
                 else:
                     logging.error("Llama: No choices in response data")
@@ -343,7 +343,7 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
             # Get the Streaming API IP from the config
             kobold_openai_api_IP = loaded_config_data['local_api_ip']['kobold_openai']
 
-        logging.debug(f"Kobold: Using API Key: {kobold_api_key[:5]}...{kobold_api_key[-5:]}")
+        logging.debug("Kobold: Using configured API key")
 
         logging.debug("Kobold.cpp: Using provided string data for summarization")
         data = input_data
@@ -390,7 +390,6 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
         }
 
         logging.debug("Kobold Summarization: Submitting request to API endpoint")
-        print("Kobold Summarization: Submitting request to API endpoint")
         kobold_api_ip = loaded_config_data['local_api_ip']['kobold']
 
         if streaming:
@@ -563,8 +562,8 @@ def summarize_with_oobabooga(input_data, api_key, custom_prompt, system_message=
         }
         if ooba_api_key:
             headers['Authorization'] = f'Bearer {ooba_api_key}'
-            logging.debug(f"Oobabooga: Using API Key: {ooba_api_key[:5]}...{ooba_api_key[-5:]}")
-        else:
+            logging.debug("Oobabooga: Using configured API key")
+        if not ooba_api_key:
             logging.debug("Oobabooga: No API key provided")
 
         # Input data handling
@@ -770,7 +769,7 @@ def summarize_with_tabbyapi(
         if temp is None:
             temp = 0.7
 
-        logging.debug(f"TabbyAPI: Using API Key: {tabby_api_key[:5]}...{tabby_api_key[-5:] if tabby_api_key else 'None'}")
+        logging.debug("TabbyAPI: Using configured API key")
 
         # Process input data
         logging.debug("TabbyAPI: Using provided data for summarization")
@@ -944,7 +943,7 @@ def summarize_with_vllm(api_key, input_data, custom_prompt_arg, temp=None, syste
             logging.error("vLLM Summarize: API key not found or is empty")
             logging.debug("vLLM Summarize: API Key Not Provided/Found in Config file or is empty")
 
-        logging.debug(f"vLLM Summarize: Using API Key: {api_key[:5]}...{api_key[-5:]}")
+        logging.debug("vLLM Summarize: Using configured API key")
 
         # Input data handling
         logging.debug(f"vLLM Summarize: Raw input data type: {type(input_data)}")
@@ -1398,7 +1397,7 @@ def summarize_with_custom_openai(api_key, input_data, custom_prompt_arg, temp=No
             logging.error("Custom OpenAI API: API key not found or is empty")
             return "Custom OpenAI API: API Key Not Provided/Found in Config file or is empty"
 
-        logging.debug(f"Custom OpenAI API: Using API Key: {custom_openai_api_key[:5]}...{custom_openai_api_key[-5:]}")
+        logging.debug("Custom OpenAI API: Using configured API key")
 
         # Input data handling
         logging.debug(f"Custom OpenAI API: Raw input data type: {type(input_data)}")
@@ -1609,7 +1608,7 @@ def summarize_with_custom_openai_2(api_key, input_data, custom_prompt_arg, temp=
             logging.error("Custom OpenAI API-2: API key not found or is empty")
             return "Custom OpenAI API-2: API Key Not Provided/Found in Config file or is empty"
 
-        logging.debug(f"Custom OpenAI API: Using API Key: {custom_openai_api_key[:5]}...{custom_openai_api_key[-5:]}")
+        logging.debug("Custom OpenAI API: Using configured API key")
 
         # Input data handling
         logging.debug(f"Custom OpenAI API-2: Raw input data type: {type(input_data)}")

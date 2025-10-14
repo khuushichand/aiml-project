@@ -7,7 +7,7 @@ from typing import Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.metrics import ensure_jobs_metrics_registered
+from tldw_Server_API.app.core.Jobs.metrics import ensure_jobs_metrics_registered, set_queue_gauges
 
 
 async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) -> None:
@@ -35,6 +35,7 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
             try:
                 if jm.backend == "postgres":
                     with jm._pg_cursor(conn) as cur:
+                        # Stale processing counts
                         cur.execute(
                             (
                                 "SELECT domain, queue, COUNT(*) as c FROM jobs "
@@ -45,7 +46,19 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                         rows = cur.fetchall()
                         for r in rows:
                             set_stale_processing(str(r[0]), str(r[1]), int(r[2]))
+                        # Queue depth gauges per domain/queue/job_type
+                        cur.execute(
+                            (
+                                "SELECT domain, queue, job_type, "
+                                "SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS q, "
+                                "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p "
+                                "FROM jobs GROUP BY domain, queue, job_type"
+                            )
+                        )
+                        for (domain, queue, job_type, q, p) in cur.fetchall():
+                            set_queue_gauges(str(domain), str(queue), str(job_type), int(q or 0), int(p or 0), backlog=int(q or 0))
                 else:
+                    # Stale processing counts
                     q = (
                         "SELECT domain, queue, COUNT(*) as c FROM jobs "
                         "WHERE status='processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now')) "
@@ -53,6 +66,15 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                     )
                     for (domain, queue, c) in conn.execute(q).fetchall():
                         set_stale_processing(str(domain), str(queue), int(c))
+                    # Queue depth gauges per domain/queue/job_type
+                    q2 = (
+                        "SELECT domain, queue, job_type, "
+                        "SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS q, "
+                        "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p "
+                        "FROM jobs GROUP BY domain, queue, job_type"
+                    )
+                    for (domain, queue, job_type, qd, pd) in conn.execute(q2).fetchall():
+                        set_queue_gauges(str(domain), str(queue), str(job_type), int(qd or 0), int(pd or 0), backlog=int(qd or 0))
             finally:
                 try:
                     conn.close()
@@ -62,4 +84,3 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
             logger.debug(f"Jobs metrics gauge loop error: {e}")
 
         await asyncio.sleep(interval)
-

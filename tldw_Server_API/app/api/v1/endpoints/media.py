@@ -1286,6 +1286,7 @@ async def get_by_identifier(
     "/{media_id:int}/versions/advanced",
     tags=["Media Versioning"],
     summary="Create or update version with content + safe metadata",
+    response_model=MediaDetailResponse,
 )
 async def create_or_update_version_advanced(
     media_id: int,
@@ -1351,7 +1352,17 @@ async def create_or_update_version_advanced(
                     analysis_content=analysis,
                     safe_metadata=smj,
                 )
-            return {"message": "New version created.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
+            return MediaDetailResponse(**details)
         else:
             # Update latest safe_metadata only
             dv_id = latest.get('id')
@@ -1359,7 +1370,17 @@ async def create_or_update_version_advanced(
                 conn = db.get_connection()
                 conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
                 conn.commit()
-            return {"message": "Metadata updated on latest version."}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
+            return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:

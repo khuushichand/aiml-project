@@ -1,7 +1,6 @@
 # Llamafile_Handler.py
 #
 # Imports
-from loguru import logger
 import os
 import platform
 import re
@@ -13,7 +12,6 @@ from typing import List, Optional, Dict, Any
 #
 # Third-party imports
 import asyncio
-import loguru as logger
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
@@ -21,6 +19,12 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelDow
     ModelNotFoundError, InferenceError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
 from tldw_Server_API.app.core.Utils.Utils import download_file, verify_checksum
+from tldw_Server_API.app.core.Local_LLM.http_utils import (
+    redact_cmd_args,
+    create_async_client,
+    request_json,
+    wait_for_http_ready,
+)
 # from .base_handler import BaseLLMHandler
 # from .exceptions import ModelNotFoundError, ModelDownloadError, ServerError, InferenceError
 # from .utils_loader import logging, project_utils # From the loader
@@ -35,7 +39,6 @@ class LlamafileHandler(BaseLLMHandler):
     def __init__(self, config: LlamafileConfig, global_app_config: Dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: LlamafileConfig  # For type hinting
-        self.logger = logging  # Ensure logger is assigned
 
         self.llamafile_exe_path = self.config.llamafile_dir / ("llamafile.exe" if os.name == "nt" else "llamafile")
         self.models_dir = Path(self.config.models_dir)
@@ -305,7 +308,8 @@ class LlamafileHandler(BaseLLMHandler):
                     else:  # Key-value pair
                         command.extend([flag, str(v)])
 
-        self.logger.info(f"Starting llamafile server for {model_filename} with command: {' '.join(command)}")
+        redacted_cmd = redact_cmd_args(command)
+        self.logger.info(f"Starting llamafile server for {model_filename} with command: {' '.join(redacted_cmd)}")
 
         try:
             # Using create_subprocess_exec for better security with list of args
@@ -315,15 +319,17 @@ class LlamafileHandler(BaseLLMHandler):
                 stderr=asyncio.subprocess.PIPE,
                 preexec_fn=os.setsid if platform.system() != "Windows" else None
             )
-            await asyncio.sleep(3)  # Increased sleep slightly
+            # Poll HTTP readiness instead of fixed sleep
+            base_url = f"http://{host}:{port}"
+            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
 
-            if process.returncode is not None:
+            if process.returncode is not None or not is_ready:
                 stderr_output = ""
                 if process.stderr:
                     err_bytes = await process.stderr.read()
                     stderr_output = err_bytes.decode(errors='ignore').strip()
                 self.logger.error(
-                    f"Llamafile server failed to start for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}")
+                    f"Llamafile server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}")
                 stdout_output = ""
                 if process.stdout:
                     out_bytes = await process.stdout.read()
@@ -334,7 +340,7 @@ class LlamafileHandler(BaseLLMHandler):
             self._active_servers[port] = process
             self.logger.info(f"Llamafile server started for {model_filename} on port {port} with PID {process.pid}.")
             return {"status": "started", "pid": process.pid, "port": port, "host": host, "model": model_filename,
-                    "command": ' '.join(command)}  # Return stringified command
+                    "command": ' '.join(redacted_cmd)}  # Return redacted command
         except Exception as e:
             self.logger.error(f"Exception starting llamafile server for {model_filename}: {e}", exc_info=True)
             raise ServerError(f"Exception starting llamafile: {e}")
@@ -485,17 +491,9 @@ class LlamafileHandler(BaseLLMHandler):
         payload = {k: v for k, v in payload.items() if v is not None}
 
         self.logger.debug(f"Sending llamafile inference request to {api_url} with payload: {payload}")
-        try:
-            import httpx
-        except ImportError:
-            self.logger.error("httpx is required for Llamafile inference. Please install it: pip install httpx")
-            raise ImportError("httpx is required for Llamafile inference.")
-
-        async with httpx.AsyncClient(timeout=kwargs.get("timeout", 120.0)) as client:
+        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
             try:
-                response = await client.post(api_url, json=payload, headers=headers)
-                response.raise_for_status()
-                result = response.json()
+                result = await request_json(client, "POST", api_url, json=payload, headers=headers)
                 self.logger.debug("Llamafile inference successful.")
                 return result
             except httpx.HTTPStatusError as e:

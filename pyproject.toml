@@ -172,6 +172,18 @@ dev = [
   "pre-commit>=3.3.0"
 ]
 
+# OpenTelemetry (optional, for metrics/tracing export)
+otel = [
+  "opentelemetry-distro>=0.48b0",
+  "opentelemetry-exporter-otlp>=1.24.0",
+  "opentelemetry-exporter-prometheus>=0.49b0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "opentelemetry-instrumentation-httpx>=0.48b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
+  "opentelemetry-instrumentation-psycopg2>=0.48b0",
+  "opentelemetry-instrumentation-aiohttp-client>=0.48b0",
+]
+
 # Evaluation and metrics (optional)
 evaluation = [
   "bert-score>=0.3.0",

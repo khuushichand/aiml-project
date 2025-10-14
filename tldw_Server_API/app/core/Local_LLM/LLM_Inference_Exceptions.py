@@ -1,35 +1,34 @@
-# LLM_Inference_Exceptions.py
-#
-# Imports
-#
-# Third-party imports
-#
-# Local imports
-#
-#######################################################################################################################
-#
-# Classes:
+"""Local LLM inference exception types.
 
-class LLMInfereceLibError(Exception):
-    """Base exception for this library."""
+Defines a small hierarchy of exceptions for the Local_LLM module.
+"""
+
+# Base class
+class LLMInferenceLibError(Exception):
+    """Base exception for the Local LLM inference library."""
     pass
 
-class ModelNotFoundError(LLMInfereceLibError):
+# Backwards-compatibility alias (fix prior typo while avoiding import breaks)
+LLMInfereceLibError = LLMInferenceLibError
+
+
+class ModelNotFoundError(LLMInferenceLibError):
     """Raised when a model is not found."""
     pass
 
-class ModelDownloadError(LLMInfereceLibError):
+
+class ModelDownloadError(LLMInferenceLibError):
     """Raised when a model download fails."""
     pass
 
-class ServerError(LLMInfereceLibError):
+
+class ServerError(LLMInferenceLibError):
     """Raised for server-related errors (start, stop, connection)."""
     pass
 
-class InferenceError(LLMInfereceLibError):
+
+class InferenceError(LLMInferenceLibError):
     """Raised during model inference."""
     pass
 
-#
 # End of LLM_Inference_Exceptions.py
-# ########################################################################################################################

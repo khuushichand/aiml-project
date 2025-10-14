@@ -44,3 +44,55 @@ def test_structure_aware_section_level_grouping_elements_per_chunk():
     assert "Para 2" in flat[1]["text"] and "Para 3" in flat[1]["text"]
     assert "Para 4" in flat[2]["text"] and "Para 5" in flat[2]["text"]
 
+
+@pytest.mark.unit
+def test_structure_aware_single_element_section():
+    text = (
+        "# Intro\n"
+        "Only one paragraph here.\n"
+    )
+
+    ck = Chunker()
+    tree = ck.chunk_text_hierarchical_tree(
+        text=text,
+        method="structure_aware",
+        max_size=3,
+        overlap=1,
+        language="en",
+    )
+    flat = ck.flatten_hierarchical(tree)
+
+    # Expect a single chunk with one grouped element
+    assert len(flat) == 1
+    assert flat[0]["metadata"].get("section_path") == "Intro"
+    assert flat[0]["metadata"].get("grouped_elements") == 1
+    assert "Only one paragraph" in flat[0]["text"]
+
+
+@pytest.mark.unit
+def test_structure_aware_overlap_ge_maxsize_clamped_behavior():
+    # 5 elements under one section, max_size=2, overlap=5 (>= max_size)
+    # Should behave like overlap = max_size - 1 => step = 1: 4 windows
+    text = (
+        "# Sec\n"
+        "A1.\n\n"
+        "A2.\n\n"
+        "A3.\n\n"
+        "A4.\n\n"
+        "A5.\n\n"
+    )
+
+    ck = Chunker()
+    tree = ck.chunk_text_hierarchical_tree(
+        text=text,
+        method="structure_aware",
+        max_size=2,
+        overlap=5,  # pathological, should clamp effectively
+        language="en",
+    )
+    flat = ck.flatten_hierarchical(tree)
+
+    assert len(flat) == 4  # [A1,A2], [A2,A3], [A3,A4], [A4,A5]
+    for item in flat:
+        assert item["metadata"].get("grouped_elements") == 2
+        assert item["metadata"].get("section_path") == "Sec"

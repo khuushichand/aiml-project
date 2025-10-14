@@ -64,6 +64,14 @@
                 <div class="metric-value" id="metric-database-size">--</div>
                 <div class="metric-label">MB</div>
             </div>
+
+            <div class="metric-card" style="grid-column: span 2; text-align: left;">
+                <h3>Jobs Overview</h3>
+                <div class="metric-label">Top 3 busiest queues</div>
+                <ul id="metric-jobs-overview" style="margin-top: 8px; padding-left: 18px;">
+                    <li class="text-muted">No data</li>
+                </ul>
+            </div>
         </div>
     </div>
 </div>
@@ -163,6 +171,113 @@
         
         <h3>Response:</h3>
         <pre id="metricsReset_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="jobsQueueStatsPanel">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/jobs/stats - Jobs Queue Stats</span>
+        </h2>
+        <p>View queue depth and processing counts per domain/queue/job_type. Auto-refresh supported.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_domain">Domain:</label>
+                    <input type="text" id="jobsStats_domain" placeholder="e.g., chatbooks">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_queue">Queue:</label>
+                    <select id="jobsStats_queue">
+                        <option value="">(any)</option>
+                        <option value="default">default</option>
+                        <option value="high">high</option>
+                        <option value="low">low</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="jobsStats_jobType">Job Type:</label>
+                    <input type="text" id="jobsStats_jobType" placeholder="e.g., export">
+                </div>
+            </div>
+        </div>
+
+        <div class="metrics-controls">
+            <button class="btn btn-primary" onclick="fetchJobsStats()">Refresh</button>
+            <button class="btn btn-secondary" onclick="startJobsStatsAutoRefresh()">Auto-Refresh (10s)</button>
+            <button class="btn btn-secondary" onclick="stopJobsStatsAutoRefresh()">Stop</button>
+        </div>
+
+        <div class="table-responsive mt-2">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Queue</th>
+                        <th>Job Type</th>
+                        <th>Queued</th>
+                        <th>Processing</th>
+                    </tr>
+                </thead>
+                <tbody id="jobsStats_tableBody">
+                    <tr><td colspan="5" class="text-muted">No data</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            let jobsStatsTimer = null;
+            async function fetchJobsStats() {
+                const domain = document.getElementById('jobsStats_domain').value.trim();
+                const queue = document.getElementById('jobsStats_queue').value.trim();
+                const jobType = document.getElementById('jobsStats_jobType').value.trim();
+                const query = {};
+                if (domain) query.domain = domain;
+                if (queue) query.queue = queue;
+                if (jobType) query.job_type = jobType;
+                const tbody = document.getElementById('jobsStats_tableBody');
+                try {
+                    Loading.show(tbody.parentElement, 'Loading jobs stats...');
+                    const res = await apiClient.makeRequest('GET', '/api/v1/jobs/stats', { query });
+                    const data = Array.isArray(res) ? res : (res?.data || []);
+                    tbody.innerHTML = '';
+                    if (!data.length) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No data</td></tr>';
+                        return;
+                    }
+                    for (const row of data) {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${row.domain ?? ''}</td>
+                            <td>${row.queue ?? ''}</td>
+                            <td>${row.job_type ?? ''}</td>
+                            <td>${row.queued ?? 0}</td>
+                            <td>${row.processing ?? 0}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    }
+                } catch (e) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="text-error">${(e && e.message) || 'Failed to load'}</td></tr>`;
+                } finally {
+                    Loading.hide(tbody.parentElement);
+                }
+            }
+            function startJobsStatsAutoRefresh() {
+                stopJobsStatsAutoRefresh();
+                jobsStatsTimer = setInterval(fetchJobsStats, 10000);
+                fetchJobsStats();
+            }
+            function stopJobsStatsAutoRefresh() {
+                if (jobsStatsTimer) {
+                    clearInterval(jobsStatsTimer);
+                    jobsStatsTimer = null;
+                }
+            }
+        </script>
     </div>
 </div>
 
@@ -291,6 +406,9 @@ function refreshMetrics() {
         .catch(error => {
             console.error('Failed to fetch metrics:', error);
         });
+
+    // Also refresh Jobs overview widget
+    refreshJobsOverview();
 }
 
 function startAutoRefresh() {
@@ -358,6 +476,91 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshMetrics();
     }
 });
+
+async function refreshJobsOverview() {
+    try {
+        const res = await apiClient.makeRequest('GET', '/api/v1/jobs/stats', { query: {} });
+        const data = Array.isArray(res) ? res : (res?.data || []);
+        const ul = document.getElementById('metric-jobs-overview');
+        ul.innerHTML = '';
+        if (!data.length) {
+            ul.innerHTML = '<li class="text-muted">No data</li>';
+            return;
+        }
+        const scored = data.map(r => ({
+            domain: r.domain || '',
+            queue: r.queue || '',
+            job_type: r.job_type || '',
+            queued: r.queued || 0,
+            processing: r.processing || 0,
+        })).map(r => ({ ...r, score: (r.queued + r.processing) }));
+        scored.sort((a, b) => b.score - a.score);
+        const top = scored.slice(0, 3);
+        for (const row of top) {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '#';
+            a.textContent = `${row.domain}/${row.queue}/${row.job_type} — queued: ${row.queued}, processing: ${row.processing}`;
+            a.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                openAdminJobsWithFilter(row.domain, row.queue, row.job_type);
+            });
+            li.appendChild(a);
+            ul.appendChild(li);
+        }
+        if (!ul.children.length) {
+            ul.innerHTML = '<li class="text-muted">No active queues</li>';
+        }
+    } catch (e) {
+        // Fallback: show soft error but keep dashboard
+        const ul = document.getElementById('metric-jobs-overview');
+        if (ul) ul.innerHTML = '<li class="text-error">Jobs overview unavailable</li>';
+    }
+}
+
+// Open Admin → Jobs and apply filters, then refresh table
+function openAdminJobsWithFilter(domain, queue, jobType) {
+    try {
+        // Switch to Admin top tab
+        const topAdminBtn = document.querySelector('.top-tab-button[data-toptab="admin"]');
+        if (topAdminBtn) topAdminBtn.click();
+
+        // After a short delay, switch to Admin Jobs sub-tab
+        setTimeout(() => {
+            const adminJobsBtn = document.querySelector('#admin-subtabs .sub-tab-button[data-content-id="tabAdminJobs"]');
+            if (adminJobsBtn) adminJobsBtn.click();
+
+            // Wait for inputs to be available, then set values and refresh
+            let attempts = 0;
+            const tryApply = () => {
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                if (d && q && jt) {
+                    d.value = domain || '';
+                    q.value = queue || '';
+                    jt.value = jobType || '';
+                    const topbar = document.getElementById('adminJobs_topbar');
+                    if (topbar) {
+                        const desc = `${domain || '(any)'}/${queue || '(any)'}/${jobType || '(any)'}`;
+                        topbar.textContent = `Filter applied: ${desc}`;
+                    }
+                    if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
+                    return true;
+                }
+                return false;
+            };
+            const interval = setInterval(() => {
+                attempts += 1;
+                if (tryApply() || attempts > 20) {
+                    clearInterval(interval);
+                }
+            }, 100);
+        }, 100);
+    } catch (e) {
+        console.warn('Failed to navigate to Admin → Jobs with filter', e);
+    }
+}
 </script>
 
 <style>
