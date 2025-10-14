@@ -107,7 +107,9 @@ async def prune_jobs_endpoint(
     """
     try:
         _enforce_domain_scope(user, req.domain)
-        jm = JobManager()
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
         deleted = jm.prune_jobs(
             statuses=req.statuses,
             older_than_days=req.older_than_days,
@@ -191,7 +193,9 @@ async def ttl_sweep_endpoint(
 ) -> TTLSweepResponse:
     try:
         _enforce_domain_scope(user, req.domain)
-        jm = JobManager()
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -238,7 +242,9 @@ async def get_jobs_stats(
     """Aggregate counts grouped by domain/queue/job_type for the WebUI."""
     try:
         _enforce_domain_scope(user, domain)
-        jm = JobManager()
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
         stats = jm.get_queue_stats(domain=domain, queue=queue, job_type=job_type)
         return [QueueStatsResponse(**s) for s in stats]
     except HTTPException:
@@ -277,7 +283,9 @@ async def list_jobs_endpoint(
 ):
     try:
         _enforce_domain_scope(user, domain)
-        jm = JobManager()
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
         rows = jm.list_jobs(domain=domain, queue=queue, status=status, owner_user_id=owner_user_id, job_type=job_type, limit=limit)
         items: list[JobItem] = []
         for r in rows:
@@ -320,7 +328,10 @@ async def stale_processing_endpoint(
 ):
     try:
         _enforce_domain_scope(user, domain)
-        jm = JobManager()
+        # Use explicit backend/db_url selection for consistency with other admin endpoints
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         out: list[StaleGroup] = []
         try:

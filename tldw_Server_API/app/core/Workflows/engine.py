@@ -650,6 +650,88 @@ class WorkflowEngine:
         except Exception as e:
             logger.warning(f"Orphan reaper failed: {e}")
 
+    async def _maybe_send_completion_webhook(self, definition: Dict[str, Any], run_id: str, status: str) -> None:
+        """Send a completion webhook if configured on the workflow definition.
+
+        Accepted definition formats:
+          - {"on_completion_webhook": "https://..."}
+          - {"on_completion_webhook": {"url": "https://...", "include_outputs": true}}
+        """
+        try:
+            # Global disable
+            import os as _os
+            if str(_os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")).lower() in {"1", "true", "yes", "on"}:
+                return
+            hook = definition.get("on_completion_webhook") if isinstance(definition, dict) else None
+            if not hook:
+                return
+            if isinstance(hook, str):
+                url = hook
+                include_outputs = True
+            elif isinstance(hook, dict):
+                url = str(hook.get("url") or "").strip()
+                include_outputs = bool(hook.get("include_outputs", True))
+            else:
+                return
+            if not url:
+                return
+            # SSRF/egress control
+            try:
+                from tldw_Server_API.app.core.Security.egress import is_url_allowed
+                if not is_url_allowed(url):
+                    return
+            except Exception:
+                # If egress module unavailable, do not send
+                return
+
+            # Prepare payload
+            run = self.db.get_run(run_id)
+            if not run:
+                return
+            import json as _json
+            outputs = None
+            try:
+                outputs = _json.loads(run.outputs_json or "null") if (include_outputs and run.outputs_json) else None
+            except Exception:
+                outputs = None
+            payload = {
+                "workflow": {
+                    "id": run.workflow_id,
+                    "name": (definition or {}).get("name"),
+                    "version": run.definition_version,
+                },
+                "run": {
+                    "id": run.run_id,
+                    "status": status,
+                    "user_id": run.user_id,
+                    "started_at": run.started_at,
+                    "ended_at": run.ended_at,
+                    "duration_ms": run.duration_ms,
+                    "error": run.error,
+                },
+            }
+            if outputs is not None:
+                payload["result"] = {"outputs": outputs}
+
+            # Headers and signing
+            headers = {"content-type": "application/json", "X-Workflow-Id": str(run.workflow_id or ""), "X-Run-Id": str(run.run_id)}
+            try:
+                import os, hmac, hashlib
+                secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
+                body = _json.dumps(payload, default=str)
+                if secret:
+                    sig = hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+                    headers["X-Workflows-Signature"] = sig
+                import httpx
+                timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
+                with httpx.Client(timeout=timeout) as client:
+                    client.post(url, data=body, headers=headers)
+            except Exception:
+                # Do not raise – webhook is best-effort
+                return
+        except Exception:
+            return
+
 
 class WorkflowScheduler:
     """In-process scheduler with per-tenant and per-workflow concurrency limits."""

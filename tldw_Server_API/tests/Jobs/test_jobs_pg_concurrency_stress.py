@@ -8,9 +8,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-
-
-pg_dsn = os.getenv("JOBS_DB_URL") or os.getenv("POSTGRES_TEST_DSN")
+from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup as _pg_schema_and_cleanup
 
 
 pytestmark = [
@@ -20,6 +18,12 @@ pytestmark = [
     pytest.mark.skipif(os.getenv("RUN_PG_JOBS_STRESS", "").lower() not in {"1", "true", "yes", "on"},
                        reason="Set RUN_PG_JOBS_STRESS=1 to enable PG stress tests")
 ]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _setup(pg_schema_and_cleanup):
+    # Ensure schema and clean table once per module via shared fixture
+    yield
 
 
 def _worker_loop(tag: str, max_iters: int = 20, complete: bool = False):

@@ -85,11 +85,13 @@ Base prefix: `/api/v1/claims`
   - Optional query params:
     - `limit` (default 100)
     - `offset` (default 0)
-    - `envelope` (default false) — when true, returns `{ items, next_offset }` instead of a bare list
+    - `envelope` (default false) — when true, returns an envelope instead of a bare list
     - `user_id` (admin only) to select another user’s media DB
   - Response:
     - when `envelope=false`: `List[ClaimRow]` (DB rows excluding `deleted`), ordered by `chunk_index` then `id`
-    - when `envelope=true`: `{ "items": List[ClaimRow], "next_offset": int|null }`
+    - when `envelope=true`: `{ "items": List[ClaimRow], "next_offset": int|null, "total": int, "total_pages": int, "next_link": string|null }`
+      - `next_link` is a simple link preserving `limit`, `offset`, `envelope`, and `absolute_links`; includes `user_id` when admin overrides are used.
+      - Add `absolute_links=true` to return a fully qualified `next_link`.
 
 - `POST /{media_id}/rebuild` — Enqueue rebuild for a media item
   - Optional (admin): `user_id` to target another user DB
@@ -160,3 +162,5 @@ curl -s -X POST -H "Authorization: Bearer <JWT>" \
 
 - Ingestion-time extraction can be enabled selectively; not all ingestion paths invoke it by default.
 - The answer-time Claims Engine (APS/LLM extractor + Hybrid verifier) is documented in design and is separate from these API endpoints.
+- `GET /status` — Claims rebuild worker status (admin only)
+  - Response: `{ "status": "ok", "stats": { "enqueued": int, "processed": int, "failed": int }, "queue_length": int, "workers": int }`

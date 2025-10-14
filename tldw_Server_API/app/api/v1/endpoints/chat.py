@@ -376,13 +376,33 @@ async def _save_message_turn_to_db(
         text_parts = ["<Message processing failed - no valid content>"]
         # Continue to save the message with placeholder text
 
+    # Persist the primary image via the schema-supported columns.
+    primary_image_data: Optional[bytes] = None
+    primary_image_mime: Optional[str] = None
+    normalized_images: list[dict[str, Any]] = []
+    if images:
+        for img_bytes, img_mime in images:
+            if img_bytes is None or img_mime is None:
+                continue
+            normalized_images.append({"data": img_bytes, "mime": img_mime})
+        if normalized_images:
+            primary_image_data = normalized_images[0]["data"]
+            primary_image_mime = normalized_images[0]["mime"]
+
+    if not text_parts and normalized_images:
+        text_parts = [f"<Image attachment x{len(normalized_images)}>"]
+
     db_payload = {
         "conversation_id": conversation_id,
         "sender": message_obj.get("name") or role,
-        "content": "\n".join(text_parts) if text_parts else None,
-        "images": [{"data": b, "mime": m} for b, m in images] or None,
+        "content": "\n".join(text_parts) if text_parts else "",
+        "image_data": primary_image_data,
+        "image_mime_type": primary_image_mime,
         "client_id": db.client_id,
     }
+    if normalized_images:
+        # Remove helper position key before persisting
+        db_payload["images"] = [{"data": item["data"], "mime": item["mime"]} for item in normalized_images]
 
     try:
         # Track database operation

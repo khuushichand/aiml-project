@@ -63,10 +63,10 @@ def test_rebuild_all_stale_policy_enqueues_expected_media(monkeypatch):
             self.username = "admin"
             self.is_admin = True
 
-    async def _override_db(*_args, **_kwargs):
+    async def _override_db():
         return db
 
-    async def _override_user(*_args, **_kwargs):
+    async def _override_user():
         return _User()
 
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db

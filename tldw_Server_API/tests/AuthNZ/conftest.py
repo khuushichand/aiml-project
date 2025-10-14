@@ -120,13 +120,11 @@ async def reset_singletons():
         # background DB work after response (to avoid TaskGroup noise in full runs)
         try:
             from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware as _HTTPMM
-            from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware as _ULM
-            from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware as _LLMB
             from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware as _SHM
             from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware as _RID
             kept = []
             for m in getattr(_app, 'user_middleware', []):
-                if getattr(m, 'cls', None) in (_HTTPMM, _ULM, _LLMB, _SHM, _RID):
+                if getattr(m, 'cls', None) in (_HTTPMM, _SHM, _RID):
                     continue
                 kept.append(m)
             if len(kept) != len(getattr(_app, 'user_middleware', [])):

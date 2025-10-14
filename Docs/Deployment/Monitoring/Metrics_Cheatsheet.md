@@ -166,9 +166,10 @@ datasources:
 2) Dashboards
 
 Copy these files to a mounted path, e.g., `/var/lib/grafana/dashboards`:
-- `Samples/Grafana/app-observability-dashboard.json`
-- `Samples/Grafana/mcp-dashboard.json`
-- `Samples/Grafana/web-scraping-dashboard.json`
+- `Docs/Deployment/Monitoring/overview.json`
+- `Docs/Deployment/Monitoring/app-observability-dashboard.json`
+- `Docs/Deployment/Monitoring/mcp-dashboard.json`
+- `Docs/Deployment/Monitoring/web-scraping-dashboard.json`
 - `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json` (LLM cost/tokens dashboard)
 
 Create `provisioning/dashboards/dashboards.yml`:
@@ -190,8 +191,8 @@ Note: If your Prometheus datasource UID is not `prometheus`, update dashboards v
 3) Alerting
 
 Copy alert rules to a mounted path, e.g., `/etc/grafana/provisioning/alerting`:
-- `Samples/Grafana/alerts/app-alerts.yml`
-- `Samples/Grafana/alerts/mcp-alerts.yml`
+- `Docs/Deployment/Monitoring/Alerts/app-alerts.yml`
+- `Docs/Deployment/Monitoring/Alerts/mcp-alerts.yml`
 
 Grafana auto‑discovers `.yml` rules under the alerting directory on startup.
 
@@ -209,8 +210,8 @@ services:
     volumes:
       - ./provisioning/datasources:/etc/grafana/provisioning/datasources
       - ./provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./Samples/Grafana/alerts:/etc/grafana/provisioning/alerting
-      - ./Samples/Grafana:/var/lib/grafana/dashboards
+      - ./Docs/Deployment/Monitoring/Alerts:/etc/grafana/provisioning/alerting
+      - ./Docs/Deployment/Monitoring:/var/lib/grafana/dashboards
 ```
 
 Once Grafana starts, browse to Dashboards → TLDW → App Observability or MCP Unified. Update the Prometheus datasource UID if yours differs.
@@ -242,7 +243,7 @@ Sample PromQL queries:
 - WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
 - DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
 
-Grafana: Import `Samples/Grafana/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
+Grafana: Import `Docs/Deployment/Monitoring/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
 
 ## Platform-Specific Notes
 

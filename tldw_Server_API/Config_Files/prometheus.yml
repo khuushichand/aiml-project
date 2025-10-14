@@ -1,0 +1,15 @@
+# Minimal Prometheus configuration for local Grafana testing.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Example scrape for a local tldw_server running on the host (Mac/Windows Docker Desktop)
+  - job_name: 'tldw-server'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+
+  # Example scrape for embeddings worker orchestrator inside the compose network
+  - job_name: 'tldw-worker-orchestrator'
+    static_configs:
+      - targets: ['worker-orchestrator:9090']

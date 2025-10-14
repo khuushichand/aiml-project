@@ -152,7 +152,7 @@ services:
     image: prom/prometheus:latest
     container_name: tldw-prometheus
     volumes:
-      - ./Config_Files/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ../Config_Files/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -177,7 +177,14 @@ services:
       - GF_INSTALL_PLUGINS=redis-datasource
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./Config_Files/grafana:/etc/grafana/provisioning
+      # Provisioning files: either point to your own provisioning directory
+      # - ./Config_Files/grafana:/etc/grafana/provisioning
+      # Or use the sample provisioning included in this repo:
+      - ../../Samples/Grafana/provisioning:/etc/grafana/provisioning
+      # Mount dashboards directory so Grafana auto-loads JSONs
+      - ../../Docs/Deployment/Monitoring:/var/lib/grafana/dashboards
+      # Mount alerting rules for Grafana managed alerting
+      - ../../Docs/Deployment/Monitoring/Alerts:/etc/grafana/provisioning/alerting
     ports:
       - "3000:3000"
     depends_on:

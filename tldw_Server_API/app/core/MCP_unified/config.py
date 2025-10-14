@@ -65,7 +65,8 @@ class MCPConfig(BaseSettings):
     ws_ping_interval: int = Field(default=30, env="MCP_WS_PING_INTERVAL")
     ws_ping_timeout: int = Field(default=60, env="MCP_WS_PING_TIMEOUT")
     ws_close_timeout: int = Field(default=10, env="MCP_WS_CLOSE_TIMEOUT")
-    
+    ws_auth_required: bool = Field(default=False, env="MCP_WS_AUTH_REQUIRED")
+
     # CORS Configuration
     cors_enabled: bool = Field(default=True, env="MCP_CORS_ENABLED")
     cors_origins: List[str] = Field(
@@ -118,6 +119,11 @@ class MCPConfig(BaseSettings):
     # Audit Logging
     audit_enabled: bool = Field(default=True, env="MCP_AUDIT_ENABLED")
     audit_log_file: str = Field(default="audit.log", env="MCP_AUDIT_LOG_FILE")
+
+    # Rate limit categories (tool → category) mapping
+    # Provide either JSON via MCP_TOOL_CATEGORY_MAP or file path via MCP_TOOL_CATEGORY_MAP_FILE
+    tool_category_map: Dict[str, str] = Field(default_factory=dict, env="MCP_TOOL_CATEGORY_MAP")
+    tool_category_map_file: Optional[str] = Field(default=None, env="MCP_TOOL_CATEGORY_MAP_FILE")
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -173,6 +179,20 @@ class MCPConfig(BaseSettings):
         if "sqlite" in v and not v.startswith("sqlite+aiosqlite"):
             # Ensure async SQLite driver is used
             v = v.replace("sqlite://", "sqlite+aiosqlite://")
+        return v
+
+    @validator("tool_category_map", pre=True)
+    def parse_tool_category_map(cls, v):
+        """Allow JSON string in env for tool→category map."""
+        if not v:
+            return {}
+        if isinstance(v, str):
+            try:
+                import json as _json
+                data = _json.loads(v)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
         return v
     
     def get_redis_connection_params(self) -> Optional[Dict[str, Any]]:
@@ -249,6 +269,20 @@ def get_config() -> MCPConfig:
     try:
         config = MCPConfig()
         config.configure_logging()
+        # Load tool category map from YAML file if provided
+        try:
+            if config.tool_category_map_file:
+                import os as _os, yaml as _yaml  # type: ignore
+                if _os.path.exists(config.tool_category_map_file):
+                    with open(config.tool_category_map_file, 'r') as f:
+                        data = _yaml.safe_load(f) or {}
+                    if isinstance(data, dict):
+                        # Expect top-level mapping { tool_name: category }
+                        for k, v in data.items():
+                            if isinstance(k, str) and isinstance(v, str):
+                                config.tool_category_map[k] = v
+        except Exception as _e:
+            logger.warning(f"Failed to load tool category map file: {_e}")
         logger.info("MCP configuration loaded successfully")
         return config
     except Exception as e:

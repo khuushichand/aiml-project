@@ -134,6 +134,9 @@ class ClaimsRebuildService:
     def get_queue_length(self) -> int:
         return self._queue.qsize()
 
+    def get_worker_count(self) -> int:
+        return len(self._threads)
+
 
 # Module-level singleton for convenience
 _service_singleton: Optional[ClaimsRebuildService] = None

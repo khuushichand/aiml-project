@@ -1,0 +1,36 @@
+# Caddyfile – HTTPS reverse proxy for tldw_server
+# Replace your.domain.com and email. Run with: docker run -p 443:443 -p 80:80 \
+#   -v $(pwd)/Samples/Caddy/Caddyfile:/etc/caddy/Caddyfile:ro caddy:2
+
+your.domain.com {
+  encode zstd gzip
+
+  @websockets {
+    header Connection *Upgrade*
+    header Upgrade    websocket
+  }
+
+  reverse_proxy localhost:8000 {
+    # WebSockets and long-lived requests are handled automatically
+    # Increase timeouts for streaming and LLM workloads
+    transport http {
+      read_buffer  4096
+      write_buffer 4096
+      read_timeout  3600s
+      write_timeout 3600s
+      dial_timeout   60s
+    }
+  }
+
+  # Security headers (tune per your WebUI needs)
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    # Basic CSP; adjust to your assets
+    Content-Security-Policy "default-src 'self'; img-src 'self' data:; object-src 'none'"
+  }
+
+  tls you@example.com
+}
+

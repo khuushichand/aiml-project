@@ -87,15 +87,31 @@ class MediaModule(BaseModule):
         }
         
         try:
-            # Check database connection
-            #media_ids = self.db.fetch_all_media_ids(limit=1)
-            # FIXME - Implement
-            pass
-            checks["database_connection"] = True
+            # Check database connection (backend-agnostic)
+            try:
+                cur = self.db.execute_query("SELECT 1")
+                _ = cur.fetchone()
+                checks["database_connection"] = True
+            except Exception as _db_e:
+                logger.debug(f"Media DB connection check failed: {_db_e}")
+                checks["database_connection"] = False
             
             # Check if database is writable (use a test table or transaction)
             # This is a simplified check - implement proper health check table
-            checks["database_writable"] = True
+            try:
+                # Use a short-lived transaction to avoid leaving artifacts
+                with self.db.transaction():
+                    self.db.execute_query("CREATE TABLE IF NOT EXISTS _mcp_healthcheck (k TEXT PRIMARY KEY, v TEXT)")
+                    self.db.execute_query("INSERT OR REPLACE INTO _mcp_healthcheck(k, v) VALUES (?, ?)", ("ping", datetime.utcnow().isoformat()))
+                    # Best-effort cleanup to keep DB tidy (ignore errors for non-SQLite backends)
+                    try:
+                        self.db.execute_query("DELETE FROM _mcp_healthcheck WHERE k = ?", ("ping",))
+                    except Exception:
+                        pass
+                checks["database_writable"] = True
+            except Exception as _w_e:
+                logger.debug(f"Media DB writable check failed: {_w_e}")
+                checks["database_writable"] = False
             
             # Check disk space
             db_path = self.config.settings.get("db_path", "./Databases/Media_DB_v2.db")

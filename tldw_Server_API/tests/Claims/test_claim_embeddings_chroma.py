@@ -33,7 +33,9 @@ def test_optional_claim_embeddings_with_chroma(monkeypatch):
 
             # Create manager with mocked client
             base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-            with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as pclient:
+            with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.Client') as cclient, \
+                 patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as pclient:
+                cclient.return_value = mock_client
                 pclient.return_value = mock_client
                 manager = ChromaDBManager(
                     user_id="test_user",

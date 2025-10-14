@@ -153,7 +153,7 @@ Sample PromQL queries:
 - WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
 - DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
 
-Grafana: Import `Samples/Grafana/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
+Grafana: Import `Docs/Deployment/Monitoring/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
 
 ## Platform-Specific Notes
 

@@ -41,7 +41,7 @@ default_chunk_options_from_lib = {
     'tokenizer_name_or_path': 'gpt2'
 }
 from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse, ChunkingTextRequest, \
-    ChunkingOptionsRequest, ChunkedContentResponse
+    ChunkingOptionsRequest, ChunkedContentResponse, ChunkingCapabilitiesResponse, MethodSpecificOptions, CodeMethodOptions
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
 from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
 # Dependencies for user-specific database access
@@ -255,6 +255,21 @@ async def process_text_for_chunking_json(
                 )
 
 
+    # Filename-based language hint if language not set/empty
+    try:
+        if (not effective_options.get('language')) and request_data.file_name:
+            fname = str(request_data.file_name)
+            ext = fname.rsplit('.', 1)[-1].lower() if '.' in fname else ''
+            ext_map = {
+                'py': 'python', 'js': 'javascript', 'jsx': 'javascript', 'ts': 'typescript', 'tsx': 'typescript',
+                'java': 'java', 'rb': 'ruby', 'rs': 'rust', 'go': 'go', 'kt': 'kotlin', 'swift': 'swift',
+                'c': 'c', 'cc': 'cpp', 'cxx': 'cpp', 'cpp': 'cpp', 'hpp': 'cpp', 'h': 'c',
+            }
+            if ext in ext_map:
+                effective_options['language'] = ext_map[ext]
+    except Exception:
+        pass
+
     logger.debug(f"Effective chunking options before LLM setup: {effective_options}")
 
     # --- LLM Configuration for specific chunking methods ---
@@ -450,6 +465,19 @@ async def process_file_for_chunking(
 
     # Filter out None values from the top level to allow library defaults
     form_options_cleaned = {k: v for k, v in form_options_dict.items() if v is not None}
+    # Filename-based language hint if not provided
+    try:
+        if not form_options_cleaned.get('language') and file and file.filename:
+            ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+            ext_map = {
+                'py': 'python', 'js': 'javascript', 'jsx': 'javascript', 'ts': 'typescript', 'tsx': 'typescript',
+                'java': 'java', 'rb': 'ruby', 'rs': 'rust', 'go': 'go', 'kt': 'kotlin', 'swift': 'swift',
+                'c': 'c', 'cc': 'cpp', 'cxx': 'cpp', 'cpp': 'cpp', 'hpp': 'cpp', 'h': 'c',
+            }
+            if ext in ext_map:
+                form_options_cleaned['language'] = ext_map[ext]
+    except Exception:
+        pass
     if code_mode is not None:
         form_options_cleaned['code_mode'] = code_mode
 
@@ -543,6 +571,7 @@ async def process_file_for_chunking(
     "/capabilities",
     summary="List chunking methods and defaults",
     tags=["Text Processing", "Chunking"],
+    response_model=ChunkingCapabilitiesResponse,
 )
 async def get_chunking_capabilities(
     current_user: User = Depends(get_request_user),
@@ -561,5 +590,13 @@ async def get_chunking_capabilities(
         "default_options": default_chunk_options_from_lib,
         "llm_required_methods": llm_required,
         "hierarchical_support": True,
-        "notes": "This describes text chunking capabilities; ingestion-specific chunkers are configured via templates or step config.",
+        "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+        "method_specific_options": MethodSpecificOptions(
+            code=CodeMethodOptions(
+                code_mode=["auto", "ast", "heuristic"],
+                language_hints={
+                    "py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"
+                },
+            )
+        ),
     }

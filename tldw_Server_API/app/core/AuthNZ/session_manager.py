@@ -964,14 +964,15 @@ class SessionManager:
                 # Proceed with cleanup if table exists
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
-                    deleted = await conn.fetchval(
+                    rows = await conn.fetch(
                         """
                         DELETE FROM sessions
                         WHERE expires_at < CURRENT_TIMESTAMP - INTERVAL '1 day'
                         OR (is_active = FALSE AND revoked_at < CURRENT_TIMESTAMP - INTERVAL '7 days')
-                        RETURNING COUNT(*)
+                        RETURNING id
                         """
                     )
+                    deleted = len(rows)
                 else:
                     # SQLite
                     cursor = await conn.execute(

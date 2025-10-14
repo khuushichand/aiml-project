@@ -9,9 +9,10 @@ This folder contains provisioning examples for Grafana so it can auto‑load a P
 Dashboards to load (copy into `/var/lib/grafana/dashboards` in your Grafana container/host):
 - `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
 - `Docs/Deployment/Monitoring/Grafana_LLM_Daily_Spend.json`
- - `Samples/Grafana/app-observability-dashboard.json`
- - `Samples/Grafana/mcp-dashboard.json`
- - `Samples/Grafana/web-scraping-dashboard.json`
+- `Docs/Deployment/Monitoring/overview.json`
+- `Docs/Deployment/Monitoring/app-observability-dashboard.json`
+- `Docs/Deployment/Monitoring/mcp-dashboard.json`
+- `Docs/Deployment/Monitoring/web-scraping-dashboard.json`
 
 Docker Compose snippet:
 
@@ -33,3 +34,4 @@ services:
 Notes
 - The datasource UID is set to `prometheus` in dashboards; change the UID if your datasource differs.
 - The dashboards are read directly from `Docs/Deployment/Monitoring` in the example; adapt the mounted path as needed.
+ - Annotations: a sample Prometheus-backed Deploys annotation is provisioned from `Samples/Grafana/provisioning/annotations/deploys.yml`. Push a `tldw_deploy_info{version,git_sha}` metric at deploy time to see markers on dashboards.

@@ -1488,5 +1488,53 @@ class WorkflowsDatabase:
             pass
         return data
 
+    # ---------- Human-in-the-loop decisions ----------
+    def approve_step_decision(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        approved_by: str,
+        comment: Optional[str] = None,
+    ) -> None:
+        """Mark step decision approved and set final status to succeeded for matching rows.
+
+        For v0.1, we update all rows matching run_id and step_id.
+        """
+        params = ("approved", approved_by, _utcnow_iso(), comment or "", "succeeded", run_id, step_id)
+        query = (
+            "UPDATE workflow_step_runs SET decision = ?, approved_by = ?, approved_at = ?, review_comment = ?, status = ? "
+            "WHERE run_id = ? AND step_id = ?"
+        )
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+        cur = self._conn.cursor()
+        cur.execute(query, params)
+        self._conn.commit()
+
+    def reject_step_decision(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        approved_by: str,
+        comment: Optional[str] = None,
+    ) -> None:
+        """Mark step decision rejected and set status to failed for matching rows."""
+        params = ("rejected", approved_by, _utcnow_iso(), comment or "", "failed", run_id, step_id)
+        query = (
+            "UPDATE workflow_step_runs SET decision = ?, approved_by = ?, approved_at = ?, review_comment = ?, status = ? "
+            "WHERE run_id = ? AND step_id = ?"
+        )
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+        cur = self._conn.cursor()
+        cur.execute(query, params)
+        self._conn.commit()
+
 
 __all__ = ["WorkflowsDatabase", "WorkflowDefinition", "WorkflowRun", "DEFAULT_DB_PATH"]

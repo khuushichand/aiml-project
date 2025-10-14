@@ -312,7 +312,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 7 # Schema v7 adds flashcard reverse flag
+    _CURRENT_SCHEMA_VERSION = 8  # Schema v8 adds multi-image support for messages
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
 
     _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
@@ -568,6 +568,20 @@ AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts,rowid,content)
   VALUES('delete',old.rowid,old.content);
 END;
+
+/*----------------------------------------------------------------
+  3b. Message images (multi-image support)
+----------------------------------------------------------------*/
+CREATE TABLE IF NOT EXISTS message_images(
+  message_id      TEXT    NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL,
+  image_data      BLOB    NOT NULL,
+  image_mime_type TEXT    NOT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(message_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_images_message ON message_images(message_id);
 
 /*----------------------------------------------------------------
   4. Keywords
@@ -1383,6 +1397,35 @@ UPDATE db_schema_version
    AND version < 7;
 """
 
+    # --- Migration: V7 -> V8 (Message images table) ---
+    _MIGRATION_SQL_V7_TO_V8 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 8 – Message images table (2025-10-14)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS message_images(
+  message_id      TEXT    NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL,
+  image_data      BLOB    NOT NULL,
+  image_mime_type TEXT    NOT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(message_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_images_message ON message_images(message_id);
+
+INSERT OR IGNORE INTO message_images (message_id, position, image_data, image_mime_type, created_at)
+SELECT id, 0, image_data, image_mime_type, CURRENT_TIMESTAMP
+FROM messages
+WHERE image_data IS NOT NULL;
+
+UPDATE db_schema_version
+   SET version = 8
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 8;
+"""
+
     def __init__(
         self,
         db_path: Union[str, Path],
@@ -2082,6 +2125,25 @@ UPDATE db_schema_version
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V6->V7: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V7 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v7_to_v8(self, conn: sqlite3.Connection):
+        """Migrates schema from V7 to V8 (introduces message_images table)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V7 to V8 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V7_TO_V8)
+            final_version = self._get_db_version(conn)
+            if final_version != 8:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V7->V8 failed version check. Expected 8, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V8 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V7->V8 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V7->V8 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V7->V8: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V8 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2141,6 +2203,9 @@ UPDATE db_schema_version
                     if target_version >= 7 and current_db_version == 6:
                         self._migrate_from_v6_to_v7(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 8 and current_db_version == 7:
+                        self._migrate_from_v7_to_v8(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Example for future migrations:
                 # elif current_db_version == 1:
                 #     self._migrate_from_v1_to_v2(conn)
@@ -2156,14 +2221,29 @@ UPDATE db_schema_version
                         if target_version >= 6 and current_db_version == 5:
                             self._migrate_from_v5_to_v6(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 7 and current_db_version == 6:
+                            self._migrate_from_v6_to_v7(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 5 and target_version >= 6:
                         self._migrate_from_v5_to_v6(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 7 and current_db_version == 6:
                             self._migrate_from_v6_to_v7(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 6 and target_version >= 7:
                         self._migrate_from_v6_to_v7(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 8 and current_db_version == 7:
+                            self._migrate_from_v7_to_v8(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 7 and target_version >= 8:
+                        self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -2212,6 +2292,10 @@ UPDATE db_schema_version
             if current_version < 7:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V6_TO_V7, conn, expected_version=7)
                 current_version = 7
+
+            if current_version < 8:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V7_TO_V8, conn, expected_version=8)
+                current_version = 8
 
             if current_version > target_version:
                 raise SchemaError(
@@ -4046,7 +4130,7 @@ UPDATE db_schema_version
         Adds a new message to a conversation, optionally with image data.
 
         `id` (UUID string) is auto-generated if not provided in `msg_data`.
-        Requires 'conversation_id', 'sender'. Message must have 'content' (text) or 'image_data'.
+        Requires 'conversation_id', 'sender'. Message must have 'content' (text) or image attachments.
         `client_id` defaults to DB instance's `client_id`. `version` is set to 1.
         `timestamp` defaults to current UTC time if not provided; `last_modified` is set to current UTC time.
 
@@ -4055,31 +4139,52 @@ UPDATE db_schema_version
 
         Args:
             msg_data: Dictionary with message data.
-                      Required: 'conversation_id', 'sender'. At least one of 'content' or 'image_data'.
+                      Required: 'conversation_id', 'sender'. At least one of 'content' or images.
                       Optional: 'id', 'parent_message_id', 'content' (str),
                                 'image_data' (bytes), 'image_mime_type' (str, required if image_data present),
-                                'timestamp', 'ranking', 'client_id'.
+                                'images' (iterable of {'data','mime'}), 'timestamp', 'ranking', 'client_id'.
 
         Returns:
             The string UUID of the newly added message.
 
         Raises:
-            InputError: If required fields are missing, if both 'content' and 'image_data' are absent,
+            InputError: If required fields are missing, if both 'content' and attachments are absent,
                         or if the parent conversation is not found or is deleted.
             ConflictError: If a message with the provided 'id' (if any) already exists.
             CharactersRAGDBError: For other database errors (e.g., FK violation for conversation_id).
         """
+        images_payload_raw = msg_data.pop('images', None)
+        normalized_images: List[Tuple[bytes, str]] = []
+        if images_payload_raw:
+            for entry in images_payload_raw:
+                img_bytes: Optional[bytes] = None
+                img_mime: Optional[str] = None
+                if isinstance(entry, dict):
+                    img_bytes = entry.get("data") or entry.get("image_data")
+                    img_mime = entry.get("mime") or entry.get("image_mime_type")
+                elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    img_bytes, img_mime = entry[0], entry[1]
+                if img_bytes is None or img_mime is None:
+                    continue
+                if isinstance(img_bytes, memoryview):
+                    img_bytes = img_bytes.tobytes()
+                normalized_images.append((img_bytes, str(img_mime)))
+
         msg_id = msg_data.get('id') or self._generate_uuid()
 
-        required_fields = ['conversation_id', 'sender', 'content']  # Content can be empty if image is present
+        required_fields = ['conversation_id', 'sender', 'content']
         for field in required_fields:
-            if field not in msg_data:  # Removed "not msg_data[field]" for 'content'
+            if field not in msg_data:
                 raise InputError(f"Required field '{field}' is missing for message.")
-        if not msg_data.get('content') and not msg_data.get('image_data'):
+        if not msg_data.get('content') and not msg_data.get('image_data') and not normalized_images:
             raise InputError("Message must have text content or image data.")
         if msg_data.get('image_data') and not msg_data.get('image_mime_type'):
             raise InputError("image_mime_type is required if image_data is provided.")
 
+        if normalized_images and not msg_data.get('image_data'):
+            first_bytes, first_mime = normalized_images[0]
+            msg_data['image_data'] = first_bytes
+            msg_data['image_mime_type'] = first_mime
 
         client_id = msg_data.get('client_id') or self.client_id
         if not client_id:
@@ -4110,25 +4215,83 @@ UPDATE db_schema_version
             )
         try:
             with self.transaction():
-                conv_cursor = self.execute_query("SELECT 1 FROM conversations WHERE id = ? AND deleted = 0",
-                                                 (msg_data['conversation_id'],))
+                conv_cursor = self.execute_query(
+                    "SELECT 1 FROM conversations WHERE id = ? AND deleted = 0",
+                    (msg_data['conversation_id'],),
+                )
                 if not conv_cursor.fetchone():
                     raise InputError(
-                        f"Cannot add message: Conversation ID '{msg_data['conversation_id']}' not found or deleted.")
-                self.execute_query(query, params)  # commit handled by transaction context
+                        f"Cannot add message: Conversation ID '{msg_data['conversation_id']}' not found or deleted."
+                    )
+                self.execute_query(query, params)
+                if normalized_images:
+                    self._insert_message_images(msg_id, normalized_images)
             logger.info(
-                f"Added message ID: {msg_id} to conversation {msg_data['conversation_id']} (Image: {'Yes' if msg_data.get('image_data') else 'No'}).")
+                "Added message ID: %s to conversation %s (Images stored: %s).",
+                msg_id,
+                msg_data['conversation_id'],
+                len(normalized_images) if normalized_images else ("Yes" if msg_data.get('image_data') else "No"),
+            )
             return msg_id
         except sqlite3.IntegrityError as e:
             if "UNIQUE constraint failed: messages.id" in str(e):
-                raise ConflictError(f"Message with ID '{msg_id}' already exists.", entity="messages",
-                                    entity_id=msg_id) from e
+                raise ConflictError(
+                    f"Message with ID '{msg_id}' already exists.",
+                    entity="messages",
+                    entity_id=msg_id,
+                ) from e
             raise CharactersRAGDBError(f"Database integrity error adding message: {e}") from e
         except InputError:
             raise
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding message: {e}")
             raise
+    def _insert_message_images(self, message_id: str, images: List[Tuple[bytes, str]]) -> None:
+        """Insert or replace message images for the given message."""
+        if not images:
+            return
+        params: List[Tuple[str, int, bytes, str]] = []
+        for idx, (img_bytes, img_mime) in enumerate(images):
+            if img_bytes is None or img_mime is None:
+                continue
+            if isinstance(img_bytes, memoryview):
+                img_bytes = img_bytes.tobytes()
+            params.append((message_id, idx, img_bytes, img_mime))
+        if not params:
+            return
+        query = (
+            "INSERT INTO message_images (message_id, position, image_data, image_mime_type) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(message_id, position) DO UPDATE SET "
+            "image_data=excluded.image_data, image_mime_type=excluded.image_mime_type, "
+            "created_at=CURRENT_TIMESTAMP"
+        )
+        self.execute_many(query, params, commit=False)
+
+    def get_message_images(self, message_id: str) -> List[Dict[str, Any]]:
+        """Fetch all images associated with a message, ordered by position."""
+        try:
+            cursor = self.execute_query(
+                "SELECT message_id, position, image_data, image_mime_type FROM message_images "
+                "WHERE message_id = ? ORDER BY position ASC",
+                (message_id,),
+            )
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            images: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                img_bytes = record.get("image_data")
+                if isinstance(img_bytes, memoryview):
+                    record["image_data"] = img_bytes.tobytes()
+                images.append(record)
+            return images
+        except CharactersRAGDBError as e:
+            logger.error(f"Failed to fetch images for message {message_id}: {e}")
+            return []
 
     def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -4150,7 +4313,18 @@ UPDATE db_schema_version
         try:
             cursor = self.execute_query(query, (message_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            if isinstance(row, dict):
+                record = dict(row)
+            else:
+                columns = [col[0] for col in cursor.description] if cursor.description else []
+                record = {columns[idx]: row[idx] for idx in range(len(columns))}
+            img_blob = record.get("image_data")
+            if isinstance(img_blob, memoryview):
+                record["image_data"] = img_blob.tobytes()
+            record["images"] = self.get_message_images(message_id)
+            return record
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching message ID {message_id}: {e}")
             raise
@@ -4180,7 +4354,20 @@ UPDATE db_schema_version
         """
         try:
             cursor = self.execute_query(query, (conversation_id, limit, offset))
-            return [dict(row) for row in cursor.fetchall()]
+            raw_rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in raw_rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                image_blob = record.get("image_data")
+                if isinstance(image_blob, memoryview):
+                    record["image_data"] = image_blob.tobytes()
+                record["images"] = self.get_message_images(record["id"])
+                results.append(record)
+            return results
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching messages for conversation ID {conversation_id}: {e}")
             raise

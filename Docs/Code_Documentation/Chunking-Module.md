@@ -74,6 +74,30 @@ Example (excerpt):
     - `get_strategy(method)` – retrieve or instantiate a strategy
     - `clear_cache()`, `get_cache_stats()`
 
+### Capabilities Endpoint
+
+`GET /api/v1/chunking/capabilities`
+
+Returns the current chunking capabilities derived from the runtime registry and defaults.
+
+Example response:
+
+```
+{
+  "methods": ["words", "sentences", "paragraphs", "tokens", "semantic", "json", "xml", "ebook_chapters", "rolling_summarize", "structure_aware", "code", "code_ast"],
+  "default_options": { ... },
+  "llm_required_methods": ["rolling_summarize", "propositions"],
+  "hierarchical_support": true,
+  "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+  "method_specific_options": {
+    "code": {
+      "code_mode": ["auto", "ast", "heuristic"],
+      "language_hints": {"py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"}
+    }
+  }
+}
+```
+
 - Legacy bridges (back‑compat):
   - `from ...Chunking import improved_chunking_process` – simplified wrapper around `Chunker`
   - `from ...Chunking import chunk_for_embedding` – standardized format for embedding pipelines

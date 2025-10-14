@@ -524,6 +524,11 @@ class MCPServer:
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
         
+        # Optionally require authentication for WS (production hardening)
+        if self.config.ws_auth_required and not user_id:
+            await websocket.close(code=1008, reason="Authentication required")
+            return
+
         # Check connection limits (global and per-IP)
         async with self.connection_lock:
             if len(self.connections) >= self.config.ws_max_connections:

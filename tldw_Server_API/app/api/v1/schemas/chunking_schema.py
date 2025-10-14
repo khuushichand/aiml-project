@@ -166,6 +166,26 @@ class ChunkMetadataResponse(BaseModel):
     # For example, if json_content was extracted:
     # initial_json_metadata: Optional[Dict[str, Any]] = None # Example
 
+
+# --- Capabilities schema ---
+
+class CodeMethodOptions(BaseModel):
+    code_mode: List[str] = Field(description="Supported values for option 'code_mode' when method='code'")
+    language_hints: Dict[str, str] = Field(description="Filename extension to language mapping hints")
+
+
+class MethodSpecificOptions(BaseModel):
+    code: CodeMethodOptions
+
+
+class ChunkingCapabilitiesResponse(BaseModel):
+    methods: List[str]
+    default_options: Dict[str, Any]
+    llm_required_methods: List[str]
+    hierarchical_support: bool
+    notes: Optional[str] = None
+    method_specific_options: Optional[MethodSpecificOptions] = None
+
 #
 # End of chunking_schema.py
 #######################################################################################################################

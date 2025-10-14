@@ -116,6 +116,25 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                 cur.execute(JOBS_POSTGRES_DDL)
             conn.commit()
     except Exception as e:
-        # Re-raise with context
-        raise RuntimeError(f"Failed to ensure Jobs schema in Postgres: {e}") from e
+        # Attempt to create database if it doesn't exist, then retry
+        msg = str(e)
+        if "does not exist" in msg and "database" in msg:
+            try:
+                base = db_url.rsplit("/", 1)[0] + "/postgres"
+                db_name = db_url.rsplit("/", 1)[1].split("?")[0]
+                with psycopg.connect(base, autocommit=True) as conn2:
+                    with conn2.cursor() as cur2:
+                        cur2.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
+                        if cur2.fetchone() is None:
+                            cur2.execute(f"CREATE DATABASE {db_name}")
+                # Retry DDL
+                with psycopg.connect(db_url) as conn3:
+                    with conn3.cursor() as cur3:
+                        cur3.execute(JOBS_POSTGRES_DDL)
+                    conn3.commit()
+            except Exception as e2:
+                raise RuntimeError(f"Failed to ensure Jobs schema in Postgres: {e2}") from e2
+        else:
+            # Re-raise with context for other errors
+            raise RuntimeError(f"Failed to ensure Jobs schema in Postgres: {e}") from e
     return db_url

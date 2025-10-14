@@ -595,7 +595,7 @@ Prebuilt configuration samples are included to speed up deployments:
   - Ensures WebSocket upgrades and long request timeouts
 
 - Traefik dynamic config: `Samples/Traefik/traefik-dynamic.yml`
-- Grafana dashboard (security): `Samples/Grafana/security-dashboard.json`
+- Grafana dashboard (security): `Docs/Deployment/Monitoring/security-dashboard.json`
 - Prometheus alerts (near-quota): `Samples/Prometheus/alerts.yml`
   - Mount into Traefik file provider (e.g., `/etc/traefik/dynamic`)
   - Configure static settings for Docker provider, entrypoints, and LetsEncrypt
@@ -604,7 +604,7 @@ See `Docs/Deployment/Reverse_Proxy_Examples.md` for end-to-end examples and Dock
 
 ## Metrics Cheatsheet
 
-- Moved to: `Docs/Monitoring/Metrics_Cheatsheet.md` (Prometheus endpoints, metric names, and PromQL examples).
+- See: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` (Prometheus endpoints, metric names, and PromQL examples).
 
 </details>
 

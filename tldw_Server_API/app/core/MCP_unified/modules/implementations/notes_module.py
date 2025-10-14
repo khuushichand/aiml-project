@@ -66,7 +66,23 @@ class NotesModule(BaseModule):
         logger.info(f"Shutting down Notes module: {self.name}")
 
     async def check_health(self) -> Dict[str, bool]:
-        return {"initialized": True}
+        checks = {"initialized": True, "driver_available": False, "disk_space": False}
+        try:
+            # Verify DB driver class is importable
+            _ = CharactersRAGDB  # noqa: F401
+            checks["driver_available"] = True
+        except Exception:
+            checks["driver_available"] = False
+        # Check Databases directory has free space
+        try:
+            import os
+            base = os.path.dirname("./Databases/test.db") or "."
+            stat = os.statvfs(base)
+            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            checks["disk_space"] = free_gb > 1
+        except Exception:
+            checks["disk_space"] = False
+        return checks
 
     async def get_tools(self) -> List[Dict[str, Any]]:
         return [

@@ -19,7 +19,21 @@ class CharactersModule(BaseModule):
         logger.info(f"Shutting down Characters module: {self.name}")
 
     async def check_health(self) -> Dict[str, bool]:
-        return {"initialized": True}
+        checks = {"initialized": True, "driver_available": False, "disk_space": False}
+        try:
+            _ = CharactersRAGDB  # noqa: F401
+            checks["driver_available"] = True
+        except Exception:
+            checks["driver_available"] = False
+        try:
+            import os
+            base = os.path.dirname("./Databases/test.db") or "."
+            stat = os.statvfs(base)
+            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            checks["disk_space"] = free_gb > 1
+        except Exception:
+            checks["disk_space"] = False
+        return checks
 
     async def get_tools(self) -> List[Dict[str, Any]]:
         return [
@@ -120,4 +134,3 @@ class CharactersModule(BaseModule):
             for k in ("name", "description", "personality", "scenario", "system_prompt")
         }
         return {"meta": meta, "content": content, "attachments": None}
-

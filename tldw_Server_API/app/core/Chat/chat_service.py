@@ -397,11 +397,27 @@ async def build_context_and_messages(
             msg_parts = []
             if text_content:
                 msg_parts.append({"type": "text", "text": text_content})
-            img_data, img_mime = db_msg.get("image_data"), db_msg.get("image_mime_type")
-            if img_data and img_mime:
+            raw_images = db_msg.get("images") or []
+            if (not raw_images) and db_msg.get("image_data") and db_msg.get("image_mime_type"):
+                raw_images = [{
+                    "position": 0,
+                    "image_data": db_msg.get("image_data"),
+                    "image_mime_type": db_msg.get("image_mime_type"),
+                }]
+
+            for image_entry in raw_images:
                 try:
-                    b64_img = await loop.run_in_executor(None, base64.b64encode, img_data)
-                    msg_parts.append({"type": "image_url", "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}})
+                    img_bytes = image_entry.get("image_data")
+                    if isinstance(img_bytes, memoryview):
+                        img_bytes = img_bytes.tobytes()
+                    if not img_bytes:
+                        continue
+                    img_mime = image_entry.get("image_mime_type") or db_msg.get("image_mime_type") or "image/png"
+                    b64_img = await loop.run_in_executor(None, base64.b64encode, img_bytes)
+                    msg_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}
+                    })
                 except Exception as e:
                     logger.warning(f"Error encoding DB image for history (msg_id {db_msg.get('id')}): {e}")
             if msg_parts:
@@ -554,13 +570,46 @@ async def execute_streaming_call(
             # Submit streaming job to the queue and bridge chunks via channel
             stream_channel: asyncio.Queue = asyncio.Queue(maxsize=100)
             est_tokens_for_queue = max(1, len(request_json) // 4)
+
+            def _queued_processor():
+                local_start = time.time()
+                try:
+                    result = llm_call_func()
+                    latency = time.time() - local_start
+                    metrics.track_llm_call(selected_provider, model, latency, success=True)
+                    if provider_manager:
+                        provider_manager.record_success(selected_provider, latency)
+                    if selected_provider != provider:
+                        try:
+                            metrics.track_provider_fallback_success(
+                                requested_provider=provider,
+                                selected_provider=selected_provider,
+                                streaming=True,
+                                queued=True,
+                            )
+                        except Exception:
+                            pass
+                    return result
+                except Exception as proc_error:
+                    latency = time.time() - local_start
+                    metrics.track_llm_call(
+                        selected_provider,
+                        model,
+                        latency,
+                        success=False,
+                        error_type=type(proc_error).__name__,
+                    )
+                    if provider_manager:
+                        provider_manager.record_failure(selected_provider, proc_error)
+                    raise
+
             await queue_for_exec.enqueue(
                 request_id=(get_request_id() or "unknown"),
                 request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
                 client_id=str(client_id),
                 priority=RequestPriority.HIGH,
                 estimated_tokens=est_tokens_for_queue,
-                processor=llm_call_func,
+                processor=_queued_processor,
                 processor_args=(),
                 processor_kwargs={},
                 streaming=True,
@@ -575,38 +624,44 @@ async def execute_streaming_call(
                     yield item
 
             raw_stream_iter = _channel_stream()
-            metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
-            try:
-                if provider_manager:
-                    provider_manager.record_success(selected_provider, time.time() - llm_start_time)
-            except Exception:
-                pass
-            # Explicit telemetry when queued streaming uses a fallback provider
-            try:
-                if selected_provider != provider:
-                    metrics.track_provider_fallback_success(
-                        requested_provider=provider,
-                        selected_provider=selected_provider,
-                        streaming=True,
-                        queued=True,
-                    )
-            except Exception:
-                pass
         else:
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
-            metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
+            latency = time.time() - llm_start_time
+            metrics.track_llm_call(selected_provider, model, latency, success=True)
             try:
                 if provider_manager:
-                    provider_manager.record_success(selected_provider, time.time() - llm_start_time)
+                    provider_manager.record_success(selected_provider, latency)
             except Exception:
                 pass
+            if selected_provider != provider:
+                try:
+                    metrics.track_provider_fallback_success(
+                        requested_provider=provider,
+                        selected_provider=selected_provider,
+                        streaming=True,
+                        queued=False,
+                    )
+                except Exception:
+                    pass
     except HTTPException as he:
-        metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=False, error_type=type(he).__name__)
+        metrics.track_llm_call(
+            selected_provider,
+            model,
+            time.time() - llm_start_time,
+            success=False,
+            error_type=type(he).__name__,
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred.")
     except Exception as e:
-        metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=False, error_type=type(e).__name__)
+        metrics.track_llm_call(
+            selected_provider,
+            model,
+            time.time() - llm_start_time,
+            success=False,
+            error_type=type(e).__name__,
+        )
         if provider_manager and not (queue_execution_enabled and queue_for_exec is not None):
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
@@ -627,8 +682,10 @@ async def execute_streaming_call(
                     llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
                     try:
                         raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
-                        provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
-                        metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
+                        fallback_latency = time.time() - llm_start_time
+                        provider_manager.record_success(fallback_provider, fallback_latency)
+                        metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
+                        selected_provider = fallback_provider
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         try:
                             metrics.track_provider_fallback_success(
@@ -691,7 +748,7 @@ async def execute_streaming_call(
                 key_id=api_key_id,
                 endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                 operation="chat",
-                provider=provider,
+                provider=selected_provider,
                 model=model,
                 status=200,
                 latency_ms=latency_ms,
@@ -902,6 +959,7 @@ async def execute_non_stream_call(
     """
     llm_start_time = time.time()
     llm_response = None
+    metrics_recorded = False
     try:
         queue_for_exec = None
         try:
@@ -910,31 +968,81 @@ async def execute_non_stream_call(
             queue_for_exec = None
         if queue_execution_enabled and queue_for_exec is not None:
             est_tokens_for_queue = max(1, len(request_json) // 4)
+            def _queued_processor():
+                local_start = time.time()
+                try:
+                    result = llm_call_func()
+                    latency = time.time() - local_start
+                    metrics.track_llm_call(selected_provider, model, latency, success=True)
+                    if provider_manager:
+                        provider_manager.record_success(selected_provider, latency)
+                    if selected_provider != provider:
+                        try:
+                            metrics.track_provider_fallback_success(
+                                requested_provider=provider,
+                                selected_provider=selected_provider,
+                                streaming=False,
+                                queued=True,
+                            )
+                        except Exception:
+                            pass
+                    return result
+                except Exception as proc_error:
+                    latency = time.time() - local_start
+                    metrics.track_llm_call(
+                        selected_provider,
+                        model,
+                        latency,
+                        success=False,
+                        error_type=type(proc_error).__name__,
+                    )
+                    if provider_manager:
+                        provider_manager.record_failure(selected_provider, proc_error)
+                    raise
+
             fut = await queue_for_exec.enqueue(
                 request_id=(get_request_id() or "unknown"),
                 request_data={"endpoint": "/api/v1/chat/completions", "mode": "non-stream"},
                 client_id=str(client_id),
                 priority=RequestPriority.NORMAL,
                 estimated_tokens=est_tokens_for_queue,
-                processor=llm_call_func,
+                processor=_queued_processor,
                 processor_args=(),
                 processor_kwargs={},
                 streaming=False,
                 stream_channel=None,
             )
             llm_response = await fut
+            metrics_recorded = True
         else:
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             loop = asyncio.get_running_loop()
             llm_response = await loop.run_in_executor(None, llm_call_func)
         llm_latency = time.time() - llm_start_time
-        metrics.track_llm_call(provider, model, llm_latency, success=True)
-        if provider_manager:
-            provider_manager.record_success(selected_provider, llm_latency)
+        if not metrics_recorded:
+            metrics.track_llm_call(selected_provider, model, llm_latency, success=True)
+            if provider_manager:
+                provider_manager.record_success(selected_provider, llm_latency)
+            if selected_provider != provider:
+                try:
+                    metrics.track_provider_fallback_success(
+                        requested_provider=provider,
+                        selected_provider=selected_provider,
+                        streaming=False,
+                        queued=False,
+                    )
+                except Exception:
+                    pass
     except Exception as e:
         llm_latency = time.time() - llm_start_time
-        metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(e).__name__)
+        metrics.track_llm_call(
+            selected_provider,
+            model,
+            llm_latency,
+            success=False,
+            error_type=type(e).__name__,
+        )
         if provider_manager:
             provider_manager.record_failure(selected_provider, e)
             name_lower_e = type(e).__name__.lower()
@@ -953,8 +1061,20 @@ async def execute_non_stream_call(
                     cleaned_args["api_endpoint"] = fallback_provider
                     try:
                         llm_response = await perform_chat_api_call_async(**cleaned_args)
-                        provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
-                        metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
+                        fallback_latency = time.time() - llm_start_time
+                        provider_manager.record_success(fallback_provider, fallback_latency)
+                        metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
+                        selected_provider = fallback_provider
+                        metrics_recorded = True
+                        try:
+                            metrics.track_provider_fallback_success(
+                                requested_provider=provider,
+                                selected_provider=fallback_provider,
+                                streaming=False,
+                                queued=False,
+                            )
+                        except Exception:
+                            pass
                     except Exception as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise fallback_error
@@ -979,7 +1099,7 @@ async def execute_non_stream_call(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     model=model,
-                    provider=provider,
+                    provider=selected_provider,
                 )
                 user_id = None
                 api_key_id = None
@@ -994,7 +1114,7 @@ async def execute_non_stream_call(
                     key_id=api_key_id,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
-                    provider=provider,
+                    provider=selected_provider,
                     model=model,
                     status=200,
                     latency_ms=int((time.time() - llm_start_time) * 1000),
@@ -1027,7 +1147,7 @@ async def execute_non_stream_call(
                     key_id=api_key_id,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
-                    provider=provider,
+                    provider=selected_provider,
                     model=model,
                     status=200,
                     latency_ms=int((time.time() - llm_start_time) * 1000),

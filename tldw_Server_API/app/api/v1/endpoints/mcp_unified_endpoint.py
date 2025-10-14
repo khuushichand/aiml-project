@@ -764,17 +764,44 @@ async def create_token(
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)
 async def refresh_token(
-    refresh_token: str = Query(..., description="Refresh token")
+    refresh_token: str = Query(..., description="Refresh token"),
+    token_id: Optional[str] = Query(None, description="Refresh token id (if available)")
 ):
     """
     Refresh authentication token.
     
-    Exchange a valid refresh token for a new access token.
+    Exchange a valid refresh token for a new access token using rotation.
+    If `token_id` is not provided, the system attempts to locate it by scanning
+    active refresh tokens (acceptable for in-memory DEV mode).
     """
-    # TODO: Implement token refresh
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Token refresh not yet implemented"
+    jwt_manager = get_jwt_manager()
+    # Attempt to find token_id if not provided
+    resolved_token_id = token_id
+    try:
+        if not resolved_token_id:
+            # Scan in-memory store (DEV): find first token_id matching token
+            for tid, rt in jwt_manager._refresh_tokens.items():  # noqa: SLF001
+                if rt.token == refresh_token and not rt.revoked:
+                    resolved_token_id = tid
+                    break
+    except Exception:
+        resolved_token_id = token_id
+
+    if not resolved_token_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    try:
+        new_access, new_refresh, new_tid = jwt_manager.rotate_refresh_token(refresh_token, resolved_token_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Refresh token rotation failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token")
+
+    return AuthTokenResponse(
+        access_token=new_access,
+        expires_in=jwt_manager.config.jwt_access_token_expire_minutes * 60,
+        refresh_token=new_refresh,
     )
 
 

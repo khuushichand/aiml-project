@@ -136,6 +136,74 @@ Runtime overrides (non‑persistent) are available via API:
 ## Notes
 - Many subsystems also support file‑based configuration under `Config_Files/` and module‑specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
 
+## Telemetry & Observability
+
+- OpenTelemetry service identity
+  - `OTEL_SERVICE_NAME`: Logical service name (default `tldw_server`).
+  - `OTEL_SERVICE_VERSION`: Service version string (default `1.0.0`).
+  - `OTEL_SERVICE_NAMESPACE`: Namespace grouping (default `production`).
+  - `DEPLOYMENT_ENV`: Deployment environment label (default `development`).
+
+- Exporters and enablement
+  - `ENABLE_METRICS`: Enable metrics pipeline (`true|false`, default `true`).
+  - `ENABLE_TRACING`: Enable tracing pipeline (`true|false`, default `true`).
+  - `ENABLE_OTEL_LOGGING`: Enable OTEL logging integration (`true|false`, default `false`).
+  - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus,console` by default).
+  - `OTEL_TRACES_EXPORTER`: Comma list of traces exporters (`console` by default).
+
+- Prometheus (pull/endpoint exporter)
+  - `PROMETHEUS_HOST`: Bind host for Prometheus exporter (default `0.0.0.0`).
+  - `PROMETHEUS_PORT`: Bind port for Prometheus exporter (default `9090`).
+
+- OTLP (push exporters for traces/metrics)
+  - `OTEL_EXPORTER_OTLP_ENDPOINT`: e.g., `http://otel-collector:4317`.
+  - `OTEL_EXPORTER_OTLP_PROTOCOL`: `grpc` or `http/protobuf` (default `grpc`).
+  - `OTEL_EXPORTER_OTLP_HEADERS`: Optional headers (e.g., `authorization=Bearer <token>`).
+  - `OTEL_EXPORTER_OTLP_INSECURE`: Allow insecure transport (`true|false`, default `true`).
+
+Notes
+- Metrics/OTEL wiring is initialized in the server; see `tldw_Server_API/app/core/Metrics/telemetry.py` for defaults.
+- When `OTEL_METRICS_EXPORTER` includes `prometheus`, the server exposes a scrape endpoint consumed by Prometheus; the port/host are controlled by `PROMETHEUS_*` above.
+
+### Quick Defaults
+
+| Variable                        | Default             | Notes |
+|---------------------------------|---------------------|-------|
+| `OTEL_SERVICE_NAME`             | `tldw_server`       | Logical service name |
+| `OTEL_SERVICE_VERSION`          | `1.0.0`             | Freeform version string |
+| `OTEL_SERVICE_NAMESPACE`        | `production`        | Logical namespace/group |
+| `DEPLOYMENT_ENV`                | `development`       | Environment label |
+| `ENABLE_METRICS`                | `true`              | Enable metrics pipeline |
+| `ENABLE_TRACING`                | `true`              | Enable tracing pipeline |
+| `ENABLE_OTEL_LOGGING`           | `false`             | Enable OTEL logging integration |
+| `OTEL_METRICS_EXPORTER`         | `prometheus,console`| Comma-separated exporters |
+| `OTEL_TRACES_EXPORTER`          | `console`           | Comma-separated exporters |
+| `PROMETHEUS_HOST`               | `0.0.0.0`           | Bind host for Prometheus exporter |
+| `PROMETHEUS_PORT`               | `9090`              | Bind port for Prometheus exporter |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`   | (empty)             | e.g., `http://otel-collector:4317` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`   | `grpc`              | `grpc` or `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_HEADERS`    | (empty)             | Optional headers string |
+| `OTEL_EXPORTER_OTLP_INSECURE`   | `true`              | Allow insecure transport |
+
+## Prometheus & Grafana (deployment)
+
+- Grafana container (see compose service `grafana`)
+  - `GF_SECURITY_ADMIN_USER`: Admin user (default `admin` in samples).
+  - `GF_SECURITY_ADMIN_PASSWORD`: Admin password (default `admin` in samples; change in production).
+  - `GF_AUTH_ANONYMOUS_ENABLED`: Enable anonymous access (`true|false`).
+  - `GF_AUTH_ANONYMOUS_ORG_ROLE`: Role for anonymous users (e.g., `Viewer`).
+  - `GF_PLUGINS_PREINSTALL`: Optional list of plugins to preinstall (preferred over deprecated `GF_INSTALL_PLUGINS`).
+
+- Prometheus container
+  - Configured via mounted `prometheus.yml`; see `tldw_Server_API/Config_Files/prometheus.yml` (sample provided).
+  - No mandatory env vars by default; override scrape targets in the YAML.
+
+Dashboards/Alerts/Annotations
+- Dashboards are provisioned from `Docs/Deployment/Monitoring/` (mounted to `/var/lib/grafana/dashboards`).
+- Alerts are provisioned from `Docs/Deployment/Monitoring/Alerts` (mounted to `/etc/grafana/provisioning/alerting`).
+- A sample Prometheus-backed annotations source is provisioned from `Samples/Grafana/provisioning/annotations/deploys.yml`.
+  - Push a metric like `tldw_deploy_info{version="vX.Y.Z",git_sha="..."} 1` at deploy time to see release markers.
+
 ## Monitoring & Alerts
 - Topic Monitoring (watchlists and alerting):
   - `MONITORING_WATCHLISTS_FILE`: JSON file with watchlists (default `tldw_Server_API/Config_Files/monitoring_watchlists.json`).

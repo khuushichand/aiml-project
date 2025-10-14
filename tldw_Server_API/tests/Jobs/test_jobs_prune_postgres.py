@@ -8,9 +8,7 @@ pytestmark = pytest.mark.pg_jobs
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-
-
-pg_dsn = os.getenv("JOBS_DB_URL") or os.getenv("POSTGRES_TEST_DSN")
+from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup as _pg_schema_and_cleanup
 
 
 pytestmark = pytest.mark.skipif(
@@ -18,25 +16,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 @pytest.fixture(scope="module", autouse=True)
-def _pg_schema_and_cleanup():
-    # Standardize env and ensure schema once for this module
-    os.environ.setdefault("TEST_MODE", "true")
-    os.environ.setdefault("AUTH_MODE", "single_user")
-    # Ensure target database exists
-    try:
-        base = pg_dsn.rsplit("/", 1)[0] + "/postgres"
-        db_name = pg_dsn.rsplit("/", 1)[1].split("?")[0]
-        with psycopg.connect(base, autocommit=True) as _conn:
-            with _conn.cursor() as _cur:
-                _cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
-                if _cur.fetchone() is None:
-                    _cur.execute(f"CREATE DATABASE {db_name}")
-    except Exception:
-        pass
-    ensure_jobs_tables_pg(pg_dsn)
-    with psycopg.connect(pg_dsn) as conn:
-        with conn, conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE jobs RESTART IDENTITY")
+def _setup(pg_schema_and_cleanup):
+    # Alias the shared PG schema/cleanup fixture for autouse
     yield
 
 

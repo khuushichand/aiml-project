@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import List, Dict, Any, Optional
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -11,6 +11,34 @@ from tldw_Server_API.app.core.config import settings
 router = APIRouter(prefix="/claims", tags=["claims"])
 
 
+@router.get("/status")
+def claims_rebuild_status(
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
+    """Return statistics about the claims rebuild worker. Admin only."""
+    try:
+        if not getattr(current_user, 'is_admin', False):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+        svc = get_claims_rebuild_service()
+        try:
+            stats = svc.get_stats()
+        except Exception:
+            stats = {}
+        try:
+            qlen = svc.get_queue_length()
+        except Exception:
+            qlen = 0
+        try:
+            workers = svc.get_worker_count()
+        except Exception:
+            workers = None
+        return {"status": "ok", "stats": stats, "queue_length": qlen, "workers": workers}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # envelope: if true, return {items: [...], next_offset: int|None}
 @router.get("/{media_id}")
 def list_claims(
@@ -18,10 +46,12 @@ def list_claims(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0, le=100000),
     envelope: bool = Query(False),
+    absolute_links: bool = Query(False),
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+    request: Request = None,
+) -> Any:
     try:
         # Admin can override user_id (use a temporary DB instance only in this case)
         override_db: Optional[MediaDatabase] = None
@@ -50,7 +80,21 @@ def list_claims(
                 next_off: Optional[int] = None
                 if offset + len(claims) < total:
                     next_off = offset + len(claims)
-                return {"items": claims, "next_offset": next_off}  # type: ignore[return-value]
+                # Build simple next link (relative/absolute), preserving user_id if present
+                next_link: Optional[str] = None
+                if next_off is not None:
+                    if request and absolute_links:
+                        base = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
+                    else:
+                        base = request.url.path if request else f"/api/v1/claims/{media_id}"
+                    params = f"limit={limit}&offset={next_off}&envelope=true"
+                    if user_id is not None and getattr(current_user, 'is_admin', False):
+                        params += f"&user_id={int(user_id)}"
+                    if absolute_links:
+                        params += "&absolute_links=true"
+                    next_link = f"{base}?{params}"
+                total_pages = int((total + int(limit) - 1) // int(limit)) if int(limit) > 0 else 0
+                return {"items": claims, "next_offset": next_off, "total": total, "total_pages": total_pages, "next_link": next_link}  # type: ignore[return-value]
         finally:
             # Only close the temporary override DB we created here; never close DI-provided instance
             if override_db is not None:

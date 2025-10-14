@@ -75,7 +75,7 @@ modules:
 
   - id: example
     class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule
-    enabled: true
+    enabled: false  # Disabled by default in production
     name: Example
     version: "1.0.0"
     department: demo

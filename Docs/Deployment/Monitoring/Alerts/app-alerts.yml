@@ -1,0 +1,86 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: tldw-app
+    folder: TLDW
+    interval: 1m
+    rules:
+      # HTTP 5xx ratio > 5% for 5 minutes
+      - uid: tldw_app_http_5xx_ratio
+        title: HTTP 5xx ratio high
+        condition: C
+        for: 5m
+        annotations:
+          summary: 'HTTP 5xx ratio > 5%'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(http_requests_total{status=~"5.."}[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "5xx"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(http_requests_total[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "all"
+              range: true
+              refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: math
+              expression: A / B
+              refId: C
+          - refId: D
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0.05
+              refId: D
+      # HTTP p95 latency > 1.0s for 10 minutes
+      - uid: tldw_app_http_p95_high
+        title: HTTP p95 latency high
+        condition: B
+        for: 10m
+        annotations:
+          summary: 'HTTP p95 latency > 1.0s'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+              instant: false
+              interval: ""
+              legendFormat: "p95"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 1
+              refId: B

@@ -2,7 +2,7 @@
 # Description: Handles user authentication and identification based on application mode.
 #
 # Imports
-from typing import Optional
+from typing import Optional, List, Dict, Any
 #
 # 3rd-Party Libraries
 from fastapi import Depends, HTTPException, status, Header, Request
@@ -31,6 +31,10 @@ class User(BaseModel):
     username: str
     email: Optional[str] = None
     is_active: bool = True
+    # RBAC/claims exposure
+    roles: List[str] = []
+    permissions: List[str] = []
+    is_admin: bool = False
 
 # --- Single User "Dummy" Object ---
 # Created when in single-user mode using values from the settings
@@ -164,17 +168,80 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             detail="Error retrieving user information."
         )
 
+    # --- Enrich with roles/permissions from central AuthNZ RBAC tables ---
+    roles: List[str] = []
+    perms: List[str] = []
+    is_admin: bool = False
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        pool = await get_db_pool()
+        # Roles
+        rows = await pool.fetchall(
+            """
+            SELECT r.name AS role
+            FROM user_roles ur
+            JOIN roles r ON r.id = ur.role_id
+            WHERE ur.user_id = ?
+            """,
+            user_id,
+        )
+        for r in rows or []:
+            name = r["role"] if isinstance(r, dict) else r[0]
+            if name and name not in roles:
+                roles.append(str(name))
+        is_admin = ("admin" in roles) or bool(user_data.get("is_superuser"))
+        # Role-based permissions
+        p_rows = await pool.fetchall(
+            """
+            SELECT DISTINCT p.name AS perm
+            FROM user_roles ur
+            JOIN role_permissions rp ON rp.role_id = ur.role_id
+            JOIN permissions p ON p.id = rp.permission_id
+            WHERE ur.user_id = ?
+            """,
+            user_id,
+        )
+        base_perms = set()
+        for pr in p_rows or []:
+            pname = pr["perm"] if isinstance(pr, dict) else pr[0]
+            if pname:
+                base_perms.add(str(pname))
+        # Explicit user overrides (granted=1 add, granted=0 remove)
+        o_rows = await pool.fetchall(
+            """
+            SELECT p.name AS perm, up.granted
+            FROM user_permissions up
+            JOIN permissions p ON p.id = up.permission_id
+            WHERE up.user_id = ?
+            """,
+            user_id,
+        )
+        for orow in o_rows or []:
+            pname = orow["perm"] if isinstance(orow, dict) else orow[0]
+            granted = orow.get("granted", 1) if isinstance(orow, dict) else (orow[1] if len(orow) > 1 else 1)
+            if not pname:
+                continue
+            if granted:
+                base_perms.add(str(pname))
+            else:
+                base_perms.discard(str(pname))
+        perms = sorted(base_perms)
+        # Admin implies system.configure
+        if is_admin:
+            perms = sorted(set(perms) | {"system.configure"})
+    except Exception as e:
+        logger.debug(f"RBAC enrichment failed for user {user_id}: {e}")
+
     # --- Create and validate the User Pydantic model ---
     try:
-        # Now the IDE should be confident that user_data is a dictionary
-        user = User(**user_data)
-    except ValidationError as e: # Catch Pydantic validation errors specifically
+        user = User(**{**user_data, "roles": roles, "permissions": perms, "is_admin": is_admin})
+    except ValidationError as e:  # Catch Pydantic validation errors specifically
         logger.error(f"Failed to validate user data for user {user_id} into User model: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing user data: Invalid format - {e}" # Include details
+            detail=f"Error processing user data: Invalid format - {e}"
         )
-    except Exception as e: # Catch other potential errors during model creation
+    except Exception as e:  # Catch other potential errors during model creation
         logger.error(f"Unexpected error creating User model for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -274,7 +341,17 @@ async def get_request_user(
             else:
                 logger.debug("X-API-KEY matched fallback app settings; accepting.")
         logger.debug("Single-user API Key verified. Returning fixed user object.")
-        user = get_single_user_instance()  # Use the getter function
+        base = get_single_user_instance()  # Use the getter function
+        # Single-user: expose admin-style claims for RBAC compatibility
+        user = User(
+            id=base.id,
+            username=base.username,
+            email=base.email,
+            is_active=base.is_active,
+            roles=["admin"],
+            permissions=["system.configure", "media.read", "media.create", "media.update", "media.delete"],
+            is_admin=True,
+        )
         try:
             request.state.user_id = user.id
         except Exception:

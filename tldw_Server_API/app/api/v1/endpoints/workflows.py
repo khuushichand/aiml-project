@@ -416,6 +416,10 @@ async def get_run(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
+    # Owner or admin (if attribute available)
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -436,11 +440,17 @@ async def get_run_events(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    events = db.get_events(run_id, since=since, limit=limit)
-    # Enforce tenant isolation by checking run first
+    # Enforce tenant isolation and owner/admin
     run = db.get_run(run_id)
-    if not run or run.tenant_id != str(getattr(current_user, "tenant_id", "default")):
+    if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+    events = db.get_events(run_id, since=since, limit=limit)
     out: List[EventResponse] = []
     for e in events:
         out.append(
@@ -465,6 +475,9 @@ async def get_run_artifacts(
         raise HTTPException(status_code=404, detail="Run not found")
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     arts = db.list_artifacts_for_run(run_id)
     # Normalize payload
@@ -501,6 +514,9 @@ async def download_artifact(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Artifact not found")
     # Only support file:// URIs for direct download
     uri = str(art.get("uri") or "")
     if uri.startswith("file://"):
@@ -508,20 +524,28 @@ async def download_artifact(
     else:
         raise HTTPException(status_code=400, detail="Only file artifacts are downloadable")
     p = Path(fpath).resolve()
-    # Basic containment check: must be under recorded workdir (if present)
+    # Containment check: must be under recorded workdir (if present)
     workdir = art.get("metadata_json", {}).get("workdir") or art.get("uri", "")
     try:
         wd = Path(str(workdir).replace("file://", "")).resolve()
         if wd.exists():
+            import os as _os
             try:
-                # Python 3.9+: is_relative_to
-                rel = str(p).startswith(str(wd))
+                common = _os.path.commonpath([str(p), str(wd)])
+                if common != str(wd):
+                    raise ValueError("path_outside_workdir")
             except Exception:
-                rel = str(p).startswith(str(wd))
-            if not rel:
-                raise HTTPException(status_code=400, detail="Invalid artifact path scope")
-    except Exception:
-        pass
+                raise ValueError("validation_error")
+    except Exception as _e:
+        # Allow non-blocking on validation failure if configured, default to blocking
+        strict = str(__import__("os").getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+        if strict:
+            raise HTTPException(status_code=400, detail="Invalid artifact path scope")
+        else:
+            try:
+                logger.warning(f"Artifact scope validation failed for {p}; proceeding due to non-strict setting: {_e}")
+            except Exception:
+                pass
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     # Guardrails: max size and allowed MIME
@@ -557,6 +581,9 @@ async def download_run_artifacts_zip(
         raise HTTPException(status_code=404, detail="Run not found")
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
     arts = db.list_artifacts_for_run(run_id)
@@ -719,17 +746,9 @@ async def approve_step(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    # Update step decision
+    # Update step decision via DB adapter
     try:
-        # Find latest step_run_id for this run+step
-        # Simplest: rely on event stream and step_run_id pattern; otherwise update all matching
-        # For v0.1, update all waiting_human rows for this step
-        cur = db._conn.cursor()
-        cur.execute(
-            "UPDATE workflow_step_runs SET decision = ?, approved_by = ?, approved_at = ?, review_comment = ?, status = ? WHERE run_id = ? AND step_id = ?",
-            ("approved", str(current_user.id), _utcnow_iso(), payload.comment or "", "succeeded", run_id, step_id),
-        )
-        db._conn.commit()
+        db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -750,12 +769,7 @@ async def reject_step(
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     try:
-        cur = db._conn.cursor()
-        cur.execute(
-            "UPDATE workflow_step_runs SET decision = ?, approved_by = ?, approved_at = ?, review_comment = ?, status = ? WHERE run_id = ? AND step_id = ?",
-            ("rejected", str(current_user.id), _utcnow_iso(), payload.comment or "", "failed", run_id, step_id),
-        )
-        db._conn.commit()
+        db.reject_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
         db.update_run_status(run_id, status="failed", status_reason="rejected_by_human", ended_at=_utcnow_iso())
         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "human_rejected", {"step_id": step_id})
     except Exception as e:

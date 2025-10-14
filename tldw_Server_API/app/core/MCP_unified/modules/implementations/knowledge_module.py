@@ -241,5 +241,11 @@ class KnowledgeModule(BaseModule):
             return await self._call_tool("notes.get", {"note_id": str(idv), "retrieval": retrieval}, context)
         if source == "media":
             return await self._call_tool("media.get", {"media_id": int(idv), "retrieval": retrieval}, context)
-        # TODO: chats, characters, prompts in future stages
+        if source == "chats":
+            return await self._call_tool("chats.get", {"conversation_id": str(idv), "retrieval": retrieval}, context)
+        if source == "characters":
+            return await self._call_tool("characters.get", {"character_id": int(idv)}, context)
+        if source == "prompts":
+            return await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
+        # Unsupported source
         raise ValueError(f"Unsupported source for get: {source}")

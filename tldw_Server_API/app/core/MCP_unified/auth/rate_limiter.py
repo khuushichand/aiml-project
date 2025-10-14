@@ -5,6 +5,7 @@ Supports both in-memory and distributed (Redis) rate limiting.
 """
 
 import time
+import os
 import asyncio
 from typing import Optional, Dict, Any
 from collections import defaultdict, deque
@@ -348,6 +349,35 @@ class RateLimiter:
         self.config = get_config()
         self.limiters = {}
         self._init_limiters()
+        # Optional category-specific limiters (e.g., ingestion vs read)
+        # Defaults fall back to the main limiter rates
+        try:
+            # In-memory token buckets for categories when Redis not used
+            rpm_ing = int(os.getenv("MCP_RATE_LIMIT_RPM_INGESTION", str(self.config.rate_limit_requests_per_minute)))
+            burst_ing = int(os.getenv("MCP_RATE_LIMIT_BURST_INGESTION", str(self.config.rate_limit_burst_size)))
+            rpm_read = int(os.getenv("MCP_RATE_LIMIT_RPM_READ", str(self.config.rate_limit_requests_per_minute)))
+            burst_read = int(os.getenv("MCP_RATE_LIMIT_BURST_READ", str(self.config.rate_limit_burst_size)))
+        except Exception:
+            rpm_ing = self.config.rate_limit_requests_per_minute
+            burst_ing = self.config.rate_limit_burst_size
+            rpm_read = self.config.rate_limit_requests_per_minute
+            burst_read = self.config.rate_limit_burst_size
+
+        # If Redis is enabled, we reuse DistributedRateLimiter with window=60
+        if self.config.rate_limit_use_redis and self.config.redis_url:
+            try:
+                import redis.asyncio as redis  # type: ignore
+                params = self.config.get_redis_connection_params()
+                rc = redis.from_url(**params)
+                self.ingestion_limiter = DistributedRateLimiter(rate=rpm_ing, window=60, redis_client=rc)
+                self.read_limiter = DistributedRateLimiter(rate=rpm_read, window=60, redis_client=rc)
+            except Exception:
+                # Fallback to memory
+                self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
+                self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
+        else:
+            self.ingestion_limiter = TokenBucketRateLimiter(rate=rpm_ing, per=60, burst=burst_ing)
+            self.read_limiter = TokenBucketRateLimiter(rate=rpm_read, per=60, burst=burst_read)
         
         # Start cleanup task for in-memory limiters; defer if no running loop
         if not self.config.rate_limit_use_redis:
@@ -435,6 +465,10 @@ class RateLimiter:
             try:
                 if hasattr(self.default_limiter, 'cleanup_old_entries'):
                     await self.default_limiter.cleanup_old_entries()
+                if hasattr(self.ingestion_limiter, 'cleanup_old_entries'):
+                    await self.ingestion_limiter.cleanup_old_entries()
+                if hasattr(self.read_limiter, 'cleanup_old_entries'):
+                    await self.read_limiter.cleanup_old_entries()
                 
                 for limiter in self.limiters.values():
                     if hasattr(limiter, 'cleanup_old_entries'):
@@ -442,6 +476,12 @@ class RateLimiter:
                         
             except Exception as e:
                 logger.error(f"Error in rate limit cleanup: {e}")
+
+    def get_category_limiter(self, category: str) -> BaseRateLimiter:
+        """Return limiter for a category ('ingestion' or 'read')."""
+        if category == 'ingestion':
+            return self.ingestion_limiter
+        return self.read_limiter
 
 
 # Singleton instance

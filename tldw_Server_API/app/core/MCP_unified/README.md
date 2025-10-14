@@ -40,7 +40,7 @@ export MCP_DATABASE_URL=sqlite+aiosqlite:///./Databases/mcp_unified.db
 ### 2. Install Dependencies
 
 ```bash
-pip install fastapi uvicorn loguru pydantic python-jose passlib bcrypt aiosqlite
+pip install fastapi uvicorn loguru pydantic PyJWT passlib bcrypt aiosqlite
 ```
 
 ### 3. Run Tests
@@ -216,7 +216,7 @@ Tool results include the serving module:
 {"content": [...], "module": "Media", "tool": "search_media"}
 ```
 
-See `Docs/Development/MCP_Modules.md` for a complete guide.
+See `Docs/MCP_Docs/MCP_Modules.md` for a complete guide.
 
 ## 🚢 Production Deployment
 
@@ -231,8 +231,13 @@ MCP_API_KEY_SALT=<strong-random-secret>
 MCP_DATABASE_URL=postgresql+asyncpg://user:pass@localhost/mcp
 MCP_REDIS_URL=redis://localhost:6379/0
 MCP_RATE_LIMIT_ENABLED=true
+MCP_RATE_LIMIT_USE_REDIS=1               # Use Redis-backed limiter (multi-node)
+MCP_RATE_LIMIT_RPM_INGESTION=30         # Optional per-category rate; default = RPM
+MCP_RATE_LIMIT_BURST_INGESTION=5
+MCP_RATE_LIMIT_RPM_READ=120
 MCP_METRICS_ENABLED=true
 MCP_LOG_LEVEL=INFO
+MCP_WS_AUTH_REQUIRED=1                  # Require authenticated WS (prod hardening)
 ```
 
 ### Docker Deployment
@@ -256,7 +261,7 @@ Scrape MCP metrics at `GET /api/v1/mcp/metrics/prometheus` (text exposition form
 - Cache hit/miss rates
 - System resource usage
 
-Security: The Prometheus endpoint is unauthenticated to support internal-only scraping. Ensure it’s exposed only on trusted networks or behind an ingress/proxy that enforces authentication.
+Security: The Prometheus endpoint is gated by default (admin required). Only set `MCP_PROMETHEUS_PUBLIC=1` behind an internal network or ingress with auth.
 
 ### Health Checks
 - `/api/v1/mcp/health` - Overall health
@@ -277,9 +282,11 @@ Security: The Prometheus endpoint is unauthenticated to support internal-only sc
 
 ## 📚 Documentation
 
-- `DESIGN.md` - Architecture and design decisions
-- `IMPLEMENTATION_STATUS.md` - Development progress
-- `MIGRATION_GUIDE.md` - Migration from old modules (if needed)
+- Developer Guide: `Docs/MCP_Docs/MCP_Unified_Developer_Guide.md`
+- System Admin Guide: `Docs/MCP_Docs/MCP_Unified_Sysadmin_Guide.md`
+- User Guide: `Docs/MCP_Docs/MCP_Unified_User_Guide.md`
+- Module Authoring: `Docs/MCP_Docs/MCP_Modules.md`
+- Context search design (FTS-first): `Docs/Design/context_mcp_search.md`
 - API documentation available at `/docs` when server is running
 
 ## 🤝 Contributing

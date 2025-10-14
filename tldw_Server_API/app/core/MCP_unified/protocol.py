@@ -538,6 +538,31 @@ class MCPProtocol:
         except Exception:
             pass
 
+        # Optional per-tool/category rate limits (ingestion vs read)
+        try:
+            # Heuristic categorization
+            cfg = get_config()
+            category = None
+            try:
+                # Prefer config-driven mapping; fallback to heuristic
+                if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
+                    category = str(cfg.tool_category_map.get(tool_name))
+            except Exception:
+                category = None
+            if not category:
+                ingestion_tools = {
+                    'ingest_media', 'update_media', 'delete_media'
+                }
+                category = 'ingestion' if tool_name in ingestion_tools else 'read'
+            key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
+            rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
+            await self.rate_limiter.check_rate_limit(rl_key, limiter=self.rate_limiter.get_category_limiter(category))
+        except RateLimitExceeded:
+            raise
+        except Exception:
+            # Best-effort; do not block on limiter errors
+            pass
+
         # Execute tool with circuit breaker (pass context through)
         t0 = time.time()
         try:

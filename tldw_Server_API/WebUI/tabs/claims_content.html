@@ -4,8 +4,20 @@
     <div class="row">
       <label>Media ID</label>
       <input id="claims-media-id" type="number" min="1" placeholder="Enter media_id" />
+      <span title="Enter the media item's numeric ID. You can copy it from the Media list or API responses (e.g., add‑media or search)." style="margin-left: 8px; cursor: help;">ⓘ</span>
+      <a id="claims-media-open" href="#" target="_blank" rel="noopener noreferrer" style="margin-left: 8px;">Open Media</a>
       <button id="claims-load-btn">Load Claims</button>
       <button id="claims-rebuild-btn">Rebuild (Background)</button>
+    </div>
+    <div class="row">
+      <label style="margin-right: 6px;">Page Size</label>
+      <input id="claims-page-size" type="number" min="1" value="50" style="width: 80px; margin-right: 12px;" />
+      <button id="claims-page-size-reset" title="Reset page size to default (50)">Reset Page Size</button>
+      <span id="claims-total"></span>
+      <button id="claims-prev-btn" disabled>Prev Page</button>
+      <button id="claims-next-btn" disabled>Next Page</button>
+      <span style="margin-left: 10px;">Next link: <a id="claims-next-link" href="#" target="_blank" rel="noopener noreferrer">(none)</a></span>
+      <span title="Page Size controls how many claims load per page. Total pages = ceil(total / page size). Use Prev/Next to navigate. Next link shows the API URL for the next page." style="margin-left: 8px; cursor: help;">ⓘ</span>
     </div>
     <div class="row">
       <label>Results</label>
@@ -16,17 +28,154 @@
   <script>
     (function() {
       const mediaIdEl = document.getElementById('claims-media-id');
+      const openMediaAnchor = document.getElementById('claims-media-open');
       const resultsEl = document.getElementById('claims-results');
+      const totalEl = document.getElementById('claims-total');
+      const pageSizeEl = document.getElementById('claims-page-size');
+      const pageSizeResetBtn = document.getElementById('claims-page-size-reset');
+      const prevBtn = document.getElementById('claims-prev-btn');
+      const nextBtn = document.getElementById('claims-next-btn');
+      const nextAnchor = document.getElementById('claims-next-link');
+      let nextLink = null;
+      let nextOffset = null;
+      let prevOffsets = [];
+      let currentOffset = 0;
+      let currentMediaId = null;
+      let currentLimit = 50;
+
+      // Restore saved page size from localStorage (if available)
+      try {
+        const saved = parseInt(localStorage.getItem('claims_page_size') || '50', 10);
+        if (Number.isFinite(saved) && saved > 0) {
+          currentLimit = saved;
+          if (pageSizeEl) pageSizeEl.value = String(saved);
+        }
+      } catch (e) {
+        // ignore storage errors
+      }
+
+      function renderResponse(data) {
+        if (Array.isArray(data)) {
+          resultsEl.textContent = JSON.stringify(data, null, 2);
+          totalEl.textContent = '';
+          nextBtn.disabled = true;
+          prevBtn.disabled = prevOffsets.length === 0;
+          nextLink = null;
+          if (nextAnchor) { nextAnchor.textContent = '(none)'; nextAnchor.removeAttribute('href'); }
+        } else if (data && typeof data === 'object') {
+          const { items, total, total_pages, next_offset, next_link } = data;
+          resultsEl.textContent = JSON.stringify(items ?? data, null, 2);
+          const pageNum = Math.floor(currentOffset / Math.max(1, currentLimit)) + 1;
+          const pages = (typeof total_pages === 'number') ? total_pages : (typeof total === 'number' ? Math.ceil(total / Math.max(1, currentLimit)) : null);
+          if (typeof total === 'number' && typeof pages === 'number') {
+            totalEl.textContent = `Total: ${total} (Page ${pageNum} of ${pages})`;
+          } else if (typeof total === 'number') {
+            totalEl.textContent = `Total: ${total}`;
+          } else {
+            totalEl.textContent = '';
+          }
+          nextLink = next_link || null;
+          nextBtn.disabled = !next_offset;
+          prevBtn.disabled = prevOffsets.length === 0;
+          if (nextAnchor) {
+            if (nextLink) { nextAnchor.textContent = nextLink; nextAnchor.setAttribute('href', nextLink); }
+            else { nextAnchor.textContent = '(none)'; nextAnchor.removeAttribute('href'); }
+          }
+        } else {
+          resultsEl.textContent = JSON.stringify(data, null, 2);
+          totalEl.textContent = '';
+          nextBtn.disabled = true;
+          prevBtn.disabled = prevOffsets.length === 0;
+          nextLink = null;
+          if (nextAnchor) { nextAnchor.textContent = '(none)'; nextAnchor.removeAttribute('href'); }
+        }
+      }
+      async function fetchClaims(offset) {
+        const mid = currentMediaId;
+        const limit = parseInt(pageSizeEl.value || `${currentLimit}`, 10);
+        currentLimit = Number.isFinite(limit) && limit > 0 ? limit : currentLimit;
+        const resp = await fetch(`/api/v1/claims/${mid}?envelope=true&limit=${currentLimit}&offset=${offset}`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        currentOffset = offset;
+        nextOffset = (typeof data.next_offset === 'number') ? data.next_offset : null;
+        renderResponse(data);
+      }
+
       document.getElementById('claims-load-btn').onclick = async () => {
         const mid = parseInt(mediaIdEl.value || '0', 10);
         if (!mid) { resultsEl.textContent = 'Enter a valid media_id'; return; }
+        currentMediaId = mid;
+        // initialize currentLimit from input, fallback to 50
+        const limit = parseInt(pageSizeEl.value || '50', 10);
+        currentLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+        prevOffsets = [];
+        currentOffset = 0;
+        nextOffset = null;
         try {
-          const resp = await fetch(`/api/v1/claims/${mid}`);
-          if (!resp.ok) throw new Error(await resp.text());
-          const data = await resp.json();
-          resultsEl.textContent = JSON.stringify(data, null, 2);
+          await fetchClaims(0);
         } catch (e) {
           resultsEl.textContent = 'Error: ' + e;
+          totalEl.textContent = '';
+          nextBtn.disabled = true;
+          prevBtn.disabled = true;
+          nextLink = null;
+        }
+      };
+      // Optional: when page size changes, reset to first page (if media selected)
+      if (pageSizeEl) {
+        pageSizeEl.addEventListener('change', async () => {
+          if (!currentMediaId) return;
+          prevOffsets = [];
+          try {
+            // Update limit and persist preference
+            const limit = parseInt(pageSizeEl.value || '50', 10);
+            currentLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+            try { localStorage.setItem('claims_page_size', String(currentLimit)); } catch (e) {}
+            await fetchClaims(0);
+          } catch (e) {
+            resultsEl.textContent = 'Error: ' + e;
+          }
+        });
+      }
+
+      if (pageSizeResetBtn) {
+        pageSizeResetBtn.addEventListener('click', async () => {
+          try { localStorage.removeItem('claims_page_size'); } catch (e) {}
+          currentLimit = 50;
+          if (pageSizeEl) pageSizeEl.value = '50';
+          // If media selected, reset pagination and reload first page
+          if (currentMediaId) {
+            prevOffsets = [];
+            try { await fetchClaims(0); } catch (e) { resultsEl.textContent = 'Error: ' + e; }
+          } else {
+            // No media selected; just update label/buttons state
+            totalEl.textContent = '';
+            prevBtn.disabled = true;
+            nextBtn.disabled = true;
+            nextLink = null;
+            if (nextAnchor) { nextAnchor.textContent = '(none)'; nextAnchor.removeAttribute('href'); }
+          }
+        });
+      }
+      prevBtn.onclick = async () => {
+        if (!currentMediaId || prevOffsets.length === 0) return;
+        const prev = prevOffsets.pop();
+        try {
+          await fetchClaims(prev);
+        } catch (e) {
+          resultsEl.textContent = 'Error: ' + e;
+        }
+      };
+      nextBtn.onclick = async () => {
+        if (!currentMediaId || typeof nextOffset !== 'number') return;
+        try {
+          prevOffsets.push(currentOffset);
+          await fetchClaims(nextOffset);
+        } catch (e) {
+          resultsEl.textContent = 'Error: ' + e;
+          nextBtn.disabled = true;
+          nextLink = null;
         }
       };
       document.getElementById('claims-rebuild-btn').onclick = async () => {
@@ -44,3 +193,16 @@
     })();
   </script>
 </section>
+      function updateOpenMediaLink() {
+        const mid = parseInt(mediaIdEl.value || '0', 10);
+        if (mid > 0) {
+          const href = `/api/v1/media/${mid}`;
+          openMediaAnchor.setAttribute('href', href);
+          openMediaAnchor.classList.remove('disabled');
+        } else {
+          openMediaAnchor.setAttribute('href', '#');
+          openMediaAnchor.classList.add('disabled');
+        }
+      }
+      mediaIdEl.addEventListener('input', updateOpenMediaLink);
+      updateOpenMediaLink();

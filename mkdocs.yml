@@ -119,6 +119,8 @@ nav:
       - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
   - Deployment:
       - Overview: Deployment/index.md
+      - First-Time Production Setup: Deployment/First_Time_Production_Setup.md
+      - Long-Term Admin Guide: Deployment/Long_Term_Admin_Guide.md
       - Embeddings Deployment Guide: Deployment/Embeddings-Deployment-Guide.md
       - Reverse Proxy Examples: Deployment/Reverse_Proxy_Examples.md
   - Evaluations:
