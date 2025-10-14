@@ -10,9 +10,9 @@ import json
 import re
 from typing import Dict, Any, List, Optional, Union, Tuple
 import ast
-import logging
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 # Multiple Choice Utilities

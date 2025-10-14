@@ -214,7 +214,7 @@ class BaseWorker(ABC):
                 
                 await self.redis_client.xadd(
                     self.config.queue_name,
-                    message.dict()
+                    (message.model_dump() if hasattr(message, "model_dump") else message.dict())
                 )
                 
                 logger.warning(f"Requeued message {message.job_id} (retry {message.retry_count})")

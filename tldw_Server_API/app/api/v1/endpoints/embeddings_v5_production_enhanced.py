@@ -241,13 +241,38 @@ class EmbeddingProvider(str, Enum):
     MISTRAL = "mistral"
 
 # Production configuration
-MAX_BATCH_SIZE = 100
-MAX_CACHE_SIZE = 5000
-CACHE_TTL_SECONDS = 3600
-CACHE_CLEANUP_INTERVAL = 300
-CONNECTION_POOL_SIZE = 20
-REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+DEFAULT_MAX_BATCH_SIZE = 100
+DEFAULT_MAX_CACHE_SIZE = 5000
+DEFAULT_CACHE_TTL_SECONDS = 3600
+DEFAULT_CACHE_CLEANUP_INTERVAL = 300
+DEFAULT_CONNECTION_POOL_SIZE = 20
+DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_MAX_RETRIES = 3
+
+# Allow overriding via settings/env
+def _cfg_int(name: str, default_val: int) -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings
+        val = _settings.get(name, None)
+        if isinstance(val, (int, float)):
+            return int(val)
+    except Exception:
+        pass
+    try:
+        env = os.getenv(name)
+        if env is not None and str(env).strip() != "":
+            return int(env)
+    except Exception:
+        pass
+    return default_val
+
+MAX_BATCH_SIZE = _cfg_int("EMBEDDINGS_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE)
+MAX_CACHE_SIZE = _cfg_int("EMBEDDINGS_CACHE_MAX_SIZE", DEFAULT_MAX_CACHE_SIZE)
+CACHE_TTL_SECONDS = _cfg_int("EMBEDDINGS_CACHE_TTL_SECONDS", DEFAULT_CACHE_TTL_SECONDS)
+CACHE_CLEANUP_INTERVAL = _cfg_int("EMBEDDINGS_CACHE_CLEANUP_INTERVAL", DEFAULT_CACHE_CLEANUP_INTERVAL)
+CONNECTION_POOL_SIZE = _cfg_int("EMBEDDINGS_CONNECTION_POOL_SIZE", DEFAULT_CONNECTION_POOL_SIZE)
+REQUEST_TIMEOUT = _cfg_int("EMBEDDINGS_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
+MAX_RETRIES = _cfg_int("EMBEDDINGS_MAX_RETRIES", DEFAULT_MAX_RETRIES)
 
 # Circuit breaker configuration
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
@@ -407,6 +432,10 @@ class TTLCache:
                     self.cache.keys(),
                     key=lambda k: self.cache[k].get('last_access', 0)
                 )
+                try:
+                    logger.debug(f"Embeddings TTLCache evict LRU key={lru_key[:8]}..., size={len(self.cache)}")
+                except Exception:
+                    pass
                 del self.cache[lru_key]
                 
             self.cache[key] = {
@@ -605,6 +634,10 @@ router = APIRouter(
     },
     lifespan=_embeddings_router_lifespan,
 )
+
+
+# Implemented provider set for 501 guard
+IMPLEMENTED_PROVIDERS = {"openai", "huggingface", "onnx", "local_api", "cohere", "google"}
 
 
 # Register cleanup on process exit
@@ -1015,6 +1048,64 @@ async def create_embeddings_with_circuit_breaker(
                     api_url=config.get("api_url"),
                     api_key=config.get("api_key"),
                 )
+            elif provider == "cohere":
+                # Direct async call to Cohere embeddings
+                api_key = config.get("api_key") or settings.get("COHERE_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Cohere API key not configured")
+                mdl = config.get("model_name_or_path", model_id) or "embed-english-v3.0"
+                session = await connection_manager.get_session(provider)
+                url = "https://api.cohere.com/v1/embed"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {"model": mdl, "texts": texts, "input_type": "search_document"}
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status >= 400:
+                        detail = await resp.text()
+                        raise HTTPException(status_code=resp.status, detail=f"Cohere error: {detail}")
+                    data = await resp.json()
+                    embs = None
+                    try:
+                        if isinstance(data.get("embeddings"), list):
+                            embs = data["embeddings"]
+                        elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
+                            embs = data["embeddings"]["float"]
+                    except Exception:
+                        embs = None
+                    if not embs:
+                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
+                    return embs
+            elif provider == "google":
+                # Direct async call to Google Generative Language API (text-embedding-004)
+                api_key = config.get("api_key") or settings.get("GOOGLE_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google API key not configured")
+                raw_model = config.get("model_name_or_path", model_id) or "models/text-embedding-004"
+                model_name = raw_model if raw_model.startswith("models/") else f"models/{raw_model}"
+                session = await connection_manager.get_session(provider)
+                base = "https://generativelanguage.googleapis.com/v1beta"
+                url = f"{base}/{model_name}:batchEmbedContents?key={api_key}"
+                reqs = [{"model": model_name, "content": {"parts": [{"text": t}]}} for t in texts]
+                payload = {"requests": reqs}
+                async with session.post(url, json=payload) as resp:
+                    if resp.status >= 400:
+                        detail = await resp.text()
+                        raise HTTPException(status_code=resp.status, detail=f"Google Embeddings error: {detail}")
+                    data = await resp.json()
+                    embs = []
+                    try:
+                        items = data.get("embeddings") or []
+                        for it in items:
+                            vec = it.get("values") or it.get("embedding") or []
+                            if isinstance(vec, dict) and "values" in vec:
+                                vec = vec["values"]
+                            if not isinstance(vec, list):
+                                raise ValueError("invalid embedding vector")
+                            embs.append(vec)
+                    except Exception:
+                        embs = []
+                    if not embs or len(embs) != len(texts):
+                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
+                    return embs
             else:
                 raise ValueError(f"Unknown provider: {provider}")
             
@@ -1319,6 +1410,16 @@ async def create_embedding_endpoint(
                 embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="model").inc()
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Model '{model}' is not allowed")
 
+        # Guard: return 501 for unsupported/unstyled providers (prevents silent fallback)
+        try:
+            prov_enum = EmbeddingProvider(provider)
+        except Exception:
+            # Unknown provider is handled as 400 elsewhere, keep behavior consistent
+            pass
+        else:
+            if provider.lower() not in IMPLEMENTED_PROVIDERS:
+                raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
+
         # Create embeddings
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
         use_synthetic_openai = (
@@ -1350,7 +1451,9 @@ async def create_embedding_endpoint(
         else:
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
-            chain = resolve_fallback_chain(provider)
+            # Disable fallback when x-provider header is explicitly set
+            fallback_disabled = x_provider is not None
+            chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
             fallback_from: Optional[str] = None
@@ -2065,6 +2168,11 @@ async def get_metrics(
         "config": {
             "enforce_policy": _should_enforce_policy(current_user),
             "dimension_policy": _dimension_policy(),
+            "cache": {
+                "ttl_seconds": CACHE_TTL_SECONDS,
+                "max_size": MAX_CACHE_SIZE,
+                "cleanup_interval": CACHE_CLEANUP_INTERVAL,
+            }
         }
     }
     return payload

@@ -267,7 +267,7 @@ class InstallationStatus:
         self.path = _resolve_status_file()
         self._persist_failed = False
         self.data: Dict[str, Any] = {
-            'plan': plan.dict(),
+            'plan': (plan.model_dump() if hasattr(plan, 'model_dump') else plan.dict()),
             'status': 'in_progress',
             'started_at': _utc_now(),
             'completed_at': None,

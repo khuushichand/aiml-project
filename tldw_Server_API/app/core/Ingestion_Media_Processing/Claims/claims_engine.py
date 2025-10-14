@@ -404,7 +404,46 @@ class ClaimsEngine:
         claims: List[Claim] = []
         extractor_mode = (claim_extractor or "auto").strip().lower()
 
-        if extractor_mode == "aps":
+        if extractor_mode == "ner":
+            # NER-assisted sentence selection: keep sentences with named entities
+            try:
+                import spacy  # type: ignore
+                try:
+                    from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+                except Exception:
+                    _settings = {}
+                model_name = None
+                try:
+                    model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
+                except Exception:
+                    model_name = "en_core_web_sm"
+
+                try:
+                    nlp = spacy.load(model_name)
+                except Exception:
+                    nlp = spacy.blank("en")
+                    if not nlp.has_pipe("sentencizer"):
+                        nlp.add_pipe("sentencizer")
+
+                doc = nlp(answer)
+                sents_text: List[str] = []
+                for sent in getattr(doc, "sents", [doc]):
+                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
+                    if has_ent:
+                        st = sent.text.strip()
+                        if len(st) >= 12:
+                            sents_text.append(st)
+                    if len(sents_text) >= claims_max:
+                        break
+                claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
+                if not claims:
+                    # If no entities detected, fall back to LLM extractor
+                    claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+            except Exception as e:
+                logger.warning(f"NER extractor unavailable/failed: {e}; falling back to LLM extractor")
+                claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+
+        elif extractor_mode == "aps":
             # APS-style proposition extraction via PropositionChunkingStrategy (LLM engine, gemma_aps prompt)
             try:
                 from tldw_Server_API.app.core.Chunking.strategies.propositions import (

@@ -290,13 +290,15 @@ async def get_jobs_config_info():
     return {
         "backend": backend,
         "configured": bool(os.getenv("JOBS_DB_URL")) or backend == "sqlite",
+        "standard_queues": ["default", "high", "low"],
         "flags": {
             "JOBS_LEASE_SECONDS": _to_int("JOBS_LEASE_SECONDS", 60),
             "JOBS_LEASE_RENEW_SECONDS": _to_int("JOBS_LEASE_RENEW_SECONDS", 30),
             "JOBS_LEASE_RENEW_JITTER_SECONDS": _to_int("JOBS_LEASE_RENEW_JITTER_SECONDS", 5),
             "JOBS_LEASE_MAX_SECONDS": _to_int("JOBS_LEASE_MAX_SECONDS", 3600),
+            "JOBS_ENFORCE_LEASE_ACK": str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"},
         },
-        "notes": "DSN is not exposed for security. Configure via JOBS_DB_URL to use PostgreSQL."
+        "notes": "DSN is not exposed for security. Configure via the environment (PostgreSQL DSN) to use a Postgres backend."
     }
 
 

@@ -1,7 +1,6 @@
 # prompt_studio_deps.py
 # FastAPI dependency injection for Prompt Studio feature
 
-import logging
 import threading
 from pathlib import Path
 from typing import Dict, Optional, Any

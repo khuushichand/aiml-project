@@ -720,7 +720,7 @@ class QA3Response(BaseModel):
 
 class BatchEvaluationRequest(BaseModel):
     """Batch evaluation request"""
-    evaluation_type: Literal["geval", "rag", "response_quality"]
+    evaluation_type: Literal["geval", "rag", "response_quality", "ocr", "propositions"]
     items: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     parallel_workers: int = Field(4, ge=1, le=20)
     continue_on_error: bool = Field(True)

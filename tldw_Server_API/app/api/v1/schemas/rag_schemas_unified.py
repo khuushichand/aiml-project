@@ -298,7 +298,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Extract and verify factual claims from the generated answer",
         example=False,
     )
-    claim_extractor: Literal["aps", "claimify", "auto"] = Field(
+    claim_extractor: Literal["aps", "claimify", "ner", "auto"] = Field(
         default="auto",
         description="Claim extraction strategy",
         example="auto",
@@ -328,6 +328,13 @@ class UnifiedRAGRequest(BaseModel):
         le=100,
         description="Maximum number of claims to extract",
         example=25,
+    )
+    claims_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description="Maximum parallel claim verifications",
+        example=8,
     )
     nli_model: Optional[str] = Field(
         default=None,

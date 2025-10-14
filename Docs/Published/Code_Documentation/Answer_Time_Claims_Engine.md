@@ -14,6 +14,7 @@ Core module: `tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_
 
 Extractor selection (ClaimsEngine.run argument `claim_extractor`):
 - `"aps"`: APS-style propositions via PropositionChunkingStrategy (LLM required).
+- `"ner"`: NER-assisted extractor (spaCy). Selects sentences containing named entities; falls back to LLM if unavailable.
 - any other (default): LLM JSON extractor with heuristic fallback.
 
 Prompts (override via `Config_Files/Prompts/`):
@@ -84,6 +85,7 @@ result = await engine.run(
     documents=documents,
     claim_extractor="aps",           # or "auto" for LLM+heuristic fallback
     claims_top_k=5,
+    claims_concurrency=8,
     claims_conf_threshold=0.7,
     claims_max=25,
     retrieve_fn=None,                # optional callable(claim_text, top_k)
@@ -95,5 +97,6 @@ print(result["summary"])
 ## Notes
 
 - `claim_extractor="auto"` currently prefers the LLM extractor with heuristic fallback; APS requires an LLM.
+- `claim_extractor="ner"` uses spaCy if available; configure model via `CLAIMS_LOCAL_NER_MODEL` (e.g., `en_core_web_sm`).
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.

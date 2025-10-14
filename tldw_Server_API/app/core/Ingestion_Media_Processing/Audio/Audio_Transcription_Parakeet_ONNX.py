@@ -17,7 +17,7 @@
 
 import os
 import json
-import logging
+from loguru import logger
 import tempfile
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Callable, Dict, Any
@@ -39,7 +39,7 @@ except ImportError:
 # Global cache for model and tokenizer
 _onnx_model_cache: Dict[str, Any] = {}
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class ParakeetONNXTokenizer:

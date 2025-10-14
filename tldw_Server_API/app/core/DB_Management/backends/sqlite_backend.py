@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
 import json
-import logging
+from loguru import logger as _loguru_logger
 from queue import Queue, Empty
 
 from .base import (
@@ -28,7 +28,7 @@ from .base import (
     NotSupportedError
 )
 
-logger = logging.getLogger(__name__)
+logger = _loguru_logger
 
 
 class SQLiteConnectionPool(ConnectionPool):
@@ -80,14 +80,17 @@ class SQLiteConnectionPool(ConnectionPool):
         if self.config.sqlite_wal_mode:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
-        
+
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
-        
+
+        # Reduce lock contention under concurrent access
+        conn.execute("PRAGMA busy_timeout = 5000")
+
         # Additional optimizations
         conn.execute("PRAGMA cache_size = -2000")  # 2MB cache
         conn.execute("PRAGMA temp_store = MEMORY")
-        
+
         return conn
     
     def return_connection(self, connection: sqlite3.Connection) -> None:
@@ -164,16 +167,19 @@ class SQLiteBackend(DatabaseBackend):
             check_same_thread=False,
             isolation_level=None
         )
-        
+
         conn.row_factory = sqlite3.Row
-        
+
         # Apply configuration
         if self.config.sqlite_wal_mode:
             conn.execute("PRAGMA journal_mode = WAL")
-        
+
         if self.config.sqlite_foreign_keys:
             conn.execute("PRAGMA foreign_keys = ON")
-        
+
+        # Reduce lock contention under concurrent access
+        conn.execute("PRAGMA busy_timeout = 5000")
+
         return conn
     
     def disconnect(self, connection: sqlite3.Connection) -> None:

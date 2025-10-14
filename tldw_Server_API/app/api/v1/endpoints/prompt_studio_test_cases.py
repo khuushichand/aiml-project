@@ -263,7 +263,7 @@ async def create_bulk_test_cases(
         # Create test cases
         test_cases = manager.create_bulk_test_cases(
             project_id=bulk_data.project_id,
-            test_cases=[tc.dict() for tc in bulk_data.test_cases],
+            test_cases=[(tc.model_dump() if hasattr(tc, 'model_dump') else tc.dict()) for tc in bulk_data.test_cases],
             signature_id=bulk_data.signature_id
         )
         
@@ -455,6 +455,9 @@ async def update_test_case(
         await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
         
         # Update test case
+    try:
+        update_data = updates.model_dump(exclude_none=True)
+    except Exception:
         update_data = {k: v for k, v in updates.dict().items() if v is not None}
         updated = manager.update_test_case(test_case_id, update_data)
         

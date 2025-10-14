@@ -12,6 +12,8 @@ from typing import List, Optional, Dict, Set, Union, Tuple
 import puremagic
 import yara
 import zipfile
+import tarfile
+import re
 #
 # Local Imports (adjust path as per your project structure)
 from tldw_Server_API.app.core.config import loaded_config_data
@@ -121,8 +123,12 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "sanitize": True,  # Flag to indicate sanitization should be applied
     },
     "archive": {
-        "allowed_extensions": {'.zip'},  # Example: only zip initially
-        "allowed_mimetypes": {'application/zip', 'application/x-zip-compressed'},
+        "allowed_extensions": {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'},
+        "allowed_mimetypes": {
+            'application/zip', 'application/x-zip-compressed',
+            'application/x-tar', 'application/gzip', 'application/x-gzip',
+            'application/x-bzip2', 'application/x-xz'
+        },
         "max_size_mb": media_config.get('max_archive_uncompressed_size_mb', 200),
         "scan_contents": True,  # Flag to indicate archive contents should be scanned
         "max_internal_files": media_config.get('max_archive_internal_files', 100),
@@ -144,7 +150,7 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.epub': 'ebook', '.mobi': 'ebook', '.azw': 'ebook',
     '.html': 'html', '.htm': 'html',
     '.xml': 'xml', '.opml': 'xml',
-    '.zip': 'archive',
+    '.zip': 'archive', '.tar': 'archive', '.tgz': 'archive', '.tbz2': 'archive', '.txz': 'archive',
     '.eml': 'email',
 }
 
@@ -162,8 +168,10 @@ class FileValidator:
             logging.warning("Yara rules path provided, but yara-python is not installed. Yara scanning disabled.")
 
         if not self.magic_available:
-            logging.warning("python-magic is not installed. MIME type validation will be limited/skipped. "
-                            "Install with: pip install python-magic")
+            logging.warning(
+                "puremagic is not available. MIME type detection will be limited/skipped. "
+                "Install with: pip install puremagic"
+            )
 
         self.media_configs = DEFAULT_MEDIA_TYPE_CONFIG.copy()
         if custom_media_configs:
@@ -292,7 +300,7 @@ class FileValidator:
 
         elif final_allowed_mimetypes:  # MIME types are restricted, but magic is unavailable
             issues.append(
-                "MIME type validation skipped: python-magic not installed, but specific MIME types are required.")
+                "MIME type validation skipped: puremagic not available, but specific MIME types are required.")
 
         # 5. Malware Scan (Yara)
         is_safe_yara, yara_match_details = self._scan_file_with_yara(current_file_path)
@@ -351,7 +359,16 @@ class FileValidator:
                 extract_dir = Path(extract_dir_str)
                 logging.debug(f"Extracting archive '{archive_path_obj.name}' to '{extract_dir}'")
 
-                if archive_path_obj.suffix.lower() == ".zip":
+                # Determine archive type
+                suffixes = [s.lower() for s in archive_path_obj.suffixes]
+                is_zip = archive_path_obj.suffix.lower() == ".zip"
+                is_tar = (
+                    archive_path_obj.suffix.lower() == ".tar" or
+                    suffixes[-2:] in [[".tar", ".gz"], [".tar", ".bz2"], [".tar", ".xz"]] or
+                    archive_path_obj.suffix.lower() in {".tgz", ".tbz2", ".txz"}
+                )
+
+                if is_zip:
                     with zipfile.ZipFile(archive_path_obj, 'r') as zip_ref:
                         # Preliminary checks for zip bomb
                         if len(zip_ref.infolist()) > max_internal_files:
@@ -427,7 +444,75 @@ class FileValidator:
                                               exc_info=True)
                                 break  # Stop on extraction error for an internal file
 
-                # Add handlers for other archive types (tar, etc.) here if needed
+                elif is_tar:
+                    try:
+                        with tarfile.open(archive_path_obj, 'r:*') as tar:
+                            members = list(tar.getmembers())
+                            if len(members) > max_internal_files:
+                                issues.append(
+                                    f"Archive contains too many files ({len(members)} > {max_internal_files}).")
+                                return ValidationResult(False, issues, archive_path_obj)
+
+                            total_uncompressed_size_members = sum(m.size for m in members if m.isfile())
+                            if total_uncompressed_size_members > max_uncompressed_size:
+                                issues.append(
+                                    f"Archive declared uncompressed size ({total_uncompressed_size_members / (1024 * 1024):.2f}MB) "
+                                    f"exceeds limit ({max_uncompressed_size / (1024 * 1024):.2f}MB).")
+                                return ValidationResult(False, issues, archive_path_obj)
+
+                            for member in members:
+                                if not member.isfile():
+                                    continue
+                                member_filename = member.name
+                                if '..' in member_filename or member_filename.startswith('/') or ':' in member_filename:
+                                    logging.warning(f"Skipping potentially malicious archive member: {member_filename}")
+                                    issues.append(f"Archive contains potentially malicious path: {member_filename}")
+                                    continue
+                                intended_path = (extract_dir / member_filename).resolve()
+                                if not str(intended_path).startswith(str(extract_dir.resolve())):
+                                    logging.warning(f"Path traversal attempt detected: {member_filename}")
+                                    issues.append(f"Archive contains path traversal attempt: {member_filename}")
+                                    continue
+
+                                extracted_count += 1
+                                if extracted_count > max_internal_files:
+                                    issues.append(
+                                        f"Exceeded max internal file limit ({max_internal_files}) during extraction.")
+                                    break
+
+                                total_extracted_size += member.size
+                                if total_extracted_size > max_uncompressed_size:
+                                    issues.append(
+                                        f"Exceeded max total uncompressed size ({max_uncompressed_size / (1024 * 1024)}MB) during extraction.")
+                                    break
+
+                                try:
+                                    try:
+                                        tar.extract(member, path=extract_dir, filter='data')
+                                    except TypeError:
+                                        # Older Python versions without 'filter'
+                                        tar.extract(member, path=extract_dir)
+                                    internal_file_path = extract_dir / member.name
+                                    internal_ext = internal_file_path.suffix.lower()
+                                    internal_media_type_key = EXT_TO_MEDIA_TYPE_KEY.get(internal_ext)
+                                    logging.debug(
+                                        f"Validating internal file: {member.name} (as {internal_media_type_key or 'generic'})")
+                                    internal_validation_result = self.validate_file(
+                                        internal_file_path,
+                                        original_filename=internal_file_path.name,
+                                        media_type_key=internal_media_type_key
+                                    )
+                                    if not internal_validation_result:
+                                        issues.append(
+                                            f"Invalid file in archive '{archive_path_obj.name}': '{member.name}'")
+                                        issues.extend([f"    - {issue}" for issue in internal_validation_result.issues])
+                                except Exception as extract_err:
+                                    issues.append(
+                                        f"Error extracting/validating internal file '{member.name}': {extract_err}")
+                                    logging.error(f"Error extracting internal file '{member.name}': {extract_err}", exc_info=True)
+                                    break
+                    except tarfile.ReadError:
+                        issues.append(f"Archive '{archive_path_obj.name}' is corrupted or not a valid TAR archive.")
                 else:
                     issues.append(f"Unsupported archive type for content scanning: {archive_path_obj.suffix}")
 
@@ -447,31 +532,66 @@ class FileValidator:
         return ValidationResult(True, file_path=archive_path_obj)
 
     def sanitize_html_content(self, html_content: str, config: Optional[Dict] = None) -> str:
-        # Placeholder for HTML sanitization using Bleach or similar
-        # from bleach import clean
-        # allowed_tags = config.get("allowed_tags", []) if config else []
-        # allowed_attributes = config.get("allowed_attributes", {}) if config else {}
-        # cleaned_html = clean(html_content, tags=allowed_tags, attributes=allowed_attributes, strip=True)
-        # logging.info("HTML content sanitized.")
-        # return cleaned_html
-        logging.warning("HTML sanitization not yet implemented. Returning original content.")
-        return html_content
+        # Simple sanitizer using bleach if available; otherwise strip tags.
+        try:
+            import bleach  # type: ignore
+            allowed_tags = (config or {}).get("allowed_tags") or [
+                'p', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'u', 'a',
+                'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre'
+            ]
+            allowed_attrs = (config or {}).get("allowed_attributes") or {
+                'a': ['href', 'title', 'rel', 'target'],
+            }
+            strip = bool((config or {}).get("strip", True))
+            cleaned_html = bleach.clean(html_content, tags=allowed_tags, attributes=allowed_attrs, strip=strip)
+            logging.info("HTML content sanitized with bleach.")
+            return cleaned_html
+        except Exception as e:
+            logging.warning(f"Bleach not available or failed ({e}); falling back to tag stripping.")
+            try:
+                return re.sub(r"<[^>]+>", " ", html_content)
+            except Exception:
+                return html_content
 
     def sanitize_xml_content(self, xml_content: str, config: Optional[Dict] = None) -> str:
-        # Placeholder for XML sanitization using lxml or similar
-        # from lxml import etree
-        # parser_config = config.get("xml_parser_options", {"resolve_entities": False, "no_network": True})
-        # parser = etree.XMLParser(**parser_config)
-        # try:
-        #   root = etree.fromstring(xml_content.encode(), parser=parser)
-        #   # Further processing to remove unwanted elements/attributes based on config
-        #   cleaned_xml = etree.tostring(root).decode()
-        #   logging.info("XML content sanitized.")
-        #   return cleaned_xml
-        # except etree.XMLSyntaxError as e:
-        #   raise FileValidationError(f"Invalid XML syntax: {e}")
-        logging.warning("XML sanitization not yet implemented. Returning original content.")
-        return xml_content
+        # Guarded XML parse using defusedxml; optionally strip comments/PIs.
+        try:
+            from defusedxml import ElementTree as DET  # type: ignore
+        except Exception:
+            logging.warning("defusedxml not available; returning original XML content.")
+            return xml_content
+
+        try:
+            root = DET.fromstring(xml_content.encode('utf-8', errors='ignore'))
+        except Exception as e:
+            raise FileValidationError(f"Invalid XML content: {e}")
+
+        # Optionally strip comments and processing instructions
+        try:
+            from xml.etree.ElementTree import Comment, ProcessingInstruction  # type: ignore
+            strip_comments = bool((config or {}).get("strip_comments", True))
+            strip_pi = bool((config or {}).get("strip_processing_instructions", True))
+            if strip_comments or strip_pi:
+                def _strip(parent):
+                    for elem in list(parent):
+                        tag_repr = getattr(elem, 'tag', None)
+                        if strip_comments and tag_repr is Comment:
+                            parent.remove(elem)
+                            continue
+                        if strip_pi and tag_repr is ProcessingInstruction:
+                            parent.remove(elem)
+                            continue
+                        _strip(elem)
+                _strip(root)
+        except Exception:
+            pass
+
+        try:
+            cleaned = DET.tostring(root, encoding='unicode')
+            logging.info("XML content sanitized with defusedxml.")
+            return cleaned
+        except Exception:
+            return xml_content
 
 
 def process_and_validate_file(
@@ -513,17 +633,19 @@ def process_and_validate_file(
             logging.info(f"Performing content scan for archive: {_original_filename}")
             return validator.validate_archive_contents(p_file_path)
 
-        # Example of how sanitization could be triggered (content needs to be read and written back)
-        # This part is more complex as it involves modifying the file or returning modified content.
-        # For now, validate_file doesn't modify. Sanitization would be a separate step.
-        # if media_config.get("sanitize"):
-        #     if media_type_key == "html":
-        #         # content = p_file_path.read_text()
-        #         # sanitized_content = validator.sanitize_html_content(content, media_config)
-        #         # p_file_path.write_text(sanitized_content) # Overwrites original, be careful
-        #         logging.info(f"Sanitization would apply to HTML file: {_original_filename}")
-        #     elif media_type_key == "xml":
-        #         logging.info(f"Sanitization would apply to XML file: {_original_filename}")
+        # Optional content sanitization step for HTML/XML if enabled in config.
+        if media_config.get("sanitize") and media_type_key in {"html", "xml"}:
+            try:
+                text = p_file_path.read_text(encoding='utf-8', errors='ignore')
+                if media_type_key == "html":
+                    sanitized = validator.sanitize_html_content(text, media_config)
+                else:
+                    sanitized = validator.sanitize_xml_content(text, media_config)
+                if sanitized and sanitized != text:
+                    p_file_path.write_text(sanitized, encoding='utf-8')
+                    logging.info(f"Sanitized {media_type_key.upper()} file content: {_original_filename}")
+            except Exception as e:
+                logging.warning(f"Sanitization failed for {_original_filename}: {e}")
 
     return validation_result
 

@@ -50,7 +50,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint currently dispatches via `Chat_Functions.chat_api_call(...)`. The next‑gen dispatcher in `chat_orchestrator.py` performs the same role but sources mappings from `provider_config.py`.
+3. The endpoint now dispatches via `chat_orchestrator.chat_api_call(...)`, which sources mappings from `provider_config.py`. A compatibility shim remains in `Chat_Functions.chat_api_call` for legacy callers and tests.
 4. `LLM_Calls/*` executes the provider‑specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.

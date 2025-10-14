@@ -38,7 +38,7 @@ class InlineSanitizeModule(BaseModule):
             }
         }]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         if tool_name == "echo_sanitize":
             return args.get("message")

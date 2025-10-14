@@ -124,7 +124,11 @@ async def mark_setup_complete(
     plan_requested = False
     if payload.install_plan and not payload.install_plan.is_empty():
         plan_requested = True
-        background_tasks.add_task(execute_install_plan, payload.install_plan.dict())
+        try:
+            plan_dict = payload.install_plan.model_dump()
+        except Exception:
+            plan_dict = payload.install_plan.dict()
+        background_tasks.add_task(execute_install_plan, plan_dict)
 
     if payload.disable_first_time_setup:
         setup_manager.update_config({setup_manager.SETUP_SECTION: {"enable_first_time_setup": False}}, create_backup=False)

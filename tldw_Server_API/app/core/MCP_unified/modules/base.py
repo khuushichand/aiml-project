@@ -334,13 +334,14 @@ class BaseModule(ABC):
         pass
     
     @abstractmethod
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Optional[Any] = None) -> Any:
         """
         Execute a tool.
         
         Args:
             tool_name: Name of the tool to execute
             arguments: Tool arguments
+            context: Optional RequestContext with user/session/db_paths
         
         Returns:
             Tool execution result

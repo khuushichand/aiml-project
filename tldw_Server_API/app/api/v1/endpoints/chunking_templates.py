@@ -149,7 +149,12 @@ async def create_template(
     """
     try:
         # Convert template config to JSON string
-        template_json = json.dumps(template_data.template.dict())
+        # Pydantic v2: use model_dump; keep compatibility if older
+        try:
+            tmpl_dict = template_data.template.model_dump()
+        except Exception:
+            tmpl_dict = template_data.template.dict()
+        template_json = json.dumps(tmpl_dict)
         
         # Create template in database
         created = db.create_chunking_template(
@@ -209,33 +214,57 @@ async def update_template(
         404: Template not found
     """
     try:
-        # Get existing template
-        existing = db.get_chunking_template(name=template_name)
-        if not existing:
-            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-        
-        # Check if built-in
-        if existing['is_builtin']:
-            raise HTTPException(status_code=400, detail="Cannot modify built-in templates")
-        
         # Prepare update data
         template_json = None
         if template_update.template:
-            template_json = json.dumps(template_update.template.dict())
+            try:
+                tmpl_dict = template_update.template.model_dump()
+            except Exception:
+                tmpl_dict = template_update.template.dict()
+            template_json = json.dumps(tmpl_dict)
         
-        # Update template
-        success = db.update_chunking_template(
-            name=template_name,
-            template_json=template_json,
-            description=template_update.description,
-            tags=template_update.tags
-        )
+        # Update template (DB layer enforces built-in protection)
+        try:
+            success = db.update_chunking_template(
+                name=template_name,
+                template_json=template_json,
+                description=template_update.description,
+                tags=template_update.tags
+            )
+        except Exception:
+            # Conservatively treat DB-layer exceptions as a protected/bad update
+            raise HTTPException(status_code=400, detail="Cannot modify built-in templates or invalid update")
         
         if not success:
+            # Attempt to disambiguate failure: not found vs built-in
+            existing = None
+            try:
+                if hasattr(db, 'get_chunking_template'):
+                    existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+            if existing is None and hasattr(db, 'list_chunking_templates'):
+                try:
+                    matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                    existing = matches[0] if matches else None
+                except Exception:
+                    existing = None
+            if not existing:
+                raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+            if existing.get('is_builtin'):
+                raise HTTPException(status_code=400, detail="Cannot modify built-in templates")
             raise HTTPException(status_code=500, detail="Failed to update template")
         
         # Get updated template
-        updated = db.get_chunking_template(name=template_name)
+        updated = None
+        try:
+            if hasattr(db, 'get_chunking_template'):
+                updated = db.get_chunking_template(name=template_name)
+        except Exception:
+            updated = None
+        if updated is None and hasattr(db, 'list_chunking_templates'):
+            matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+            updated = matches[0] if matches else None
         
         return ChunkingTemplateResponse(
             id=updated['id'],
@@ -277,22 +306,33 @@ async def delete_template(
         404: Template not found
     """
     try:
-        # Get existing template
-        existing = db.get_chunking_template(name=template_name)
-        if not existing:
-            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-        
-        # Check if built-in
-        if existing['is_builtin']:
-            raise HTTPException(status_code=400, detail="Cannot delete built-in templates")
-        
-        # Delete template
-        success = db.delete_chunking_template(
-            name=template_name,
-            hard_delete=hard_delete
-        )
+        # Delete template (DB layer enforces built-in protection)
+        try:
+            success = db.delete_chunking_template(
+                name=template_name,
+                hard_delete=hard_delete
+            )
+        except Exception:
+            raise HTTPException(status_code=400, detail="Cannot delete built-in templates or invalid delete")
         
         if not success:
+            # Attempt to disambiguate failure: not found vs built-in
+            existing = None
+            try:
+                if hasattr(db, 'get_chunking_template'):
+                    existing = db.get_chunking_template(name=template_name)
+            except Exception:
+                existing = None
+            if existing is None and hasattr(db, 'list_chunking_templates'):
+                try:
+                    matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == template_name]
+                    existing = matches[0] if matches else None
+                except Exception:
+                    existing = None
+            if not existing:
+                raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+            if existing.get('is_builtin'):
+                raise HTTPException(status_code=400, detail="Cannot delete built-in templates")
             raise HTTPException(status_code=500, detail="Failed to delete template")
         
     except HTTPException:
@@ -324,7 +364,11 @@ async def apply_template(
     """
     try:
         # Get template from database
-        template_data = db.get_chunking_template(name=request.template_name)
+        try:
+            template_data = db.get_chunking_template(name=request.template_name)
+        except AttributeError:
+            matches = [t for t in db.list_chunking_templates(include_builtin=True, include_custom=True, tags=None, user_id=None, include_deleted=False) if t.get('name') == request.template_name]
+            template_data = matches[0] if matches else None
         if not template_data:
             raise HTTPException(status_code=404, detail=f"Template '{request.template_name}' not found")
         

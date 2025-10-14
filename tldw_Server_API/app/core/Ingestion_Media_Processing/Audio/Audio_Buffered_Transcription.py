@@ -16,14 +16,14 @@
 ####################
 
 import math
-import logging
+from loguru import logger
 from typing import Optional, List, Tuple, Union, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
 import numpy as np
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class MergeAlgorithm(Enum):

@@ -2,7 +2,7 @@
 import time
 import requests
 import json
-import logging
+from loguru import logger
 import os
 import sqlite3 # For specific error types
 from typing import List, Dict, Optional, Tuple
@@ -20,10 +20,7 @@ except ImportError:
 #
 # Functions:
 
-# --- Logging Setup ---
-# Configure this as needed for your client application
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("ClientSyncEngine")
+# Logging is handled by the application; use loguru directly
 
 # --- Configuration ---
 # These should ideally come from a config file or environment variables

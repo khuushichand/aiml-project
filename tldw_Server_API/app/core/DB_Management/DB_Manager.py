@@ -46,6 +46,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_all_content_from_database as sqlite_get_all_content_from_database, \
     get_latest_transcription as sqlite_get_latest_transcription, \
     mark_media_as_processed as sqlite_mark_media_as_processed,
+    get_full_media_details as sqlite_get_full_media_details, \
+    get_full_media_details_rich as sqlite_get_full_media_details_rich, \
     ingest_article_to_db_new as sqlite_ingest_article_to_db, \
     get_unprocessed_media as sqlite_get_unprocessed_media,\
 )
@@ -255,10 +257,20 @@ def check_media_exists(*args, **kwargs):
 
 def get_full_media_details2(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return MediaDatabase.get_full_media_details(*args, **kwargs)
+        return sqlite_get_full_media_details(*args, **kwargs)
     elif db_type == 'elasticsearch':
         # Implement Elasticsearch version
         raise NotImplementedError("Elasticsearch version of add_media_with_keywords not yet implemented")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+
+def get_full_media_details_rich2(*args, **kwargs):
+    if db_type in SQL_CONTENT_BACKENDS:
+        return sqlite_get_full_media_details_rich(*args, **kwargs)
+    elif db_type == 'elasticsearch':
+        # Implement Elasticsearch version
+        raise NotImplementedError("Elasticsearch version of get_full_media_details_rich not yet implemented")
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 

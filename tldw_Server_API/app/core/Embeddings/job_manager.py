@@ -218,7 +218,7 @@ class EmbeddingJobManager:
         job_key = f"job:{job_id}"
         await self.redis_client.hset(
             job_key,
-            mapping=job_info.dict()
+            mapping=job_info.model_dump() if hasattr(job_info, "model_dump") else job_info.dict()
         )
         await self.redis_client.expire(job_key, self.config.job_ttl_seconds)
         
@@ -241,7 +241,7 @@ class EmbeddingJobManager:
         # Add to chunking queue
         await self.redis_client.xadd(
             self.config.chunking_queue,
-            chunking_message.dict()
+            (chunking_message.model_dump() if hasattr(chunking_message, "model_dump") else chunking_message.dict())
         )
         
         logger.info(f"Created job {job_id} for user {user_id} with priority {effective_priority}")

@@ -57,7 +57,14 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 
 # --- Logging Setup ---
 # Assume logger is configured elsewhere or use basic config:
-import logging
+# Logging: prefer loguru's logger; fall back to stdlib logging
+try:
+    from loguru import logger
+    logging = logger  # alias used throughout this module
+except Exception:  # pragma: no cover - defensive fallback
+    import logging as _stdlib_logging
+    logger = _stdlib_logging.getLogger("Media_DB_v2")
+    logging = logger
 
 import yaml
 
@@ -80,8 +87,7 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Use application-wide logging configuration; avoid configuring here.
 
 # --- Custom Exceptions ---
 class DatabaseError(Exception):
@@ -1466,7 +1472,7 @@ class MediaDatabase:
                 final_db_version = self._get_db_version(conn)
                 if final_db_version != target_version:
                     raise SchemaError(f"Schema applied, but final DB version is {final_db_version}, expected {target_version}.")
-                logging.info(f"Database schema initialized to version {target_version}.")
+                logger.info(f"Database schema initialized to version {target_version}.")
             
             elif current_db_version < target_version:
                 # Use the migration system for existing databases.
@@ -1496,9 +1502,17 @@ class MediaDatabase:
                         migrator = DatabaseMigrator(self.db_path_str, migrations_dir=migrations_dir)
                         result = migrator.migrate_to_version(target_version)
 
-                        if result["status"] == "success":
-                            logging.info(f"Database migrated from version {result['previous_version']} to {result['current_version']}")
-                            # Get a new connection after migration
+                        status = (result or {}).get("status")
+                        if status in {"success", "no_migrations", "no_change"}:
+                            if status == "success":
+                                logger.info(
+                                    f"Database migrated from version {result['previous_version']} to {result['current_version']}"
+                                )
+                            else:
+                                logger.info(
+                                    f"No migration scripts to apply (status={status}); proceeding with FTS/setup checks"
+                                )
+                            # Get a new connection after migration (or when no migration files present)
                             conn = self.get_connection()
                             # Ensure FTS tables exist
                             self._ensure_fts_structures(conn)
@@ -1512,10 +1526,10 @@ class MediaDatabase:
                 raise SchemaError(f"Migration needed from version {current_db_version} to {target_version}, but no migration path is defined.")
 
         except (DatabaseError, SchemaError, sqlite3.Error) as e:
-            logging.error(f"Schema initialization/migration failed: {e}", exc_info=True)
+            logger.error(f"Schema initialization/migration failed: {e}", exc_info=True)
             raise DatabaseError(f"Schema initialization failed: {e}") from e
         except Exception as e:
-            logging.error(f"Unexpected error during schema initialization: {e}", exc_info=True)
+            logger.error(f"Unexpected error during schema initialization: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema: {e}") from e
 
     def _initialize_schema_postgres(self):
@@ -1847,35 +1861,34 @@ class MediaDatabase:
         Soft-delete all claims for a given media_id by setting deleted=1 and bumping version.
         Returns the number of affected rows.
         """
-        conn = self.get_connection()
         try:
-            current_time = self._get_current_utc_timestamp_str()
-            cur = conn.cursor()
-            # Mark rows as deleted and bump version/last_modified
-            cur.execute(
-                """
-                UPDATE Claims
-                SET deleted = 1,
-                    version = version + 1,
-                    last_modified = ?,
-                    client_id = ?
-                WHERE media_id = ? AND deleted = 0
-                """,
-                (current_time, self.client_id, int(media_id)),
-            )
-            affected = cur.rowcount or 0
-            # Defensively ensure FTS index no longer references these rows even if triggers were
-            # not created or failed to fire in some environments.
-            try:
-                conn.execute(
-                    "DELETE FROM claims_fts WHERE rowid IN (SELECT id FROM Claims WHERE media_id = ?)",
-                    (int(media_id),),
+            with self.transaction() as conn:
+                current_time = self._get_current_utc_timestamp_str()
+                # Mark rows as deleted and bump version/last_modified
+                update_sql = (
+                    "UPDATE Claims "
+                    "SET deleted = 1, version = version + 1, last_modified = ?, client_id = ? "
+                    "WHERE media_id = ? AND deleted = 0"
                 )
-            except sqlite3.Error:
-                # Best-effort cleanup; ignore if FTS table doesn't exist
-                pass
-            conn.commit()
-            return affected
+                cur = self._execute_with_connection(
+                    conn,
+                    update_sql,
+                    (current_time, self.client_id, int(media_id)),
+                )
+                affected = cur.rowcount or 0
+
+                # Best-effort cleanup of SQLite FTS table; Postgres uses triggers/tsvector on base table
+                if self.backend_type == BackendType.SQLITE:
+                    try:
+                        self._execute_with_connection(
+                            conn,
+                            "DELETE FROM claims_fts WHERE rowid IN (SELECT id FROM Claims WHERE media_id = ?)",
+                            (int(media_id),),
+                        )
+                    except sqlite3.Error:
+                        pass
+
+                return affected
         except sqlite3.Error as e:
             logging.error(f"Failed to soft-delete claims for media_id={media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to soft-delete claims: {e}") from e
@@ -4794,6 +4807,245 @@ class MediaDatabase:
             logger.error(f"Unexpected error fetching media by ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error fetching media by ID: {e}") from e
 
+    # ------------------------------------------------------------------------
+    # Unvectorized chunk helpers (read-only)
+    # ------------------------------------------------------------------------
+    def has_unvectorized_chunks(self, media_id: int) -> bool:
+        """Return True if UnvectorizedMediaChunks exist for the media item."""
+        try:
+            cur = self.execute_query(
+                "SELECT 1 FROM UnvectorizedMediaChunks WHERE media_id = ? AND deleted = 0 LIMIT 1",
+                (media_id,),
+            )
+            return cur.fetchone() is not None
+        except sqlite3.Error as e:
+            logger.error(f"Error checking unvectorized chunks for media {media_id}: {e}")
+            return False
+
+    def get_unvectorized_anchor_index_for_offset(self, media_id: int, approx_offset: int) -> Optional[int]:
+        """
+        Best-effort mapping from an approximate character offset in the full
+        content to a prechunked chunk_index using UnvectorizedMediaChunks.
+
+        Prefers ranges where start_char/end_char are present. Returns None when
+        mapping can't be determined.
+        """
+        try:
+            # Prefer explicit start/end range match
+            cur = self.execute_query(
+                """
+                SELECT chunk_index
+                FROM UnvectorizedMediaChunks
+                WHERE media_id = ? AND deleted = 0 AND start_char IS NOT NULL AND end_char IS NOT NULL
+                  AND start_char <= ? AND end_char > ?
+                ORDER BY chunk_index ASC
+                LIMIT 1
+                """,
+                (media_id, approx_offset, approx_offset),
+            )
+            row = cur.fetchone()
+            if row:
+                return int(row["chunk_index"]) if isinstance(row, dict) else int(row[0])
+            return None
+        except sqlite3.Error as e:
+            logger.error(f"Error locating anchor chunk for media {media_id} at offset {approx_offset}: {e}")
+            return None
+
+    def get_unvectorized_chunk_index_by_uuid(self, media_id: int, chunk_uuid: str) -> Optional[int]:
+        """Return chunk_index for a given chunk UUID if present."""
+        try:
+            cur = self.execute_query(
+                "SELECT chunk_index FROM UnvectorizedMediaChunks WHERE media_id = ? AND uuid = ? AND deleted = 0",
+                (media_id, chunk_uuid),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return int(row["chunk_index"]) if isinstance(row, dict) else int(row[0])
+        except sqlite3.Error as e:
+            logger.error(f"Error fetching chunk_index by UUID for media {media_id}: {e}")
+            return None
+
+    def get_unvectorized_chunks_in_range(self, media_id: int, start_index: int, end_index: int) -> List[Dict[str, Any]]:
+        """
+        Fetch a range of chunks [start_index, end_index] (inclusive) ordered by chunk_index.
+        Returns dicts with keys: chunk_index, uuid, chunk_text, start_char, end_char, chunk_type.
+        """
+        if end_index < start_index:
+            start_index, end_index = end_index, start_index
+        try:
+            cur = self.execute_query(
+                """
+                SELECT chunk_index, uuid, chunk_text, start_char, end_char, chunk_type
+                FROM UnvectorizedMediaChunks
+                WHERE media_id = ? AND deleted = 0 AND chunk_index BETWEEN ? AND ?
+                ORDER BY chunk_index ASC
+                """,
+                (media_id, start_index, end_index),
+            )
+            return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(
+                f"Error fetching chunk range [{start_index},{end_index}] for media {media_id}: {e}")
+            return []
+
+
+# ----------------------------------------------------------------------------
+# Composite helper: Full media details (active-only)
+# ----------------------------------------------------------------------------
+def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include_content: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Return a consolidated view of an active media item:
+      - media: full Media row
+      - latest_version: latest active DocumentVersion (content optionally included)
+      - keywords: list[str] of active keywords
+
+    Args:
+      db_instance: MediaDatabase instance
+      media_id: target media id
+      include_content: include latest version content
+
+    Returns: dict or None when media not found/active.
+    """
+    if not isinstance(db_instance, MediaDatabase):
+        raise TypeError("db_instance required.")
+    # Media row (active-only)
+    media = db_instance.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+    if not media:
+        return None
+    # Latest doc version
+    latest = get_document_version(db_instance, media_id=media_id, version_number=None, include_content=include_content)
+    # Keywords
+    try:
+        keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
+    except Exception:
+        keywords = []
+
+    return {
+        "media": media,
+        "latest_version": latest,
+        "keywords": keywords,
+    }
+
+
+def get_full_media_details_rich(
+    db_instance: MediaDatabase,
+    media_id: int,
+    *,
+    include_content: bool = True,
+    include_versions: bool = True,
+    include_version_content: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a response-shaped dictionary aligned with MediaDetailResponse for an active media item.
+
+    Returns None when media is not active or not found.
+    """
+    if not isinstance(db_instance, MediaDatabase):
+        raise TypeError("db_instance required.")
+
+    media = db_instance.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+    if not media:
+        return None
+
+    # Latest doc version (for prompt/analysis/safe_metadata)
+    latest = get_document_version(db_instance, media_id=media_id, version_number=None, include_content=False)
+    prompt = (latest or {}).get("prompt")
+    analysis = (latest or {}).get("analysis_content")
+    safe_metadata_raw = (latest or {}).get("safe_metadata")
+    safe_metadata = None
+    if isinstance(safe_metadata_raw, str):
+        try:
+            import json as _json
+            safe_metadata = _json.loads(safe_metadata_raw)
+        except Exception:
+            safe_metadata = None
+    elif isinstance(safe_metadata_raw, dict):
+        safe_metadata = safe_metadata_raw
+
+    # Keywords
+    try:
+        keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
+    except Exception:
+        keywords = []
+
+    # Content and metadata parsing
+    content_text = media.get("content") or ""
+    content_meta: Dict[str, Any] = {}
+    mtype = media.get("type")
+    if mtype in ("video", "audio") and content_text:
+        try:
+            parts = content_text.split("\n\n", 1)
+            if len(parts) == 2:
+                import json as _json
+                possible_json_str, remaining_text = parts[0], parts[1]
+                try:
+                    parsed = _json.loads(possible_json_str)
+                    if isinstance(parsed, dict):
+                        content_meta = parsed
+                        content_text = remaining_text
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    word_count = len(content_text.split()) if content_text else 0
+
+    # Versions list (lightweight by default – no content)
+    versions_list: List[Dict[str, Any]] = []
+    if include_versions:
+        try:
+            rows = db_instance.get_all_document_versions(
+                media_id=media_id,
+                include_content=include_version_content,
+                include_deleted=False,
+            )
+            for rv in rows or []:
+                safe_md = rv.get("safe_metadata")
+                if isinstance(safe_md, str):
+                    try:
+                        import json as _json
+                        safe_md = _json.loads(safe_md)
+                    except Exception:
+                        safe_md = None
+                versions_list.append({
+                    "uuid": rv.get("uuid"),
+                    "media_id": rv.get("media_id"),
+                    "version_number": rv.get("version_number"),
+                    "created_at": rv.get("created_at"),
+                    "prompt": rv.get("prompt"),
+                    "analysis_content": rv.get("analysis_content"),
+                    "safe_metadata": safe_md,
+                    "content": rv.get("content") if include_version_content else None,
+                })
+        except Exception:
+            versions_list = []
+
+    # Build response dict matching MediaDetailResponse structure
+    return {
+        "media_id": media_id,
+        "source": {
+            "url": media.get("url"),
+            "title": media.get("title"),
+            "duration": media.get("duration"),
+            "type": mtype,
+        },
+        "processing": {
+            "prompt": prompt,
+            "analysis": analysis,
+            "safe_metadata": safe_metadata,
+            "model": media.get("transcription_model"),
+            "timestamp_option": media.get("timestamp_option"),
+        },
+        "content": {
+            "metadata": content_meta,
+            "text": content_text if include_content else "",
+            "word_count": word_count,
+        },
+        "keywords": keywords,
+        "timestamps": media.get("timestamps", []) or [],
+        "versions": versions_list,
+    }
+
     # Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title
     # Ensure they include the include_deleted and include_trash filters correctly.
     def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
@@ -6537,9 +6789,15 @@ def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> List[Dic
         raise TypeError("db_instance required.")
     logger.debug(f"Fetching transcripts for media_id={media_id} DB: {db_instance.db_path_str}")
     try:
-        query = "SELECT t.* FROM Transcripts t JOIN Media m ON t.media_id = m.id WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 ORDER BY t.created_at DESC"
-        cursor = db_instance.execute_query(query, (media_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        query = (
+            "SELECT t.* FROM Transcripts t "
+            "JOIN Media m ON t.media_id = m.id "
+            "WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 "
+            "ORDER BY t.created_at DESC"
+        )
+        with db_instance.transaction() as conn:
+            rows = db_instance._fetchall_with_connection(conn, query, (media_id,))
+        return rows
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error getting transcripts media {media_id} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get transcripts {media_id}") from e
@@ -6566,10 +6824,15 @@ def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optio
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance required.")
     try:
-        query = "SELECT t.transcription FROM Transcripts t JOIN Media m ON t.media_id = m.id WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 ORDER BY t.created_at DESC LIMIT 1"
-        cursor = db_instance.execute_query(query, (media_id,))
-        result = cursor.fetchone()
-        return result['transcription'] if result else None
+        query = (
+            "SELECT t.transcription FROM Transcripts t "
+            "JOIN Media m ON t.media_id = m.id "
+            "WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 "
+            "ORDER BY t.created_at DESC LIMIT 1"
+        )
+        with db_instance.transaction() as conn:
+            result = db_instance._fetchone_with_connection(conn, query, (media_id,))
+        return (result or {}).get('transcription')
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get latest transcript {media_id} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get latest transcript {media_id}") from e
@@ -6598,10 +6861,14 @@ def get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) ->
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance required.")
     try:
-        query = "SELECT t.* FROM Transcripts t JOIN Media m ON t.media_id = m.id WHERE t.uuid = ? AND t.deleted = 0 AND m.deleted = 0"
-        cursor = db_instance.execute_query(query, (transcript_uuid,))
-        result = cursor.fetchone()
-        return dict(result) if result else None
+        query = (
+            "SELECT t.* FROM Transcripts t "
+            "JOIN Media m ON t.media_id = m.id "
+            "WHERE t.uuid = ? AND t.deleted = 0 AND m.deleted = 0"
+        )
+        with db_instance.transaction() as conn:
+            result = db_instance._fetchone_with_connection(conn, query, (transcript_uuid,))
+        return result
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get transcript UUID {transcript_uuid} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get transcript {transcript_uuid}") from e
@@ -6628,10 +6895,14 @@ def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> Opti
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance required.")
     try:
-        query = "SELECT dv.analysis_content FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.uuid = ? AND dv.deleted = 0 AND m.deleted = 0"
-        cursor = db_instance.execute_query(query, (version_uuid,))
-        result = cursor.fetchone()
-        return result['analysis_content'] if result else None
+        query = (
+            "SELECT dv.analysis_content FROM DocumentVersions dv "
+            "JOIN Media m ON dv.media_id = m.id "
+            "WHERE dv.uuid = ? AND dv.deleted = 0 AND m.deleted = 0"
+        )
+        with db_instance.transaction() as conn:
+            result = db_instance._fetchone_with_connection(conn, query, (version_uuid,))
+        return (result or {}).get('analysis_content')
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get analysis UUID {version_uuid} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get analysis {version_uuid}") from e
@@ -6660,9 +6931,25 @@ def get_media_prompts(db_instance: MediaDatabase, media_id: int) -> List[Dict]:
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance required.")
     try:
-        query = "SELECT dv.id, dv.uuid, dv.prompt, dv.created_at, dv.version_number FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.media_id = ? AND dv.deleted = 0 AND m.deleted = 0 AND dv.prompt IS NOT NULL AND dv.prompt != '' ORDER BY dv.version_number DESC"
-        cursor = db_instance.execute_query(query, (media_id,))
-        return [{'id': r['id'], 'uuid': r['uuid'], 'content': r['prompt'], 'created_at': r['created_at'], 'version_number': r['version_number']} for r in cursor.fetchall()]
+        query = (
+            "SELECT dv.id, dv.uuid, dv.prompt, dv.created_at, dv.version_number "
+            "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id "
+            "WHERE dv.media_id = ? AND dv.deleted = 0 AND m.deleted = 0 "
+            "AND dv.prompt IS NOT NULL AND dv.prompt != '' "
+            "ORDER BY dv.version_number DESC"
+        )
+        with db_instance.transaction() as conn:
+            rows = db_instance._fetchall_with_connection(conn, query, (media_id,))
+        return [
+            {
+                'id': r['id'],
+                'uuid': r['uuid'],
+                'content': r['prompt'],
+                'created_at': r['created_at'],
+                'version_number': r['version_number'],
+            }
+            for r in rows
+        ]
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get prompts media {media_id} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get prompts {media_id}") from e
@@ -6689,10 +6976,14 @@ def get_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> Option
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance required.")
     try:
-        query = "SELECT dv.prompt FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.uuid = ? AND dv.deleted = 0 AND m.deleted = 0"
-        cursor = db_instance.execute_query(query, (version_uuid,))
-        result = cursor.fetchone()
-        return result['prompt'] if result else None
+        query = (
+            "SELECT dv.prompt FROM DocumentVersions dv "
+            "JOIN Media m ON dv.media_id = m.id "
+            "WHERE dv.uuid = ? AND dv.deleted = 0 AND m.deleted = 0"
+        )
+        with db_instance.transaction() as conn:
+            result = db_instance._fetchone_with_connection(conn, query, (version_uuid,))
+        return (result or {}).get('prompt')
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get prompt UUID {version_uuid} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get prompt {version_uuid}") from e
@@ -6767,6 +7058,113 @@ def soft_delete_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> 
         logger.error(f"Unexpected soft delete Transcript error UUID {transcript_uuid}: {e}", exc_info=True)
         raise DatabaseError(f"Unexpected transcript soft delete error: {e}") from e
 
+
+# Transcript write/update helper (backend-aware)
+def upsert_transcript(
+    db_instance: MediaDatabase,
+    media_id: int,
+    transcription: str,
+    whisper_model: str,
+    created_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Insert or update a transcript for a media item keyed by (media_id, whisper_model).
+
+    - On existing row: updates transcription, bumps version, updates last_modified/client_id.
+    - On missing row: inserts new transcript with version=1.
+
+    Returns a dict with id, uuid, version, media_id, whisper_model, last_modified.
+    """
+    if not isinstance(db_instance, MediaDatabase):
+        raise TypeError("db_instance required.")
+    if not isinstance(media_id, int):
+        raise TypeError("media_id must be int")
+    if not transcription:
+        raise InputError("transcription text required")
+    if not whisper_model:
+        raise InputError("whisper_model required")
+
+    now = db_instance._get_current_utc_timestamp_str()
+    created_val = created_at or now
+    client_id = db_instance.client_id
+
+    try:
+        with db_instance.transaction() as conn:
+            # Check if transcript exists
+            info = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT id, uuid, version FROM Transcripts WHERE media_id = ? AND whisper_model = ? AND deleted = 0",
+                (media_id, whisper_model),
+            )
+
+            if info:
+                t_id, t_uuid, cur_ver = info.get('id'), info.get('uuid'), int(info.get('version') or 1)
+                new_ver = cur_ver + 1
+                upd = db_instance._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE Transcripts SET transcription = ?, last_modified = ?, version = ?, client_id = ? "
+                        "WHERE id = ? AND version = ?"
+                    ),
+                    (transcription, now, new_ver, client_id, t_id, cur_ver),
+                )
+                if upd.rowcount == 0:
+                    raise ConflictError("Transcripts", t_id)
+                payload = {
+                    'id': t_id,
+                    'uuid': t_uuid,
+                    'version': new_ver,
+                    'media_id': media_id,
+                    'whisper_model': whisper_model,
+                    'last_modified': now,
+                }
+                db_instance._log_sync_event(conn, 'Transcripts', t_uuid, 'update', new_ver, payload)
+                return payload
+
+            # Insert new transcript
+            new_uuid = str(uuid.uuid4())
+            if db_instance.backend_type == BackendType.POSTGRESQL:
+                insert_sql = (
+                    "INSERT INTO Transcripts (media_id, whisper_model, transcription, created_at, uuid, last_modified, version, client_id, deleted) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0) RETURNING id, version"
+                )
+                cur = db_instance._execute_with_connection(
+                    conn,
+                    insert_sql,
+                    (media_id, whisper_model, transcription, created_val, new_uuid, now, client_id),
+                )
+                row = cur.fetchone()
+                new_id = row['id'] if row else None
+                new_ver = row['version'] if row else 1
+            else:
+                insert_sql = (
+                    "INSERT INTO Transcripts (media_id, whisper_model, transcription, created_at, uuid, last_modified, version, client_id, deleted) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0)"
+                )
+                cur = db_instance._execute_with_connection(
+                    conn,
+                    insert_sql,
+                    (media_id, whisper_model, transcription, created_val, new_uuid, now, client_id),
+                )
+                new_id = cur.lastrowid
+                new_ver = 1
+
+            payload = {
+                'id': new_id,
+                'uuid': new_uuid,
+                'version': new_ver,
+                'media_id': media_id,
+                'whisper_model': whisper_model,
+                'last_modified': now,
+            }
+            db_instance._log_sync_event(conn, 'Transcripts', new_uuid, 'create', new_ver, payload)
+            return payload
+    except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
+        if isinstance(e, (InputError, ConflictError, DatabaseError)):
+            raise e
+        raise DatabaseError(f"Failed upsert transcript: {e}") from e
+    except Exception as e:
+        raise DatabaseError(f"Unexpected upsert transcript error: {e}") from e
 
 # clear_specific_analysis/prompt call instance methods implicitly via update logic
 def clear_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> bool:
@@ -7124,6 +7522,43 @@ def fetch_keywords_for_media_batch(media_ids: List[int], db_instance: MediaDatab
         logger.error(f"Failed fetch keywords batch '{db_instance.db_path_str}': {e}", exc_info=True)
         raise DatabaseError("Failed fetch keywords batch") from e
 
+
+# Runtime compatibility patch: ensure get_media_by_title exists on MediaDatabase
+try:
+    _ = getattr(MediaDatabase, "get_media_by_title")
+except Exception:
+    _ = None
+if not _:
+    def _get_media_by_title(self, title: str, include_deleted: bool = False, include_trash: bool = False) -> Optional[Dict]:
+        """Fetch the most recently modified active media by exact title.
+
+        Mirrors other getter helpers. Ordered by last_modified DESC to prefer latest.
+        """
+        if not title:
+            raise InputError("title cannot be empty or None.")
+
+        query = "SELECT * FROM Media WHERE title = ?"
+        params = [title]
+
+        if not include_deleted:
+            query += " AND deleted = 0"
+        if not include_trash:
+            query += " AND is_trash = 0"
+
+        query += " ORDER BY last_modified DESC LIMIT 1"
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+        except sqlite3.Error as e:
+            logger.error(f"Error fetching media by title '{title}': {e}", exc_info=True)
+            raise DatabaseError(f"Failed to fetch media by title: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
+
+    setattr(MediaDatabase, "get_media_by_title", _get_media_by_title)
 
 #
 # End of Media_DB_v2.py

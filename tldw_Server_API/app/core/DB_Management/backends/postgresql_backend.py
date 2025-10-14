@@ -11,7 +11,7 @@ Note: This implementation requires psycopg (v3) to be installed:
     pip install psycopg-pool
 """
 
-import logging
+from loguru import logger
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
@@ -29,7 +29,6 @@ from .base import (
     NotSupportedError
 )
 
-logger = logging.getLogger(__name__)
 
 # Try to import psycopg v3. Keep the legacy flag name for test compatibility.
 try:

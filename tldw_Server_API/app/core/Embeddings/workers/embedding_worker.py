@@ -432,7 +432,7 @@ class EmbeddingWorker(BaseWorker):
         """Send embeddings to storage queue"""
         await self.redis_client.xadd(
             self.storage_queue,
-            result.dict()
+            (result.model_dump() if hasattr(result, "model_dump") else result.dict())
         )
         logger.debug(f"Sent job {result.job_id} to storage queue")
     

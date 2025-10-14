@@ -316,6 +316,35 @@ class TestBatchEvaluationEndpoint:
         for eval_result in result["results"]:
             assert "status" in eval_result
             assert "evaluation_id" in eval_result
+
+    @pytest.mark.asyncio
+    async def test_batch_evaluation_rate_limit_headers(self, async_api_client, auth_headers):
+        """Headers X-RateLimit-* should be present on batch response."""
+        batch_data = SampleDataGenerator.generate_batch_evaluation_request(size=2)
+        batch_data["parallel_workers"] = 1
+        response = await async_api_client.post(
+            "/api/v1/evaluations/batch",
+            json=batch_data,
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        hdrs = response.headers
+        for key in [
+            "X-RateLimit-Tier",
+            "X-RateLimit-PerMinute-Limit",
+            "X-RateLimit-PerMinute-Remaining",
+            "X-RateLimit-Daily-Limit",
+            "X-RateLimit-Daily-Remaining",
+            "X-RateLimit-Tokens-Remaining",
+            "X-RateLimit-Reset",
+        ]:
+            assert key in hdrs, f"Missing header: {key}"
+        # Baseline RateLimit-* headers present
+        for key in [
+            "RateLimit-Limit",
+            "RateLimit-Reset",
+        ]:
+            assert key in hdrs, f"Missing header: {key}"
     
     @pytest.mark.asyncio
     async def test_batch_parallel_processing(self, async_api_client, auth_headers):

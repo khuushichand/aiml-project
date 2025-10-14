@@ -1,7 +1,7 @@
 # Llamafile_Handler.py
 #
 # Imports
-import logging
+from loguru import logger
 import os
 import platform
 import re

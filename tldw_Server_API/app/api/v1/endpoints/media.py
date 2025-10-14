@@ -70,6 +70,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user, t
 from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_paginated_files,
+    get_full_media_details_rich2,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase, DatabaseError,
@@ -747,6 +748,9 @@ def get_add_media_form(
 )
 async def get_media_item(
     media_id: int = Path(..., description="The ID of the media item"),
+    include_content: bool = Query(True, description="Include main content text in response"),
+    include_versions: bool = Query(True, description="Include versions list"),
+    include_version_content: bool = Query(False, description="Include content for each version in versions list"),
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
@@ -755,162 +759,19 @@ async def get_media_item(
     Fetches the details for a specific *active* (non-deleted, non-trash) media item,
     including its associated keywords, its latest prompt/analysis, and document versions.
     """
-    logger.debug(f"Attempting to fetch details for media_id: {media_id}")
+    logger.debug(f"Attempting to fetch rich details for media_id: {media_id}")
     try:
-        media_record_raw = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-
-        if not media_record_raw:
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=include_content,
+            include_versions=include_versions,
+            include_version_content=include_version_content,
+        )
+        if not details:
             logger.warning(f"Media not found or not active for ID: {media_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or is inactive/trashed")
-
-        # Ensure media_record is a dictionary
-        media_record = dict(media_record_raw)
-        logger.debug(f"Found active media record for ID: {media_id}")
-
-        keywords_list = fetch_keywords_for_media(media_id=media_id, db_instance=db)
-        logger.debug(f"Fetched keywords for media ID {media_id}: {keywords_list}")
-
-        latest_version_info = None
-        prompt = None
-        analysis = None
-        try:
-             latest_version_info = get_document_version(
-                 db_instance=db,
-                 media_id=media_id,
-                 version_number=None, # Get latest
-                 include_content=False
-             )
-             if latest_version_info:
-                  prompt = latest_version_info.get('prompt')
-                  analysis = latest_version_info.get('analysis_content')
-                  logger.debug(f"Fetched latest version info (prompt/analysis) for media ID {media_id}")
-             else:
-                   logger.warning(f"No active document version found for media ID {media_id} to get latest prompt/analysis.")
-        except Exception as dv_e:
-            logger.error(f"Error fetching latest document version for media {media_id}: {dv_e}", exc_info=True)
-
-
-        # --- FIX for Structured Content (Video/Audio) ---
-        content_from_db = media_record.get('content', '')
-        final_content_text = content_from_db
-        final_metadata = {} # Default to empty dict
-
-        if media_record.get('type') in ['video', 'audio']:
-            try:
-                # This assumes JSON part, then "\n\n", then text transcript.
-                parts = content_from_db.split("\n\n", 1)
-                if len(parts) == 2:
-                    possible_json_str = parts[0]
-                    remaining_text = parts[1]
-                    try:
-                        parsed_json_metadata = json.loads(possible_json_str)
-                        if isinstance(parsed_json_metadata, dict):
-                            final_metadata = parsed_json_metadata
-                            final_content_text = remaining_text
-                        else:
-                            logger.warning(f"Parsed JSON metadata for media {media_id} is not a dict. Treating as text.")
-                    except json.JSONDecodeError:
-                        logger.warning(f"First part of content for media {media_id} is not valid JSON. Treating all as text.")
-                # If no "\n\n", the whole content_from_db is treated as text
-            except Exception as e_parse_meta:
-                logger.error(f"Could not parse structured metadata from content for media {media_id}: {e_parse_meta}", exc_info=True)
-        # --- END FIX for Structured Content ---
-
-        word_count = len(final_content_text.split()) if final_content_text else 0
-
-        # --- FIX for Document Versions List ---
-        doc_versions_list = []
-        # Only fetch versions if it's a 'document' type, or adjust logic as needed
-        if media_record.get('type') == 'document':
-            try:
-                # Fetch active versions, without full content to keep the list light
-                raw_versions = db.get_all_document_versions(media_id=media_id, include_content=False, include_deleted=False)
-                for rv_row in raw_versions:
-                    rv = dict(rv_row) # Convert row to dict
-                    # Map to VersionDetailResponse fields
-                    # Ensure datetime objects are handled correctly if not already strings
-                    created_at_dt = rv.get("created_at")
-                    if isinstance(created_at_dt, str):
-                        try:
-                            created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
-                        except ValueError:
-                            logger.warning(f"Could not parse created_at string '{created_at_dt}' for version {rv.get('version_number')}")
-                            # Handle as per Pydantic model requirements, maybe skip or use a default
-                            pass # Pydantic will handle it if it's not a valid datetime
-
-                    # Parse safe_metadata for display
-                    safe_md = rv.get("safe_metadata")
-                    if isinstance(safe_md, str):
-                        try:
-                            safe_md = json.loads(safe_md)
-                        except Exception:
-                            safe_md = None
-                    doc_versions_list.append(
-                        VersionDetailResponse(
-                            media_id=rv.get("media_id"),
-                            version_number=rv.get("version_number"),
-                            created_at=created_at_dt, # Pass datetime object
-                            prompt=rv.get("prompt"),
-                            analysis_content=rv.get("analysis_content"),
-                            safe_metadata=safe_md,
-                            content=None # Don't include content in the list
-                        )
-                    )
-                logger.debug(f"Fetched {len(doc_versions_list)} document versions for media ID {media_id}")
-            except Exception as e_vers:
-                logger.error(f"Error fetching document versions for media {media_id}: {e_vers}", exc_info=True)
-
-        # Parse safe_metadata if present
-        safe_metadata_dict = None
-        try:
-            if safe_metadata and isinstance(safe_metadata, str):
-                safe_metadata_dict = json.loads(safe_metadata)
-            elif isinstance(safe_metadata, dict):
-                safe_metadata_dict = safe_metadata
-        except Exception:
-            safe_metadata_dict = None
-
-        response_data = {
-            "media_id": media_id,
-            "source": { # Corresponds to MediaSourceDetail model
-                "url": media_record.get('url'),
-                "title": media_record.get('title'),
-                "duration": media_record.get('duration'), # Assuming 'duration' exists in Media table
-                "type": media_record.get('type')
-            },
-            "processing": { # Corresponds to MediaProcessingDetail model
-                "prompt": prompt,
-                "analysis": analysis,
-                "safe_metadata": safe_metadata_dict,
-                "model": media_record.get('transcription_model'),
-                "timestamp_option": media_record.get('timestamp_option') # Assuming 'timestamp_option' exists
-            },
-            "content": { # Corresponds to MediaContentDetail model
-                "metadata": final_metadata,
-                "text": final_content_text,
-                "word_count": word_count
-            },
-            "keywords": keywords_list if keywords_list else [],
-            "timestamps": media_record.get('timestamps', []), # Assuming 'timestamps' list exists in Media table or is parsed
-            "versions": doc_versions_list, # Add the fetched versions
-            # Add other top-level fields from MediaDetailResponse if they come directly from media_record
-            # e.g., "uuid": media_record.get('uuid'),
-            # "author": media_record.get('author'),
-            # "ingestion_date": media_record.get('ingestion_date'),
-            # "last_modified": media_record.get('last_modified'),
-            # "version": media_record.get('version'), # Sync version
-        }
-
-        # To ensure the response matches MediaDetailResponse, instantiate it:
-        try:
-            return MediaDetailResponse(**response_data)
-        except Exception as pydantic_err: # Catch Pydantic validation errors
-            logger.error(f"Pydantic validation error for MediaDetailResponse for media {media_id}: {pydantic_err}", exc_info=True)
-            # Log the data that failed validation
-            logger.debug(f"Data causing Pydantic error: {response_data}")
-            raise HTTPException(status_code=500, detail=f"Internal server error creating response for media item.")
-
-
+        return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except DatabaseError as e:
@@ -937,7 +798,7 @@ async def get_media_item(
     tags=["Media Versioning"],
     summary="Create Media Version",
     status_code=status.HTTP_201_CREATED,
-    response_model=Dict[str, Any], # Update if you create a specific Pydantic model
+    response_model=MediaDetailResponse,
 )
 async def create_version(
     media_id: int,
@@ -977,13 +838,17 @@ async def create_version(
         # New method returns a dict with id, uuid, media_id, version_number
         logger.info(f"Successfully created version {result_dict.get('version_number')} (UUID: {result_dict.get('uuid')}) for media_id: {media_id}")
 
-        # Return the useful info from the result
-        return {
-            "message": "Document version created successfully.",
-            "media_id": result_dict.get("media_id"),
-            "version_number": result_dict.get("version_number"),
-            "version_uuid": result_dict.get("uuid")
-        }
+        # Return updated rich details for consistency
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version creation")
+        return MediaDetailResponse(**details)
 
     except InputError as e: # Catch specific error if media_id not found/inactive
         logger.warning(f"Cannot create version for media {media_id}: {e}")
@@ -1190,6 +1055,7 @@ async def search_by_metadata(
     "/{media_id:int}/metadata",
     tags=["Media Management"],
     summary="Update safe metadata for the latest version",
+    response_model=MediaDetailResponse,
 )
 async def patch_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -1249,7 +1115,17 @@ async def patch_metadata(
                     analysis_content=latest.get('analysis_content'),
                     safe_metadata=new_meta_json,
                 )
-            return {"message": "New version created with updated metadata.", "version_number": res.get('version_number'), "version_uuid": res.get('uuid')}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+            return MediaDetailResponse(**details)
         else:
             # Update in place on latest version
             dv_id = latest.get('id')
@@ -1259,7 +1135,17 @@ async def patch_metadata(
                 conn = db.get_connection()
                 conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (new_meta_json, dv_id))
                 conn.commit()
-            return {"message": "Metadata updated on latest version."}
+            # Return updated rich details for consistency
+            details = get_full_media_details_rich2(
+                db_instance=db,
+                media_id=media_id,
+                include_content=True,
+                include_versions=True,
+                include_version_content=False,
+            )
+            if not details:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+            return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:
@@ -1271,6 +1157,7 @@ async def patch_metadata(
     "/{media_id:int}/versions/{version_number:int}/metadata",
     tags=["Media Versioning"],
     summary="Set safe metadata for a specific version",
+    response_model=MediaDetailResponse,
 )
 async def put_version_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -1317,7 +1204,17 @@ async def put_version_metadata(
             conn = db.get_connection()
             conn.execute("UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0", (smj, dv_id))
             conn.commit()
-        return {"message": "Version metadata updated."}
+        # Return updated rich details for consistency
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
+        return MediaDetailResponse(**details)
     except HTTPException:
         raise
     except Exception as e:
@@ -1619,7 +1516,7 @@ async def delete_version(
     "/{media_id:int}/versions/rollback",
     tags=["Media Versioning"],
     summary="Rollback to Media Version",
-    response_model=Dict[str, Any], # Update if you create a specific Pydantic model
+    response_model=MediaDetailResponse,
 )
 async def rollback_version(
     media_id: int,
@@ -1659,15 +1556,20 @@ async def rollback_version(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
 
         # Success case - DB method returns success details
-        logger.info(f"Rollback successful for media {media_id} to version {target_version_number}. New doc version: {rollback_result.get('new_document_version_number')}")
-        return {
-            "message": rollback_result.get("success", "Rollback successful."),
-            "media_id": media_id,
-            "rolled_back_from_version": target_version_number,
-            "new_document_version_number": rollback_result.get("new_document_version_number"),
-            "new_document_version_uuid": rollback_result.get("new_document_version_uuid"),
-            "new_media_version": rollback_result.get("new_media_version") # Sync version of Media record
-        }
+        logger.info(
+            f"Rollback successful for media {media_id} to version {target_version_number}. "
+            f"New doc version: {rollback_result.get('new_document_version_number')}"
+        )
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after rollback")
+        return MediaDetailResponse(**details)
 
     except ValueError as e: # Catch invalid target_version_number
         logger.warning(f"Invalid input for rollback media {media_id}: {e}")
@@ -1690,7 +1592,7 @@ async def rollback_version(
     tags=["Media Management"],
     summary="Update Media Item",
     status_code=status.HTTP_200_OK,
-    response_model=Dict[str, Any], # Update if specific model created
+    response_model=MediaDetailResponse,
 )
 async def update_media_item(
     payload: MediaUpdateRequest,
@@ -1857,18 +1759,18 @@ async def update_media_item(
             # Commit happens automatically via context manager 'with db.transaction()'
 
         # --- 8. Prepare and Return Response ---
-        response = {
-            "message": message,
-            "media_id": media_id,
-            "media_uuid": media_uuid,
-            "new_media_sync_version": new_sync_version,
-            "new_document_version": { # Include details if version was created
-                 "version_number": new_doc_version_info.get('version_number') if new_doc_version_info else None,
-                 "uuid": new_doc_version_info.get('uuid') if new_doc_version_info else None,
-            } if new_doc_version_info else None,
-            # "updated_media": updated_media_info # Optionally return full updated object
-        }
-        return response
+        # Return the updated rich view for consistency with GET response
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=True,
+            include_versions=True,
+            include_version_content=False,
+        )
+        if not details:
+            # Should not happen for active update
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after update")
+        return MediaDetailResponse(**details)
 
     except HTTPException: # Re-raise FastAPI/manual HTTP exceptions
         raise

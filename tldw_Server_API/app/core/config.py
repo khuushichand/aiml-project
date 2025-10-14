@@ -4,7 +4,6 @@
 # Imports
 import configparser
 import json
-import logging
 import os
 import yaml
 from functools import lru_cache

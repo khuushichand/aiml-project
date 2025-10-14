@@ -447,6 +447,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error('At least one SQLite database path must be provided')
 
     config = _build_postgres_config_from_args(args)
+    # Pre-initialize target PostgreSQL schemas where needed so row copy succeeds
+    try:
+        # Only initialize Evaluations schema if that target is requested
+        if any(label == 'evaluations' for (label, _path) in targets):
+            from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory as _Fac
+            from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _Evals
+            _backend = _Fac.create_backend(config)
+            # Instantiate to create tables/indexes; uses provided backend
+            _ = _Evals(db_path=':memory:', backend=_backend)
+            try:
+                _backend.get_pool().close_all()
+            except Exception:
+                pass
+    except Exception as _init_exc:  # pragma: no cover - defensive
+        logger.warning('Could not pre-initialize PostgreSQL schema: %s', _init_exc)
     for label, path in targets:
         migrate_sqlite_to_postgres(
             path,

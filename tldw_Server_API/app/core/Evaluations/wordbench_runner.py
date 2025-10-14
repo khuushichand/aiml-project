@@ -9,14 +9,14 @@ import json
 import asyncio
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import NextTokenCapture
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_openai, chat_with_anthropic, chat_with_local_llm
 )
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class WordBenchRunner:

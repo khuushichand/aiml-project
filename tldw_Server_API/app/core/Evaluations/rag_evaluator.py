@@ -434,7 +434,8 @@ class RAGEvaluator:
             if resp_tokens:
                 coverage = len(resp_tokens & ctx_tokens) / len(resp_tokens)
 
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -604,7 +605,8 @@ class RAGEvaluator:
                 })
 
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                "openai",
                 analyze,
                 "openai",  # api_name - first param
                 response,  # input_data
@@ -691,7 +693,8 @@ class RAGEvaluator:
             """
             
             try:
-                score_str = await asyncio.to_thread(
+                score_str = await llm_circuit_breaker.call_with_breaker(
+                    api_name,
                     analyze,
                     api_name,  
                     context,   
@@ -749,7 +752,8 @@ class RAGEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 combined_context,  # input_data

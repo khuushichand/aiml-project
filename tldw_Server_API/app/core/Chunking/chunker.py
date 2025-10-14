@@ -408,6 +408,56 @@ class Chunker:
                         })
                         # Advance by step (matching words strategy semantics)
                         t_i = min(len(tokens), t_i + step)
+                elif method == 'sentences':
+                    # Compute sentence spans and group by sentence count to mirror strategy behavior
+                    from .strategies.sentences import SentenceChunkingStrategy  # local import
+                    ss = SentenceChunkingStrategy(language=language)
+                    # Get sentence list using strategy internals for parity
+                    sentences = ss._split_sentences(segment)  # noqa: SLF001
+                    # Build sentence spans by sequential search
+                    sent_spans: List[Tuple[int, int]] = []
+                    cur = 0
+                    for s in sentences:
+                        idx = segment.find(s, cur)
+                        if idx == -1:
+                            idx = cur
+                        sent_spans.append((idx, idx + len(s)))
+                        cur = idx + len(s)
+                    # Group sentences into chunks (max_size sentences, overlap)
+                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
+                    for i in range(0, len(sentences), step):
+                        group = sentences[i:i + (max_size if isinstance(max_size, int) else len(sentences))]
+                        if not group:
+                            continue
+                        ch_text = ''.join(group) if language in ['zh', 'zh-cn', 'zh-tw', 'ja'] else ' '.join(group)
+                        s0 = sent_spans[i][0] if i < len(sent_spans) else 0
+                        j_last = min(len(sent_spans) - 1, i + len(group) - 1)
+                        e0 = sent_spans[j_last][1] if j_last >= 0 else len(segment)
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text.strip(),
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + s0,
+                                'end_offset': start + e0,
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                elif method == 'structure_aware':
+                    # Carry block span directly as a precise chunk for structure-aware mode
+                    ch_text = segment
+                    out_chunks.append({
+                        'type': 'text',
+                        'text': ch_text,
+                        'metadata': {
+                            'method': method,
+                            'start_offset': start,
+                            'end_offset': end,
+                            'language': language,
+                            'paragraph_kind': kind,
+                        }
+                    })
                 else:
                     # Fallback: bound search within the segment using a rolling cursor
                     cursor = 0
@@ -470,27 +520,112 @@ class Chunker:
         if current_section and current_section.get('end_offset') is None:
             current_section['end_offset'] = len(text)
 
-        return {'type': 'hierarchical', 'schema_version': 1, 'method': method, 'language': language, 'root': root}
+        return {
+            'type': 'hierarchical',
+            'schema_version': 1,
+            'method': method,
+            'language': language,
+            'max_size': max_size,
+            'overlap': overlap,
+            'root': root,
+        }
 
     def flatten_hierarchical(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Flatten a hierarchical tree into a list of dict chunks with ancestry info."""
         if not isinstance(tree, dict):
             return []
         root = tree.get('root') or {'children': tree.get('blocks', [])}
+        method = tree.get('method')
+        # Elements-per-chunk semantics for structure_aware grouping
+        sa_max = tree.get('max_size') if isinstance(tree.get('max_size'), int) else None
+        sa_ovl = tree.get('overlap') if isinstance(tree.get('overlap'), int) else 0
         out: List[Dict[str, Any]] = []
 
-        def walk(node: Dict[str, Any], titles: List[str]):
-            kind = node.get('kind')
-            if kind == 'section':
-                title = str(node.get('title') or '').strip()
-                titles = titles + ([title] if title else [])
-            for ch in node.get('chunks') or []:
+        def _append_with_titles(items: List[Dict[str, Any]], titles: List[str]):
+            for ch in items:
                 txt = ch.get('text') if isinstance(ch, dict) else str(ch)
                 md = dict(ch.get('metadata') or {}) if isinstance(ch, dict) else {}
                 md['ancestry_titles'] = titles
                 if titles:
                     md['section_path'] = ' > '.join(titles)
                 out.append({'text': txt, 'metadata': md})
+
+        def _gather_section_items(section_node: Dict[str, Any]) -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            for child in section_node.get('children') or []:
+                if isinstance(child, dict):
+                    for ch in child.get('chunks') or []:
+                        if isinstance(ch, dict):
+                            items.append(ch)
+            return items
+
+        def _group_items_by_elements(items: List[Dict[str, Any]], max_elements: int, overlap: int) -> List[Dict[str, Any]]:
+            if max_elements is None or max_elements <= 0:
+                return items
+            if overlap < 0:
+                overlap = 0
+            step = max(1, max_elements - overlap)
+            grouped: List[Dict[str, Any]] = []
+            i = 0
+            n = len(items)
+            while i < n:
+                group = items[i:i + max_elements]
+                if not group:
+                    break
+                # Drop short trailing windows when we already emitted at least one window
+                if len(group) < max_elements and i > 0:
+                    break
+                # Concatenate texts preserving original content
+                texts: List[str] = []
+                starts: List[int] = []
+                ends: List[int] = []
+                for it in group:
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts.append(t)
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    try:
+                        s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
+                    except Exception:
+                        s = None
+                    try:
+                        e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
+                    except Exception:
+                        e = None
+                    if s is not None:
+                        starts.append(s)
+                    if e is not None:
+                        ends.append(e)
+                agg_text = ''.join(texts)
+                start_off = min(starts) if starts else 0
+                end_off = max(ends) if ends else start_off + len(agg_text)
+                grouped.append({
+                    'type': 'text',
+                    'text': agg_text,
+                    'metadata': {
+                        'method': method,
+                        'start_offset': start_off,
+                        'end_offset': end_off,
+                        'grouped_elements': len(group),
+                    }
+                })
+                i += step
+            return grouped
+
+        def walk(node: Dict[str, Any], titles: List[str]):
+            kind = node.get('kind')
+            if kind == 'section':
+                title = str(node.get('title') or '').strip()
+                titles = titles + ([title] if title else [])
+            # For structure_aware, group elements per section using max_size/overlap
+            if kind == 'section' and method == 'structure_aware' and isinstance(sa_max, int) and sa_max > 0:
+                section_items = _gather_section_items(node)
+                grouped_items = _group_items_by_elements(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0)
+                _append_with_titles(grouped_items, titles)
+                # Do not descend into children again to avoid duplicating content
+                return
+            # Default behavior: emit this node's chunks as-is
+            for ch in node.get('chunks') or []:
+                _append_with_titles([ch], titles)
             for child in node.get('children') or []:
                 if isinstance(child, dict):
                     walk(child, titles)

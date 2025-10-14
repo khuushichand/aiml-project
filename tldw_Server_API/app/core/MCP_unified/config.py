@@ -99,6 +99,11 @@ class MCPConfig(BaseSettings):
     metrics_enabled: bool = Field(default=True, env="MCP_METRICS_ENABLED")
     metrics_port: int = Field(default=9090, env="MCP_METRICS_PORT")
     health_check_path: str = Field(default="/health", env="MCP_HEALTH_PATH")
+
+    # Session Configuration
+    session_ttl_minutes: int = Field(default=30, env="MCP_SESSION_TTL_MINUTES")
+    max_sessions: int = Field(default=100, env="MCP_MAX_SESSIONS")
+    max_session_uris: int = Field(default=500, env="MCP_MAX_SESSION_URIS")
     
     # Logging Configuration
     log_level: str = Field(default="INFO", env="MCP_LOG_LEVEL")

@@ -13,10 +13,10 @@ import csv
 import requests
 from typing import List, Dict, Any, Optional, Generator, Tuple
 from pathlib import Path
-import logging
+from loguru import logger
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 class DatasetLoader:

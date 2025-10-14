@@ -57,7 +57,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
 
             owner = job.get("owner_user_id") or (job.get("payload") or {}).get("user_id")
             if not owner:
-                jm.fail_job(int(job["id"]), error="missing owner_user_id", retryable=False)
+                jm.fail_job(int(job["id"]), error="missing owner_user_id", retryable=False, worker_id=worker_id, lease_id=str(job.get("lease_id")))
                 continue
             # Build a per-user service
             db = _build_chacha_db_for_user(str(owner))
@@ -66,13 +66,14 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
             payload: Dict = job.get("payload") or {}
             action = payload.get("action")
             chatbooks_job_id = payload.get("chatbooks_job_id")
+            lease_id = job.get("lease_id")
             async def _start_renewal(job_id: int):
                 async def _loop():
                     while True:
                         try:
                             if stop_event and stop_event.is_set():
                                 return
-                            jm.renew_job_lease(int(job_id), seconds=lease_seconds)
+                            jm.renew_job_lease(int(job_id), seconds=lease_seconds, worker_id=worker_id, lease_id=str(lease_id))
                         except Exception:
                             pass
                         # Apply jitter to renewal interval to avoid thundering herd
@@ -81,7 +82,10 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 return asyncio.create_task(_loop())
 
             if action == "export":
-                ej = svc._get_export_job(chatbooks_job_id)
+                try:
+                    ej = svc._get_export_job(chatbooks_job_id)
+                except Exception:
+                    ej = None
                 if ej:
                     ej.status = ExportStatus.IN_PROGRESS
                     ej.started_at = datetime.utcnow()
@@ -117,16 +121,19 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     categories=payload.get("categories") or [],
                 )
                 if ok:
-                    # Mid-flight cancel check (honor cancellation request)
+                    # Mid-flight cancel check (honor cancellation request or terminal state)
                     cur = jm.get_job(int(job["id"])) or {}
-                    if cur.get("cancel_requested_at"):
+                    if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
                         if ej:
                             ej.status = ExportStatus.CANCELLED
                             ej.completed_at = datetime.utcnow()
                             svc._save_export_job(ej)
                         jm.finalize_cancelled(int(job["id"]), reason="cancel requested during processing")
                         continue
-                    ej = svc._get_export_job(chatbooks_job_id)
+                    try:
+                        ej = svc._get_export_job(chatbooks_job_id)
+                    except Exception:
+                        ej = None
                     if ej and ej.status != ExportStatus.CANCELLED:
                         ej.status = ExportStatus.COMPLETED
                         ej.completed_at = datetime.utcnow()
@@ -139,15 +146,18 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
                         ej.download_url = svc._build_download_url(ej.job_id, ej.expires_at)
                         svc._save_export_job(ej)
-                    jm.complete_job(int(job["id"]), result={"path": file_path})
+                    jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id))
                 else:
-                    ej = svc._get_export_job(chatbooks_job_id)
+                    try:
+                        ej = svc._get_export_job(chatbooks_job_id)
+                    except Exception:
+                        ej = None
                     if ej:
                         ej.status = ExportStatus.FAILED
                         ej.completed_at = datetime.utcnow()
                         ej.error_message = msg
                         svc._save_export_job(ej)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False)
+                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id))
                 # Stop renewal
                 try:
                     _renew_task.cancel()
@@ -190,9 +200,9 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                 )
                 ij = svc._get_import_job(chatbooks_job_id)
                 if ok:
-                    # Mid-flight cancel check
+                    # Mid-flight cancel check (honor cancellation request or terminal state)
                     cur = jm.get_job(int(job["id"])) or {}
-                    if cur.get("cancel_requested_at"):
+                    if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
                         if ij:
                             ij.status = ImportStatus.CANCELLED
                             ij.completed_at = datetime.utcnow()
@@ -203,20 +213,20 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ij.status = ImportStatus.COMPLETED
                         ij.completed_at = datetime.utcnow()
                         svc._save_import_job(ij)
-                    jm.complete_job(int(job["id"]))
+                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(lease_id))
                 else:
                     if ij:
                         ij.status = ImportStatus.FAILED
                         ij.completed_at = datetime.utcnow()
                         ij.error_message = msg
                         svc._save_import_job(ij)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False)
+                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id))
                 try:
                     _renew_task.cancel()
                 except Exception:
                     pass
             else:
-                jm.fail_job(int(job["id"]), error="unknown action", retryable=False)
+                jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id))
         except Exception as e:
             logger.error(f"Core Jobs worker loop error: {e}")
             await asyncio.sleep(poll_sleep)

@@ -177,26 +177,26 @@ class AsyncChunker:
             # Process buffer when it's large enough
             if len(buffer) >= buffer_size:
                 # Chunk the buffer
+                # Concatenate with a space for word mode to avoid gluing partial tokens
+                sep = ' ' if (method or '').lower() == 'words' and overlap_buffer and buffer and not buffer[0].isspace() else ''
                 chunks = await self.chunk_text(
-                    overlap_buffer + buffer,
+                    overlap_buffer + sep + buffer,
                     method, max_size, overlap, **options
                 )
                 
-                # Yield all but the last chunk
+                # Yield all but the last chunk and base overlap on the last yielded chunk
+                last_yielded = None
                 for chunk in chunks[:-1]:
                     yield chunk
-                
-                # Keep last chunk as overlap (method-aware when possible)
-                if chunks and overlap_size > 0:
-                    last = chunks[-1]
+                    last_yielded = chunk
+
+                # Keep last_yielded tail as overlap to ensure adjacent yielded chunks share words/chars
+                if last_yielded and overlap_size > 0:
                     if (method or '').lower() == 'words':
-                        toks = last.split()
-                        if toks:
-                            overlap_buffer = ' '.join(toks[-overlap_size:])
-                        else:
-                            overlap_buffer = last[-overlap_size:]
+                        toks = last_yielded.split()
+                        overlap_buffer = ' '.join(toks[-overlap_size:]) if toks else ''
                     else:
-                        overlap_buffer = last[-overlap_size:] if len(last) > overlap_size else last
+                        overlap_buffer = last_yielded[-overlap_size:] if len(last_yielded) > overlap_size else last_yielded
                 else:
                     overlap_buffer = ""
                 
@@ -204,8 +204,9 @@ class AsyncChunker:
         
         # Process remaining buffer
         if buffer or overlap_buffer:
+            sep = ' ' if (method or '').lower() == 'words' and overlap_buffer and buffer and not buffer[0].isspace() else ''
             chunks = await self.chunk_text(
-                overlap_buffer + buffer,
+                overlap_buffer + sep + buffer,
                 method, max_size, overlap, **options
             )
             for chunk in chunks:

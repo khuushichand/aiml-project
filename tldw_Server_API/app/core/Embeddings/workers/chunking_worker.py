@@ -117,7 +117,7 @@ class ChunkingWorker(BaseWorker):
         """Send chunked data to embedding queue"""
         await self.redis_client.xadd(
             self.embedding_queue,
-            result.dict()
+            (result.model_dump() if hasattr(result, "model_dump") else result.dict())
         )
         logger.debug(f"Sent job {result.job_id} to embedding queue")
     

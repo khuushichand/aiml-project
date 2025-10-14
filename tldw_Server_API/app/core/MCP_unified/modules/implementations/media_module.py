@@ -110,7 +110,44 @@ class MediaModule(BaseModule):
     
     async def get_tools(self) -> List[Dict[str, Any]]:
         """Get available media tools"""
-        return [
+        tools = [
+            # Context-search tools (FTS-only v1)
+            create_tool_definition(
+                name="media.search",
+                description="Search media by title/content with optional filters (FTS-only).",
+                parameters={
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0},
+                        "snippet_length": {"type": "integer", "minimum": 50, "maximum": 2000, "default": 300},
+                        "media_types": {"type": "array", "items": {"type": "string"}},
+                        "date_from": {"type": "string", "description": "ISO 8601 start date"},
+                        "date_to": {"type": "string", "description": "ISO 8601 end date"},
+                        "order_by": {"type": "string", "enum": ["relevance", "recent"], "default": "relevance"}
+                    },
+                    "required": ["query"],
+                },
+                metadata={"category": "search", "readOnlyHint": True},
+            ),
+            create_tool_definition(
+                name="media.get",
+                description="Retrieve media content or snippet by id.",
+                parameters={
+                    "properties": {
+                        "media_id": {"type": "integer"},
+                        "retrieval": {
+                            "type": "object",
+                            "properties": {
+                                "mode": {"type": "string", "enum": ["snippet", "full"], "default": "snippet"},
+                                "snippet_length": {"type": "integer", "minimum": 50, "maximum": 2000, "default": 300},
+                            }
+                        }
+                    },
+                    "required": ["media_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True},
+            ),
             create_tool_definition(
                 name="search_media",
                 description="Search for media content using keywords or semantic search",
@@ -276,8 +313,9 @@ class MediaModule(BaseModule):
                 metadata={"category": "management", "auth_required": True}
             )
         ]
+        return tools
     
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         """Execute media tool with validation and error handling"""
         # Validate and sanitize inputs
         arguments = self.sanitize_input(arguments)
@@ -286,7 +324,11 @@ class MediaModule(BaseModule):
         logger.info(f"Executing media tool: {tool_name}", extra={"audit": True})
         
         try:
-            if tool_name == "search_media":
+            if tool_name == "media.search":
+                return await self._media_search_normalized(context=context, **arguments)
+            elif tool_name == "media.get":
+                return await self._media_get_normalized(context=context, **arguments)
+            elif tool_name == "search_media":
                 return await self._search_media(**arguments)
             
             elif tool_name == "get_transcript":
@@ -310,6 +352,357 @@ class MediaModule(BaseModule):
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name} - {e}")
             raise
+
+    def _open_media_db(self, context: Any | None) -> MediaDatabase:
+        """Open per-user media DB when context provides one; fallback to module DB."""
+        try:
+            if context and getattr(context, "db_paths", None):
+                user_media_path = context.db_paths.get("media")
+                if user_media_path and str(user_media_path) != str(getattr(self.db, "db_path_str", "")):
+                    return MediaDatabase(db_path=user_media_path, client_id=f"mcp_media_{self.config.name}")
+        except Exception:
+            pass
+        return self.db
+
+    def _normalize_scores(self, rows: List[Dict[str, Any]]) -> List[float]:
+        if not rows:
+            return []
+        # If relevance_score present (bm25-like), lower is better
+        if all((r.get("relevance_score") is not None) for r in rows):
+            vals = [float(r.get("relevance_score") or 0.0) for r in rows]
+            mn, mx = min(vals), max(vals)
+            if mx - mn < 1e-9:
+                return [1.0 for _ in vals]
+            return [(mx - v) / (mx - mn + 1e-9) for v in vals]
+        # Fallback positional decay
+        n = len(rows)
+        if n == 1:
+            return [1.0]
+        return [1.0 - (i / max(1, n - 1)) for i in range(n)]
+
+    def _make_snippet(self, text: Optional[str], query: Optional[str], length: int = 300) -> str:
+        if not text:
+            return ""
+        length = max(50, min(length, 2000))
+        t = " ".join(text.split())
+        if not query:
+            return t[:length]
+        try:
+            idx = t.lower().find(query.lower())
+            if idx == -1:
+                return t[:length]
+            half = max(0, length // 2)
+            start = max(0, idx - half)
+            end = min(len(t), start + length)
+            return t[start:end]
+        except Exception:
+            return t[:length]
+
+    async def _media_search_normalized(
+        self,
+        query: str,
+        limit: int = 10,
+        offset: int = 0,
+        snippet_length: int = 300,
+        media_types: Optional[List[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        order_by: str = "relevance",
+        context: Any | None = None,
+    ) -> Dict[str, Any]:
+        # Session defaults
+        try:
+            if context and getattr(context, "metadata", None):
+                sc = context.metadata.get("safe_config")
+                if isinstance(sc, dict):
+                    snippet_length = int(sc.get("snippet_length", snippet_length))
+        except Exception:
+            pass
+
+        # Build date_range
+        date_range = None
+        try:
+            if date_from or date_to:
+                from datetime import datetime as _dt
+                date_range = {}
+                if date_from:
+                    date_range["start_date"] = _dt.fromisoformat(date_from)
+                if date_to:
+                    date_range["end_date"] = _dt.fromisoformat(date_to)
+        except Exception:
+            date_range = None
+
+        # Map order
+        sort_by = "relevance" if order_by == "relevance" else "last_modified_desc"
+        page = (offset // max(1, limit)) + 1 if limit > 0 else 1
+        dbi = self._open_media_db(context)
+        results, total = dbi.search_media_db(
+            search_query=query,
+            search_fields=["title", "content"],
+            media_types=media_types or None,
+            date_range=date_range,
+            sort_by=sort_by,
+            page=page,
+            results_per_page=limit,
+            include_trash=False,
+            include_deleted=False,
+        )
+        scores = self._normalize_scores(results)
+        out = []
+        for i, r in enumerate(results):
+            mid = r.get("id")
+            content = r.get("content") or ""
+            # Compute an approximate offset of query within content as a location hint
+            approx_offset = None
+            try:
+                idx = content.lower().find(query.lower()) if query else -1
+                if idx >= 0:
+                    approx_offset = idx
+            except Exception:
+                approx_offset = None
+            # Try to map to prechunked chunk_index when available
+            loc_hint = None
+            try:
+                if approx_offset is not None and isinstance(mid, (int, str)):
+                    mid_int = int(mid)
+                    if self._open_media_db(context).has_unvectorized_chunks(mid_int):
+                        cidx = self._open_media_db(context).get_unvectorized_anchor_index_for_offset(mid_int, int(approx_offset))
+                        if cidx is not None:
+                            loc_hint = {"chunk_index": cidx}
+            except Exception:
+                loc_hint = None
+            out.append({
+                "id": mid,
+                "source": "media",
+                "title": r.get("title"),
+                "snippet": self._make_snippet(content, query, snippet_length),
+                "uri": f"media://{mid}",
+                "score": float(scores[i] if i < len(scores) else 0.0),
+                "score_type": "fts",
+                "created_at": r.get("ingestion_date"),
+                "last_modified": r.get("last_modified"),
+                "version": r.get("version"),
+                "tags": None,
+                "media_type": r.get("type"),
+                "url": r.get("url"),
+                "loc": (loc_hint if loc_hint is not None else ({"approx_offset": approx_offset} if approx_offset is not None else None)),
+            })
+        return {
+            "results": out,
+            "has_more": (offset + len(results)) < total,
+            "next_offset": (offset + len(results)) if (offset + len(results)) < total else None,
+            "total_estimated": total,
+        }
+
+    async def _media_get_normalized(self, media_id: int, retrieval: Optional[Dict[str, Any]] = None, context: Any | None = None) -> Dict[str, Any]:
+        retrieval = retrieval or {}
+        mode = retrieval.get("mode", "snippet")
+        snippet_length = int(retrieval.get("snippet_length", 300))
+        max_tokens = retrieval.get("max_tokens")
+        cpt = int(retrieval.get("chars_per_token", 4))
+        chunk_size_tokens = int(retrieval.get("chunk_size_tokens", 1000 if max_tokens else 500))
+        sibling_window = int(retrieval.get("sibling_window", 1))
+        loc = retrieval.get("loc") or {}
+        # Session defaults
+        try:
+            if context and getattr(context, "metadata", None):
+                sc = context.metadata.get("safe_config")
+                if isinstance(sc, dict):
+                    snippet_length = int(sc.get("snippet_length", snippet_length))
+                    if isinstance(sc.get("chars_per_token"), int):
+                        cpt = int(sc.get("chars_per_token"))
+        except Exception:
+            pass
+
+        dbi = self._open_media_db(context)
+        # Use active media row for metadata + content
+        meta = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+        if not meta:
+            raise ValueError(f"Media not found: {media_id}")
+        content = meta.get("content") or ""
+        item = {
+            "id": meta.get("id"),
+            "source": "media",
+            "title": meta.get("title"),
+            "snippet": self._make_snippet(content, None, snippet_length),
+            "uri": f"media://{meta.get('id')}",
+            "score": 1.0,
+            "score_type": "fts",
+            "created_at": meta.get("ingestion_date"),
+            "last_modified": meta.get("last_modified"),
+            "version": meta.get("version"),
+            "tags": None,
+            "media_type": meta.get("type"),
+            "url": meta.get("url"),
+            "loc": None,
+        }
+        if mode == "full":
+            body = content
+            return {"meta": item, "content": body, "attachments": None}
+
+        # Helper for on-the-fly chunking
+        def _chunkify(text: str, size_chars: int) -> List[str]:
+            if size_chars <= 0:
+                size_chars = 1000 * cpt
+            chunks = []
+            i = 0
+            n = len(text)
+            while i < n:
+                chunks.append(text[i:i+size_chars])
+                i += size_chars
+            return chunks
+
+        def _estimate_tokens(chars: int) -> int:
+            return max(1, (chars + cpt - 1) // cpt)
+
+        # If chunking modes requested:
+        if mode in {"chunk", "chunk_with_siblings", "auto"}:
+            if mode == "auto" and max_tokens:
+                mode = "chunk_with_siblings"
+            elif mode == "auto":
+                mode = "snippet"
+
+            # Prefer prechunked retrieval when available
+            prefer_prechunked = bool(retrieval.get("prefer_prechunked", True))
+            anchor_index: Optional[int] = None
+            anchor_uuid: Optional[str] = None
+
+            # Extract loc hints
+            approx_offset = None
+            try:
+                if isinstance(loc, dict) and isinstance(loc.get("approx_offset"), int):
+                    approx_offset = int(loc.get("approx_offset"))
+            except Exception:
+                approx_offset = None
+            if isinstance(loc, dict) and isinstance(loc.get("chunk_index"), int):
+                anchor_index = int(loc.get("chunk_index"))
+            if isinstance(loc, dict) and isinstance(loc.get("chunk_uuid"), str):
+                anchor_uuid = str(loc.get("chunk_uuid"))
+
+            if prefer_prechunked and dbi.has_unvectorized_chunks(media_id):
+                # Resolve anchor by uuid or offset
+                if anchor_index is None and anchor_uuid:
+                    anchor_index = dbi.get_unvectorized_chunk_index_by_uuid(media_id, anchor_uuid)
+                if anchor_index is None and isinstance(approx_offset, int):
+                    anchor_index = dbi.get_unvectorized_anchor_index_for_offset(media_id, approx_offset)
+                if anchor_index is None:
+                    anchor_index = 0
+
+                anchor_list = dbi.get_unvectorized_chunks_in_range(media_id, anchor_index, anchor_index)
+                if anchor_list:
+                    anchor_chunk = anchor_list[0]
+                    anchor_uuid = anchor_chunk.get("uuid") or anchor_uuid
+
+                    if mode == "chunk":
+                        body = anchor_chunk.get("chunk_text") or ""
+                        item["loc"] = {"chunk_index": anchor_index, "chunk_uuid": anchor_uuid}
+                        return {"meta": item, "content": body, "attachments": None}
+
+                    # chunk_with_siblings budgeted expansion
+                    budget_tokens = int(max_tokens) if max_tokens else None
+                    selected_indexes: List[int] = [anchor_index]
+                    selected_texts: Dict[int, str] = {anchor_index: anchor_chunk.get("chunk_text") or ""}
+                    if budget_tokens is None:
+                        for d in range(1, max(1, sibling_window) + 1):
+                            li = anchor_index - d
+                            ri = anchor_index + d
+                            if li >= 0:
+                                left_chunks = dbi.get_unvectorized_chunks_in_range(media_id, li, li)
+                                if left_chunks:
+                                    selected_indexes.insert(0, li)
+                                    selected_texts[li] = left_chunks[0].get("chunk_text") or ""
+                            right_chunks = dbi.get_unvectorized_chunks_in_range(media_id, ri, ri)
+                            if right_chunks:
+                                selected_indexes.append(ri)
+                                selected_texts[ri] = right_chunks[0].get("chunk_text") or ""
+                    else:
+                        current_tokens = _estimate_tokens(len(selected_texts[anchor_index]))
+                        left = anchor_index - 1
+                        right = anchor_index + 1
+                        while True:
+                            progressed = False
+                            if left >= 0:
+                                lc = dbi.get_unvectorized_chunks_in_range(media_id, left, left)
+                                if lc:
+                                    t_add = _estimate_tokens(len(lc[0].get("chunk_text") or ""))
+                                    if current_tokens + t_add <= budget_tokens:
+                                        selected_indexes.insert(0, left)
+                                        selected_texts[left] = lc[0].get("chunk_text") or ""
+                                        current_tokens += t_add
+                                        left -= 1
+                                        progressed = True
+                            rc = dbi.get_unvectorized_chunks_in_range(media_id, right, right)
+                            if rc:
+                                t_add = _estimate_tokens(len(rc[0].get("chunk_text") or ""))
+                                if current_tokens + t_add <= budget_tokens:
+                                    selected_indexes.append(right)
+                                    selected_texts[right] = rc[0].get("chunk_text") or ""
+                                    current_tokens += t_add
+                                    right += 1
+                                    progressed = True
+                            if not progressed:
+                                break
+
+                    body = "\n\n".join([selected_texts[i] for i in selected_indexes])
+                    item["loc"] = {"chunk_index": anchor_index, "chunk_uuid": anchor_uuid}
+                    return {"meta": item, "content": body, "attachments": None}
+
+            # Fallback: on-the-fly chunking from full content
+            size_chars = max(1, chunk_size_tokens * cpt)
+            chunks = _chunkify(content, size_chars)
+            if not chunks:
+                body = self._make_snippet(content, None, snippet_length)
+                return {"meta": item, "content": body, "attachments": None}
+
+            if approx_offset is None:
+                anchor_index = 0
+            else:
+                anchor_index = max(0, min(len(chunks) - 1, approx_offset // size_chars))
+
+            if mode == "chunk":
+                body = chunks[anchor_index]
+                item["loc"] = {"chunk_index": anchor_index, "approx_offset": anchor_index * size_chars}
+                return {"meta": item, "content": body, "attachments": None}
+
+            budget_tokens = int(max_tokens) if max_tokens else None
+            sel = [anchor_index]
+            if budget_tokens is None:
+                for d in range(1, max(1, sibling_window) + 1):
+                    if anchor_index - d >= 0:
+                        sel.insert(0, anchor_index - d)
+                    if anchor_index + d < len(chunks):
+                        sel.append(anchor_index + d)
+            else:
+                current_tokens = _estimate_tokens(len(chunks[anchor_index]))
+                left = anchor_index - 1
+                right = anchor_index + 1
+                while True:
+                    progressed = False
+                    if left >= 0:
+                        t_add = _estimate_tokens(len(chunks[left]))
+                        if current_tokens + t_add <= budget_tokens:
+                            sel.insert(0, left)
+                            current_tokens += t_add
+                            left -= 1
+                            progressed = True
+                    if right < len(chunks):
+                        t_add = _estimate_tokens(len(chunks[right]))
+                        if current_tokens + t_add <= budget_tokens:
+                            sel.append(right)
+                            current_tokens += t_add
+                            right += 1
+                            progressed = True
+                    if not progressed:
+                        break
+
+            selected_chunks = [chunks[i] for i in sel]
+            body = "\n\n".join(selected_chunks)
+            item["loc"] = {"chunk_index": anchor_index, "approx_offset": anchor_index * size_chars}
+            return {"meta": item, "content": body, "attachments": None}
+
+        # Default snippet mode
+        body = self._make_snippet(content, None, snippet_length)
+        return {"meta": item, "content": body, "attachments": None}
     
     async def _search_media(
         self,
@@ -577,7 +970,13 @@ class MediaModule(BaseModule):
                 name="Popular Media",
                 description="Most accessed media items",
                 mime_type="application/json"
-            )
+            ),
+            create_resource_definition(
+                uri="media://types",
+                name="Media Types",
+                description="Distinct media types present in the database",
+                mime_type="application/json"
+            ),
         ]
     
     async def read_resource(self, uri: str) -> Dict[str, Any]:
@@ -599,6 +998,9 @@ class MediaModule(BaseModule):
                 "type": "media_list",
                 "items": popular
             }
+        elif uri == "media://types":
+            types = self.db.get_distinct_media_types()
+            return {"uri": uri, "type": "media_types", "items": types}
         
         else:
             raise ValueError(f"Unknown resource URI: {uri}")

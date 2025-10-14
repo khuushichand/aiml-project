@@ -45,7 +45,7 @@ from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import threading
-import logging
+from loguru import logger
 from typing import List, Dict, Optional, Any, Union, Set, Tuple
 #
 # Third-Party Libraries
@@ -4241,7 +4241,7 @@ UPDATE db_schema_version
                 fields_to_update_sql.append(f"{key} = ?")
                 params_for_set_clause.append(value)
             elif key not in ['id', 'conversation_id', 'sender', 'timestamp', 'last_modified', 'version', 'client_id', 'deleted']:
-                logging.warning(
+                logger.warning(
                     f"Attempted to update immutable or unknown field '{key}' in message ID {message_id}, skipping.")
 
         if not fields_to_update_sql: # If only image was cleared, this list might be empty now if no other fields

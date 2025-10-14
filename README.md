@@ -29,6 +29,7 @@
 Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 - Docs Hub: `Docs/Documentation.md`
+- Database Backends & Migrations: `Docs/Database-Backends.md`
 - Moderation/Guardrails: `Docs/Moderation-Guardrails.md`
 
 ### Media Processing
@@ -626,6 +627,11 @@ Full API documentation is available at `http://localhost:8000/docs` when the ser
 - `POST /api/v1/media/ingest` - Ingest media into database
 - `GET /api/v1/media/search` - Search ingested content
 - `GET /api/v1/media/{id}` - Get media details
+  - Query params:
+    - `include_content` (bool, default: true): include the main content text
+    - `include_versions` (bool, default: true): include versions list summary
+    - `include_version_content` (bool, default: false): include content text for each version
+  - Notes: Response shape is unified across GET/PUT/POST version/rollback and conforms to `MediaDetailResponse`
 
 #### Chat (OpenAI Compatible)
 - `POST /api/v1/chat/completions` - Chat completion (OpenAI format)
@@ -815,7 +821,8 @@ curl -X POST "http://localhost:8000/api/v1/rag/search/stream" \
   -d '{
     "query": "What is CRISPR?",
     "enable_generation": true,
-    "enable_claims": true
+    "enable_claims": true,
+    "claims_concurrency": 8
   }'
 ## Events:
 # {"type":"delta","text":"..."}
@@ -839,6 +846,7 @@ https://huggingface.co/google/gemma-7b-aps-it
   - The APS extractor calls your default OpenAI‑compatible chat endpoint; to back it with a specific APS‑IT model, set your gateway (vLLM/TabbyAPI/OpenRouter/custom‑openai) to use that model by default.
   - For ingestion‑time claims (non‑APS path), you can also set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `tldw_Server_API/Config_Files/config.txt`.
   - For local verification, set `RAG_NLI_MODEL` (e.g., `roberta-large-mnli`).
+  - For streaming overlays, control verification fan‑out with `claims_concurrency` (default 8, range 1–32).
 
 # Simple search interface
 curl -X GET "http://localhost:8000/api/v1/rag/simple?q=machine%20learning&limit=5" \

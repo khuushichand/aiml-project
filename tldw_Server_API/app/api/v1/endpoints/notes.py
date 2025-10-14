@@ -2,7 +2,7 @@
 #
 #
 # Imports
-import logging
+from loguru import logger
 import time
 from collections import defaultdict
 import sys

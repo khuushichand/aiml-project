@@ -558,6 +558,10 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
     enable_claims = bool(kwargs.get("enable_claims", False))
     claims_top_k = int(kwargs.get("claims_top_k", 3))
     claims_max = int(kwargs.get("claims_max", 10))
+    try:
+        claims_concurrency = int(kwargs.get("claims_concurrency", 8))
+    except Exception:
+        claims_concurrency = 8
     
     if enable_claims and ClaimsEngine is not None:
         try:
@@ -594,6 +598,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                                 claims_conf_threshold=0.75,
                                 claims_max=min(5, claims_max),
                                 retrieve_fn=None,
+                                claims_concurrency=claims_concurrency,
                             )
                             context.metadata["claims_overlay"] = claims_out
                             last_emit = len(buffer)

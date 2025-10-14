@@ -10,7 +10,7 @@ import yaml
 from typing import Dict, Any, List, Optional, Type
 from pathlib import Path
 from dataclasses import dataclass, field
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import (
     BaseEvaluation,
@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.Evaluations.benchmark_utils import (
     load_dataset_from_url
 )
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 @dataclass

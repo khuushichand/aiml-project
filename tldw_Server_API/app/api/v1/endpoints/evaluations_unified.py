@@ -93,28 +93,7 @@ security = HTTPBearer(auto_error=False)
 _webhook_managers: dict = {}
 _wm_lock = None
 
-def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
-    global _wm_lock
-    if _wm_lock is None:
-        import threading as _threading
-        _wm_lock = _threading.Lock()
-    with _wm_lock:
-        mgr = _webhook_managers.get(user_id)
-        if mgr is None:
-            import os as _os
-            _override_db = _os.getenv("EVALUATIONS_TEST_DB_PATH")
-            db_path = _override_db or str(DatabasePaths.get_evaluations_db_path(user_id))
-            mgr = WebhookManager(db_path=db_path)
-            _webhook_managers[user_id] = mgr
-        return mgr
-
-def get_db_for_user(user_id: int):
-    svc = get_unified_evaluation_service_for_user(user_id)
-    return getattr(svc, 'db', None)
-
-
-# ============= Authentication =============
-
+## Authentication placed early to satisfy Depends() references
 async def verify_api_key(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
@@ -213,6 +192,294 @@ async def verify_api_key(
             "code": "invalid_credentials"
         }}
     )
+
+def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
+    global _wm_lock
+    if _wm_lock is None:
+        import threading as _threading
+        _wm_lock = _threading.Lock()
+    with _wm_lock:
+        mgr = _webhook_managers.get(user_id)
+        if mgr is None:
+            import os as _os
+            _override_db = _os.getenv("EVALUATIONS_TEST_DB_PATH")
+            db_path = _override_db or str(DatabasePaths.get_evaluations_db_path(user_id))
+            mgr = WebhookManager(db_path=db_path)
+            _webhook_managers[user_id] = mgr
+    return mgr
+
+def get_db_for_user(user_id: int):
+    svc = get_unified_evaluation_service_for_user(user_id)
+    return getattr(svc, 'db', None)
+
+
+# Early definition to satisfy forward references in route dependencies
+async def verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+) -> str:
+    """
+    Verify API key or JWT token based on authentication mode.
+    Early duplicate definition to satisfy forward references; the later
+    definition is identical and may override this name without affecting
+    already-bound dependencies.
+    """
+    settings = get_settings()
+
+    try:
+        if os.getenv("TESTING", "").lower() in ("true", "1", "yes") and \
+           os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+            return "test_user"
+    except Exception:
+        pass
+
+    token = None
+    if settings.AUTH_MODE == "single_user" and x_api_key and isinstance(x_api_key, str):
+        token = x_api_key
+    elif credentials:
+        token = credentials.credentials
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {
+                "message": "Missing API key or token",
+                "type": "authentication_error",
+                "code": "missing_credentials"
+            }}
+        )
+
+    if isinstance(token, str) and token.startswith("Bearer "):
+        token = token[7:]
+
+    if settings.AUTH_MODE == "single_user":
+        expected_token = (
+            os.getenv("SINGLE_USER_API_KEY")
+            or getattr(settings, "SINGLE_USER_API_KEY", None)
+            or os.getenv("API_BEARER")
+            or getattr(settings, "API_BEARER", None)
+        )
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": {
+                    "message": "Server authentication not configured",
+                    "type": "configuration_error",
+                    "code": "auth_not_configured"
+                }}
+            )
+        if token == expected_token:
+            return token
+
+    elif settings.AUTH_MODE == "multi_user":
+        try:
+            jwt_service = JWTService(settings)
+            payload = jwt_service.decode_access_token(token)
+            return f"user_{payload['sub']}"
+        except TokenExpiredError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Token has expired",
+                    "type": "authentication_error",
+                    "code": "token_expired"
+                }}
+            )
+        except InvalidTokenError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": sanitize_error_message(e, "authentication"),
+                    "type": "authentication_error",
+                    "code": "invalid_token"
+                }}
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"error": {
+            "message": "Invalid API key or token",
+            "type": "authentication_error",
+            "code": "invalid_credentials"
+        }}
+    )
+
+
+@router.post("/admin/idempotency/cleanup")
+async def admin_cleanup_idempotency(
+    ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
+    target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+):
+    """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
+
+    Returns a summary of deleted rows per user and total.
+    """
+    # Admin gate
+    require_admin(current_user)
+    try:
+        from pathlib import Path as _Path
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
+
+        deleted_total = 0
+        details = []
+
+        # Build candidate user ids
+        candidate_ids = set()
+        if target_user_id is not None:
+            candidate_ids.add(int(target_user_id))
+        else:
+            try:
+                candidate_ids.add(int(_DP.get_single_user_id()))
+            except Exception:
+                pass
+            try:
+                base = _Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
+                if base.exists():
+                    for entry in base.iterdir():
+                        if entry.is_dir():
+                            try:
+                                candidate_ids.add(int(entry.name))
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+
+        for uid in sorted(candidate_ids):
+            try:
+                db_path = _DP.get_evaluations_db_path(uid)
+                if not db_path.exists():
+                    continue
+                db = _EDB(str(db_path))
+                deleted = db.cleanup_idempotency_keys(ttl_hours=int(ttl_hours))
+                deleted_total += int(deleted)
+                details.append({"user_id": uid, "deleted": int(deleted)})
+            except Exception:
+                continue
+
+        return {"deleted_total": deleted_total, "details": details}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin idempotency cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail="Idempotency cleanup failed")
+
+
+def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] = None, model: Optional[str] = None) -> int:
+    """Estimate tokens with provider/model hints when available.
+
+    Preference order when tiktoken is available:
+    1) encoding_for_model(model) if model provided and recognized
+    2) Heuristic by model name -> o200k_base for 4o/4.1/o1 families
+    3) cl100k_base as a general default
+
+    Falls back to chars/4 if tiktoken or encoding lookup is unavailable.
+    """
+    try:
+        import tiktoken  # type: ignore
+        enc = None
+
+        # Try exact model mapping first (OpenAI models)
+        if isinstance(model, str) and model:
+            try:
+                enc = tiktoken.encoding_for_model(model)
+            except Exception:
+                enc = None
+
+        # Heuristic for modern OpenAI models when model hint exists
+        if enc is None and isinstance(model, str):
+            m = model.lower()
+            try:
+                if ("gpt-4o" in m) or ("gpt-4.1" in m) or m.startswith("o1"):
+                    enc = tiktoken.get_encoding("o200k_base")
+            except Exception:
+                enc = None
+
+        # Provider fallback (OpenAI -> cl100k_base)
+        if enc is None and isinstance(provider, str) and provider.lower() == "openai":
+            try:
+                enc = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                enc = None
+
+        # Final default
+        if enc is None:
+            try:
+                enc = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                enc = None
+
+        if enc is not None:
+            total = 0
+            for t in texts:
+                if isinstance(t, str) and t:
+                    total += len(enc.encode(t))
+            return total
+    except Exception:
+        pass
+
+    # Fallback: character-based approximation
+    total_chars = 0
+    for t in texts:
+        if isinstance(t, str):
+            total_chars += len(t)
+    return max(0, total_chars // 4)
+
+
+async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
+    """Fetch usage summary and set standard X-RateLimit-* headers."""
+    try:
+        summary = await limiter.get_usage_summary(user_id)
+        limits = summary.get("limits", {})
+        usage = summary.get("usage", {})
+        remaining = summary.get("remaining", {})
+        # Tier
+        response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
+        # Per-minute (evaluations)
+        pm = limits.get("per_minute", {})
+        per_min_limit = int(pm.get("evaluations", 0) or 0)
+        response.headers["X-RateLimit-PerMinute-Limit"] = str(per_min_limit)
+        # New: per-minute remaining when available from prior check
+        try:
+            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
+                response.headers["X-RateLimit-PerMinute-Remaining"] = str(int(meta.get("requests_remaining") or 0))
+        except Exception:
+            pass
+        # Daily quotas
+        daily = limits.get("daily", {})
+        response.headers["X-RateLimit-Daily-Limit"] = str(daily.get("evaluations", 0))
+        response.headers["X-RateLimit-Daily-Remaining"] = str(remaining.get("daily_evaluations", 0))
+        response.headers["X-RateLimit-Tokens-Remaining"] = str(remaining.get("daily_tokens", 0))
+        # Cost quotas (optional)
+        response.headers["X-RateLimit-Daily-Cost-Remaining"] = f"{remaining.get('daily_cost', 0):.2f}"
+        response.headers["X-RateLimit-Monthly-Cost-Remaining"] = f"{remaining.get('monthly_cost', 0):.2f}"
+        # Baseline RateLimit-* headers (simple minute window approximation)
+        try:
+            response.headers["RateLimit-Limit"] = str(per_min_limit)
+            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
+                response.headers["RateLimit-Remaining"] = str(int(meta.get("requests_remaining") or 0))
+            reset_val = 60
+            if meta and isinstance(meta, dict) and "reset_seconds" in meta:
+                reset_val = int(meta.get("reset_seconds") or 60)
+            response.headers["RateLimit-Reset"] = str(reset_val)
+            # X- header parity for reset seconds
+            response.headers["X-RateLimit-Reset"] = str(reset_val)
+        except Exception:
+            pass
+    except Exception:
+        # Non-fatal
+        pass
+
+
+# ============= Authentication =============
+
+# (definition moved earlier to satisfy Depends references)
+def _verify_api_key_placeholder():
+    """
+    Placeholder to maintain file structure; actual verify_api_key is defined above.
+    """
 
 
 # ============= Rate Limiting =============
@@ -339,6 +606,8 @@ async def create_embeddings_abtest(
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     """Create an embeddings A/B test (stub).
 
@@ -348,6 +617,21 @@ async def create_embeddings_abtest(
     # Simple test_id generation
     svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
+    # Idempotency: reuse existing test if key provided
+    if idempotency_key:
+        try:
+            existing_id = db.lookup_idempotency("emb_abtest", idempotency_key, user_ctx)
+            if existing_id:
+                logger.info(f"A/B test idempotent hit: {existing_id}")
+                if response is not None:
+                    try:
+                        response.headers["X-Idempotent-Replay"] = "true"
+                        response.headers["Idempotency-Key"] = idempotency_key
+                    except Exception:
+                        pass
+                return EmbeddingsABTestCreateResponse(test_id=existing_id, status='created')
+        except Exception:
+            pass
     # Persist test, arms, and queries
     test_id = db.create_abtest(name=payload.name, config=payload.config.model_dump(), created_by=user_ctx)
     # Insert arms
@@ -363,6 +647,12 @@ async def create_embeddings_abtest(
     # Insert queries
     db.insert_abtest_queries(test_id, [q.model_dump() for q in payload.config.queries])
     logger.info(f"A/B test created: {test_id} by {user_ctx}")
+    # Record idempotency mapping if provided
+    try:
+        if idempotency_key:
+            db.record_idempotency("emb_abtest", idempotency_key, test_id, user_ctx)
+    except Exception:
+        pass
     return EmbeddingsABTestCreateResponse(test_id=test_id, status='created')
 
 
@@ -374,6 +664,8 @@ async def run_embeddings_abtest(
     _: None = Depends(check_evaluation_rate_limit),
     media_db = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     """Start an embeddings A/B test (stub runner).
 
@@ -384,9 +676,31 @@ async def run_embeddings_abtest(
     require_admin(current_user)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
+    # Idempotency: ensure repeated run requests with same key are a no-op
+    if idempotency_key:
+        try:
+            prior = db.lookup_idempotency("emb_abtest_run", idempotency_key, user_ctx)
+            if prior:
+                logger.info(f"A/B test run idempotent hit: {test_id}")
+                headers = {}
+                if response is not None:
+                    try:
+                        response.headers["X-Idempotent-Replay"] = "true"
+                        response.headers["Idempotency-Key"] = idempotency_key
+                    except Exception:
+                        pass
+                return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
+        except Exception:
+            pass
+
     # Launch background job
     asyncio.create_task(run_abtest_full(db, payload.config, test_id, str(current_user.id), media_db))
     logger.info(f"A/B test started in background: {test_id}")
+    try:
+        if idempotency_key:
+            db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
+    except Exception:
+        pass
     return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
 
 
@@ -540,9 +854,27 @@ async def delete_embeddings_abtest(
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Cancel/cleanup an embeddings A/B test (stub)."""
+    # Idempotency: if prior mapping exists, return canonical response without side effects
+    try:
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        if idempotency_key:
+            prior = svc.db.lookup_idempotency("emb_abtest_delete", idempotency_key, user_ctx)
+            if prior:
+                logger.info(f"A/B test delete idempotent hit: {test_id}")
+                return Response(content=json.dumps({"status": "deleted", "test_id": test_id}), media_type='application/json', headers={"X-Idempotent-Replay": "true", "Idempotency-Key": idempotency_key})
+    except Exception:
+        pass
+
+    # Perform delete/cleanup (stubbed)
     logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    try:
+        if idempotency_key:
+            svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)
+    except Exception:
+        pass
     return {"status": "deleted", "test_id": test_id}
 
 
@@ -553,13 +885,23 @@ async def export_embeddings_abtest(
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Export AB test results (JSON or CSV). Admin-only."""
     require_admin(current_user)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
     if format == 'json':
-        return {"test_id": test_id, "total": total, "results": rows}
+        # Idempotency: record export mapping (best-effort)
+        try:
+            if idempotency_key:
+                svc.db.record_idempotency("emb_abtest_export_json", idempotency_key, f"{test_id}:json", user_ctx)
+        except Exception:
+            pass
+        headers = {}
+        if idempotency_key:
+            headers = {"Idempotency-Key": idempotency_key}
+        return Response(content=json.dumps({"test_id": test_id, "total": total, "results": rows}), media_type='application/json', headers=headers)
     # CSV
     import csv
     import io
@@ -568,7 +910,15 @@ async def export_embeddings_abtest(
     writer.writerow(["result_id", "arm_id", "query_id", "ranked_ids", "latency_ms", "metrics_json"])
     for r in rows:
         writer.writerow([r.get('result_id'), r.get('arm_id'), r.get('query_id'), r.get('ranked_ids'), r.get('latency_ms'), r.get('metrics_json')])
-    return Response(content=output.getvalue(), media_type='text/csv', headers={"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"})
+    try:
+        if idempotency_key:
+            svc.db.record_idempotency("emb_abtest_export_csv", idempotency_key, f"{test_id}:csv", user_ctx)
+    except Exception:
+        pass
+    headers = {"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    return Response(content=output.getvalue(), media_type='text/csv', headers=headers)
 
 
 # ============= OpenAI-Compatible Evaluation Endpoints =============
@@ -583,6 +933,8 @@ async def create_evaluation(
     eval_request: CreateEvaluationRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     """
     Create a new evaluation definition (OpenAI-compatible).
@@ -591,17 +943,40 @@ async def create_evaluation(
     """
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+
+        # Idempotency: if key provided and a prior evaluation exists, return it
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_evaluation(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return EvaluationResponse(**existing)
+            except Exception:
+                pass
         evaluation = await svc.create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
             eval_type=eval_request.eval_type,
-            eval_spec=eval_request.eval_spec.dict(),
+            eval_spec=(eval_request.eval_spec.model_dump() if hasattr(eval_request.eval_spec, 'model_dump') else eval_request.eval_spec.dict()),
             dataset_id=eval_request.dataset_id,
-            dataset=[sample.dict() for sample in eval_request.dataset] if eval_request.dataset else None,
-            metadata=eval_request.metadata.dict() if eval_request.metadata else None,
+            dataset=[(s.model_dump() if hasattr(s, 'model_dump') else s.dict()) for s in eval_request.dataset] if eval_request.dataset else None,
+            metadata=(eval_request.metadata.model_dump() if hasattr(eval_request.metadata, 'model_dump') else eval_request.metadata.dict()) if eval_request.metadata else None,
             created_by=user_id
         )
-        
+        # Record idempotency mapping
+        try:
+            if idempotency_key and evaluation.get("id"):
+                svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
+        except Exception:
+            pass
+
         return EvaluationResponse(**evaluation)
         
     except Exception as e:
@@ -703,10 +1078,11 @@ async def get_rate_limit_status(
 @router.post("/rag/pipeline/presets", response_model=PipelinePresetResponse)
 async def create_or_update_pipeline_preset(
     preset: PipelinePresetCreate,
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     try:
-        db = get_db()
+        db = get_db_for_user(current_user.id)
         if db is None:
             raise ValueError("Database not available")
         db.upsert_pipeline_preset(preset.name, preset.config, user_id=user_id)
@@ -740,10 +1116,11 @@ async def create_or_update_pipeline_preset(
 async def list_pipeline_presets(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user_id: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     try:
-        db = get_db()
+        db = get_db_for_user(current_user.id)
         if db is None:
             raise ValueError("Database not available")
         items, total = db.list_pipeline_presets(limit=limit, offset=offset)
@@ -776,9 +1153,13 @@ async def list_pipeline_presets(
 
 
 @router.get("/rag/pipeline/presets/{name}", response_model=PipelinePresetResponse)
-async def get_pipeline_preset(name: str, user_id: str = Depends(verify_api_key)):
+async def get_pipeline_preset(
+    name: str,
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+):
     try:
-        db = get_db()
+        db = get_db_for_user(current_user.id)
         if db is None:
             raise ValueError("Database not available")
         row = db.get_pipeline_preset(name)
@@ -815,9 +1196,13 @@ async def get_pipeline_preset(name: str, user_id: str = Depends(verify_api_key))
 
 
 @router.delete("/rag/pipeline/presets/{name}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_pipeline_preset(name: str, user_id: str = Depends(verify_api_key)):
+async def delete_pipeline_preset(
+    name: str,
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+):
     try:
-        db = get_db()
+        db = get_db_for_user(current_user.id)
         if db is None:
             raise ValueError("Database not available")
         ok = db.delete_pipeline_preset(name)
@@ -840,10 +1225,13 @@ async def delete_pipeline_preset(name: str, user_id: str = Depends(verify_api_ke
 
 
 @router.post("/rag/pipeline/cleanup", response_model=PipelineCleanupResponse)
-async def cleanup_ephemeral_collections(user_id: str = Depends(verify_api_key)):
+async def cleanup_ephemeral_collections(
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+):
     """Delete expired ephemeral collections according to TTL registry."""
     try:
-        db = get_db()
+        db = get_db_for_user(current_user.id)
         if db is None:
             raise ValueError("Database not available")
         expired = db.list_expired_ephemeral_collections()
@@ -876,14 +1264,33 @@ async def create_dataset(
     dataset_request: CreateDatasetRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     """Create a new dataset"""
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+
+        # Idempotency: reuse if mapping exists
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("dataset", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_dataset(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return DatasetResponse(**existing)
+            except Exception:
+                pass
         dataset_id = await svc.create_dataset(
             name=dataset_request.name,
             description=dataset_request.description,
-            samples=[s.dict() for s in dataset_request.samples],
+            samples=[(s.model_dump() if hasattr(s, 'model_dump') else s.dict()) for s in dataset_request.samples],
             metadata=dataset_request.metadata,
             created_by=user_id
         )
@@ -891,6 +1298,13 @@ async def create_dataset(
         dataset = await svc.get_dataset(dataset_id)
         if not dataset:
             raise ValueError("Failed to retrieve created dataset")
+        
+        # Record idempotency mapping
+        try:
+            if idempotency_key:
+                svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
+        except Exception:
+            pass
         
         return DatasetResponse(**dataset)
         
@@ -1230,7 +1644,10 @@ async def update_evaluation(
 ):
     """Update evaluation definition"""
     try:
-        updates = update_request.dict(exclude_unset=True)
+        try:
+            updates = update_request.model_dump(exclude_unset=True)
+        except Exception:
+            updates = update_request.dict(exclude_unset=True)
         if not updates:
             raise create_error_response(
                 message="No updates provided",
@@ -1303,19 +1720,43 @@ async def create_run(
     user_id: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     """Create and start an evaluation run"""
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        # Idempotency: return existing run if key provided
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("run", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_run(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return RunResponse(**existing)
+            except Exception:
+                pass
         run = await svc.create_run(
             eval_id=eval_id,
             target_model=run_request.target_model,
-            config=run_request.config.dict() if run_request.config else None,
-            dataset_override=run_request.dataset_override.dict() if run_request.dataset_override else None,
+            config=(run_request.config.model_dump() if hasattr(run_request.config, 'model_dump') else run_request.config.dict()) if run_request.config else None,
+            dataset_override=(run_request.dataset_override.model_dump() if hasattr(run_request.dataset_override, 'model_dump') else run_request.dataset_override.dict()) if run_request.dataset_override else None,
             webhook_url=str(run_request.webhook_url) if run_request.webhook_url else None,
             created_by=user_id
         )
-        
+        # Record idempotency mapping
+        try:
+            if idempotency_key and run.get("id"):
+                svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
+        except Exception:
+            pass
+
         return RunResponse(**run)
         
     except ValueError as e:
@@ -1378,6 +1819,7 @@ async def list_runs(
 @router.post("/geval", response_model=GEvalResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_geval(
     request: GEvalRequest,
+    response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
 ):
@@ -1386,8 +1828,23 @@ async def evaluate_geval(
     
     G-Eval evaluates summaries on fluency, consistency, relevance, and coherence.
     """
-    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Per-user usage limits
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        tokens_est = _estimate_tokens_from_texts(
+            request.source_text,
+            request.summary,
+            provider=getattr(request, "api_name", None),
+            model=None,
+        )
+        allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:geval", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=meta.get("error", "Rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)}
+            )
         # Normalize user id for single-user mode to match webhook registrations
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -1431,6 +1888,13 @@ async def evaluate_geval(
             api_key=request.api_key,
             user_id=effective_user_id
         )
+        # If provider returned actual usage, record it
+        try:
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage and isinstance(usage, dict):
+                await limiter.record_actual_usage(user_id, "evals:geval", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+        except Exception:
+            pass
         
         # Format response - accept either numeric or structured metric dicts
         raw_metrics = result["results"].get("metrics", {})
@@ -1497,13 +1961,19 @@ async def evaluate_geval(
                 }
             ))
 
-        return GEvalResponse(
+        resp_payload = GEvalResponse(
             metrics=formatted_metrics,
             average_score=result["results"].get("average_score", 0.0),
             summary_assessment=result["results"].get("assessment", "Evaluation complete"),
             evaluation_time=result["evaluation_time"],
             metadata={"evaluation_id": result["evaluation_id"]}
         )
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
+        except Exception:
+            pass
+        return resp_payload
         
     except Exception as e:
         # Log with stack trace for diagnostics
@@ -1525,6 +1995,7 @@ async def evaluate_geval(
 @router.post("/rag", response_model=RAGEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_rag(
     request: RAGEvaluationRequest,
+    response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
 ):
@@ -1533,8 +2004,25 @@ async def evaluate_rag(
     
     Evaluates relevance, faithfulness, answer similarity, and context precision.
     """
-    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Per-user usage limits
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        tokens_est = _estimate_tokens_from_texts(
+            request.query,
+            "\n".join(request.retrieved_contexts or []),
+            request.generated_response,
+            request.ground_truth,
+            provider=getattr(request, "api_name", None),
+            model=None,
+        )
+        allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:rag", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=meta.get("error", "Rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)}
+            )
         # Normalize user id for single-user mode to match webhook registrations
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -1579,6 +2067,12 @@ async def evaluate_rag(
             api_name=request.api_name,
             user_id=effective_user_id
         )
+        try:
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage and isinstance(usage, dict):
+                await limiter.record_actual_usage(user_id, "evals:rag", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+        except Exception:
+            pass
         
         # Extract and format metrics from results
         raw_metrics = result["results"].get("metrics", {})
@@ -1615,7 +2109,7 @@ async def evaluate_rag(
                 }
             ))
 
-        return RAGEvaluationResponse(
+        resp_payload = RAGEvaluationResponse(
             metrics=formatted_metrics,
             overall_score=result["results"].get("overall_score", 0.0),
             retrieval_quality=result["results"].get("retrieval_quality", 0.0),
@@ -1623,6 +2117,12 @@ async def evaluate_rag(
             suggestions=result["results"].get("suggestions", []),
             metadata={"evaluation_id": result["evaluation_id"]}
         )
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
+        except Exception:
+            pass
+        return resp_payload
         
     except Exception as e:
         logger.error(f"RAG evaluation failed: {e}")
@@ -1635,6 +2135,7 @@ async def evaluate_rag(
 @router.post("/response-quality", response_model=ResponseQualityResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_response_quality(
     request: ResponseQualityRequest,
+    response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
 ):
@@ -1643,8 +2144,24 @@ async def evaluate_response_quality(
     
     Checks relevance, completeness, accuracy, and format compliance.
     """
-    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
+        # Per-user usage limits
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        tokens_est = _estimate_tokens_from_texts(
+            request.prompt,
+            request.response,
+            request.expected_format,
+            provider=getattr(request, "api_name", None),
+            model=None,
+        )
+        allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:response_quality", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=meta.get("error", "Rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)}
+            )
         # Normalize user id for single-user mode to match webhook registrations
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -1689,6 +2206,12 @@ async def evaluate_response_quality(
             api_name=request.api_name,
             user_id=effective_user_id
         )
+        try:
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage and isinstance(usage, dict):
+                await limiter.record_actual_usage(user_id, "evals:response_quality", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+        except Exception:
+            pass
 
         # Convert metrics to proper EvaluationMetric structure
         metrics = {}
@@ -1744,13 +2267,19 @@ async def evaluate_response_quality(
                 }
             ))
 
-        return ResponseQualityResponse(
+        resp_payload = ResponseQualityResponse(
             metrics=metrics,
             overall_quality=result["results"].get("overall_quality", 0.0),
             format_compliance=format_compliance,
             issues=result["results"].get("issues", []),
             improvements=result["results"].get("improvements", [])
         )
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
+        except Exception:
+            pass
+        return resp_payload
 
     except Exception as e:
         logger.error(f"Response quality evaluation failed: {e}")
@@ -1765,12 +2294,34 @@ async def evaluate_propositions_endpoint(
     request: PropositionEvaluationRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    response: Response = None,
 ):
     """
     Evaluate proposition extraction quality.
     Computes precision/recall/F1 with semantic or Jaccard matching and density metrics.
     """
     try:
+        # Per-user usage limits (approximate with total text tokens)
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        tokens_est = _estimate_tokens_from_texts(
+            "\n".join(request.extracted or []),
+            "\n".join(request.reference or []),
+        )
+        allowed, meta = await limiter.check_rate_limit(
+            user_id,
+            endpoint="evals:propositions",
+            is_batch=False,
+            tokens_requested=tokens_est,
+            estimated_cost=0.0,
+        )
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=meta.get("error", "Rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)},
+            )
+
         svc = get_unified_evaluation_service_for_user(current_user.id)
         result = await svc.evaluate_propositions(
             extracted=request.extracted,
@@ -1783,7 +2334,7 @@ async def evaluate_propositions_endpoint(
         metrics = result["results"].get("metrics", {})
         counts = result["results"].get("counts", {})
 
-        return PropositionEvaluationResponse(
+        resp_payload = PropositionEvaluationResponse(
             precision=metrics.get("precision", 0.0),
             recall=metrics.get("recall", 0.0),
             f1=metrics.get("f1", 0.0),
@@ -1796,6 +2347,12 @@ async def evaluate_propositions_endpoint(
             details=result["results"].get("details", {}),
             metadata={"evaluation_id": result["evaluation_id"], "evaluation_time": result.get("evaluation_time")}
         )
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
+        except Exception:
+            pass
+        return resp_payload
     
     except Exception as e:
         logger.error(f"Proposition evaluation failed: {e}")
@@ -1883,16 +2440,83 @@ async def batch_evaluate(
     request: BatchEvaluationRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    response: Response = None,
 ):
     """
     Run multiple evaluations in batch.
     
     Supports running multiple evaluation types with configurable parallelism.
     """
-    # FIXME/TODO: Add per-user usage limits via user_rate_limiter to prevent abuse
     try:
         start_time = time.time()
         service = get_unified_evaluation_service_for_user(current_user.id)
+
+        # Per-user usage limits (aggregate all items)
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        tokens_total = 0
+        etype = (request.evaluation_type or "").lower()
+        for item in request.items or []:
+            provider_hint = item.get("api_name") if isinstance(item, dict) else None
+            model_hint = None
+            # Commonly used keys for model hints across clients
+            if isinstance(item, dict):
+                model_hint = item.get("model") or item.get("target_model")
+            if etype == "geval":
+                tokens_total += _estimate_tokens_from_texts(
+                    (item.get("source_text") if isinstance(item, dict) else None),
+                    (item.get("summary") if isinstance(item, dict) else None),
+                    provider=provider_hint,
+                    model=model_hint,
+                )
+            elif etype == "rag":
+                ctx = []
+                if isinstance(item, dict):
+                    rc = item.get("retrieved_contexts")
+                    if isinstance(rc, list):
+                        ctx = rc
+                tokens_total += _estimate_tokens_from_texts(
+                    (item.get("query") if isinstance(item, dict) else None),
+                    "\n".join(ctx),
+                    (item.get("generated_response") if isinstance(item, dict) else None),
+                    (item.get("ground_truth") if isinstance(item, dict) else None),
+                    provider=provider_hint,
+                    model=model_hint,
+                )
+            elif etype == "response_quality":
+                tokens_total += _estimate_tokens_from_texts(
+                    (item.get("prompt") if isinstance(item, dict) else None),
+                    (item.get("response") if isinstance(item, dict) else None),
+                    (item.get("expected_format") if isinstance(item, dict) else None),
+                    provider=provider_hint,
+                    model=model_hint,
+                )
+            elif etype == "propositions":
+                extracted = []
+                reference = []
+                if isinstance(item, dict):
+                    if isinstance(item.get("extracted"), list):
+                        extracted = item.get("extracted")
+                    if isinstance(item.get("reference"), list):
+                        reference = item.get("reference")
+                tokens_total += _estimate_tokens_from_texts(
+                    "\n".join(extracted),
+                    "\n".join(reference),
+                )
+
+        allowed, meta = await limiter.check_rate_limit(
+            user_id,
+            endpoint=f"evals:batch:{etype}",
+            is_batch=True,
+            tokens_requested=tokens_total,
+            estimated_cost=0.0,
+        )
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=meta.get("error", "Rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)},
+            )
         
         results = []
         failed_count = 0
@@ -1938,6 +2562,14 @@ async def batch_evaluate(
                         metrics=eval_request.get("metrics"),
                         ocr_options=eval_request.get("ocr_options"),
                         thresholds=eval_request.get("thresholds"),
+                        user_id=user_id,
+                    )
+                elif eval_type == "propositions":
+                    task = service.evaluate_propositions(
+                        extracted=eval_request.get("extracted", []),
+                        reference=eval_request.get("reference", []),
+                        method=eval_request.get("method", "semantic"),
+                        threshold=eval_request.get("threshold", 0.7),
                         user_id=user_id,
                     )
                 else:
@@ -2013,6 +2645,14 @@ async def batch_evaluate(
                             thresholds=eval_request.get("thresholds"),
                             user_id=user_id,
                         )
+                    elif eval_type == "propositions":
+                        result = await service.evaluate_propositions(
+                            extracted=eval_request.get("extracted", []),
+                            reference=eval_request.get("reference", []),
+                            method=eval_request.get("method", "semantic"),
+                            threshold=eval_request.get("threshold", 0.7),
+                            user_id=user_id,
+                        )
                     else:
                         results.append({
                             "evaluation_id": None,
@@ -2042,7 +2682,7 @@ async def batch_evaluate(
         
         processing_time = time.time() - start_time
         
-        return BatchEvaluationResponse(
+        resp_payload = BatchEvaluationResponse(
             total_items=len(request.items),
             successful=len(results) - failed_count,
             failed=failed_count,
@@ -2050,6 +2690,12 @@ async def batch_evaluate(
             aggregate_metrics={},  # TODO: Calculate aggregate metrics
             processing_time=processing_time
         )
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response)
+        except Exception:
+            pass
+        return resp_payload
         
     except Exception as e:
         logger.error(f"Batch evaluation failed: {e}")
@@ -2070,7 +2716,9 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 @router.post("/ocr", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_ocr_endpoint(
     request: OCREvaluationRequest,
-    user_id: str = Depends(verify_api_key)
+    response: Response,
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
 ):
     """Evaluate OCR effectiveness on provided items (text-to-text comparison).
 
@@ -2078,6 +2726,23 @@ async def evaluate_ocr_endpoint(
     PDF-based OCR execution can be added in future if needed.
     """
     try:
+        # Per-user usage limits (approximate by total text length)
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        texts = []
+        try:
+            for it in request.items or []:
+                if getattr(it, "extracted_text", None):
+                    texts.append(it.extracted_text)
+                if getattr(it, "ground_truth_text", None):
+                    texts.append(it.ground_truth_text)
+        except Exception:
+            pass
+        tokens_est = _estimate_tokens_from_texts("\n".join(texts))
+        allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:ocr", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(status_code=429, detail=meta.get("error", "Rate limit exceeded"), headers={"Retry-After": str(retry_after)})
+
         service = get_unified_evaluation_service_for_user(current_user.id)
         result = await service.evaluate_ocr(
             items=[i.model_dump() for i in request.items],
@@ -2086,6 +2751,18 @@ async def evaluate_ocr_endpoint(
             thresholds=request.thresholds,
             user_id=user_id,
         )
+        try:
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage and isinstance(usage, dict):
+                await limiter.record_actual_usage(user_id, "evals:ocr", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+        except Exception:
+            pass
+        # Apply headers
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
+        except Exception:
+            pass
         return OCREvaluationResponse(**result)
     except Exception as e:
         logger.error(f"OCR evaluation endpoint failed: {e}")
@@ -2097,6 +2774,7 @@ async def evaluate_ocr_endpoint(
 
 @router.post("/ocr-pdf", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_ocr_pdf_endpoint(
+    response: Response,
     files: List[UploadFile] = File(..., description="PDF files to OCR and evaluate"),
     ground_truths: Optional[List[str]] = Form(None, description="Ground-truth text per file (order aligned)"),
     ground_truths_json: Optional[str] = Form(None, description="JSON array of ground-truth texts aligned to files"),
@@ -2114,6 +2792,21 @@ async def evaluate_ocr_pdf_endpoint(
 ):
     """Evaluate OCR by running OCR on uploaded PDFs and comparing to provided ground-truths."""
     try:
+        # Per-user usage limits (approximate by file sizes if available)
+        limiter = get_user_rate_limiter_for_user(current_user.id)
+        size_est = 0
+        try:
+            for f in files:
+                s = getattr(f, "size", None)
+                if isinstance(s, int):
+                    size_est += s
+        except Exception:
+            pass
+        tokens_est = max(0, size_est // 4)
+        allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:ocr_pdf", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
+        if not allowed:
+            retry_after = meta.get("retry_after", 60)
+            raise HTTPException(status_code=429, detail=meta.get("error", "Rate limit exceeded"), headers={"Retry-After": str(retry_after)})
         if ground_truths is not None and len(ground_truths) not in (0, len(files)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ground_truths count must match files length or be omitted")
 
@@ -2171,6 +2864,17 @@ async def evaluate_ocr_pdf_endpoint(
             thresholds=thresholds,
             user_id=user_id,
         )
+        try:
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage and isinstance(usage, dict):
+                await limiter.record_actual_usage(user_id, "evals:ocr", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+        except Exception:
+            pass
+        try:
+            if response is not None:
+                await _apply_rate_limit_headers(limiter, user_id, response)
+        except Exception:
+            pass
         return OCREvaluationResponse(**result)
     except HTTPException:
         raise

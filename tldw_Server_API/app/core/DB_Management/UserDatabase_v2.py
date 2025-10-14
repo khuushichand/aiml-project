@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional, Union
 from uuid import uuid4
-import logging
+from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.backends.base import (
@@ -27,7 +27,6 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-logger = logging.getLogger(__name__)
 
 ########################################################################################################################
 # Custom Exceptions

@@ -62,7 +62,7 @@ def test_provider_fallback_to_hf(client, monkeypatch):
         "model": "text-embedding-3-small",
         "input": "fallback test"
     }
-    r = client.post("/api/v1/embeddings", json=payload, headers={"x-provider": "openai"})
+    r = client.post("/api/v1/embeddings", json=payload)
     assert r.status_code == 200
     data = r.json()
     # Expect model string to indicate huggingface actually served it
@@ -74,3 +74,30 @@ def test_provider_fallback_to_hf(client, monkeypatch):
     emb = data["data"][0]["embedding"]
     assert isinstance(emb, list)
     assert len(emb) == 384
+
+
+@pytest.mark.unit
+def test_no_fallback_when_header_specified(client, monkeypatch):
+    async def override_user():
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_request_user] = override_user
+
+    # Fail for openai, succeed for huggingface; header will disable fallback and keep failure
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None):
+        from fastapi import HTTPException
+        if provider == "openai":
+            raise HTTPException(status_code=503, detail="openai down")
+        return [[0.0] * 384 for _ in texts]
+
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+    monkeypatch.setattr(mod, "create_embeddings_batch_async", fake_batch_async, raising=True)
+    os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"
+
+    payload = {"model": "text-embedding-3-small", "input": "no-fallback"}
+    r = client.post("/api/v1/embeddings", json=payload, headers={"x-provider": "openai"})
+    assert r.status_code == 503
+    # No fallback headers expected
+    assert r.headers.get("X-Embeddings-Provider") is None or r.headers.get("X-Embeddings-Provider") == "openai"
+    assert r.headers.get("X-Embeddings-Fallback-From") is None

@@ -15,14 +15,18 @@ Base path: `/api/v1/evaluations`
 - `POST /geval` — Summarization evaluation (G‑Eval metrics)
 - `POST /rag` — RAG evaluation (relevance, faithfulness, similarity, etc.)
 - `POST /response-quality` — General response quality + format compliance
-- `POST /batch` — Batch evaluations with parallel workers
+- `POST /batch` — Batch evaluations with parallel workers (supports `geval`, `rag`, `response_quality`, `ocr`, `propositions`)
 - `POST /history` — History retrieval and aggregation
 - `POST /custom-metric` — User‑defined metric evaluation
 - `POST /compare` — Compare evaluation results
 - Webhooks: `POST /webhooks`, `GET /webhooks`, `DELETE /webhooks`, `POST /webhooks/test`
 - Rate limits: `GET /rate-limits`
+- Idempotency: provide `Idempotency-Key` for create endpoints (evaluations, datasets, runs) to safely retry without duplicates.
+- Admin gating: heavy endpoints (e.g., embeddings A/B test run/export) require admin when `EVALS_HEAVY_ADMIN_ONLY=true`.
 - Embeddings A/B test (scaffold): `POST /embeddings/abtest`, `POST /embeddings/abtest/{test_id}/run`, `GET /embeddings/abtest/{test_id}`
+  - Event stream (SSE): `GET /embeddings/abtest/{test_id}/events`
 - RAG pipeline presets: `POST /rag/pipeline/presets`, `GET /rag/pipeline/presets`
+  - Cleanup expired collections: `POST /rag/pipeline/cleanup`
 - Health & Metrics: `GET /health`, `GET /metrics` (JSON or Prometheus text via `Accept`)
 
 Authentication
@@ -36,5 +40,6 @@ Authentication
 
 Notes
 - Legacy evaluation routers are deprecated and not mounted by default; use the unified endpoints above.
+- Response headers include `X-RateLimit-*` and baseline `RateLimit-*` values reflecting per-user allowances. See the Unified API Reference for details.
 
 Use the sidebar to browse evaluation topics and deeper guides.

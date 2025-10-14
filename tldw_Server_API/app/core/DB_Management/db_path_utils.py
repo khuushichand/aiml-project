@@ -7,11 +7,10 @@ Ensures consistent database file locations across the application.
 import os
 from pathlib import Path
 from typing import Optional, Dict
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
 
-logger = logging.getLogger(__name__)
 
 
 class DatabasePaths:

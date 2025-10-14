@@ -17,7 +17,7 @@
 
 import os
 import sys
-import logging
+from loguru import logger
 import tempfile
 import subprocess
 from pathlib import Path
@@ -37,7 +37,7 @@ _mlx_model_cache: Optional[Any] = None
 def check_mlx_available() -> bool:
     """Check if MLX is available and we're on macOS."""
     if not IS_MACOS:
-        logging.debug("MLX is only available on macOS")
+        logger.debug("MLX is only available on macOS")
         return False
     
     try:
@@ -45,7 +45,7 @@ def check_mlx_available() -> bool:
         import mlx.core as mx
         return True
     except ImportError:
-        logging.debug("MLX not installed")
+        logger.debug("MLX not installed")
         return False
 
 
@@ -66,15 +66,15 @@ def install_parakeet_mlx() -> bool:
         True if installation successful, False otherwise
     """
     if not IS_MACOS:
-        logging.error("parakeet-mlx is only supported on macOS")
+        logger.error("parakeet-mlx is only supported on macOS")
         return False
     
     if check_parakeet_mlx_installed():
-        logging.info("parakeet-mlx is already installed")
+        logger.info("parakeet-mlx is already installed")
         return True
     
     try:
-        logging.info("Installing parakeet-mlx from GitHub...")
+        logger.info("Installing parakeet-mlx from GitHub...")
         
         # Install using pip
         cmd = [
@@ -85,14 +85,14 @@ def install_parakeet_mlx() -> bool:
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
-            logging.info("Successfully installed parakeet-mlx")
+            logger.info("Successfully installed parakeet-mlx")
             return True
         else:
-            logging.error(f"Failed to install parakeet-mlx: {result.stderr}")
+            logger.error(f"Failed to install parakeet-mlx: {result.stderr}")
             return False
             
     except Exception as e:
-        logging.error(f"Error installing parakeet-mlx: {e}")
+        logger.error(f"Error installing parakeet-mlx: {e}")
         return False
 
 
@@ -113,11 +113,11 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
     global _mlx_model_cache
     
     if not IS_MACOS:
-        logging.error("Parakeet MLX is only supported on macOS with Apple Silicon")
+        logger.error("Parakeet MLX is only supported on macOS with Apple Silicon")
         return None
     
     if _mlx_model_cache and not force_reload:
-        logging.debug("Using cached Parakeet MLX model")
+        logger.debug("Using cached Parakeet MLX model")
         return _mlx_model_cache
     
     # Check MLX availability

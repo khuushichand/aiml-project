@@ -58,6 +58,7 @@ High-level entry: `ClaimsEngine(analyze_fn).run(...)` returns:
 
 Extractor options (argument `claim_extractor`):
 - `aps`: Use PropositionChunkingStrategy with the `gemma_aps` profile to produce APS-style atomic propositions (`max_size=1` ensures one proposition per chunk). Requires an LLM via `analyze_fn`.
+- `ner`: NER-assisted sentence selection using spaCy (model from `CLAIMS_LOCAL_NER_MODEL`, default `en_core_web_sm`). Sentences with named entities are returned as claims. Falls back to LLM if NER unavailable.
 - otherwise: LLM-based extractor (JSON of claims) with fallback to heuristics. Uses prompt_loader keys `ingestion/claims_extractor_system` and `ingestion/claims_extractor_prompt` when provided, with safe defaults if not.
 
 Verifier: `HybridClaimVerifier`
@@ -72,6 +73,7 @@ Verifier: `HybridClaimVerifier`
 
 Notes:
 - `claim_extractor="auto"` in `ClaimsEngine.run` currently uses the LLM path by default with heuristic fallback. The ingestion-time module’s `auto` may behave differently (see above).
+- `claims_concurrency` bounds parallel verifications (default 8; range 1–32).
 - `nli_model` can be passed to override the default NLI model.
 
 ## Prompt Customization

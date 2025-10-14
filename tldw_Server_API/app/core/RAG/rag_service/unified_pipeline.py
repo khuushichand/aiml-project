@@ -292,6 +292,7 @@ async def unified_rag_pipeline(
     claims_conf_threshold: float = 0.7,
     claims_max: int = 25,
     nli_model: Optional[str] = None,
+    claims_concurrency: int = 8,
     
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
@@ -1418,6 +1419,7 @@ async def unified_rag_pipeline(
                                 claims_max=claims_max,
                                 retrieve_fn=_retrieve_for_claim,
                                 nli_model=nli_model,
+                                claims_concurrency=claims_concurrency,
                             )
                             claims_payload = claims_run.get("claims")
                             factuality_payload = claims_run.get("summary")
@@ -1434,6 +1436,7 @@ async def unified_rag_pipeline(
                             claims_max=claims_max,
                             retrieve_fn=_retrieve_for_claim,
                             nli_model=nli_model,
+                            claims_concurrency=claims_concurrency,
                         )
                         claims_payload = claims_run.get("claims")
                         factuality_payload = claims_run.get("summary")

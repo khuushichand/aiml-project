@@ -153,7 +153,7 @@ try:
     # These are used to determine which providers are configured and have keys.
     # The actual APP_API_KEYS should be loaded by your application's schema/config logic.
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import API_KEYS as APP_API_KEYS_FROM_SCHEMA
-    from tldw_Server_API.app.core.Chat.Chat_Functions import API_CALL_HANDLERS as APP_API_CALL_HANDLERS
+    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as APP_API_CALL_HANDLERS
 
     ALL_CONFIGURED_PROVIDERS_FROM_APP = list(APP_API_CALL_HANDLERS.keys())
 except ImportError:
@@ -167,7 +167,14 @@ def get_commercial_providers_with_keys_integration():
     """
     Returns a list of commercial providers for which API keys are actually set
     and non-empty, as understood by the application's schema.
+
+    This integration test set is gated by RUN_COMMERCIAL_CHAT_TESTS. If not enabled,
+    returns an empty list to skip these tests in environments without network access
+    or valid provider credentials.
     """
+    # Require explicit opt-in to run commercial provider tests
+    if os.getenv("RUN_COMMERCIAL_CHAT_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return []
     potentially_commercial = [
         "openai", "anthropic", "cohere", "groq", "openrouter",
         "deepseek", "mistral", "google", "huggingface", "qwen"

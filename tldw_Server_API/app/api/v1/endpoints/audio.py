@@ -41,8 +41,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
 )
 
 # For logging (if you use the same logger as in your PDF endpoint)
-import logging # or from your_project.utils import logger
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)

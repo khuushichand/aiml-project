@@ -68,7 +68,7 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 )
 
 # For chat completions
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
+from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call
 )
 

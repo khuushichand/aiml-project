@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_helpers import load_conversation_history
-from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 
 class DocumentType(Enum):

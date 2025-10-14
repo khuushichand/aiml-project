@@ -397,6 +397,9 @@ async def update_project(
     """
     try:
         # Filter out None values
+    try:
+        update_data = updates.model_dump(exclude_none=True)
+    except Exception:
         update_data = {k: v for k, v in updates.dict().items() if v is not None}
         
         if not update_data:

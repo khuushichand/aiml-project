@@ -7,7 +7,7 @@ database backend instances based on configuration.
 
 import os
 from typing import Dict, Optional, Type
-import logging
+from loguru import logger
 
 from .base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
 from .sqlite_backend import SQLiteBackend
@@ -19,7 +19,6 @@ try:
 except ImportError:
     POSTGRESQL_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
 
 # Registry of available backends
 _BACKEND_REGISTRY: Dict[BackendType, Type[DatabaseBackend]] = {

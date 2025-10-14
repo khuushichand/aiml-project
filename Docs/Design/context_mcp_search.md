@@ -1,10 +1,10 @@
 # MCP Context Search and Retrieval (FTS-first)
 
-Version: v0.1 (design draft)
+Version: v0.1 (implemented)
 
 Author: tldw_server2 team
 
-Status: Draft for review (no code changes yet)
+Status: Implemented (core modules and aggregator available)
 
 ## Overview
 
@@ -17,7 +17,7 @@ This design adds context7-like functionality via MCP tools to search and retriev
 - Configurable snippet length (default 300)
 - Retrieval modes: snippet, chunk, chunk_with_siblings (budgeted), full
 
-Initially, only FTS/keyword search is implemented (no vectors). Later versions can add re-ranking/embeddings without breaking caller contracts.
+Initially, only FTS/keyword search is implemented (no vectors). Later versions can add re-ranking/embeddings without breaking caller contracts. The following are implemented in code now: Notes, Media, Chats, Characters, Prompts source modules, and a Knowledge aggregator with normalized outputs.
 
 ## Session & Client Awareness
 
@@ -152,7 +152,7 @@ Behavior:
 Token estimation uses `chars_per_token` as a multiplier to convert characters → tokens (`tokens ≈ ceil(chars / cpt)`).
 
 Anchor identification (`loc`):
-- `media`: prefer stored chunks from `UnvectorizedMediaChunks` (by `chunk_index` or `uuid`). If missing, approximate via text search in full content/summary.
+- `media`: prefers stored chunks from `UnvectorizedMediaChunks` (by `chunk_index` or `uuid`). When a prechunked table exists, `media.search` attempts to map the first match offset to a precise `loc.chunk_index`; `media.get` uses `chunk_index`/`chunk_uuid` to anchor and then expands to siblings under the token budget. If no prechunked chunks exist, it falls back to on‑the‑fly chunking with approximate offsets.
 - `notes`: FTS match → approximate offset or sentence-chunk boundary (on-the-fly chunking with `Chunker`).
 - `chats`: treat each message as a “chunk”; siblings are adjacent messages. The anchor is `message_id`.
 - `characters`/`prompts`: if needed, chunk on-the-fly by sentences/paragraphs.
@@ -308,6 +308,10 @@ knowledge.get
     "retrieval"?: RetrievalOptions
   }
   output: GetResponse
+
+Notes
+- `media.search` now returns a more precise `loc` when prechunked data exists: `{ "chunk_index": N }` rather than only `{ "approx_offset" }`.
+- `media.get` prefers `UnvectorizedMediaChunks` for `mode = "chunk" | "chunk_with_siblings" | "auto"`. It anchors by `chunk_index` or `chunk_uuid` when provided, otherwise maps an `approx_offset` to a `chunk_index`. If prechunked data is not available, it falls back to on‑the‑fly chunking.
 ```
 
 ## Location (loc) Semantics by Source

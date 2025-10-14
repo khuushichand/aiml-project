@@ -103,6 +103,26 @@ curl -H "Authorization: Bearer sk-..." https://api.example.com/api/v1/evaluation
 | Premium    | 100         | 200,000    | 200        | $50        |
 | Enterprise | Unlimited   | Unlimited  | 1000       | Custom     |
 
+### Rate Limit Response Headers
+Unified evaluation endpoints include standard response headers that surface current limits and remaining allowances:
+
+- X-RateLimit-Tier
+- X-RateLimit-PerMinute-Limit
+- X-RateLimit-PerMinute-Remaining
+- X-RateLimit-Daily-Limit
+- X-RateLimit-Daily-Remaining
+- X-RateLimit-Tokens-Remaining
+- X-RateLimit-Daily-Cost-Remaining
+- X-RateLimit-Monthly-Cost-Remaining
+
+In addition, draft standard headers are provided for compatibility with proxies and SDKs:
+
+- RateLimit-Limit
+- RateLimit-Remaining
+- RateLimit-Reset (seconds until the current minute window resets)
+
+Note: Remaining values are based on the latest limiter decision; actual token/cost usage may adjust after the request completes when providers return precise usage metadata.
+
 ## Core API Endpoints
 
 ### Evaluation Management
@@ -407,7 +427,7 @@ Evaluates general response quality and format compliance.
 ### Batch Evaluation
 `POST /api/v1/evaluations/batch`
 
-Process multiple evaluations in parallel.
+Process multiple evaluations in parallel. Supported `evaluation_type` values: `geval`, `rag`, `response_quality`, `ocr`, `propositions`.
 
 **Request:**
 ```json
@@ -475,6 +495,46 @@ Example response:
   "aggregate_metrics": {"coherence": 0.915},
   "processing_time": 1.82
 }
+```
+
+Additional examples:
+
+Propositions (Jaccard):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "propositions",
+        "items": [
+          {
+            "extracted": ["Alice founded Acme in 2020", "Bob joined in 2021"],
+            "reference": ["Alice founded Acme in 2020"],
+            "method": "jaccard",
+            "threshold": 0.5
+          }
+        ],
+        "parallel_workers": 1
+      }'
+```
+
+OCR (text-based items):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "ocr",
+        "items": [
+          {
+            "items": [
+              {"id": "d1", "extracted_text": "hello world", "ground_truth_text": "hello world"}
+            ],
+            "metrics": ["cer", "wer"]
+          }
+        ],
+        "parallel_workers": 1
+      }'
 ```
 
 ### Propositions Evaluation
@@ -617,6 +677,40 @@ Exports metrics in Prometheus format:
 
 Returns current tier, limits, usage, remaining allowance, and reset time.
 
+Responses from evaluation endpoints also include standard `X-RateLimit-*` headers:
+- `X-RateLimit-Tier`
+- `X-RateLimit-PerMinute-Limit`
+- `X-RateLimit-Daily-Limit`
+- `X-RateLimit-Daily-Remaining`
+- `X-RateLimit-Tokens-Remaining`
+- `X-RateLimit-Daily-Cost-Remaining`
+- `X-RateLimit-Monthly-Cost-Remaining`
+
+### Idempotency
+
+For create endpoints, supply `Idempotency-Key` to make requests safe to retry. When a prior successful request with the same key exists (scoped per user and entity type), the API returns the original resource instead of creating a duplicate.
+
+- `POST /api/v1/evaluations` — create evaluation definition
+- `POST /api/v1/evaluations/datasets` — create dataset
+- `POST /api/v1/evaluations/{eval_id}/runs` — create run
+- `POST /api/v1/evaluations/embeddings/abtest` — create embeddings A/B test (scaffold)
+- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` — start A/B test (admin‑gated)
+
+Example:
+```
+Idempotency-Key: 9c20c0b8-5e5b-42d1-ae6a-6b1ae1a4f3de
+```
+
+Keys are stored server-side and are unique per `{user_id, entity_type, key}`.
+
+### Admin Gating
+
+Some heavy operations (e.g., embeddings A/B test run and export) are admin-gated by default. Control this behavior with the environment variable:
+
+- `EVALS_HEAVY_ADMIN_ONLY=true|false` (default: `true`)
+
+When enabled, non-admin users receive `403` for gated endpoints.
+
 ## Error Handling
 
 All errors follow a consistent format:
@@ -698,6 +792,33 @@ r = requests.post(f"{BASE}/{e['id']}/runs", json={"target_model": "gpt-4"}, head
 
 # Poll run status
 status = requests.get(f"{BASE}/runs/{r['id']}", headers=headers).json()
+```
+
+### Pipeline Presets & Cleanup
+
+Create or update a pipeline preset:
+```bash
+curl -X POST "$BASE/rag/pipeline/presets" \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"standard","config": {"retrieval": {"k": 8}}}'
+```
+
+List presets:
+```bash
+curl "$BASE/rag/pipeline/presets" -H "X-API-KEY: $API_KEY"
+```
+
+Cleanup expired ephemeral collections:
+```bash
+curl -X POST "$BASE/rag/pipeline/cleanup" -H "X-API-KEY: $API_KEY"
+```
+
+### Embeddings A/B Test (SSE)
+
+Stream events for a running A/B test:
+```bash
+curl "$BASE/embeddings/abtest/abtest_123/events" -H "X-API-KEY: $API_KEY"
 ```
 
 ## Best Practices

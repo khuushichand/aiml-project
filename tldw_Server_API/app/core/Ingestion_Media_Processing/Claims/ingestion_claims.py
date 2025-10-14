@@ -53,12 +53,56 @@ def extract_claims_for_chunks(
                     sents.append(t)
                 if len(sents) >= max_per_chunk:
                     break
-
+        elif mode == "ner":
+            # NER-assisted selection: keep sentences with named entities
+            sents = []
+            try:
+                import spacy  # type: ignore
+                model_name = None
+                try:
+                    model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
+                except Exception:
+                    model_name = "en_core_web_sm"
+                try:
+                    nlp = spacy.load(model_name)
+                except Exception:
+                    nlp = spacy.blank("en")
+                    if not nlp.has_pipe("sentencizer"):
+                        nlp.add_pipe("sentencizer")
+                doc = nlp(txt)
+                for sent in getattr(doc, "sents", [doc]):
+                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
+                    if has_ent:
+                        st = sent.text.strip()
+                        if len(st) >= 12:
+                            sents.append(st)
+                    if len(sents) >= max_per_chunk:
+                        break
+                if not sents:
+                    # fallback to heuristic
+                    parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
+                    for p in parts:
+                        t = (p or "").strip()
+                        if len(t) >= 12:
+                            sents.append(t)
+                        if len(sents) >= max_per_chunk:
+                            break
+            except Exception as e:
+                logger.debug(f"NER-assisted extraction failed: {e}; falling back to heuristic")
+                sents = []
+                parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
+                for p in parts:
+                    t = (p or "").strip()
+                    if len(t) >= 12:
+                        sents.append(t)
+                    if len(sents) >= max_per_chunk:
+                        break
+        
         # LLM-based extractor via unified chat API (LLM_Calls)
         else:
             sents = []
             try:
-                from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call  # type: ignore
+                from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call  # type: ignore
 
                 # Determine provider: explicit mode may be a provider name; otherwise use config
                 provider = mode if mode in {

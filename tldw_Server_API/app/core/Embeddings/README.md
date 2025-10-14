@@ -90,3 +90,7 @@ These pieces are present for future horizontal scaling but are not hooked up to 
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: List of patterns to enable `trust_remote_code` for HuggingFace models.
 - `CHROMADB_FORCE_STUB`: `true|false` to force in-memory Chroma stub for tests.
 - `TESTING` / `USE_REAL_OPENAI_IN_TESTS`: When `TESTING=true` and `USE_REAL_OPENAI_IN_TESTS!=true`, OpenAI embeddings are deterministically synthesized.
+- `EMBEDDINGS_CACHE_TTL_SECONDS`: Override cache TTL (default 3600).
+- `EMBEDDINGS_CACHE_MAX_SIZE`: Override cache max entries (default 5000).
+- `EMBEDDINGS_CACHE_CLEANUP_INTERVAL`: Override cache cleanup interval seconds (default 300).
+- `EMBEDDINGS_MAX_BATCH_SIZE`: Maximum uncached texts processed per internal batch (default 100).

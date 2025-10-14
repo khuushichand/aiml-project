@@ -100,6 +100,19 @@ class RequestContext:
         self.session_id = session_id
         self.metadata = metadata or {}
         self.start_time = datetime.now(timezone.utc)
+        # Derive per-user db paths (read-only) if possible
+        self.db_paths: Dict[str, str] = {}
+        try:
+            if self.user_id is not None:
+                # Attempt to parse an integer user id (expected by DatabasePaths)
+                uid_int = int(str(self.user_id))
+                from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+                paths = DatabasePaths.get_all_user_db_paths(uid_int)
+                # Convert Paths to strings for downstream use
+                self.db_paths = {k: str(v) for k, v in paths.items()}
+        except Exception as _e:
+            # Non-fatal: leave db_paths empty when user id is not numeric or any failure occurs
+            pass
         # Build a bound logger for this request
         self.logger = logger.bind(
             request_id=request_id,
@@ -226,6 +239,20 @@ class MCPProtocol:
                     request.id
                 )
             
+            # If this is a tools/call, validate tool name early (before RBAC)
+            try:
+                if request.method == "tools/call":
+                    _p = request.params or {}
+                    _name = _p.get("name") if isinstance(_p, dict) else None
+                    if not isinstance(_name, str) or not self._tool_name_re.match(_name):
+                        return self._error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Invalid tool name",
+                            request.id
+                        )
+            except Exception:
+                return self._error_response(ErrorCode.INTERNAL_ERROR, "Invalid tool name", request.id)
+
             # Find handler
             handler = self.handlers.get(request.method)
             if not handler:
@@ -501,7 +528,17 @@ class MCPProtocol:
                 if not permitted:
                     raise PermissionError(f"Permission denied for tool: {tool_name}")
         
-        # Execute tool with circuit breaker
+        # Harden arguments against cross-user/db overrides
+        try:
+            if isinstance(tool_args, dict):
+                forbidden = {"user_id", "db_path", "db_paths", "chacha_db", "media_db", "prompts_db"}
+                for k in list(tool_args.keys()):
+                    if k in forbidden:
+                        del tool_args[k]
+        except Exception:
+            pass
+
+        # Execute tool with circuit breaker (pass context through)
         t0 = time.time()
         try:
             # Trace the tool call with OTEL
@@ -518,7 +555,8 @@ class MCPProtocol:
                     result = await module.execute_with_circuit_breaker(
                         module.execute_tool,
                         tool_name,
-                        tool_args
+                        tool_args,
+                        context
                     )
                     span.set_attribute("mcp.status", "success")
                 except Exception as _tool_e:

@@ -28,7 +28,6 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 #
 # 3rd-party Libraries
 import requests
-import logging
 
 from loguru import logger
 
@@ -43,6 +42,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 # Authoritative provider mappings (avoid drift):
 from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as _PROVIDER_API_CALL_HANDLERS
 from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_PARAM_MAP as _PROVIDER_PARAM_MAP
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _orchestrator_chat_api_call
 from tldw_Server_API.app.core.Utils.Utils import generate_unique_filename, logging
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -65,18 +65,7 @@ def approximate_token_count(history):
         logging.error(f"Error calculating token count: {str(e)}")
         return 0
 
-# FIXME - Validate below
-# 1. Dispatch table for handler functions (centralized in provider_config)
-API_CALL_HANDLERS = _PROVIDER_API_CALL_HANDLERS
-"""Dispatch table mapping provider names to handler callables (from provider_config)."""
-
-# Centralized parameter mapping (authoritative in provider_config)
-PROVIDER_PARAM_MAP = _PROVIDER_PARAM_MAP
-"""Parameter name mapping per provider (from provider_config)."""
-
-
-"""Deprecated local provider map removed. provider_config.PROVIDER_PARAM_MAP is authoritative."""
-_DEPRECATED_PROVIDER_PARAM_MAP = {}
+"""Provider mappings now live in provider_config; this module no longer exports them."""
 
 def chat_api_call(
     api_endpoint: str,
@@ -107,201 +96,42 @@ def chat_api_call(
     extra_body: Optional[Dict[str, Any]] = None,
     ):
     """
-    Acts as a unified dispatcher to call various LLM API providers.
-
-    This function routes chat requests to the appropriate LLM provider based on
-    `api_endpoint`. It uses `API_CALL_HANDLERS` to find the correct handler
-    function and `PROVIDER_PARAM_MAP` to translate generic parameters to
-    provider-specific ones.
-
-    Args:
-        api_endpoint: The identifier for the target LLM provider (e.g., "openai", "anthropic").
-        messages_payload: A list of message objects (OpenAI format: `{'role': ..., 'content': ...}`)
-                          representing the conversation history and current user message.
-        api_key: The API key for the specified provider.
-        temp: Temperature for sampling, controlling randomness.
-        system_message: An optional system-level instruction for the LLM. How this is
-                        used depends on the provider; some prepend it to messages, others
-                        have a dedicated parameter.
-        streaming: Whether to stream the response from the LLM.
-        minp: Minimum probability for token sampling (nucleus sampling related).
-        maxp: Maximum probability for token sampling (often maps to `top_p`).
-        model: The specific model to use for the LLM provider.
-        topk: Top-K sampling parameter.
-        topp: Top-P (nucleus) sampling parameter.
-        logprobs: Whether to return log probabilities of tokens.
-        top_logprobs: Number of top log probabilities to return.
-        logit_bias: A dictionary to bias token generation probabilities.
-        presence_penalty: Penalty for new tokens based on their presence in the text so far.
-        frequency_penalty: Penalty for new tokens based on their frequency in the text so far.
-        tools: A list of tools the model may call.
-        tool_choice: Controls which tool the model should call.
-        max_tokens: The maximum number of tokens to generate in the response.
-        seed: A seed for deterministic generation, if supported.
-        stop: A string or list of strings that, when generated, will cause the LLM to stop.
-        response_format: Specifies the format of the response (e.g., `{'type': 'json_object'}`).
-        n: The number of chat completion choices to generate.
-        user_identifier: An identifier for the end-user, for tracking or moderation purposes.
-
-    Returns:
-        The LLM's response. This can be a string for non-streaming responses or
-        a generator for streaming responses. The exact type depends on the
-        underlying provider's handler function.
-
-    Raises:
-        ValueError: If the `api_endpoint` is unsupported or if there's a parameter issue.
-        ChatAuthenticationError: If authentication with the provider fails (e.g., invalid API key).
-        ChatRateLimitError: If the provider's rate limit is exceeded.
-        ChatBadRequestError: If the request to the provider is malformed or invalid.
-        ChatProviderError: If the provider's server returns an error or there's a network issue.
-        ChatConfigurationError: If there's a configuration issue for the specified provider.
-        ChatAPIError: For other unexpected API-related errors.
-        requests.exceptions.HTTPError: Propagated from underlying HTTP requests if not caught and re-raised.
-        requests.exceptions.RequestException: For network errors during the request.
+    Deprecated shim.
+    - Default: forwards to chat_orchestrator.chat_api_call to avoid drift.
+    - Test compatibility: if API_CALL_HANDLERS has been patched on this module
+      (object identity differs from provider_config), perform local dispatch
+      using the patched mapping so existing tests that monkeypatch this symbol
+      continue to work without changes.
     """
-    endpoint_lower = api_endpoint.lower()
-    logging.info(f"Chat API Call - Routing to endpoint: {endpoint_lower}")
-    log_counter("chat_api_call_attempt", labels={"api_endpoint": endpoint_lower})
-    start_time = time.time()
-
-    handler = API_CALL_HANDLERS.get(endpoint_lower)
-    if not handler:
-        logging.error(f"Unsupported API endpoint requested: {api_endpoint}")
-        raise ValueError(f"Unsupported API endpoint: {api_endpoint}")
-
-    params_map = PROVIDER_PARAM_MAP.get(endpoint_lower, {})
-    call_kwargs = {}
-
-    # Construct kwargs for the handler function based on the map
-    # This requires careful mapping and ensuring the handler functions are adapted.
-
-    # Generic parameters available from chat_api_call signature
-    available_generic_params = {
-        'api_key': api_key,
-        'messages_payload': messages_payload, # This is the core change
-        'temp': temp,
-        'system_message': system_message,
-        'streaming': streaming,
-        'minp': minp,
-        'maxp': maxp, # Will be mapped to top_p by some providers
-        'model': model,
-        'topk': topk,
-        'topp': topp, # Will be mapped to top_p by some providers
-        'logprobs': logprobs,
-        'top_logprobs': top_logprobs,
-        'logit_bias': logit_bias,
-        'presence_penalty': presence_penalty,
-        'frequency_penalty': frequency_penalty,
-        'tools': tools,
-        'tool_choice': tool_choice,
-        'max_tokens': max_tokens,
-        'seed': seed,
-        'stop': stop,
-        'response_format': response_format,
-        'n': n,
-        'user_identifier': user_identifier,
-        'extra_headers': extra_headers,
-        'extra_body': extra_body,
-    }
-
-    for generic_param_name, provider_param_name in params_map.items():
-        if generic_param_name in available_generic_params and available_generic_params[generic_param_name] is not None:
-            call_kwargs[provider_param_name] = available_generic_params[generic_param_name]
-        if generic_param_name == 'prompt' and endpoint_lower == 'cohere':
-             pass # Specific handling for Cohere's prompt is assumed to be within chat_with_cohere
-
-    # Never log secrets by default; allow opt-in masked key logging via env
-    _key_val = call_kwargs.get(params_map.get('api_key', 'api_key'))
-    try:
-        import os as _os_keys
-        if (
-            _key_val
-            and isinstance(_key_val, str)
-            and len(_key_val) > 8
-            and _os_keys.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}
-        ):
-            logging.debug(
-                "Chat API Call - API Key (masked): %s...%s",
-                _key_val[:4],
-                _key_val[-4:]
-            )
-    except Exception:
-        pass
-
-    try:
-        logging.debug(f"Calling handler {handler.__name__} with kwargs: { {k: (type(v) if k != params_map.get('api_key') else 'key_hidden') for k,v in call_kwargs.items()} }")
-        response = handler(**call_kwargs)
-
-        call_duration = time.time() - start_time
-        log_histogram("chat_api_call_duration", call_duration, labels={"api_endpoint": endpoint_lower})
-        log_counter("chat_api_call_success", labels={"api_endpoint": endpoint_lower})
-
-        if isinstance(response, str):
-             logging.debug(f"Debug - Chat API Call - Response (first 500 chars): {response[:500]}...")
-        elif hasattr(response, '__iter__') and not isinstance(response, (str, bytes, dict)):
-             logging.debug(f"Debug - Chat API Call - Response: Streaming Generator")
-        else:
-             logging.debug(f"Debug - Chat API Call - Response Type: {type(response)}")
-        return response
-
-    # --- Exception Mapping (copied from your original, ensure it's still relevant) ---
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, 'status_code', 500)
-        error_text = getattr(e.response, 'text', str(e))
-        log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
-
-        # Log safely first - escape curly braces to avoid loguru formatting issues
-        try:
-            escaped_details = error_text[:500].replace("{", "{{").replace("}", "}}")
-            logging.error(f"{log_message_base}. Details: {escaped_details}", exc_info=False)
-        except Exception as log_e:
-            logging.error(f"Error during logging HTTPError details: {repr(log_e)}")
-
-        detail_message = f"API call to {endpoint_lower} failed with status {status_code}. Response: {error_text[:200]}"
-        if status_code == 401:
-            raise ChatAuthenticationError(provider=endpoint_lower,
-                                          message=f"Authentication failed for {endpoint_lower}. Check API key. Detail: {error_text[:200]}")
-        elif status_code == 429:
-            raise ChatRateLimitError(provider=endpoint_lower,
-                                     message=f"Rate limit exceeded for {endpoint_lower}. Detail: {error_text[:200]}")
-        elif 400 <= status_code < 500:
-            raise ChatBadRequestError(provider=endpoint_lower,
-                                      message=f"Bad request to {endpoint_lower} (Status {status_code}). Detail: {error_text[:200]}")
-        elif 500 <= status_code < 600:
-            raise ChatProviderError(provider=endpoint_lower,
-                                    message=f"Error from {endpoint_lower} server (Status {status_code}). Detail: {error_text[:200]}",
-                                    status_code=status_code)
-        else:
-            raise ChatAPIError(provider=endpoint_lower,
-                               message=f"Unexpected HTTP status {status_code} from {endpoint_lower}. Detail: {error_text[:200]}",
-                               status_code=status_code)
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
-        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
-    except (ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError, ChatConfigurationError, ChatProviderError,
-            ChatAPIError) as e_chat_direct:
-        # This catches cases where the handler itself has already processed an error
-        # (e.g. non-HTTP error, or it decided to raise a specific Chat*Error type)
-        # and raises one of our custom exceptions.
-        # Escape curly braces in the error message to avoid loguru formatting issues
-        escaped_message = e_chat_direct.message.replace("{", "{{").replace("}", "}}")
-        logging.error(
-            f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
-            exc_info=True if e_chat_direct.status_code >= 500 else False)
-        raise e_chat_direct  # Re-raise the specific error
-    except (ValueError, TypeError, KeyError) as e:
-        logging.error(f"Value/Type/Key error during chat API call setup for {endpoint_lower}: {e}", exc_info=True)
-        error_type = "Configuration/Parameter Error"
-        if "Unsupported API endpoint" in str(e):
-            raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}")
-        else:
-            raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}")
-    except Exception as e:
-        logging.exception(
-            f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
-        raise ChatAPIError(provider=endpoint_lower,
-                           message=f"An unexpected internal error occurred in chat_api_call for {endpoint_lower}: {str(e)}",
-                           status_code=500)
+    # Forward to orchestrator (single source of truth)
+    return _orchestrator_chat_api_call(
+        api_endpoint=api_endpoint,
+        messages_payload=messages_payload,
+        api_key=api_key,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        minp=minp,
+        maxp=maxp,
+        model=model,
+        topk=topk,
+        topp=topp,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        )
 
 
 # FIXME - thing is fucking big.

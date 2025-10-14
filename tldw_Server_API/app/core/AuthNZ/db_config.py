@@ -10,13 +10,13 @@ import os
 from typing import Optional, Dict, Any
 from pathlib import Path
 from urllib.parse import urlparse
-import logging
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
 from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 ########################################################################################################################
 # Configuration Helper Class

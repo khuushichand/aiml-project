@@ -1039,7 +1039,7 @@ async def list_vectors(
     if returned == limit and (offset + returned) < total:
         next_offset = offset + returned
     return {
-        "data": [item.dict() for item in items],
+        "data": [item.model_dump() if hasattr(item, "model_dump") else item.dict() for item in items],
         "pagination": {
             "limit": limit,
             "offset": offset,

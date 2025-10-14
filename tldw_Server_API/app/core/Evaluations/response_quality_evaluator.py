@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, List
 from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Evaluations.circuit_breaker import llm_circuit_breaker
 
 
 class ResponseQualityEvaluator:
@@ -116,7 +117,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -163,7 +165,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -208,7 +211,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -255,7 +259,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -301,7 +306,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            result = await asyncio.to_thread(
+            result = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data
@@ -356,7 +362,8 @@ class ResponseQualityEvaluator:
         """
         
         try:
-            score_str = await asyncio.to_thread(
+            score_str = await llm_circuit_breaker.call_with_breaker(
+                api_name,
                 analyze,
                 api_name,  # First param
                 response,  # input_data

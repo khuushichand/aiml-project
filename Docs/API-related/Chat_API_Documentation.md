@@ -204,6 +204,7 @@ When exceeded, the endpoint returns `429`.
 ## Observability
 - Metrics: Tracks request size, LLM latency, streaming chunks/heartbeats, DB transactions, and image processing.
 - Audit: When enabled, logs API request metadata (user_id, request_id, model/provider, streaming) via the unified audit service.
+- Logging: The server never logs API keys by default. For troubleshooting in non-production environments, you can enable masked key logging by setting `ALLOW_MASKED_KEY_LOG=true`. When enabled, logs may include a masked form of the key (first/last 4 chars). Do not enable in production.
 
 ### Queue Diagnostics (Admins)
 - Endpoints (read-only operational state):

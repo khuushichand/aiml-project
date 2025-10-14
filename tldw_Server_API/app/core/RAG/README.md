@@ -156,7 +156,8 @@ POST /api/v1/rag/search/stream
 {
   "query": "What is CRISPR?",
   "enable_generation": true,
-  "enable_claims": true
+  "enable_claims": true,
+  "claims_concurrency": 8
 }
 ```
 
@@ -164,6 +165,9 @@ Events:
 - `{ "type": "delta", "text": "..." }`
 - `{ "type": "claims_overlay", ... }`
 - `{ "type": "final_claims", ... }`
+
+Notes:
+- Control verification fan-out during streaming overlays with `claims_concurrency` (default 8, range 1–32).
 
 ## RAG Evaluation (claim_faithfulness)
 

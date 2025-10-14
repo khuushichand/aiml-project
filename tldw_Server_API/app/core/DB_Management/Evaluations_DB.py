@@ -332,6 +332,20 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC)")
 
+            # Idempotency mapping table (generic, scoped by user and entity type)
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    user_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, entity_type, idempotency_key)
+                )
+                """
+            )
+
             # Embeddings A/B test tables
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS embedding_abtests (
@@ -462,6 +476,23 @@ class EvaluationsDatabase:
             created_by TEXT,
             metadata JSONB
         );
+        -- Unified evaluations table (enabled by default on PostgreSQL)
+        CREATE TABLE IF NOT EXISTS evaluations_unified (
+            id TEXT PRIMARY KEY,
+            evaluation_id TEXT UNIQUE,
+            name TEXT NOT NULL,
+            evaluation_type TEXT NOT NULL,
+            input_data JSONB NOT NULL,
+            results JSONB,
+            status TEXT NOT NULL DEFAULT 'completed',
+            user_id TEXT,
+            metadata JSONB,
+            embedding_provider TEXT,
+            embedding_model TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+            eval_spec JSONB
+        );
         CREATE TABLE IF NOT EXISTS internal_evaluations (
             evaluation_id TEXT PRIMARY KEY,
             evaluation_type TEXT NOT NULL,
@@ -564,11 +595,24 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id);
         CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status);
         CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_created ON evaluations_unified(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_status ON evaluations_unified(status);
+        CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
         CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type);
         CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id);
         CREATE INDEX IF NOT EXISTS idx_webhooks_active ON evaluation_runs(status);
         CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC);
+        
+        -- Idempotency mapping table (generic, scoped by user and entity type)
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            user_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY(user_id, entity_type, idempotency_key)
+        );
         """
         with self.backend.transaction() as conn:
             self.backend.create_tables(ddl, connection=conn)
@@ -856,6 +900,99 @@ class EvaluationsDatabase:
             )
             rows = [dict(r) for r in cursor.fetchall()]
         return rows, total
+
+    # ============= Idempotency Helpers =============
+
+    def lookup_idempotency(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[str]:
+        """Lookup an existing entity_id by idempotency key scoped to user and entity type."""
+        if not key:
+            return None
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT entity_id FROM idempotency_keys WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?",
+                    (uid, entity_type, key),
+                )
+                row = cursor.fetchone()
+                if row:
+                    # sqlite3.Row or dict-like from backend adapter
+                    return row[0] if not isinstance(row, dict) else row.get("entity_id")
+            except Exception:
+                return None
+        return None
+
+    def record_idempotency(self, entity_type: str, key: str, entity_id: str, user_id: Optional[str]) -> None:
+        """Record an idempotency mapping; ignore on conflict."""
+        if not key or not entity_id:
+            return
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Try INSERT OR IGNORE for SQLite; Postgres path uses ON CONFLICT via backend adapter
+                if self.backend_type == BackendType.SQLITE:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO idempotency_keys (user_id, entity_type, idempotency_key, entity_id)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (uid, entity_type, key, entity_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO idempotency_keys (user_id, entity_type, idempotency_key, entity_id)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(user_id, entity_type, idempotency_key) DO NOTHING
+                        """,
+                        (uid, entity_type, key, entity_id),
+                    )
+                conn = getattr(cursor, "connection", None)
+                try:
+                    if conn:
+                        conn.commit()
+                except Exception:
+                    pass
+            except Exception:
+                # Best-effort; safe to ignore failures
+                pass
+
+    def cleanup_idempotency_keys(self, ttl_hours: int = 72) -> int:
+        """Remove idempotency keys older than ttl_hours. Returns deleted row count.
+
+        This is intended to be invoked by a periodic maintenance task.
+        For SQLite, uses datetime('now', ?). For PostgreSQL, uses NOW() - INTERVAL.
+        """
+        deleted = 0
+        try:
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        DELETE FROM idempotency_keys
+                        WHERE created_at < (NOW() - (INTERVAL '1 hour' * %s))
+                        """,
+                        (ttl_hours,),
+                    )
+                    deleted = cursor.rowcount or 0
+                    # no commit needed for backend adapter
+            else:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    # SQLite: datetime('now', '-{ttl} hours')
+                    cursor.execute(
+                        "DELETE FROM idempotency_keys WHERE datetime(created_at) < datetime('now', ?)",
+                        (f"-{int(ttl_hours)} hours",),
+                    )
+                    conn.commit()
+                    deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+        except Exception as e:
+            logger.warning(f"cleanup_idempotency_keys failed: {e}")
+            return 0
+        return int(deleted)
     
     def update_evaluation(self, eval_id: str, updates: Dict[str, Any]) -> bool:
         """Update evaluation definition"""

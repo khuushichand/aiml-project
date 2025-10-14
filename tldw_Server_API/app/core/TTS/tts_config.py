@@ -347,7 +347,8 @@ class TTSConfigManager:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
-        return self.get_config().dict()
+        cfg = self.get_config()
+        return cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
     
     def save_yaml(self, path: Optional[Path] = None):
         """Save current configuration to YAML file"""
@@ -361,7 +362,8 @@ class TTSConfigManager:
         if 'providers' in config_dict:
             for provider_name in config_dict['providers']:
                 if isinstance(config_dict['providers'][provider_name], ProviderConfig):
-                    config_dict['providers'][provider_name] = config_dict['providers'][provider_name].dict()
+                    cfg = config_dict['providers'][provider_name]
+                    config_dict['providers'][provider_name] = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
         
         with open(path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)

@@ -565,7 +565,7 @@ async def run_evaluation_async(evaluation_id: int, db: PromptStudioDatabase):
             if _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() == "true":
                 _chat_call = None
             else:
-                from tldw_Server_API.app.core.Chat.Chat_Functions import chat_api_call as _chat_call  # type: ignore
+                from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _chat_call  # type: ignore
         except Exception:
             _chat_call = None  # Fallback: no chat; mark errors per test case
 

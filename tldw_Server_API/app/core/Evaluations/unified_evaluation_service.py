@@ -22,7 +22,9 @@ from enum import Enum
 from loguru import logger
 
 # Import database components
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_evaluations_database as _create_evals_db,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 # Import evaluation engines
@@ -95,7 +97,8 @@ class UnifiedEvaluationService:
         import os as _os
         _override_db = _os.getenv("EVALUATIONS_TEST_DB_PATH")
         effective_db_path = _override_db or db_path
-        self.db = EvaluationsDatabase(effective_db_path)
+        # Use backend-aware factory so Postgres content backend is honored
+        self.db = _create_evals_db(db_path=effective_db_path)
         
         # Initialize evaluation runner for async processing (lazy import)
         from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
@@ -1377,8 +1380,16 @@ class UnifiedEvaluationService:
 
 # Singleton instance
 _service_instance = None
-_service_instances_by_user = {}
 _service_instances_lock = None
+
+# LRU cache for per-user services to bound memory in long‑lived servers
+try:
+    from collections import OrderedDict
+except Exception:  # pragma: no cover - stdlib guard
+    OrderedDict = dict  # type: ignore
+
+_MAX_SERVICE_INSTANCES = 128
+_service_instances_by_user: "OrderedDict[int, UnifiedEvaluationService]" = OrderedDict()  # type: ignore[name-defined]
 
 
 def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEvaluationService:
@@ -1410,10 +1421,28 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
         _service_instances_lock = _threading.Lock()
 
     with _service_instances_lock:
-        svc = _service_instances_by_user.get(user_id)
-        if svc is not None:
+        # Return existing and mark as recently used
+        if user_id in _service_instances_by_user:
+            svc = _service_instances_by_user.pop(user_id)
+            _service_instances_by_user[user_id] = svc
             return svc
+
+        # Create new service for this user
         db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
         svc = UnifiedEvaluationService(db_path=db_path)
         _service_instances_by_user[user_id] = svc
+
+        # Evict least-recently-used if over capacity
+        if hasattr(_service_instances_by_user, "popitem") and len(_service_instances_by_user) > _MAX_SERVICE_INSTANCES:  # type: ignore[attr-defined]
+            try:
+                old_user_id, old_svc = _service_instances_by_user.popitem(last=False)  # type: ignore[arg-type]
+                # Best effort shutdown without blocking
+                try:
+                    import asyncio as _aio
+                    if hasattr(old_svc, "shutdown"):
+                        _aio.create_task(old_svc.shutdown())
+                except Exception:
+                    pass
+            except Exception:
+                pass
         return svc

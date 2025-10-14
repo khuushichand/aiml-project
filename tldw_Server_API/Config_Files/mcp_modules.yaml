@@ -13,6 +13,66 @@ modules:
       db_path: ./Databases/Media_DB_v2.db
       cache_ttl: 300
 
+  - id: notes
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.notes_module:NotesModule
+    enabled: true
+    name: Notes
+    version: "1.0.0"
+    department: knowledge
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}
+
+  - id: knowledge
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.knowledge_module:KnowledgeModule
+    enabled: true
+    name: Knowledge
+    version: "1.0.0"
+    department: knowledge
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}
+
+  - id: chats
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.chats_module:ChatsModule
+    enabled: true
+    name: Chats
+    version: "1.0.0"
+    department: knowledge
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}
+
+  - id: characters
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.characters_module:CharactersModule
+    enabled: true
+    name: Characters
+    version: "1.0.0"
+    department: knowledge
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}
+
+  - id: prompts
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.prompts_module:PromptsModule
+    enabled: true
+    name: Prompts
+    version: "1.0.0"
+    department: knowledge
+    timeout_seconds: 30
+    max_retries: 3
+    circuit_breaker_threshold: 5
+    circuit_breaker_timeout: 60
+    settings: {}
+
   - id: example
     class: tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule
     enabled: true

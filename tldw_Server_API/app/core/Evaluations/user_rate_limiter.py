@@ -325,6 +325,12 @@ class UserRateLimiter:
         """Check per-minute rate limits."""
         now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
+        # Seconds until window reset
+        try:
+            elapsed = (now - minute_ago).total_seconds()
+            reset_seconds = max(0, 60 - int(elapsed))
+        except Exception:
+            reset_seconds = 60
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -358,13 +364,15 @@ class UserRateLimiter:
                         "retry_after": retry_after,
                         "limit": limit,
                         "window": "1 minute",
-                        "tier": config.tier.value
+                        "tier": config.tier.value,
+                        "reset_seconds": reset_seconds,
                     }
             
             return True, {
                 "requests_remaining": limit - request_count - 1,
                 "limit": limit,
-                "window": "1 minute"
+                "window": "1 minute",
+                "reset_seconds": reset_seconds,
             }
     
     async def _check_daily_limits(
@@ -635,6 +643,17 @@ class UserRateLimiter:
                 "monthly_cost": config.max_cost_per_month - monthly_cost
             }
         }
+
+    async def record_actual_usage(self, user_id: str, endpoint: str, tokens_used: int, cost: float = 0.0) -> None:
+        """Record actual usage after a request completes (if provider returns usage).
+
+        Safe no-op on failure.
+        """
+        try:
+            await self._record_request(user_id, endpoint, max(0, int(tokens_used or 0)), float(cost or 0.0))
+        except Exception:
+            # Non-fatal; logging here could be noisy for hot paths
+            pass
 
 
 # Global instance

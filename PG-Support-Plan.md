@@ -1,15 +1,15 @@
 # PostgreSQL Support Implementation Plan
 
 ## ⚠️ ACTUAL IMPLEMENTATION STATUS ⚠️
-**As of 2025-09-07 (revised 2025-10-12):**
-- **Integration Progress**: ~65% – MediaDatabase runs through backend helpers for keyword sync, soft delete, document versions, sync-log paths, and permanent delete (backend-aware). ChaChaNotes has backend-aware constructors, schema bootstrap, and PostgreSQL FTS rebuild/search in place; analytics uses the backend abstraction. Remaining work: finish Media transcript/analytics helpers and a few SQLite-only branches; complete ChaCha link/flashcard legacy utilities; broaden end-to-end tests.
-- **Functional PostgreSQL Support**: Partial – Schema bootstrap and several write paths execute via the Postgres backend, but trash/restore flows, transcript handling, and analytics queries still rely on SQLite SQL or features.
-- **Tests Written**: Partial – dual-backend unit/integration tests cover ChaChaNotes PostgreSQL FTS flows, Media/claims retrievers, migration CLI row-count parity, and selected end-to-end RAG paths; two flaky AuthNZ refresh tests stabilized via module fixture (TEST_MODE with per-test app reload).
-- **Files Created**: Backend abstraction (~2200 LOC) lives under `app/core/DB_Management/backends/`; MediaDatabase refactor in progress.
-- **Git Status**: Backend modules plus new factory helpers are committed; ongoing refactor tracked in working tree.
-- **Dependencies**: psycopg deps remain commented out in `requirements.txt` (enable after broader Postgres CI passes consistently).
-- **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager factories reuse shared backend.
-- **Main Issue**: Residual SQLite-specific SQL across Media/ChaCha code and lack of migrations/tests block full Postgres enablement.
+**As of 2025-09-07 (revised 2025-10-14):**
+- **Integration Progress**: ~70% – MediaDatabase runs through backend helpers for keyword sync, soft delete, document versions, sync-log paths, and permanent delete (backend-aware). ChaChaNotes has backend-aware constructors, schema bootstrap, and PostgreSQL FTS rebuild/search in place; analytics uses the backend abstraction. EvaluationsDatabase is now backend-aware and provisions PostgreSQL schema including the `evaluations_unified` table; `main.py` and evaluation services use the factory so Postgres is honored when selected. Remaining work: finish Media transcript/analytics helpers and a few SQLite-only branches; complete ChaCha link/flashcard legacy utilities; broaden end-to-end tests.
+- **Functional PostgreSQL Support**: Partial – Schema bootstrap and several write paths execute via the Postgres backend, but some Media transcript/analytics queries and ChaCha legacy utilities still rely on SQLite-specific SQL.
+- **Tests Written**: Partial – dual-backend unit/integration tests cover ChaChaNotes PostgreSQL FTS flows, Media/claims retrievers, Evaluations dual-backend smoke, and a migration CLI row-count parity test for Evaluations. Two flaky AuthNZ refresh tests were stabilized via module fixture (TEST_MODE with per-test app reload).
+- **Files Created**: Backend abstraction (~2200 LOC) under `app/core/DB_Management/backends/`; DB_Manager factories; migration tooling updated.
+- **Git Status**: Backend modules plus factory helpers committed; ongoing refactor tracked in working tree.
+- **Dependencies**: psycopg deps remain commented out in `requirements.txt` (enable after Postgres CI is green).
+- **Configuration**: `config.txt` and `content_backend.py` expose PostgreSQL fields; DB_Manager factories reuse shared backend across Media/ChaCha/Evaluations.
+- **Main Issue**: Residual SQLite-specific SQL across Media/ChaCha code and missing end-to-end tests block full Postgres enablement.
 
 ## Executive Summary
 This document outlines the plan to add PostgreSQL support to the tldw_server RAG system while maintaining full SQLite compatibility. The implementation will allow users to choose their preferred database backend based on their needs.
@@ -107,11 +107,11 @@ Tasks:
 - [ ] End-to-end testing
 
 ### Phase 5: Migration Tools
-**Status**: Not Started  
+**Status**: Partial  
 **Timeline**: Day 15-17
 
 Tasks:
-- [ ] SQLite to PostgreSQL migrator
+- [x] SQLite to PostgreSQL migrator (content/ChaCha/analytics; now includes Evaluations)
 - [ ] PostgreSQL to SQLite migrator
 - [ ] Schema synchronization validator
 - [ ] Performance benchmarking tools

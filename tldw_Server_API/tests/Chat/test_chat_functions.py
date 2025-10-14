@@ -9,14 +9,18 @@ from typing import List, Dict, Any
 import requests  # For mocking requests.exceptions
 
 # Imports from your application
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
-    chat_api_call,
-    chat,  # This is the multimodal chat coordinator
-    save_chat_history_to_db_wrapper,  # Assuming you want to test this too
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.provider_config import (
     API_CALL_HANDLERS,
-    PROVIDER_PARAM_MAP, load_characters, save_character, ChatDictionary, parse_user_dict_markdown_file,
-    # Import other functions you might want to unit test from Chat_Functions.py
-    # e.g., process_user_input, parse_user_dict_markdown_file, etc.
+    PROVIDER_PARAM_MAP,
+)
+from tldw_Server_API.app.core.Chat.Chat_Functions import (
+    chat,  # This is the multimodal chat coordinator
+    save_chat_history_to_db_wrapper,
+    load_characters,
+    save_character,
+    ChatDictionary,
+    parse_user_dict_markdown_file,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError,
@@ -65,7 +69,7 @@ def mock_llm_api_call_handlers_for_chat_functions_unit():
         mock_handler.__name__ = original_func_name  # Explicitly set it
         mocked_handlers_dict[provider_name_key] = mock_handler
 
-    with patch("tldw_Server_API.app.core.Chat.Chat_Functions.API_CALL_HANDLERS", new=mocked_handlers_dict):
+    with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict):
         yield mocked_handlers_dict
 
 

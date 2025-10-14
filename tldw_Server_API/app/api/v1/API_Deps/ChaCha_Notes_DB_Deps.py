@@ -4,7 +4,7 @@ import os
 import json
 import threading
 from pathlib import Path
-import logging
+from loguru import logger
 from typing import Dict, Optional, List
 
 from fastapi import Depends, HTTPException, status
@@ -46,7 +46,7 @@ def _resolve_main_user_base_dir() -> Path:
             return Path(base).resolve()
         except Exception:
             pass
-    logging.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings or environment. Using fallback.")
+    logger.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings or environment. Using fallback.")
     return Path("./app_data/user_databases_fallback").resolve()
 
 # USER_CHACHA_DB_BASE_DIR will now be defined *per user* inside _get_chacha_db_path_for_user
@@ -54,9 +54,9 @@ def _resolve_main_user_base_dir() -> Path:
 
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:
-    logging.error("CRITICAL: SERVER_CLIENT_ID is not configured in settings.")
+    logger.error("CRITICAL: SERVER_CLIENT_ID is not configured in settings.")
     SERVER_CLIENT_ID = "default_server_client_id"
-    logging.warning(f"SERVER_CLIENT_ID not set, using placeholder: {SERVER_CLIENT_ID}")
+    logger.warning(f"SERVER_CLIENT_ID not set, using placeholder: {SERVER_CLIENT_ID}")
 
 # Global directory creation for a *common* ChaChaNotes base is removed
 # as each user gets their DB under their own USER_DB_BASE_DIR/user_id/
@@ -70,7 +70,7 @@ MAX_CACHED_CHACHA_DB_INSTANCES = settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", 
 
 if _HAS_CACHETOOLS:
     _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
-    logging.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
+    logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 else:
     _chacha_db_instances: Dict[str, CharactersRAGDB] = {}
 
@@ -102,9 +102,9 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
 
     try:
         user_specific_chacha_base_dir.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {user_specific_chacha_base_dir}")
+        logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {user_specific_chacha_base_dir}")
     except OSError as e:
-        logging.error(
+        logger.error(
             f"Could not create ChaChaNotes DB directory for user_id {user_id} at {user_specific_chacha_base_dir}: {e}",
             exc_info=True)
         raise IOError(f"Could not initialize ChaChaNotes storage directory for user {user_id}.") from e
@@ -118,10 +118,10 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     try:
         default_char = db_instance.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         if default_char:
-            logging.debug(f"Default character '{DEFAULT_CHARACTER_NAME}' already exists with ID: {default_char['id']}.")
+            logger.debug(f"Default character '{DEFAULT_CHARACTER_NAME}' already exists with ID: {default_char['id']}.")
             return default_char['id']
         else:
-            logging.info(f"Default character '{DEFAULT_CHARACTER_NAME}' not found. Creating now...")
+            logger.info(f"Default character '{DEFAULT_CHARACTER_NAME}' not found. Creating now...")
             card_data = {
                 'name': DEFAULT_CHARACTER_NAME,
                 'description': DEFAULT_CHARACTER_DESCRIPTION,
@@ -144,19 +144,19 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
             # The add_character_card in CharactersRAGDB handles versioning and timestamps.
             char_id = db_instance.add_character_card(card_data)
             if char_id:
-                logging.info(f"Successfully created default character '{DEFAULT_CHARACTER_NAME}' with ID: {char_id}.")
+                logger.info(f"Successfully created default character '{DEFAULT_CHARACTER_NAME}' with ID: {char_id}.")
                 return char_id
             else:
                 # This should ideally not happen if add_character_card raises on failure
-                logging.error(f"Failed to create default character '{DEFAULT_CHARACTER_NAME}'. add_character_card returned None.")
+                logger.error(f"Failed to create default character '{DEFAULT_CHARACTER_NAME}'. add_character_card returned None.")
                 return None
     except ConflictError as e: # Should only happen if get_character_card_by_name had an issue or race condition
-        logging.warning(f"Conflict error while ensuring default character (likely race condition, re-fetching): {e}")
+        logger.warning(f"Conflict error while ensuring default character (likely race condition, re-fetching): {e}")
         # Re-fetch, as it might have been created by another thread.
         refetched_char = db_instance.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         if refetched_char:
             return refetched_char['id']
-        logging.error(f"Still could not get/create default character after conflict: {e}")
+        logger.error(f"Still could not get/create default character after conflict: {e}")
         return None
     except (CharactersRAGDBError, InputError) as e:
         logging.error(f"Database error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e}", exc_info=True)

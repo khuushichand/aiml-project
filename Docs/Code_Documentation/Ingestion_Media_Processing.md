@@ -63,6 +63,15 @@ Base prefix: `/api/v1/media`
   - `POST /ingest-web-content` — Multi‑mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
   - `POST /process-web-scraping` — Process scraping jobs without persistence.
 
+### Media Item Details
+
+- `GET  /api/v1/media/{id}` — Retrieve rich media details
+  - Query params:
+    - `include_content` (bool, default: true): include main content text
+    - `include_versions` (bool, default: true): include versions list
+    - `include_version_content` (bool, default: false): include per-version content
+  - Response: unified `MediaDetailResponse` (also used by PUT and POST version endpoints)
+
 Notes
 - API does not accept provider API keys in requests; credentials are read from server configuration.
 - Audio/Video processing requires ffmpeg in PATH.

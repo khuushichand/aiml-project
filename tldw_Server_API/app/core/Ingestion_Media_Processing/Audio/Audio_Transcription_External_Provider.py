@@ -15,7 +15,7 @@
 ####################
 
 import os
-import logging
+from loguru import logger
 import tempfile
 from typing import Optional, Dict, Any, Union, Tuple
 from pathlib import Path
@@ -28,7 +28,7 @@ import json
 import base64
 from urllib.parse import urlparse, urljoin
 
-logger = logging.getLogger(__name__)
+logger = logger
 
 
 @dataclass

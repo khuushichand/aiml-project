@@ -6,8 +6,10 @@ Handles WebSocket and HTTP connections with production-ready features.
 
 import asyncio
 import json
-from typing import Dict, Any, Optional, Set, List
-from datetime import datetime, timezone
+from typing import Dict, Any, Optional, Set, List, Deque
+from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass, field
+from collections import deque
 from contextlib import asynccontextmanager
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from loguru import logger
@@ -74,6 +76,31 @@ class WebSocketConnection:
             logger.bind(connection_id=self.connection_id).error(f"Error closing WebSocket {self.connection_id}: {e}")
 
 
+@dataclass
+class SessionData:
+    """Lightweight in-memory session state for HTTP/WS MCP sessions."""
+    session_id: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    uris_seen: Deque[str] = field(default_factory=lambda: deque(maxlen=500))
+    uris_index: Set[str] = field(default_factory=set)
+    client_info: Dict[str, Any] = field(default_factory=dict)
+    safe_config: Dict[str, Any] = field(default_factory=dict)
+
+    def touch(self):
+        self.last_activity = datetime.now(timezone.utc)
+
+    def add_seen_uri(self, uri: str, max_len: int):
+        if uri in self.uris_index:
+            return
+        # Enforce bounded size
+        if len(self.uris_seen) >= max_len:
+            oldest = self.uris_seen.popleft()
+            self.uris_index.discard(oldest)
+        self.uris_seen.append(uri)
+        self.uris_index.add(uri)
+
+
 class MCPServer:
     """
     Production-ready MCP Server with WebSocket and HTTP support.
@@ -99,6 +126,10 @@ class MCPServer:
         self.connections: Dict[str, WebSocketConnection] = {}
         self.connection_lock = asyncio.Lock()
         self._ip_connection_counts: Dict[str, int] = {}
+        
+        # Session management (HTTP/WS)
+        self.sessions: Dict[str, SessionData] = {}
+        self.session_lock = asyncio.Lock()
         
         # Server state
         self.initialized = False
@@ -301,6 +332,11 @@ class MCPServer:
         task = asyncio.create_task(self._metrics_collection_loop())
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
+
+        # Session cleanup task
+        task = asyncio.create_task(self._session_cleanup_loop())
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
     
     async def _connection_cleanup_loop(self):
         """Periodically clean up stale connections"""
@@ -351,6 +387,68 @@ class MCPServer:
         """Log server metrics"""
         metrics = await self.get_metrics()
         logger.info(f"Server metrics: {metrics}")
+
+    # ------------------------
+    # Session helpers
+    # ------------------------
+
+    async def _session_cleanup_loop(self):
+        """Periodically evict stale sessions."""
+        while not self.shutdown_event.is_set():
+            try:
+                await asyncio.sleep(60)
+                await self._cleanup_stale_sessions()
+            except Exception as e:
+                logger.error(f"Error in session cleanup: {e}")
+
+    async def _cleanup_stale_sessions(self):
+        ttl = timedelta(minutes=max(1, int(self.config.session_ttl_minutes)))
+        cutoff = datetime.now(timezone.utc) - ttl
+        async with self.session_lock:
+            to_delete = [sid for sid, s in self.sessions.items() if s.last_activity < cutoff]
+            for sid in to_delete:
+                self.sessions.pop(sid, None)
+
+    async def _get_or_create_session(self, session_id: str) -> SessionData:
+        async with self.session_lock:
+            s = self.sessions.get(session_id)
+            if s is None:
+                # Enforce global cap
+                if len(self.sessions) >= max(1, int(self.config.max_sessions)):
+                    # Evict oldest
+                    oldest_id = min(self.sessions, key=lambda k: self.sessions[k].last_activity)
+                    self.sessions.pop(oldest_id, None)
+                s = SessionData(session_id=session_id)
+                # Respect configured max URIs per session
+                s.uris_seen = deque(maxlen=max(1, int(self.config.max_session_uris)))
+                self.sessions[session_id] = s
+            s.touch()
+            return s
+
+    def _merge_safe_config(self, current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge allowlisted safe config keys with clamping."""
+        if not incoming:
+            return current
+        out = dict(current)
+        # Allowlist keys
+        allow_int = {
+            "snippet_length": (1, 2000),
+            "max_tokens": (500, 200000),
+            "sibling_window": (0, 10),
+            "chars_per_token": (1, 20),
+            "maxSessionUris": (10, 5000),
+        }
+        allow_bool = {"aliasMode", "compactShape"}
+        allow_str = {"order_by"}
+        for k, v in incoming.items():
+            if k in allow_bool and isinstance(v, bool):
+                out[k] = v
+            elif k in allow_str and isinstance(v, str):
+                out[k] = v
+            elif k in allow_int and isinstance(v, (int, float)):
+                lo, hi = allow_int[k]
+                out[k] = int(max(lo, min(int(v), hi)))
+        return out
     
     async def handle_websocket(
         self,
@@ -558,6 +656,36 @@ class MCPServer:
             if isinstance(data, dict) and data.get("type") == "pong":
                 continue
             
+            # Ensure session exists and update with client/safe config if applicable
+            try:
+                sess = await self._get_or_create_session(connection.connection_id)
+                # If this is initialize, capture clientInfo and optional config
+                if isinstance(data, dict) and data.get("method") == "initialize":
+                    try:
+                        params = data.get("params") or {}
+                        client_info = params.get("clientInfo") or {}
+                        if isinstance(client_info, dict):
+                            sess.client_info.update(client_info)
+                        # Optional config param for WS (either dict or base64-encoded JSON)
+                        cfg = params.get("config")
+                        safe_incoming: Dict[str, Any] = {}
+                        if isinstance(cfg, dict):
+                            safe_incoming = cfg
+                        elif isinstance(cfg, str):
+                            import base64, json as _json
+                            try:
+                                decoded = base64.b64decode(cfg).decode("utf-8")
+                                safe_incoming = _json.loads(decoded)
+                            except Exception:
+                                safe_incoming = {}
+                        if safe_incoming:
+                            sess.safe_config = self._merge_safe_config(sess.safe_config, safe_incoming)
+                    except Exception:
+                        pass
+                sess.touch()
+            except Exception:
+                pass
+
             # Create request context
             context = RequestContext(
                 request_id=data.get("id", "unknown") if isinstance(data, dict) else "unknown",
@@ -631,11 +759,42 @@ class MCPServer:
         Returns:
             MCP response
         """
+        # Pull session_id and safe_config from metadata when present
+        session_id: Optional[str] = None
+        safe_cfg: Dict[str, Any] = {}
+        try:
+            if metadata:
+                raw_sid = metadata.get("session_id")
+                if isinstance(raw_sid, str) and raw_sid:
+                    session_id = raw_sid
+                sc = metadata.get("safe_config")
+                if isinstance(sc, dict):
+                    safe_cfg = sc
+        except Exception:
+            session_id = None
+            safe_cfg = {}
+
+        # If we have a session id, ensure session exists and merge safe config
+        try:
+            if session_id:
+                sess = await self._get_or_create_session(session_id)
+                if safe_cfg:
+                    sess.safe_config = self._merge_safe_config(sess.safe_config, safe_cfg)
+                # If initialize, capture clientInfo
+                if request.method == "initialize" and isinstance(request.params, dict):
+                    ci = (request.params or {}).get("clientInfo")
+                    if isinstance(ci, dict):
+                        sess.client_info.update(ci)
+                sess.touch()
+        except Exception:
+            pass
+
         # Create request context
         context = RequestContext(
             request_id=request.id or "http_request",
             user_id=user_id,
             client_id=client_id,
+            session_id=session_id,
             metadata=metadata or {}
         )
         

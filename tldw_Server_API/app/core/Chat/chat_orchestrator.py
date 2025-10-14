@@ -7,7 +7,7 @@ interactions with various LLM providers.
 """
 #
 # Imports
-import logging
+from loguru import logger as logging
 import os
 import time
 from typing import Any, Dict, List, Optional, Union
@@ -91,7 +91,10 @@ def chat_api_call(
     stop: Optional[Union[str, List[str]]] = None,
     response_format: Optional[Dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
     n: Optional[int] = None,
-    user_identifier: Optional[str] = None  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
+    # Provider-specific extensions (e.g., Bedrock guardrails)
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     ):
     """
     Acts as a unified dispatcher to call various LLM API providers.
@@ -186,7 +189,9 @@ def chat_api_call(
         'stop': stop,
         'response_format': response_format,
         'n': n,
-        'user_identifier': user_identifier
+        'user_identifier': user_identifier,
+        'extra_headers': extra_headers,
+        'extra_body': extra_body,
     }
 
     for generic_param_name, provider_param_name in params_map.items():
@@ -195,8 +200,23 @@ def chat_api_call(
         if generic_param_name == 'prompt' and endpoint_lower == 'cohere':
              pass # Specific handling for Cohere's prompt is assumed to be within chat_with_cohere
 
-    if call_kwargs.get(params_map.get('api_key', 'api_key')) and isinstance(call_kwargs.get(params_map.get('api_key', 'api_key')), str) and len(call_kwargs.get(params_map.get('api_key', 'api_key'))) > 8:
-         logging.info(f"Debug - Chat API Call - API Key: {call_kwargs[params_map.get('api_key', 'api_key')][:4]}...{call_kwargs[params_map.get('api_key', 'api_key')][-4:]}")
+    # Never log secrets by default; allow opt-in masked key logging via env
+    try:
+        import os as _os_keys
+        _key_val = call_kwargs.get(params_map.get('api_key', 'api_key'))
+        if (
+            _key_val
+            and isinstance(_key_val, str)
+            and len(_key_val) > 8
+            and _os_keys.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}
+        ):
+            logging.debug(
+                "Chat API Call - API Key (masked): %s...%s",
+                _key_val[:4],
+                _key_val[-4:]
+            )
+    except Exception:
+        pass
 
     try:
         logging.debug(f"Calling handler {handler.__name__} with kwargs: { {k: (type(v) if k != params_map.get('api_key') else 'key_hidden') for k,v in call_kwargs.items()} }")

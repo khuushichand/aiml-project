@@ -82,7 +82,7 @@ class TestModule(BaseModule):
             }
         ]
     
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         """Execute test tool"""
         if tool_name == "echo":
             return arguments.get("message", "")

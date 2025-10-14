@@ -144,6 +144,7 @@ class ONNXModelCfg(BaseModelCfg):
 
 class OpenAIModelCfg(BaseModelCfg):
     provider: str = "openai"
+    api_key: Optional[str] = None
 
 
 class LocalAPICfg(BaseModelCfg):

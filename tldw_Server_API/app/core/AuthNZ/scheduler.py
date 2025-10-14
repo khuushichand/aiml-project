@@ -50,6 +50,8 @@ class AuthNZScheduler:
         self._register_auth_failure_monitor()
         self._register_api_usage_monitor()
         self._register_rate_limit_monitor()
+        # Evaluations: idempotency keys cleanup
+        self._register_evaluations_idempotency_cleanup()
         
         # Start the scheduler
         self.scheduler.start()
@@ -172,6 +174,59 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered rate limit monitor (every 15 minutes)")
+
+    def _register_evaluations_idempotency_cleanup(self):
+        """Register job to cleanup stale idempotency keys in Evaluations DBs."""
+        # Daily at 4:00 AM
+        self.scheduler.add_job(
+            self._cleanup_evaluations_idempotency,
+            trigger=CronTrigger(hour=4, minute=0),
+            id='evaluations_idempotency_cleanup',
+            name='Cleanup Evaluations idempotency keys',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.debug("Registered evaluations idempotency cleanup (daily at 04:00)")
+
+    async def _cleanup_evaluations_idempotency(self):
+        """Iterate user evaluation DBs and purge old idempotency keys."""
+        try:
+            from pathlib import Path
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+            from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
+            # Discover user database base dir (reuse DatabasePaths fallback by building a known path)
+            base = Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
+            deleted_total = 0
+            # Include single-user fixed id explicitly
+            candidate_ids = set()
+            try:
+                candidate_ids.add(int(_DP.get_single_user_id()))
+            except Exception:
+                pass
+            try:
+                if base.exists():
+                    for entry in base.iterdir():
+                        if entry.is_dir():
+                            try:
+                                candidate_ids.add(int(entry.name))
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            for uid in sorted(candidate_ids):
+                try:
+                    db_path = _DP.get_evaluations_db_path(uid)
+                    if not db_path.exists():
+                        continue
+                    db = _EDB(str(db_path))
+                    deleted = db.cleanup_idempotency_keys(ttl_hours=72)
+                    deleted_total += int(deleted)
+                except Exception:
+                    continue
+            if deleted_total:
+                logger.info(f"Evaluations idempotency cleanup removed {deleted_total} rows across user DBs")
+        except Exception as e:
+            logger.error(f"Failed evaluations idempotency cleanup: {e}")
     
     # Cleanup Jobs
     

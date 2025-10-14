@@ -96,8 +96,13 @@ from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_se
 # Legacy OpenAI evaluation endpoint - replaced by unified router
 # from tldw_Server_API.app.api.v1.endpoints.evals_openai import router as openai_evals_router
 
-# Unified Evaluation endpoint
-from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
+# Unified Evaluation endpoint (guarded; can be heavy and optional in some test contexts)
+try:
+    from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
+    _HAS_UNIFIED_EVALUATIONS = True
+except Exception as _evals_import_err:  # noqa: BLE001 - log and continue for deterministic test startup
+    logger.warning(f"Unified Evaluation endpoints unavailable; skipping import: {_evals_import_err}")
+    _HAS_UNIFIED_EVALUATIONS = False
 from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
 from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
 #
@@ -381,10 +386,13 @@ async def lifespan(app: FastAPI):
     cleanup_task = None
     core_jobs_task = None
     claims_task = None
+    jobs_metrics_task = None
     try:
         import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EvalsDB
+        from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+            create_evaluations_database as _create_evals_db,
+        )
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DBP
         from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory as _VSF
         from tldw_Server_API.app.core.config import settings as _app_settings
@@ -398,7 +406,8 @@ async def lifespan(app: FastAPI):
 
         async def _ephemeral_cleanup_loop():
             logger.info(f"Starting ephemeral collections cleanup worker (every {_interval_sec}s)")
-            db = _EvalsDB(_db_path)
+            # Use backend-aware factory so Postgres content backend is honored
+            db = _create_evals_db(db_path=_db_path)
             adapter = _VSF.create_from_settings(_app_settings, user_id=str(_app_settings.get("SINGLE_USER_FIXED_ID", "1")))
             await adapter.initialize()
             while True:
@@ -454,6 +463,24 @@ async def lifespan(app: FastAPI):
                 logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
+
+    # Jobs metrics gauges worker (stale processing)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_gauges as _run_jobs_metrics
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Jobs metrics gauge worker")
+        else:
+            _enabled = (_os.getenv("JOBS_METRICS_GAUGES_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                jobs_metrics_stop_event = _asyncio.Event()
+                jobs_metrics_task = _asyncio.create_task(_run_jobs_metrics(jobs_metrics_stop_event))
+                logger.info("Jobs metrics gauge worker started with explicit stop_event signal")
+            else:
+                logger.info("Jobs metrics gauge worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
     # Claims rebuild worker (periodic)
     try:
@@ -1402,7 +1429,8 @@ app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", 
 
 
 # Router for Unified Evaluation endpoint (combines both legacy endpoints)
-app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+if _HAS_UNIFIED_EVALUATIONS:
+    app.include_router(unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
 app.include_router(ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
 app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
 
@@ -1411,10 +1439,12 @@ app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmark
 
 # Router for Setup endpoints (first-time configuration)
 from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
 app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
 
 # Router for Configuration Info endpoint (for documentation)
 app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
 
 # Router for Sync endpoint
 app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])

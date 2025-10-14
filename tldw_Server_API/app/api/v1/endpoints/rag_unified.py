@@ -516,6 +516,7 @@ async def unified_search_endpoint(
             claims_top_k=request.claims_top_k,
             claims_conf_threshold=request.claims_conf_threshold,
             claims_max=request.claims_max,
+            claims_concurrency=request.claims_concurrency,
             nli_model=request.nli_model,
             
             # Feedback
@@ -617,8 +618,11 @@ async def unified_batch_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
         
-        # Convert request to kwargs, excluding queries
-        kwargs = request.dict(exclude={"queries", "max_concurrent"})
+        # Convert request to kwargs, excluding queries (Pydantic v2+ compat)
+        try:
+            kwargs = request.model_dump(exclude={"queries", "max_concurrent"})
+        except Exception:
+            kwargs = request.dict(exclude={"queries", "max_concurrent"})
         kwargs.update(db_paths)
         kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
         
@@ -781,6 +785,7 @@ async def unified_search_stream_endpoint(
                 enable_claims=request.enable_claims,
                 claims_top_k=request.claims_top_k,
                 claims_max=request.claims_max,
+                claims_concurrency=request.claims_concurrency,
             )
 
             last_overlay = None

@@ -109,4 +109,5 @@ class OrchestrationConfig(BaseModel):
         import yaml
         
         with open(path, 'w') as f:
-            yaml.dump(self.dict(), f, default_flow_style=False)
+            dump_obj = self.model_dump() if hasattr(self, "model_dump") else self.dict()
+            yaml.dump(dump_obj, f, default_flow_style=False)

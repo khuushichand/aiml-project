@@ -3107,7 +3107,11 @@ async def ingest_batch(
             return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=str(e))
 
     for it in payload.items:
-        results.append(await _process_one(it.dict()))
+        try:
+            item_dict = it.model_dump() if hasattr(it, "model_dump") else it.dict()
+        except Exception:
+            item_dict = it.dict()
+        results.append(await _process_one(item_dict))
 
     succeeded = sum(1 for r in results if r.success)
     failed = len(results) - succeeded

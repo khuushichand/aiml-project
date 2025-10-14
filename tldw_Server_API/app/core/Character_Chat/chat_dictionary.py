@@ -26,7 +26,7 @@ Features:
 """
 
 import json
-import logging
+from loguru import logger
 import random
 import re
 import warnings

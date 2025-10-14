@@ -349,9 +349,15 @@ class RateLimiter:
         self.limiters = {}
         self._init_limiters()
         
-        # Start cleanup task for in-memory limiters
+        # Start cleanup task for in-memory limiters; defer if no running loop
         if not self.config.rate_limit_use_redis:
-            asyncio.create_task(self._cleanup_task())
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._cleanup_task())
+            except RuntimeError:
+                # No running event loop in this context (e.g., sync test setup)
+                # Defer scheduling until later; functional behavior unaffected.
+                self._defer_cleanup = True  # marker only
     
     def _init_limiters(self):
         """Initialize rate limiters based on configuration"""

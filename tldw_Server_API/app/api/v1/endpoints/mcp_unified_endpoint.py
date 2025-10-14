@@ -233,7 +233,10 @@ async def mcp_request(
     request: MCPRequest,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
+    config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
+    response: Response = None,
 ):
     """
     Process an MCP request via HTTP.
@@ -249,7 +252,7 @@ async def mcp_request(
     
     # Process request
     # Attach org/team metadata when auth via API key
-    metadata = {}
+    metadata: Dict[str, Any] = {}
     if x_api_key:
         try:
             api_mgr = await get_api_key_manager()
@@ -273,14 +276,41 @@ async def mcp_request(
         except Exception:
             pass
 
-    response = await server.handle_http_request(
+    # Parse optional safe config (base64-encoded JSON)
+    safe_config: Dict[str, Any] = {}
+    if config:
+        try:
+            import base64, json as _json
+            decoded = base64.b64decode(config).decode("utf-8")
+            cfg = _json.loads(decoded)
+            if isinstance(cfg, dict):
+                safe_config = cfg
+        except Exception as e:
+            logger.debug(f"Failed to parse safe config: {e}")
+
+    # Session lifecycle: if initialize and no session id provided, generate one and return header
+    try:
+        if request.method == "initialize" and not mcp_session_id:
+            import uuid as _uuid
+            mcp_session_id = _uuid.uuid4().hex
+            if response is not None:
+                response.headers["mcp-session-id"] = mcp_session_id
+    except Exception:
+        pass
+
+    if mcp_session_id:
+        metadata["session_id"] = mcp_session_id
+    if safe_config:
+        metadata["safe_config"] = safe_config
+
+    resp_obj = await server.handle_http_request(
         request,
         client_id=client_id,
         user_id=derived_user_id,
         metadata=metadata or None
     )
     # Convert authorization errors to HTTP 403 with hint for HTTP clients
-    if response.error and response.error.code == -32001:
+    if resp_obj.error and resp_obj.error.code == -32001:
         hint = None
         try:
             if request.method == "tools/call":
@@ -290,11 +320,11 @@ async def mcp_request(
         except Exception:
             hint = None
         raise HTTPException(status_code=403, detail={
-            "message": response.error.message or "Insufficient permissions",
+            "message": resp_obj.error.message or "Insufficient permissions",
             "hint": hint or "Insufficient permissions for this operation"
         })
 
-    return response
+    return resp_obj
 
 
 @router.post("/request/batch", response_model=list[MCPResponse])
@@ -302,7 +332,10 @@ async def mcp_request_batch(
     requests: list[MCPRequest],
     client_id: Optional[str] = Query(None, description="Client identifier"),
     user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
+    config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
+    response: Response = None,
 ):
     """
     Process a batch of MCP requests via HTTP.
@@ -338,12 +371,25 @@ async def mcp_request_batch(
         except Exception:
             pass
 
+    # Optional safe config
+    safe_config: Dict[str, Any] = {}
+    if config:
+        try:
+            import base64, json as _json
+            decoded = base64.b64decode(config).decode("utf-8")
+            cfg = _json.loads(decoded)
+            if isinstance(cfg, dict):
+                safe_config = cfg
+        except Exception as e:
+            logger.debug(f"Batch failed to parse safe config: {e}")
+
     # Build context and process via protocol directly to leverage batch support
     ctx = RequestContext(
         request_id="http_batch",
         user_id=derived_user_id,
         client_id=client_id,
-        metadata=metadata,
+        session_id=mcp_session_id,
+        metadata={**metadata, **({"safe_config": safe_config} if safe_config else {})},
     )
     payload = [r.model_dump() for r in requests]
     resp = await server.protocol.process_request(payload, ctx)

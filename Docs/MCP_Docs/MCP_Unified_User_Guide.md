@@ -233,6 +233,41 @@ Get AI-powered completions.
 }
 ```
 
+### Knowledge Tools (Unified)
+
+#### knowledge.search
+Unified FTS search across Notes, Media, Chats, Characters, and Prompts.
+```json
+{
+  "tool_name": "knowledge.search",
+  "arguments": {
+    "query": "topic or question",
+    "limit": 20,
+    "sources": ["notes", "media", "chats", "characters", "prompts"],
+    "snippet_length": 300,
+    "filters": { "media": { "media_types": ["pdf", "html"], "order_by": "relevance" } }
+  }
+}
+```
+
+#### knowledge.get
+Retrieve a specific item by source + id. Supports retrieval modes:
+`snippet`, `full`, `chunk`, `chunk_with_siblings`, and `auto`.
+```json
+{
+  "tool_name": "knowledge.get",
+  "arguments": {
+    "source": "media",
+    "id": 123,
+    "retrieval": { "mode": "chunk_with_siblings", "max_tokens": 6000, "chars_per_token": 4 }
+  }
+}
+```
+
+Notes:
+- When prechunked media exists, `media.search` attempts to return a precise `loc` with `chunk_index`.
+- `media.get` anchors by `chunk_index`/`chunk_uuid` when available and expands to sibling chunks under the token budget; otherwise it falls back to on‑the‑fly chunking.
+
 ## Authentication
 
 ### Getting a Token

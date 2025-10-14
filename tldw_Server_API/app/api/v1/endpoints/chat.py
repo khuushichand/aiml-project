@@ -16,7 +16,6 @@ import asyncio
 import base64
 import datetime
 import json
-import logging
 import os
 import sqlite3
 import time
@@ -251,8 +250,8 @@ async def _process_content_for_db_sync(
     conversation_id: str # For logging
 ) -> tuple[list[str], list[tuple[bytes, str]]]:
     """
-    Synchronous helper to process message content, including base64 decoding.
-    To be run in an executor.
+    Async helper to process message content, including base64 decoding.
+    Runs within the event loop (uses async image processor when available).
     """
     text_parts_sync: list[str] = []
     images_sync: list[tuple[bytes, str]] = []   # (bytes, mime)
@@ -948,7 +947,28 @@ async def create_chat_completion(
                 f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
                 extra={"request_id": request_id, "status_code": e_http.status_code}
             )
-        raise e_http # Re-raise, details are assumed to be client-safe or intentionally set
+        # Allow-list expected HTTP errors raised intentionally by the endpoint
+        allowed_statuses = {
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_409_CONFLICT,
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status.HTTP_502_BAD_GATEWAY,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            status.HTTP_504_GATEWAY_TIMEOUT,
+        }
+        if e_http.status_code in allowed_statuses:
+            # Re-raise expected/intentional HTTP errors
+            raise e_http
+        # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected internal server error occurred."
+        )
 
     except ChatModuleException as e_chat:
         # Our custom exceptions with structured error handling
