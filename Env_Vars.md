@@ -31,6 +31,12 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `ALLOW_NLTK_DOWNLOADS`: Force-enable NLTK downloads even when running tests (`1|true|yes`).
   - Overrides `TEST_MODE`/`DISABLE_NLTK_DOWNLOADS`/pytest auto-detection to allow downloads for development scenarios that require full NLTK resources.
 
+### Chunking (regex safety and templates)
+- `CHUNKING_REGEX_TIMEOUT`: Float seconds to cap regex execution for chapter/section detection and template boundaries. Default: `2`. Values <= 0 disable. On timeout, strategies fall back to safe paths.
+- `CHUNKING_DISABLE_MP`: Disable process-based isolation for regex (default: disabled, i.e., no MP). Set `0|false|no` to enable optional MP fallback; note platform constraints.
+- `CHUNKING_REGEX_SIMPLE_ONLY`: When `1|true|yes`, only a safe regex subset is allowed for custom boundary patterns. Unsafe constructs are rejected during validation.
+- `CHUNKING_TEMPLATES_FALLBACK_ENABLED`: When `0|false|no`, disallow the in-process fallback store for chunking templates. Endpoints will return `500` with a hint if DB methods are missing. Default: enabled for dev/test.
+
 ### Security Health (Audit Thresholds)
 - `AUDIT_SEC_CRITICAL_HIGH_RISK_MIN`: Minimum count of high-risk security events in the last 24h to mark status as `at_risk` and risk level `critical`. Default: `1`.
 - `AUDIT_SEC_ELEVATED_FAILURE_MIN`: Minimum count of failure events in the last 24h to mark status `elevated` and risk level `high`. Default: `50`.

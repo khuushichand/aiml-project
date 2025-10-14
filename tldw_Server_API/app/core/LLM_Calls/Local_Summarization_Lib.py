@@ -103,20 +103,17 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
         }
 
         logging.debug("Local LLM: Posting request")
-        response = requests.post(
-            'http://127.0.0.1:8080/v1/chat/completions',
-            headers=headers,
-            json=data,
-        )
-
-        if response.status_code == 200:
-            if streaming:
-                logging.debug("Local LLM: Processing streaming response")
-
-                def stream_generator():
-                    for line in response.iter_lines():
-                        if line:
-                            decoded_line = line.decode('utf-8').strip()
+        url = 'http://127.0.0.1:8080/v1/chat/completions'
+        if streaming:
+            logging.debug("Local LLM: Processing streaming response")
+            client = httpx.Client()
+            resp = client.stream("POST", url, headers=headers, json=data)
+            resp.raise_for_status()
+            def stream_generator():
+                try:
+                    for line in resp.iter_lines():
+                        if line and line.strip():
+                            decoded_line = line.strip()
                             if decoded_line.startswith('data:'):
                                 data_str = decoded_line[len('data:'):].strip()
                                 if data_str == '[DONE]':
@@ -126,15 +123,19 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
                                     if 'choices' in data_json and len(data_json['choices']) > 0:
                                         delta = data_json['choices'][0].get('delta', {})
                                         if 'content' in delta:
-                                            content = delta['content']
-                                            yield content
+                                            yield delta['content']
                                 except json.JSONDecodeError:
-                                    logging.error(f"Local LLM: Error decoding JSON from line: {decoded_line}")
+                                    logging.error("Local LLM: Error decoding JSON from line: {}", decoded_line)
                                     continue
-                return stream_generator()
-            else:
+                finally:
+                    resp.close()
+            return stream_generator()
+        else:
+            with httpx.Client() as client:
+                resp = client.post(url, headers=headers, json=data)
+                resp.raise_for_status()
                 logging.debug("Local LLM: Processing non-streaming response")
-                response_data = response.json()
+                response_data = resp.json()
                 if 'choices' in response_data and len(response_data['choices']) > 0:
                     summary = response_data['choices'][0]['message']['content'].strip()
                     logging.debug("Local LLM: Summarization successful")
@@ -143,9 +144,6 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
                 else:
                     logging.warning("Local LLM: Summary not found in the response data")
                     return "Local LLM: Summary not available"
-        else:
-            logging.error(f"Local LLM: Request failed with status code {response.status_code}")
-            return f"Local LLM: Failed to process summary, status code {response.status_code}"
     except Exception as e:
         logging.error(f"Local LLM: Error in processing: {str(e)}")
         return f"Local LLM: Error occurred while processing summary: {str(e)}"
@@ -252,37 +250,17 @@ def summarize_with_llama(input_data, custom_prompt, api_key=None, temp=None, sys
             "stream": streaming
         }
 
-        # Create a session
-        session = requests.Session()
-
-        # Load config values
-        retry_count = loaded_config_data['llama_api']['api_retries']
-        retry_delay = loaded_config_data['llama_api']['api_retry_delay']
-
-        # Configure the retry strategy
-        retry_strategy = Retry(
-            total=retry_count,  # Total number of retries
-            backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-            status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-        )
-
-        # Create the adapter
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-
-        # Mount adapters for both HTTP and HTTPS
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
         logging.debug("Llama: Submitting request to API endpoint")
-        response = session.post(api_url, headers=headers, json=data, stream=streaming)
-
-        if response.status_code == 200:
-            if streaming:
-                logging.debug("Llama: Processing streaming response")
-
-                def stream_generator():
-                    for line in response.iter_lines():
-                        if line:
-                            decoded_line = line.decode('utf-8').strip()
+        if streaming:
+            client = httpx.Client()
+            resp = client.stream("POST", api_url, headers=headers, json=data)
+            resp.raise_for_status()
+            logging.debug("Llama: Processing streaming response")
+            def stream_generator():
+                try:
+                    for line in resp.iter_lines():
+                        if line and line.strip():
+                            decoded_line = line.strip()
                             if decoded_line.startswith('data:'):
                                 data_str = decoded_line[len('data:'):].strip()
                                 if data_str == '[DONE]':
@@ -292,27 +270,27 @@ def summarize_with_llama(input_data, custom_prompt, api_key=None, temp=None, sys
                                     if 'choices' in data_json and len(data_json['choices']) > 0:
                                         delta = data_json['choices'][0].get('delta', {})
                                         if 'content' in delta:
-                                            content = delta['content']
-                                            yield content
+                                            yield delta['content']
                                 except json.JSONDecodeError:
-                                    logging.error(f"Llama: Error decoding JSON from line: {decoded_line}")
+                                    logging.error("Llama: Error decoding JSON from line: {}", decoded_line)
                                     continue
-                return stream_generator()
-            else:
+                finally:
+                    resp.close()
+            return stream_generator()
+        else:
+            with httpx.Client() as client:
+                resp = client.post(api_url, headers=headers, json=data)
+                resp.raise_for_status()
                 logging.debug("Llama.cpp Summarizer: Processing non-streaming response")
-                response_data = response.json()
+                response_data = resp.json()
                 if 'content' in response_data and len(response_data['content']) > 0:
                     logging.debug(response_data)
                     summary = response_data['content'].strip()
                     logging.debug("llama: Summarization successful")
-                    # Avoid printing to stdout in production
                     return summary
                 else:
                     logging.error("Llama: No choices in response data")
                     return "Llama: No choices in response data"
-        else:
-            logging.error(f"Llama: API request failed with status code {response.status_code}: {response.text}")
-            return f"Llama: API request failed: {response.text}"
 
     except Exception as e:
         logging.error(f"Llama: Error in processing: {str(e)}")

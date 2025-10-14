@@ -30,6 +30,11 @@ class LlamafileConfig(BaseHandlerConfig):
     models_dir: DirectoryPath = Path("models/llamafile_models") # Directory to store llamafile models
     default_port: int = 8080
     default_host: str = "127.0.0.1"
+    allow_unvalidated_args: bool = False
+    allow_cli_secrets: bool = False
+    port_autoselect: bool = True
+    port_probe_max: int = 10
+    allowed_paths: Optional[list[Path]] = None
     # Add other llamafile specific defaults if needed from the `start_llamafile` args
 
 class LLMManagerConfig(BaseModel):
@@ -47,6 +52,11 @@ class LlamaCppConfig(BaseHandlerConfig):
     default_n_gpu_layers: int = 0  # Sensible default, user should override
     default_ctx_size: int = 2048
     default_threads: Optional[int] = None # Let llama.cpp decide by default
+    allow_unvalidated_args: bool = False
+    allow_cli_secrets: bool = False
+    port_autoselect: bool = True
+    port_probe_max: int = 10
+    allowed_paths: Optional[list[Path]] = None
     # Add other common llama.cpp server arguments you want to default or control
     # e.g., default_main_gpu, default_tensor_split, etc.
     log_output_file: Optional[Path] = None # Optional: Path to save llama.cpp server logs

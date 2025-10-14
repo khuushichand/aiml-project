@@ -154,7 +154,7 @@ def auth_headers(test_client):
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     # Use X-API-KEY header as expected by the endpoint in single-user mode
-    api_key = settings.SINGLE_USER_API_KEY or "default-secret-key-for-single-user"
+    api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {
         "X-API-KEY": api_key,
         "X-CSRF-Token": getattr(test_client, 'csrf_token', '')

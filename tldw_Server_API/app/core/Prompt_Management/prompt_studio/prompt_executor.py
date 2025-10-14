@@ -63,8 +63,8 @@ class PromptExecutor:
     ####################################################################################################################
     # Prompt Execution
     
-    def execute_prompt(self, prompt_id: int, test_inputs: Dict[str, Any],
-                            model_config: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_prompt(self, prompt_id: int, test_inputs: Dict[str, Any],
+                             model_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a prompt with given inputs and model configuration.
         
@@ -96,7 +96,7 @@ class PromptExecutor:
             provider = model_config.get("provider", "openai")
             model = model_config.get("model", "gpt-3.5-turbo")
             
-            result = self._call_llm(
+            result = await self._call_llm(
                 provider=provider,
                 model=model,
                 prompt=final_prompt,
@@ -221,7 +221,8 @@ class PromptExecutor:
             LLM response
         """
         # Get provider function
-        provider_func = self.PROVIDER_FUNCTIONS.get(provider.lower())
+        provider_lower = (provider or "").lower()
+        provider_func = self.PROVIDER_FUNCTIONS.get(provider_lower)
         if not provider_func:
             raise ValueError(f"Unknown provider: {provider}")
         
@@ -238,7 +239,7 @@ class PromptExecutor:
         
         try:
             # Call provider (most providers have similar signatures)
-            if provider in ["openai", "anthropic", "groq", "mistral", "deepseek"]:
+            if provider_lower in ["openai", "anthropic", "groq", "mistral", "deepseek"]:
                 response = await asyncio.to_thread(
                     provider_func,
                     messages,
@@ -247,7 +248,7 @@ class PromptExecutor:
                     max_tokens=max_tokens,
                     stream=False
                 )
-            elif provider == "ollama":
+            elif provider_lower == "ollama":
                 response = await asyncio.to_thread(
                     provider_func,
                     messages,
@@ -313,7 +314,8 @@ class PromptExecutor:
         for key, value in inputs.items():
             # Handle different placeholder formats
             template = template.replace(f"{{{key}}}", str(value))
-            template = template.replace(f"{{{{key}}}}", str(value))
+            # Double-brace template: replace {{var}} correctly
+            template = template.replace(f"{{{{{key}}}}}", str(value))
             template = template.replace(f"${key}", str(value))
             template = template.replace(f"<{key}>", str(value))
         
@@ -336,8 +338,8 @@ class PromptExecutor:
         return template
 
     # Compatibility alias used by tests
-    def execute(self, prompt_id: int, inputs: Dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
-                parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute(self, prompt_id: int, inputs: Dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
+                      parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute prompt using simplified signature.
 
@@ -356,7 +358,7 @@ class PromptExecutor:
             "model": model,
             "parameters": parameters or {}
         }
-        return self.execute_prompt(prompt_id, inputs, model_config)
+        return await self.execute_prompt(prompt_id, inputs, model_config)
     
     def _parse_output(self, output: str, signature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """

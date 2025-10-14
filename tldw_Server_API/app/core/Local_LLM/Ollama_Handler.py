@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfi
 from tldw_Server_API.app.core.Local_LLM.http_utils import (
     create_async_client,
     request_json,
-    wait_for_http_ready,
+    wait_for_ollama_ready,
 )
 
 
@@ -171,10 +171,8 @@ class OllamaHandler(BaseLLMHandler):
                 stdout=asyncio.subprocess.PIPE,  # Or DEVNULL if we don't care about its output after start
                 stderr=asyncio.subprocess.PIPE
             )
-            # `ollama serve` might run in the background quickly.
-            # We need a way to confirm it's up, e.g., by polling its health endpoint.
-            # This is a simplified start; a robust version would poll health.
-            await asyncio.sleep(2)  # Give it a moment to start
+            # Confirm server is up by polling common Ollama endpoints
+            ready = await wait_for_ollama_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
 
             if process.returncode is not None and process.returncode != 0:
                 stderr_output = (await process.stderr.read()).decode() if process.stderr else "Unknown error"
@@ -326,7 +324,7 @@ class OllamaHandler(BaseLLMHandler):
                 self.logger.info("Attempting to start Ollama server...")
                 try:
                     await self.serve_model(model_name, port=port, host=host)
-                    ready = await wait_for_http_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
+                    ready = await wait_for_ollama_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
                     if not ready:
                         raise InferenceError("Ollama server did not become ready in time")
                     return await request_json(client, "POST", api_url, json=payload)

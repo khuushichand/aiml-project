@@ -101,6 +101,17 @@ Code documentation:
 - Validate only: POST /api/v1/chunking/templates/validate
 - Apply (full template pipeline): POST /api/v1/chunking/templates/apply
 
+### Diagnostics (DB Capability Headers)
+
+Templates endpoints include optional diagnostic headers to help verify that the correct database implementation is in use:
+
+- `X-Template-DB-Class`: module.ClassName of the DB dependency instance.
+- `X-Template-DB-Capability`: `native` (DB supports templates natively) or `fallback` (endpoints are using an in-memory fallback store for this process).
+- `X-Template-DB-Missing`: Comma-separated list of required methods not found on the DB class.
+- `X-Template-DB-Hint`: Suggests using `tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`.
+
+If you see `fallback`, templates will function but not persist across restarts. Update DI wiring to use Media_DB_v2.MediaDatabase to enable native persistence and full feature support.
+
 ### Chunking Endpoint Integration
 
 When calling POST /api/v1/chunking/chunk_text with options.template_name set, the server now executes the full template pipeline (preprocess, chunk, postprocess). The response includes minimal metadata per chunk:
@@ -125,4 +136,3 @@ For methods like rolling_summarize that require LLM access, the server uses its 
 
 - The template processor is tolerant to both {operation, config} and {type, params} shapes.
 - Built-in templates are shipped under tldw_Server_API/app/core/Chunking/template_library and seeded into the DB on startup.
-

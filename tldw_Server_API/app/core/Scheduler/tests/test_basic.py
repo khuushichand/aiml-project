@@ -13,6 +13,8 @@ from ..backends.sqlite_backend import SQLiteBackend
 from ..core.write_buffer import SafeWriteBuffer
 from ..config import SchedulerConfig
 
+DEFAULT_METADATA = {"user_id": "basic-test"}
+
 
 @pytest.mark.asyncio
 async def test_sqlite_backend_basic():
@@ -33,8 +35,7 @@ async def test_sqlite_backend_basic():
                 handler="test_handler",
                 payload={"test": "data"},
                 queue_name="test_queue",
-                priority=TaskPriority.NORMAL.value
-            )
+                priority=TaskPriority.NORMAL.value, metadata=DEFAULT_METADATA)
             
             # Enqueue task
             task_id = await backend.enqueue(task)
@@ -88,10 +89,10 @@ async def test_bulk_enqueue_with_idempotency():
         try:
             # Create tasks with some having idempotency keys
             tasks = [
-                Task(handler="handler1", idempotency_key="unique1"),
-                Task(handler="handler2", idempotency_key="unique2"),
-                Task(handler="handler3"),  # No idempotency key
-                Task(handler="handler4", idempotency_key="unique1"),  # Duplicate!
+                Task(handler="handler1", idempotency_key="unique1", metadata=DEFAULT_METADATA),
+                Task(handler="handler2", idempotency_key="unique2", metadata=DEFAULT_METADATA),
+                Task(handler="handler3", metadata=DEFAULT_METADATA),  # No idempotency key
+                Task(handler="handler4", idempotency_key="unique1", metadata=DEFAULT_METADATA),  # Duplicate!
             ]
             
             # Bulk enqueue
@@ -120,9 +121,9 @@ async def test_dependency_resolution():
         
         try:
             # Create tasks with dependencies
-            task1 = Task(id="task1", handler="handler1")
-            task2 = Task(id="task2", handler="handler2", depends_on=["task1"])
-            task3 = Task(id="task3", handler="handler3", depends_on=["task1", "task2"])
+            task1 = Task(id="task1", handler="handler1", metadata=DEFAULT_METADATA)
+            task2 = Task(id="task2", handler="handler2", depends_on=["task1"], metadata=DEFAULT_METADATA)
+            task3 = Task(id="task3", handler="handler3", depends_on=["task1", "task2"], metadata=DEFAULT_METADATA)
             
             # Enqueue all tasks
             await backend.enqueue(task1)
@@ -177,7 +178,7 @@ async def test_write_buffer_atomic_operations():
             # Add tasks concurrently
             tasks = []
             for i in range(20):
-                task = Task(handler=f"handler{i}", payload={"id": i})
+                task = Task(handler=f"handler{i}", payload={"id": i}, metadata=DEFAULT_METADATA)
                 tasks.append(task)
             
             # Add tasks concurrently to test race conditions
@@ -223,7 +224,7 @@ async def test_write_buffer_recovery():
         buffer = SafeWriteBuffer(backend, config)
         
         # Add some tasks
-        tasks = [Task(handler=f"handler{i}") for i in range(5)]
+        tasks = [Task(handler=f"handler{i}", metadata=DEFAULT_METADATA) for i in range(5)]
         for task in tasks:
             await buffer.add(task)
         

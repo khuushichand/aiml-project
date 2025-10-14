@@ -8,7 +8,7 @@ import json
 import asyncio
 #
 # 3rd-party imports
-import redis
+from redis import asyncio as redis_async
 from redis.exceptions import RedisError
 from loguru import logger
 #
@@ -38,7 +38,7 @@ class TokenBlacklist:
         """Initialize token blacklist service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
         
         # Cache for recently checked tokens (in-memory)
@@ -60,12 +60,12 @@ class TokenBlacklist:
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
-                self.redis_client = redis.from_url(
+                self.redis_client = redis_async.from_url(
                     self.settings.REDIS_URL,
                     decode_responses=True,
                     socket_connect_timeout=1
                 )
-                self.redis_client.ping()
+                await self.redis_client.ping()
                 logger.debug("Redis connected for token blacklist")
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis unavailable for token blacklist: {e}")
@@ -181,7 +181,7 @@ class TokenBlacklist:
                 ttl = int((expires_at - datetime.utcnow()).total_seconds())
                 
                 if ttl > 0:
-                    self.redis_client.setex(
+                    await self.redis_client.setex(
                         key,
                         ttl,
                         json.dumps({
@@ -247,7 +247,8 @@ class TokenBlacklist:
         if self.redis_client:
             try:
                 key = f"blacklist:{jti}"
-                if self.redis_client.exists(key):
+                exists = await self.redis_client.exists(key)
+                if exists:
                     # Add to local cache for next time
                     self._local_cache.add(jti)
                     return True

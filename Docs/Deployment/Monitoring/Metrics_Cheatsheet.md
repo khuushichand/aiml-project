@@ -119,6 +119,74 @@ Notes:
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
 
+## Grafana Provisioning
+
+These examples provision Prometheus as a datasource, import dashboards, and load alert rules using Grafana’s file provisioning.
+
+1) Datasource (Prometheus)
+
+Create `provisioning/datasources/prometheus.yml`:
+```yaml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+```
+
+2) Dashboards
+
+Copy these files to a mounted path, e.g., `/var/lib/grafana/dashboards`:
+- `Samples/Grafana/app-observability-dashboard.json`
+- `Samples/Grafana/mcp-dashboard.json`
+
+Create `provisioning/dashboards/dashboards.yml`:
+```yaml
+apiVersion: 1
+providers:
+  - name: tldw-dashboards
+    orgId: 1
+    folder: TLDW
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+```
+
+Note: If your Prometheus datasource UID is not `prometheus`, update dashboards via UI on import, or set a dashboard‑level default datasource. The alert rules below explicitly use `datasourceUid: prometheus`.
+
+3) Alerting
+
+Copy alert rules to a mounted path, e.g., `/etc/grafana/provisioning/alerting`:
+- `Samples/Grafana/alerts/app-alerts.yml`
+- `Samples/Grafana/alerts/mcp-alerts.yml`
+
+Grafana auto‑discovers `.yml` rules under the alerting directory on startup.
+
+4) Docker Compose (snippet)
+
+```yaml
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./Samples/Grafana/alerts:/etc/grafana/provisioning/alerting
+      - ./Samples/Grafana:/var/lib/grafana/dashboards
+```
+
+Once Grafana starts, browse to Dashboards → TLDW → App Observability or MCP Unified. Update the Prometheus datasource UID if yours differs.
+
 Prometheus scrape_config example:
 ```yaml
 scrape_configs:

@@ -271,9 +271,22 @@ class Chunker:
             offsets.append((pos, len(text), text[pos:len(text)]))
 
         def match_template(s: str) -> Optional[str]:
+            # Use safe search with optional timeouts and RE2 when available
+            try:
+                from .regex_safety import safe_search
+            except Exception:
+                safe_search = None  # type: ignore
             for kind, pat in template_patterns:
-                if pat.search(s):
-                    return kind
+                try:
+                    ok = False
+                    if safe_search is not None:
+                        ok = bool(safe_search(pat, s))
+                    else:
+                        ok = pat.search(s) is not None
+                    if ok:
+                        return kind
+                except Exception:
+                    continue
             return None
 
         def classify_line(s: str) -> Optional[str]:
@@ -412,17 +425,10 @@ class Chunker:
                     # Compute sentence spans and group by sentence count to mirror strategy behavior
                     from .strategies.sentences import SentenceChunkingStrategy  # local import
                     ss = SentenceChunkingStrategy(language=language)
-                    # Get sentence list using strategy internals for parity
-                    sentences = ss._split_sentences(segment)  # noqa: SLF001
-                    # Build sentence spans by sequential search
-                    sent_spans: List[Tuple[int, int]] = []
-                    cur = 0
-                    for s in sentences:
-                        idx = segment.find(s, cur)
-                        if idx == -1:
-                            idx = cur
-                        sent_spans.append((idx, idx + len(s)))
-                        cur = idx + len(s)
+                    # Get sentence spans using strategy to avoid naive find
+                    sent_with_spans = ss._split_sentences_with_spans(segment)  # noqa: SLF001
+                    sentences = [s for (s, _s, _e) in sent_with_spans]
+                    sent_spans: List[Tuple[int, int]] = [(s0, e0) for (_t, s0, e0) in sent_with_spans]
                     # Group sentences into chunks (max_size sentences, overlap)
                     step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
                     for i in range(0, len(sentences), step):
@@ -611,6 +617,89 @@ class Chunker:
                 i += step
             return grouped
 
+        def _group_section_by_kind_weight(items: List[Dict[str, Any]], max_weight: int, overlap: int, weights: Dict[str, int]) -> List[Dict[str, Any]]:
+            """Group contiguous items by paragraph_kind using weight budget per group.
+
+            Does not cross kind boundaries; code_fence blocks tend to be heavier by default.
+            """
+            if max_weight is None or max_weight <= 0:
+                return items
+            if overlap < 0:
+                overlap = 0
+            # Clamp overlap to max_weight - 1 (no negative step)
+            overlap = min(overlap, max(0, max_weight - 1))
+            out_groups: List[Dict[str, Any]] = []
+            i = 0
+            n = len(items)
+            while i < n:
+                # Start new group at i and keep same kind
+                first = items[i]
+                kind = (first.get('metadata') or {}).get('paragraph_kind') if isinstance(first, dict) else None
+                budget = max_weight
+                j = i
+                texts: List[str] = []
+                starts: List[int] = []
+                ends: List[int] = []
+                count = 0
+                while j < n:
+                    it = items[j]
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    ikind = md.get('paragraph_kind') if isinstance(md, dict) else None
+                    if ikind != kind:
+                        break
+                    w = int(weights.get(str(ikind), 1)) if isinstance(weights, dict) else 1
+                    if w <= 0:
+                        w = 1
+                    if w > budget and count > 0:
+                        break
+                    # Take this item
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts.append(t)
+                    try:
+                        s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
+                    except Exception:
+                        s = None
+                    try:
+                        e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
+                    except Exception:
+                        e = None
+                    if s is not None:
+                        starts.append(s)
+                    if e is not None:
+                        ends.append(e)
+                    budget -= w
+                    j += 1
+                    count += 1
+                    if budget <= 0:
+                        break
+                if count == 0:
+                    # Fallback to consume one item to make progress
+                    j = i + 1
+                    it = items[i]
+                    t = it.get('text') if isinstance(it, dict) else str(it)
+                    texts = [t]
+                    md = it.get('metadata') if isinstance(it, dict) else {}
+                    starts = [int(md.get('start_offset'))] if md and md.get('start_offset') is not None else []
+                    ends = [int(md.get('end_offset'))] if md and md.get('end_offset') is not None else []
+                agg_text = ''.join(texts)
+                start_off = min(starts) if starts else 0
+                end_off = max(ends) if ends else start_off + len(agg_text)
+                out_groups.append({
+                    'type': 'text',
+                    'text': agg_text,
+                    'metadata': {
+                        'method': method,
+                        'start_offset': start_off,
+                        'end_offset': end_off,
+                        'grouped_elements': count,
+                        'group_kind': kind,
+                    }
+                })
+                # Overlap semantics: step by max(1, count - overlap)
+                step = max(1, count - overlap)
+                i += step
+            return out_groups
+
         def walk(node: Dict[str, Any], titles: List[str]):
             kind = node.get('kind')
             if kind == 'section':
@@ -619,7 +708,20 @@ class Chunker:
             # For structure_aware, group elements per section using max_size/overlap
             if kind == 'section' and method == 'structure_aware' and isinstance(sa_max, int) and sa_max > 0:
                 section_items = _gather_section_items(node)
-                grouped_items = _group_items_by_elements(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0)
+                # Optional grouping configuration carried in tree
+                grouping_cfg = tree.get('grouping') if isinstance(tree.get('grouping'), dict) else {}
+                by_kind = bool(grouping_cfg.get('by_kind', False))
+                weights = grouping_cfg.get('element_weights') if isinstance(grouping_cfg.get('element_weights'), dict) else {
+                    'paragraph': 1,
+                    'list_unordered': 1,
+                    'list_ordered': 1,
+                    'table_md': 2,
+                    'code_fence': 3,
+                }
+                if by_kind:
+                    grouped_items = _group_section_by_kind_weight(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0, weights)
+                else:
+                    grouped_items = _group_items_by_elements(section_items, sa_max, sa_ovl if isinstance(sa_ovl, int) else 0)
                 _append_with_titles(grouped_items, titles)
                 # Do not descend into children again to avoid duplicating content
                 return
@@ -772,12 +874,45 @@ class Chunker:
         language = language or self.config.language
         
         # Check cache if enabled
+        cache_key = None
+        cache_allowed = False
+        cache_reason = "disabled"
         if self._cache is not None:
+            try:
+                tlen = len(text)
+                min_len = getattr(self.config, 'min_text_length_to_cache', 0)
+                max_len = getattr(self.config, 'max_text_length_to_cache', getattr(self.config, 'cache_max_text_length', 2_000_000))
+                if tlen < int(min_len):
+                    cache_reason = "skipped_min_len"
+                elif tlen > int(max_len):
+                    cache_reason = "skipped_max_len"
+                else:
+                    cache_allowed = True
+                    cache_reason = "allowed"
+            except Exception:
+                cache_reason = "policy_error"
+        # Attempt get if allowed
+        if self._cache is not None and cache_allowed:
             cache_key = self._get_cache_key(text, method, max_size, overlap, language, options)
             cached_result = self._cache.get(cache_key)
             if cached_result is not None:
+                try:
+                    increment_counter("chunker_cache_get_total", labels={"result": "hit", "reason": cache_reason})
+                except Exception:
+                    pass
                 logger.debug("Returning cached result")
                 return cached_result
+            else:
+                try:
+                    increment_counter("chunker_cache_get_total", labels={"result": "miss", "reason": cache_reason})
+                except Exception:
+                    pass
+        else:
+            # cache disabled or not allowed by policy
+            try:
+                increment_counter("chunker_cache_get_total", labels={"result": "skip", "reason": cache_reason})
+            except Exception:
+                pass
         
         # Get strategy lazily
         strategy = self.get_strategy(method)
@@ -794,14 +929,23 @@ class Chunker:
             chunks = strategy.chunk(text, max_size, overlap, **options)
             
             # Cache result if enabled
-            if self._cache is not None and len(chunks) > 0:
+            if self._cache is not None and len(chunks) > 0 and cache_allowed and cache_key is not None:
                 try:
-                    if len(text) <= getattr(self.config, 'cache_max_text_length', 2_000_000):
-                        self._cache.put(cache_key, chunks)
-                    else:
-                        logger.debug("Skip caching due to text length over cache_max_text_length")
+                    self._cache.put(cache_key, chunks)
+                    try:
+                        increment_counter("chunker_cache_put_total", labels={"result": "stored"})
+                    except Exception:
+                        pass
                 except Exception:
                     # Defensive: never fail chunking due to cache policy
+                    try:
+                        increment_counter("chunker_cache_put_total", labels={"result": "error"})
+                    except Exception:
+                        pass
+            elif self._cache is not None and len(chunks) > 0:
+                try:
+                    increment_counter("chunker_cache_put_total", labels={"result": "skipped", "reason": cache_reason})
+                except Exception:
                     pass
             
             logger.info(f"Created {len(chunks)} chunks using {method} method")

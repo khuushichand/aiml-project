@@ -332,7 +332,17 @@ async def execute_prompt_simple(
     inputs = payload.get("inputs") or {}
     provider = payload.get("provider", "openai")
     model = payload.get("model", "gpt-3.5-turbo")
-    result = executor.execute(prompt_id, inputs=inputs, provider=provider, model=model)
+    # Support both async executor (normal) and sync mocks in tests
+    maybe = executor.execute(prompt_id, inputs=inputs, provider=provider, model=model)
+    try:
+        import inspect as _inspect
+        if _inspect.isawaitable(maybe):
+            result = await maybe
+        else:
+            result = maybe  # test mocks may return plain dict
+    except Exception:
+        # Fallback to awaiting; if it fails, raise for better visibility
+        result = await maybe  # type: ignore[func-returns-value]
     return {
         "output": result.get("raw_output") or result.get("parsed_output") or "",
         "tokens_used": result.get("tokens_used", 0),

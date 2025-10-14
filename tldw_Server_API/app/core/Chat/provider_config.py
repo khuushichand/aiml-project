@@ -13,7 +13,8 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_openai, chat_with_anthropic, chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
-    chat_with_qwen, chat_with_bedrock
+    chat_with_qwen, chat_with_bedrock,
+    chat_with_openai_async, chat_with_groq_async, chat_with_anthropic_async, chat_with_openrouter_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -56,6 +57,14 @@ A dispatch table mapping API endpoint names (e.g., 'openai') to their
 corresponding handler functions (e.g., `chat_with_openai`). This is used by
 `chat_api_call` to route requests to the appropriate LLM provider.
 """
+
+# Optional async handlers. When present, the orchestrator can invoke these without blocking threads.
+ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
+    'openai': chat_with_openai_async,
+    'groq': chat_with_groq_async,
+    'anthropic': chat_with_anthropic_async,
+    'openrouter': chat_with_openrouter_async,
+}
 
 # 2. Parameter mapping for each provider
 # Maps generic chat_api_call param name to provider-specific param name

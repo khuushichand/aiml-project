@@ -62,10 +62,16 @@ The primary API is a single unified endpoint where all features are parameters.
 
 ## Authentication
 
-In single-user mode (default), use the API key from config:
+In single-user mode (default), generate a strong API key and set it via `SINGLE_USER_API_KEY`:
+
+```bash
+export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
+Use that value when calling the API:
 
 ```http
-X-API-Key: default-secret-key-for-single-user
+X-API-Key: YOUR_API_KEY
 ```
 
 In multi-user mode, use JWT Bearer tokens:

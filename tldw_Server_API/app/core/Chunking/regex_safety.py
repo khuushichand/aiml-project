@@ -9,6 +9,15 @@ from __future__ import annotations
 
 import re
 from typing import Optional, Tuple, Set
+import os
+try:  # pragma: no cover
+    from loguru import logger as _logger
+except Exception:  # pragma: no cover
+    class _N:
+        def warning(self, *a, **k):
+            pass
+    _logger = _N()
+import time
 
 
 # Pre-compiled heuristics to catch catastrophic backtracking risks
@@ -90,3 +99,46 @@ def warn_ambiguity(pattern: str) -> Optional[str]:
         return "Unanchored pattern with wide wildcard may overmatch"
     return None
 
+
+# Optional RE2 support for safer regex execution
+_re2 = None
+try:  # pragma: no cover - optional dependency
+    import re2 as _re2  # type: ignore
+except Exception:  # pragma: no cover - absence is fine
+    _re2 = None
+
+
+def safe_search(compiled_pat: "re.Pattern", text: str, *, timeout_env: str = "CHUNKING_REGEX_TIMEOUT") -> bool:
+    """Perform a safe regex search with optional timeout and RE2 fallback.
+
+    - If python-re is used, we cannot enforce hard timeouts; this function measures elapsed time
+      and bails early across many calls, but a single pathological call can still block.
+    - If re2 is available and the pattern can be compiled there, we prefer it.
+    - timeout is read from env var (float seconds). Values <= 0 disable the guard.
+    """
+    # Try RE2 when available by recompiling pattern string
+    t0 = time.perf_counter()
+    timeout_s = 0.0
+    try:
+        timeout_s = float(os.getenv(timeout_env, "0") or 0.0)
+    except Exception:
+        timeout_s = 0.0
+    # Fast path: optional RE2 search
+    if _re2 is not None:
+        try:
+            rp = _re2.compile(compiled_pat.pattern)
+            return rp.search(text) is not None
+        except Exception:
+            # fall back to python-re
+            pass
+    # Python re fallback
+    # Best-effort to detect overlong execution: measure post-call
+    try:
+        found = compiled_pat.search(text) is not None
+        if timeout_s > 0 and (time.perf_counter() - t0) > timeout_s:
+            # Consider this a timeout condition from caller's perspective
+            _logger.warning("Regex search exceeded CHUNKING_REGEX_TIMEOUT; treating as no match")
+            return False
+        return found
+    except Exception:
+        return False

@@ -314,6 +314,7 @@ async def unified_rag_pipeline(
     
     # ========== ALT INPUTS ==========
     media_db: Any = None,
+    chacha_db: Any = None,
     
     # ========== ERROR HANDLING ==========
     fallback_on_error: bool = False,
@@ -508,15 +509,20 @@ async def unified_rag_pipeline(
                                 result.metadata["cached_query"] = cached_query
                                 break
 
-                if result.cache_hit and isinstance(cached_documents, dict):
-                    ans = cached_documents.get("answer")
-                    if ans is not None:
-                        result.generated_answer = ans
-                    docs = cached_documents.get("documents")
-                    if docs is not None:
-                        result.documents = docs
-                    if cached_documents.get("cached") is True:
-                        result.metadata["cached_flag"] = True
+                if result.cache_hit:
+                    if isinstance(cached_documents, dict):
+                        ans = cached_documents.get("answer")
+                        if ans is not None:
+                            result.generated_answer = ans
+                        docs = cached_documents.get("documents")
+                        if isinstance(docs, list):
+                            result.documents = docs
+                        if cached_documents.get("cached") is True:
+                            result.metadata["cached_flag"] = True
+                    elif isinstance(cached_documents, list):
+                        # Backward compatibility: older cache entries stored document lists directly
+                        result.documents = cached_documents
+                    result.metadata.setdefault("cached_flag", True)
                             
             result.timings["cache_check"] = time.time() - cache_start
             if metrics:
@@ -665,11 +671,13 @@ async def unified_rag_pipeline(
                             db_paths,
                             user_id=user_id or "0",
                             media_db=media_db,
+                            chacha_db=chacha_db,
                         )
                     except TypeError:
                         retriever = MultiDatabaseRetriever(
                             db_paths,
                             user_id=user_id or "0",
+                            media_db=media_db,
                         )
 
                     # Configure retrieval
@@ -1287,13 +1295,20 @@ async def unified_rag_pipeline(
                                     db_paths["notes_db"] = notes_db_path
                                 if character_db_path:
                                     db_paths["character_cards_db"] = character_db_path
-                                # Initialize multi retriever
-                                mdr = MultiDatabaseRetriever(
-                                    db_paths,
-                                    user_id=user_id or "0",
-                                    media_db=media_db,
-                                    chacha_db=chacha_db
-                                )
+                                # Initialize multi retriever scoped to user's databases
+                                try:
+                                    mdr = MultiDatabaseRetriever(
+                                        db_paths,
+                                        user_id=user_id or "0",
+                                        media_db=media_db,
+                                        chacha_db=chacha_db,
+                                    )
+                                except TypeError:
+                                    mdr = MultiDatabaseRetriever(
+                                        db_paths,
+                                        user_id=user_id or "0",
+                                        media_db=media_db,
+                                    )
 
                                 # Determine sources same as earlier
                                 claim_sources = sources or ["media_db"]
@@ -1538,10 +1553,15 @@ async def unified_rag_pipeline(
                     # Support both async/sync and set/add method names
                     set_fn = getattr(cache, 'set', None) or getattr(cache, 'add', None)
                     if set_fn:
+                        cache_payload = {
+                            "documents": list(result.documents),
+                            "answer": result.generated_answer,
+                            "cached": True,
+                        }
                         if asyncio.iscoroutinefunction(set_fn):
-                            await set_fn(query, result.documents, ttl=cache_ttl)
+                            await set_fn(query, cache_payload, ttl=cache_ttl)
                         else:
-                            set_fn(query, result.documents, ttl=cache_ttl)
+                            set_fn(query, cache_payload, ttl=cache_ttl)
             except Exception as e:
                 logger.error(f"Cache storage error: {e}")
         

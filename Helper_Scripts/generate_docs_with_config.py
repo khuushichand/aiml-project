@@ -50,13 +50,22 @@ def get_api_key_for_docs() -> str:
     auth_config = config.get('Authentication', {})
     auth_mode = auth_config.get('auth_mode', 'single_user').lower()
     
+    placeholders = {
+        "",
+        "default-secret-key-for-single-user",
+        "your_api_key_here",
+        "YOUR_API_KEY_HERE",
+        "change-me-in-production",
+        "CHANGE_ME_TO_SECURE_API_KEY",
+        "test-api-key-12345",
+    }
+
     if auth_mode == 'single_user':
-        # In single-user mode, return the actual API key
-        api_key = auth_config.get('single_user_api_key', 'default-secret-key-for-single-user')
-        return api_key
-    else:
-        # In multi-user mode, return a placeholder
-        return "YOUR_API_KEY_HERE"
+        api_key = auth_config.get('single_user_api_key', '').strip()
+        return api_key if api_key and api_key not in placeholders else "YOUR_API_KEY"
+
+    # Multi-user mode: always return placeholder
+    return "YOUR_API_KEY"
 
 
 def get_base_url() -> str:

@@ -233,7 +233,7 @@
     MCP: 'Manage Model Context Protocol host settings, tokens, and exposed tools.',
     'MCP-Unified': 'Unified MCP service configuration including tool registry and RBAC.',
     Logging: 'Direct logs to files or services, adjust verbosity, and enable observability hooks.',
-    Moderation: 'Configure chat guardrails: enablement, input/output actions, redact replacement, blocklist path, and per-user overrides file.',
+    Moderation: 'Configure chat guardrails: enablement, input/output actions, redact replacement, blocklist path, and per-user overrides file. Managed blocklist uses ETag/If-Match headers to protect concurrent edits.',
   };
   const MODULE_WALKTHROUGHS = {
     chat: {

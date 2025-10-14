@@ -231,13 +231,13 @@ class QueueBackend(ABC):
         pass
     
     @abstractmethod
-    async def renew_lease(self, lease_id: str, expires_at: datetime) -> bool:
+    async def renew_lease(self, task_id: str, lease_id: str) -> bool:
         """
         Renew an existing lease.
         
         Args:
-            lease_id: Lease to renew
-            expires_at: New expiration time
+            task_id: Task whose lease should be renewed
+            lease_id: Lease identifier
             
         Returns:
             True if lease was renewed

@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 
 
 # --- Fixtures defined locally in this file ---
-API_BEARER="default-secret-key-for-single-user"
+API_BEARER = os.getenv("API_BEARER", "test-api-key-12345")
 
 @pytest.fixture
 def mock_user():
@@ -145,7 +145,7 @@ def valid_auth_token() -> str:
             return api_bearer
         else:
             # Default token for single-user mode with Bearer prefix
-            return "Bearer default-secret-key-for-single-user"
+            return f"Bearer {API_BEARER}"
 
 
 # --- Provider lists and helpers defined locally for this test file ---

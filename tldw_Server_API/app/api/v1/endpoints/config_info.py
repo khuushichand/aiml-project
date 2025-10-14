@@ -67,12 +67,18 @@ def load_safe_config() -> Dict:
     
     # In single-user mode, we can expose the API key for documentation
     if auth_mode == 'single_user':
-        api_key = config.get('Authentication', 'single_user_api_key', 
-                           fallback='default-secret-key-for-single-user')
-        safe_config["api_key_for_docs"] = api_key
+        api_key = config.get('Authentication', 'single_user_api_key', fallback='').strip()
+        placeholders = {
+            "",
+            "your_api_key_here",
+            "YOUR_API_KEY_HERE",
+            "change-me-in-production",
+            "CHANGE_ME_TO_SECURE_API_KEY",
+            "test-api-key-12345",
+        }
+        safe_config["api_key_for_docs"] = "" if api_key in placeholders else api_key
     else:
-        # In multi-user mode, provide a placeholder
-        safe_config["api_key_for_docs"] = "YOUR_API_KEY_HERE"
+        safe_config["api_key_for_docs"] = ""
     
     # Check which LLM providers are configured (without exposing keys)
     configured_providers = []
@@ -127,20 +133,20 @@ async def get_documentation_config():
     return {
         "configured": config.get("configured", False),
         "auth_mode": config.get("auth_mode", "single_user"),
-        "api_key": config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+        "api_key": config.get("api_key_for_docs") or "YOUR_API_KEY",
         "base_url": base_url,
         "configured_providers": config.get("configured_llm_providers", []),
         "examples": {
             "python": generate_python_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             ),
             "curl": generate_curl_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             ),
             "javascript": generate_js_example(
-                config.get("api_key_for_docs", "default-secret-key-for-single-user"),
+                config.get("api_key_for_docs") or "YOUR_API_KEY",
                 base_url
             )
         }

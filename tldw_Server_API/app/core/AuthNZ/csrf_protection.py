@@ -192,6 +192,54 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         self.token_manager = CSRFTokenManager()
         logger.info(f"CSRF Protection Middleware initialized (enabled={enabled})")
     
+    async def _resolve_user_id(self, request: Request) -> Optional[int]:
+        """Resolve user identifier prior to dependency execution when binding required."""
+        try:
+            existing = getattr(request.state, "user_id", None)
+            if isinstance(existing, int):
+                return existing
+        except Exception:
+            existing = None
+        # Attempt to decode Authorization bearer token
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if token:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                    payload = get_jwt_service().decode_access_token(token)
+                    user_id = payload.get("user_id") or payload.get("sub")
+                    if isinstance(user_id, str):
+                        user_id = int(user_id)
+                    if isinstance(user_id, int):
+                        try:
+                            request.state.user_id = user_id
+                        except Exception:
+                            pass
+                        return user_id
+                except Exception as exc:
+                    logger.debug(f"CSRF binding: bearer token decode failed: {exc}")
+        # Attempt API key lookup
+        api_key = request.headers.get("X-API-KEY")
+        if api_key:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+                manager = await get_api_key_manager()
+                info = await manager.validate_api_key(
+                    api_key=api_key,
+                    ip_address=request.client.host if request.client else None
+                )
+                user_id = info.get("user_id") if info else None
+                if isinstance(user_id, int):
+                    try:
+                        request.state.user_id = user_id
+                    except Exception:
+                        pass
+                    return user_id
+            except Exception as exc:
+                logger.debug(f"CSRF binding: API key resolution failed: {exc}")
+        return None
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Process request with CSRF protection
@@ -213,13 +261,19 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         
         # Check if this request needs CSRF protection
         if self.token_manager.should_protect(request):
+            if get_settings().CSRF_BIND_TO_USER:
+                user_id = await self._resolve_user_id(request)
+            else:
+                try:
+                    user_id = getattr(request.state, 'user_id', None)
+                except Exception:
+                    user_id = None
             # Get tokens
             cookie_token = request.cookies.get(self.token_manager.token_cookie_name)
             header_token = request.headers.get(self.token_manager.token_header_name)
             
             # Validate tokens
-            uid = getattr(request.state, 'user_id', None)
-            if not self.token_manager.validate_token(cookie_token, header_token, uid):
+            if not self.token_manager.validate_token(cookie_token, header_token, user_id):
                 logger.warning(
                     f"CSRF token validation failed for {request.method} {request.url.path} "
                     f"from {request.client.host if request.client else 'unknown'}"

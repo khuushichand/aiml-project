@@ -442,8 +442,8 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 
 ### Authentication Improvements
 - **Enhanced API Key Support**: Updated `verify_api_key` function to support:
-  - Default development key: `default-secret-key-for-single-user`
-  - Environment variable configuration via `API_BEARER`
+  - Single-user deployments must set `SINGLE_USER_API_KEY` (e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+  - Environment variable configuration via `SINGLE_USER_API_KEY` or legacy `API_BEARER`
   - OpenAI-style `sk-` prefixed keys for compatibility
   - Proper error responses matching OpenAI format
 

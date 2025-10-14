@@ -184,21 +184,29 @@ class AsyncChunker:
                     method, max_size, overlap, **options
                 )
                 
-                # Yield all but the last chunk and base overlap on the last yielded chunk
-                last_yielded = None
-                for chunk in chunks[:-1]:
-                    yield chunk
-                    last_yielded = chunk
-
-                # Keep last_yielded tail as overlap to ensure adjacent yielded chunks share words/chars
-                if last_yielded and overlap_size > 0:
-                    if (method or '').lower() == 'words':
-                        toks = last_yielded.split()
-                        overlap_buffer = ' '.join(toks[-overlap_size:]) if toks else ''
+                # Overlap handling: when overlap>0, we can yield all chunks now and carry only the tail.
+                # When overlap==0, yield all but the last and carry the last chunk for the next iteration.
+                if overlap_size > 0:
+                    for chunk in chunks:
+                        yield chunk
+                    last = chunks[-1] if chunks else None
+                    if last:
+                        if (method or '').lower() == 'words':
+                            toks = last.split()
+                            overlap_buffer = ' '.join(toks[-overlap_size:]) if toks else ''
+                        else:
+                            overlap_buffer = last[-overlap_size:] if len(last) > overlap_size else last
                     else:
-                        overlap_buffer = last_yielded[-overlap_size:] if len(last_yielded) > overlap_size else last_yielded
+                        overlap_buffer = ""
                 else:
-                    overlap_buffer = ""
+                    for chunk in chunks[:-1]:
+                        yield chunk
+                    withheld = chunks[-1] if chunks else None
+                    if withheld:
+                        # No explicit overlap: carry full last chunk forward so it will be emitted on next iteration/final flush
+                        overlap_buffer = withheld
+                    else:
+                        overlap_buffer = ""
                 
                 buffer = ""
         

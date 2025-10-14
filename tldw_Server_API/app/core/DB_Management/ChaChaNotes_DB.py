@@ -4961,7 +4961,7 @@ UPDATE db_schema_version
             FROM {fts_table_name} fts
             JOIN {main_table_name} main ON fts.rowid = main.id
             WHERE fts.{fts_match_cols_or_table} MATCH ? AND main.deleted = 0
-            ORDER BY rank
+            ORDER BY bm25(fts)
             LIMIT ?
         """
         try:
@@ -5419,7 +5419,7 @@ UPDATE db_schema_version
                          JOIN notes main ON fts.rowid = main.rowid
                 WHERE fts.notes_fts MATCH ?
                   AND main.deleted = 0
-                ORDER BY rank LIMIT ?
+                ORDER BY bm25(fts) LIMIT ?
                 """
         try:
             cursor = self.execute_query(query, (safe_search_term, limit))

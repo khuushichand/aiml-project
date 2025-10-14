@@ -1158,6 +1158,79 @@
                         enableCopy: true,
                         enableCollapse: true
                     });
+
+                    // Notes list: render summary and table view
+                    if (endpointId === 'notesList') {
+                        try {
+                            const notes = (response && (response.notes || response.items || response.results)) || [];
+                            const count = (typeof response.count === 'number') ? response.count : notes.length;
+                            const total = (typeof response.total === 'number') ? response.total : '';
+                            const limit = (typeof response.limit === 'number') ? response.limit : '';
+                            const offset = (typeof response.offset === 'number') ? response.offset : '';
+
+                            const s = document.getElementById('notesList_summary');
+                            if (s) {
+                                s.textContent = `count=${count}  total=${total}  limit=${limit}  offset=${offset}`;
+                            }
+
+                            const tbl = document.getElementById('notesList_table');
+                            if (tbl) {
+                                const tbody = tbl.querySelector('tbody');
+                                if (tbody) {
+                                    if (!Array.isArray(notes) || notes.length === 0) {
+                                        tbody.innerHTML = '<tr><td colspan="4"><em>No notes</em></td></tr>';
+                                    } else {
+                                        const rows = notes.map(n => {
+                                            const title = Utils.escapeHtml(String(n.title ?? 'Untitled'));
+                                            const id = Utils.escapeHtml(String(n.id ?? ''));
+                                            const ver = Utils.escapeHtml(String(n.version ?? ''));
+                                            const lm = Utils.escapeHtml(String(n.last_modified ?? n.updated_at ?? ''));
+                                            return `<tr><td>${title}</td><td>${id}</td><td>${ver}</td><td>${lm}</td></tr>`;
+                                        }).join('');
+                                        tbody.innerHTML = rows;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to render notes list summary/table:', e);
+                        }
+                    }
+
+                    // Notes search: render summary and table view
+                    if (endpointId === 'notesSearch') {
+                        try {
+                            const notes = Array.isArray(response)
+                                ? response
+                                : ((response && (response.notes || response.items || response.results)) || []);
+                            const count = Array.isArray(notes) ? notes.length : 0;
+
+                            const s = document.getElementById('notesSearch_summary');
+                            if (s) {
+                                s.textContent = `count=${count}`;
+                            }
+
+                            const tbl = document.getElementById('notesSearch_table');
+                            if (tbl) {
+                                const tbody = tbl.querySelector('tbody');
+                                if (tbody) {
+                                    if (!Array.isArray(notes) || notes.length === 0) {
+                                        tbody.innerHTML = '<tr><td colspan="4"><em>No results</em></td></tr>';
+                                    } else {
+                                        const rows = notes.map(n => {
+                                            const title = Utils.escapeHtml(String(n.title ?? 'Untitled'));
+                                            const id = Utils.escapeHtml(String(n.id ?? ''));
+                                            const ver = Utils.escapeHtml(String(n.version ?? ''));
+                                            const lm = Utils.escapeHtml(String(n.last_modified ?? n.updated_at ?? ''));
+                                            return `<tr><td>${title}</td><td>${id}</td><td>${ver}</td><td>${lm}</td></tr>`;
+                                        }).join('');
+                                        tbody.innerHTML = rows;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to render notes search summary/table:', e);
+                        }
+                    }
                 } else {
                     responseArea.textContent = response;
                 }
@@ -1261,6 +1334,62 @@
             } catch (e) {
                 alert('Failed to submit: ' + (e?.message || e));
             }
+        }
+
+        // Notes: quick download of visible list/search via GET export
+        async function notesExportDownload(params, filenameBase) {
+            try {
+                const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+                const url = new URL(`${baseUrl}/api/v1/notes/export`);
+                // Build query params
+                Object.entries(params || {}).forEach(([k, v]) => {
+                    if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, String(v));
+                });
+                // Force CSV format
+                url.searchParams.set('format', 'csv');
+
+                const headers = {};
+                const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+                if (token) headers['X-API-KEY'] = token;
+
+                const resp = await fetch(url.toString(), { method: 'GET', headers });
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    throw new Error(`HTTP ${resp.status}: ${text}`);
+                }
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                const href = URL.createObjectURL(blob);
+                a.href = href;
+                a.download = `${filenameBase || 'notes_export'}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(href);
+                Toast.success('Downloaded CSV');
+            } catch (e) {
+                Toast.error(e?.message || String(e));
+            }
+        }
+
+        async function notesDownloadVisibleList() {
+            try {
+                const limit = document.getElementById('notesList_limit')?.value || '20';
+                const offset = document.getElementById('notesList_offset')?.value || '0';
+                const include_keywords = document.getElementById('notesList_include_keywords')?.checked ? 'true' : '';
+                const filename = document.getElementById('notesList_dl_filename')?.value || 'notes_visible';
+                await notesExportDownload({ limit, offset, include_keywords }, filename);
+            } catch (e) { /* no-op */ }
+        }
+
+        async function notesDownloadVisibleSearch() {
+            try {
+                const q = document.getElementById('notesSearch_query')?.value || '';
+                const limit = document.getElementById('notesSearch_limit')?.value || '10';
+                const include_keywords = document.getElementById('notesSearch_include_keywords')?.checked ? 'true' : '';
+                const filename = document.getElementById('notesSearch_dl_filename')?.value || 'notes_search';
+                await notesExportDownload({ q, limit, offset: 0, include_keywords }, filename);
+            } catch (e) { /* no-op */ }
         }
     </script>
 </body>

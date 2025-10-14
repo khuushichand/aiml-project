@@ -1903,12 +1903,23 @@
             <span class="endpoint-path">/api/v1/moderation/blocklist/managed - Managed Blocklist</span>
         </h2>
         <p>List, append, and remove blocklist entries with concurrency protection. Uses a content hash version as ETag.</p>
+        <p style="font-size: 0.9em; color: #666; margin-top: -6px;">
+            Tip: Managed operations require sending the current ETag in an <code>If-Match</code> header.
+            Click <strong>Load</strong> to refresh and keep the ETag up to date. If someone else updates the list first,
+            your append/delete will return <code>412 Precondition Failed</code>—just reload and try again.
+        </p>
 
         <div class="columns">
             <div class="column">
                 <div class="form-group">
                     <label for="moderationManaged_filter">Filter:</label>
                     <input id="moderationManaged_filter" type="text" placeholder="Search patterns..." oninput="renderManagedBlocklist()" />
+                    <div style="margin-top:6px;">
+                        <label style="font-size:0.9em; color:#666;">
+                            <input id="moderationManaged_onlyInvalid" type="checkbox" onchange="renderManagedBlocklist()" />
+                            Only invalid
+                        </label>
+                    </div>
                 </div>
             </div>
             <div class="column">
@@ -1918,6 +1929,7 @@
                 </div>
                 <div class="btn-group">
                     <button class="api-button" onclick="moderationAppendManaged()">Append</button>
+                    <button class="api-button" onclick="moderationLintManaged()">Lint</button>
                 </div>
             </div>
         </div>
@@ -1928,22 +1940,39 @@
         </div>
 
         <div id="moderationManaged_table"></div>
+        <div id="moderationManaged_legend" style="font-size: 0.9em; color: #666; margin-top: 6px;">
+            Legend: <span class="lint-ok"><span class="lint-icon">✓</span>ok</span>,
+            <span class="lint-invalid"><span class="lint-icon">⚠</span>invalid</span>. Label shows pattern type (literal/regex/comment/empty).
+        </div>
         <h3>Status:</h3>
         <pre id="moderationManaged_status">---</pre>
     </div>
 
     <script>
         window._moderationManaged = { version: '', items: [] };
+        window._moderationManagedLint = {}; // id -> lint item
 
         function renderManagedBlocklist() {
             const container = document.getElementById('moderationManaged_table');
             const filter = (document.getElementById('moderationManaged_filter').value || '').toLowerCase();
-            const items = (window._moderationManaged.items || []).filter(it => !filter || String(it.line).toLowerCase().includes(filter));
-            let html = '<table class="table"><thead><tr><th>ID</th><th>Pattern</th><th>Actions</th></tr></thead><tbody>';
+            let items = (window._moderationManaged.items || []).filter(it => !filter || String(it.line).toLowerCase().includes(filter));
+            const onlyInvalid = !!document.getElementById('moderationManaged_onlyInvalid')?.checked;
+            if (onlyInvalid) {
+                items = items.filter((it) => {
+                    const lint = window._moderationManagedLint[String(it.id)] || null;
+                    return lint && lint.ok === false;
+                });
+            }
+            let html = '<table class="table"><thead><tr><th>ID</th><th>Pattern</th><th>Lint</th><th>Actions</th></tr></thead><tbody>';
             for (const it of items) {
+                const lint = window._moderationManagedLint[String(it.id)] || null;
+                const lintText = lint ? (lint.ok ? 'ok' : (lint.error || 'invalid')) : '';
+                const lintClass = lint ? (lint.ok ? 'ok' : 'invalid') : '';
+                const lintIcon = lint ? (lint.ok ? '✓' : '⚠') : '';
                 html += `<tr>
                     <td>${it.id}</td>
                     <td><code>${Utils.escapeHtml(String(it.line))}</code></td>
+                    <td><span class="lint-${lintClass}" title="${Utils.escapeHtml(lintText)}"><span class="lint-icon">${lintIcon}</span>${Utils.escapeHtml(lint ? (lint.pattern_type || '') : '')}</span></td>
                     <td><button class="btn btn-danger" onclick="moderationDeleteManaged(${it.id})">Delete</button></td>
                 </tr>`;
             }
@@ -1955,6 +1984,7 @@
             try {
                 const res = await apiClient.get('/api/v1/moderation/blocklist/managed');
                 window._moderationManaged = res || { version: '', items: [] };
+                await moderationLintManagedAll();
                 renderManagedBlocklist();
                 document.getElementById('moderationManaged_status').textContent = `Loaded version: ${res.version}`;
                 Toast.success('Loaded managed blocklist');
@@ -1970,6 +2000,14 @@
             try {
                 const line = (document.getElementById('moderationManaged_newLine').value || '').trim();
                 if (!line) { Toast.error('Enter a line'); return; }
+                // Automatic lint before append
+                const lint = await apiClient.post('/api/v1/moderation/blocklist/lint', { line });
+                const invalid = (lint.items || []).filter(it => !it.ok);
+                if (invalid.length > 0) {
+                    document.getElementById('moderationManaged_status').textContent = JSON.stringify(lint, null, 2);
+                    Toast.error('Lint failed: fix the line before append');
+                    return;
+                }
                 const res = await apiClient.post('/api/v1/moderation/blocklist/append', { line }, { headers: { 'If-Match': window._moderationManaged.version }});
                 window._moderationManaged.version = res.version;
                 await moderationLoadManaged();
@@ -1993,6 +2031,40 @@
                 Toast.error('Failed to delete');
             }
         }
+
+        async function moderationLintManaged() {
+            try {
+                const line = (document.getElementById('moderationManaged_newLine').value || '').trim();
+                if (!line) { Toast.error('Enter a line'); return; }
+                const res = await apiClient.post('/api/v1/moderation/blocklist/lint', { line });
+                const invalid = (res.items || []).filter(it => !it.ok);
+                const msg = `Lint: ${res.valid_count} valid, ${res.invalid_count} invalid`;
+                document.getElementById('moderationManaged_status').textContent = JSON.stringify(res, null, 2);
+                if (invalid.length === 0) {
+                    Toast.success(msg);
+                } else {
+                    Toast.error(msg);
+                }
+            } catch (e) {
+                document.getElementById('moderationManaged_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Lint failed');
+            }
+        }
+
+        async function moderationLintManagedAll() {
+            try {
+                const lines = (window._moderationManaged.items || []).map(it => it.line);
+                if (!lines.length) { window._moderationManagedLint = {}; return; }
+                const res = await apiClient.post('/api/v1/moderation/blocklist/lint', { lines });
+                const map = {};
+                // Map by sequential index (same order as items), which equals the managed id
+                (res.items || []).forEach((it, i) => { map[String(i)] = it; });
+                window._moderationManagedLint = map;
+            } catch (e) {
+                // Non-fatal; keep table rendering
+                window._moderationManagedLint = {};
+            }
+        }
     </script>
     <div class="endpoint-section" id="moderationBlocklist">
         <h2>
@@ -2008,11 +2080,28 @@
 
         <div class="btn-group">
             <button class="api-button" onclick="moderationLoadBlocklist()">Load</button>
+            <button class="api-button" onclick="moderationLintBlocklist()">Lint</button>
             <button class="api-button" onclick="moderationSaveBlocklist()">Save</button>
+        </div>
+
+        <div id="moderationBlocklist_legend" style="font-size: 0.9em; color: #666; margin-top: 6px;">
+            Legend: <span class="lint-ok"><span class="lint-icon">✓</span>ok</span>,
+            <span class="lint-invalid"><span class="lint-icon">⚠</span>invalid</span>. Lint results are shown in the Status box.
+        </div>
+
+        <div style="margin-top:6px;">
+            <label style="font-size:0.9em; color:#666;">
+                <input id="moderationBlocklist_onlyInvalid" type="checkbox" onchange="renderBlocklistInvalidList()" />
+                Only invalid (from last lint)
+            </label>
         </div>
 
         <h3>Status:</h3>
         <pre id="moderationBlocklist_status">---</pre>
+        <div id="moderationBlocklist_invalidList" style="margin-top:8px;"></div>
+        <div id="moderationBlocklist_invalidActions" class="btn-group" style="display:none; margin-top:6px;">
+            <button class="btn btn-secondary" onclick="moderationCopyInvalidBlocklist()">Copy invalid lines</button>
+        </div>
     </div>
 
     <script>
@@ -2038,6 +2127,82 @@
             } catch (e) {
                 document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(e.response || e, null, 2);
                 Toast.error('Failed to save blocklist');
+            }
+        }
+
+        // Store last lint response for raw blocklist
+        window._moderationBlocklistLastLint = null;
+
+        async function moderationLintBlocklist() {
+            try {
+                const raw = document.getElementById('moderationBlocklist_text').value || '';
+                const lines = raw.split(/\r?\n/);
+                const res = await apiClient.post('/api/v1/moderation/blocklist/lint', { lines });
+                const invalid = (res.items || []).filter(it => !it.ok);
+                const msg = `Lint: ${res.valid_count} valid, ${res.invalid_count} invalid`;
+                document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(res, null, 2);
+                window._moderationBlocklistLastLint = res;
+                renderBlocklistInvalidList();
+                if (invalid.length === 0) {
+                    Toast.success(msg);
+                } else {
+                    Toast.error(msg);
+                }
+            } catch (e) {
+                document.getElementById('moderationBlocklist_status').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Lint failed');
+            }
+        }
+
+        function renderBlocklistInvalidList() {
+            const container = document.getElementById('moderationBlocklist_invalidList');
+            const onlyInvalid = !!document.getElementById('moderationBlocklist_onlyInvalid')?.checked;
+            const actions = document.getElementById('moderationBlocklist_invalidActions');
+            if (!onlyInvalid) { container.innerHTML = ''; if (actions) actions.style.display = 'none'; return; }
+            const res = window._moderationBlocklistLastLint;
+            if (!res || !Array.isArray(res.items)) { container.innerHTML = '<em>No lint results yet</em>'; return; }
+            const invalid = (res.items || []).filter(it => it && it.ok === false);
+            if (!invalid.length) { container.innerHTML = '<em>No invalid items</em>'; if (actions) actions.style.display = 'none'; return; }
+            let html = '<table class="simple-table"><thead><tr><th>#</th><th>Type</th><th>Error</th><th>Line</th></tr></thead><tbody>';
+            for (const it of invalid) {
+                const idx = typeof it.index === 'number' ? it.index : '';
+                const type = it.pattern_type || '';
+                const err = it.error || 'invalid';
+                const line = (it.line || '').slice(0, 120);
+                html += `<tr>
+                    <td>${idx}</td>
+                    <td>${Utils.escapeHtml(String(type))}</td>
+                    <td class="lint-invalid">${Utils.escapeHtml(String(err))}</td>
+                    <td><code>${Utils.escapeHtml(String(line))}</code></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+            if (actions) actions.style.display = 'block';
+        }
+
+        async function moderationCopyInvalidBlocklist() {
+            try {
+                const res = window._moderationBlocklistLastLint;
+                if (!res || !Array.isArray(res.items)) { Toast.error('No lint results'); return; }
+                const invalid = (res.items || []).filter(it => it && it.ok === false && typeof it.line === 'string');
+                if (!invalid.length) { Toast.error('No invalid lines'); return; }
+                const text = invalid.map(it => it.line).join('\n');
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                    Toast.success('Copied invalid lines');
+                } else {
+                    // Fallback
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    if (ok) Toast.success('Copied invalid lines'); else Toast.error('Copy failed');
+                }
+            } catch (e) {
+                Toast.error('Copy failed');
             }
         }
     </script>

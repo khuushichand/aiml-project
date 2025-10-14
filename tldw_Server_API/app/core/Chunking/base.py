@@ -240,6 +240,8 @@ class ChunkerConfig:
                  enable_cache: bool = True,
                  cache_size: int = 100,
                  cache_max_text_length: int = 2_000_000,
+                 min_text_length_to_cache: int = 0,
+                 max_text_length_to_cache: int = 2_000_000,
                  max_text_size: int = 100_000_000,  # 100MB
                  enable_metrics: bool = True):
         """
@@ -274,6 +276,10 @@ class ChunkerConfig:
             raise ValueError(f"max_text_size must be a positive integer, got {max_text_size}")
         if not isinstance(cache_max_text_length, int) or cache_max_text_length <= 0:
             raise ValueError(f"cache_max_text_length must be a positive integer, got {cache_max_text_length}")
+        if not isinstance(min_text_length_to_cache, int) or min_text_length_to_cache < 0:
+            raise ValueError(f"min_text_length_to_cache must be a non-negative integer, got {min_text_length_to_cache}")
+        if not isinstance(max_text_length_to_cache, int) or max_text_length_to_cache <= 0:
+            raise ValueError(f"max_text_length_to_cache must be a positive integer, got {max_text_length_to_cache}")
 
         self.default_method = default_method
         self.default_max_size = default_max_size
@@ -282,6 +288,9 @@ class ChunkerConfig:
         self.enable_cache = enable_cache
         self.cache_size = cache_size
         self.cache_max_text_length = cache_max_text_length
+        # New cache policy thresholds (preferred)
+        self.min_text_length_to_cache = min_text_length_to_cache
+        self.max_text_length_to_cache = max_text_length_to_cache
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
         

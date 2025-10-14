@@ -139,9 +139,9 @@ class SecretManager:
                 env_var="SINGLE_USER_API_KEY",
                 config_section="API", 
                 config_key="api_bearer",  # Existing key in config
-                required=False,
-                default_value="default-secret-key-for-single-user",
-                min_length=16,
+                required=True,
+                min_length=24,
+                rotation_days=365,
                 description="API key for single-user authentication mode"
             ),
             

@@ -2141,7 +2141,9 @@ async function oaIngestBatchSubmit() {
         perform_analysis: document.getElementById('oaIngestBatch_perform_analysis').checked
     };
     // Display cURL
-    const curl = apiClient.generateCurl('POST', '/api/v1/paper-search/ingest/batch', { body: payload });
+    const curl = (typeof apiClient.generateCurlV2 === 'function'
+        ? apiClient.generateCurlV2('POST', '/api/v1/paper-search/ingest/batch', { body: payload })
+        : apiClient.generateCurl('POST', '/api/v1/paper-search/ingest/batch', { body: payload }));
     const curlEl = document.getElementById('oaIngestBatch_curl');
     if (curlEl) curlEl.textContent = curl;
     // Post
@@ -2187,7 +2189,9 @@ async function pmcBatchIngestSubmit() {
 
     // Show a representative cURL for the first item
     const first = items[0];
-    const curl = apiClient.generateCurl('POST', '/api/v1/paper-search/pmc-oa/ingest-pdf', { query: { pmcid: first.pmcid, title: first.title, author: first.author, keywords: (first.keywords || []).join(',') }, body: paramsCommon });
+    const curl = (typeof apiClient.generateCurlV2 === 'function'
+        ? apiClient.generateCurlV2('POST', '/api/v1/paper-search/pmc-oa/ingest-pdf', { query: { pmcid: first.pmcid, title: first.title, author: first.author, keywords: (first.keywords || []).join(',') }, body: paramsCommon })
+        : apiClient.generateCurl('POST', '/api/v1/paper-search/pmc-oa/ingest-pdf', { query: { pmcid: first.pmcid, title: first.title, author: first.author, keywords: (first.keywords || []).join(',') }, body: paramsCommon }));
     const curlEl = document.getElementById('pmcBatchIngest_curl');
     if (curlEl) curlEl.textContent = curl + '\n# ... repeated for remaining items';
 

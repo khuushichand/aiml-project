@@ -59,6 +59,10 @@ Admin API Endpoints
   - `POST /api/v1/moderation/blocklist/append` (requires `If-Match`) → append line.
   - `DELETE /api/v1/moderation/blocklist/{id}` (requires `If-Match`).
   - `PUT /api/v1/moderation/blocklist` (replace entire file).
+  - `POST /api/v1/moderation/blocklist/lint` (dry-run validation) → validate one line or many without persisting.
+    - Request: `{ line: string }` or `{ lines: string[] }`
+    - Response: `{ items: [{ index, line, ok, pattern_type: 'literal'|'regex'|'comment'|'empty', action?, replacement?, categories?, error?, warning?, sample? }], valid_count, invalid_count }`
+    - Notes: Use lint to pre-check regex safety (catastrophic patterns are rejected) and parse per-pattern actions (`block|redact|warn`) and `#categories` before appending or saving.
 - Per-user Overrides:
   - `GET /api/v1/moderation/users` → list all.
   - `GET /api/v1/moderation/users/{user_id}` → get.
@@ -104,4 +108,3 @@ Testing
 
 Notes
 - Runtime overrides are non-destructive and can be removed by deleting keys or the overrides file.
-

@@ -775,16 +775,19 @@ class MediaDBRetriever(BaseRetriever):
     
     def _build_fts_query(self, query: str) -> str:
         """Build FTS5 query with proper escaping."""
-        # Basic tokenization and escaping
-        terms = query.split()
+        text = (query or "").strip()
+        if not text:
+            return "*"
+        safe_query = text.replace('"', '""')
+        terms = safe_query.split()
         
         # Quote phrases
         if len(terms) > 1:
             # Use phrase search for multi-word queries
-            return f'"{query}"'
+            return f'"{safe_query}"'
         else:
             # Single term with prefix matching
-            return f'{query}*'
+            return f'{safe_query}*'
 
 
 class NotesDBRetriever(BaseRetriever):
@@ -818,7 +821,7 @@ class NotesDBRetriever(BaseRetriever):
 
         documents = []
 
-        # Build SQL query
+        # Build SQL query compatible with ChaChaNotes schema (no notebooks/tags tables)
         sql = """
             SELECT 
                 n.id,
@@ -827,27 +830,9 @@ class NotesDBRetriever(BaseRetriever):
                 n.created_at,
                 n.last_modified AS updated_at
             FROM notes n
-            WHERE (n.title LIKE ? OR n.content LIKE ?)
+            WHERE n.deleted = 0 AND (n.title LIKE ? OR n.content LIKE ?)
         """
-        
         params = [f"%{query}%", f"%{query}%"]
-        
-        # Add notebook filter
-        if notebook_id:
-            sql += " AND n.notebook_id = ?"
-            params.append(notebook_id)
-        
-        # Add tag filter
-        if self.config.tags_filter:
-            sql += """ 
-                AND n.id IN (
-                    SELECT note_id FROM note_tags 
-                    WHERE tag_id IN (
-                        SELECT id FROM tags WHERE name IN ({})
-                    )
-                )
-            """.format(",".join("?" * len(self.config.tags_filter)))
-            params.extend(self.config.tags_filter)
         
         # Optional restriction to specific note IDs (e.g., from access control)
         allowed_note_ids = kwargs.get("allowed_note_ids")
@@ -1296,7 +1281,14 @@ class CharacterCardsRetriever(BaseRetriever):
 class MultiDatabaseRetriever:
     """Orchestrates retrieval across multiple databases."""
 
-    def __init__(self, db_paths: Dict[str, str], user_id: str = "0", *, media_db: Optional[Any] = None):
+    def __init__(
+        self,
+        db_paths: Dict[str, str],
+        user_id: str = "0",
+        *,
+        media_db: Optional[Any] = None,
+        chacha_db: Optional[Any] = None
+    ):
         """
         Initialize multi-database retriever.
 
@@ -1314,17 +1306,20 @@ class MultiDatabaseRetriever:
 
         if "notes_db" in db_paths:
             self.retrievers[DataSource.NOTES] = NotesDBRetriever(
-                db_paths["notes_db"]
+                db_paths["notes_db"],
+                chacha_db=chacha_db,
             )
 
         if "prompts_db" in db_paths:
             self.retrievers[DataSource.PROMPTS] = PromptsDBRetriever(
-                db_paths["prompts_db"]
+                db_paths["prompts_db"],
+                chacha_db=chacha_db,
             )
 
         if "character_cards_db" in db_paths:
             self.retrievers[DataSource.CHARACTER_CARDS] = CharacterCardsRetriever(
-                db_paths["character_cards_db"]
+                db_paths["character_cards_db"],
+                chacha_db=chacha_db,
             )
         # Optional: Claims retriever if provided
         if "claims_db" in db_paths:

@@ -27,16 +27,46 @@
                 <input type="checkbox" id="notesList_include_keywords"> Include Keywords
             </label>
         </div>
-        
-        <button class="api-button" onclick="makeRequest('notesList', 'GET', '/api/v1/notes', 'query')">
-            List Notes
-        </button>
+        <div class="columns">
+            <div class="column">
+                <button class="api-button" onclick="makeRequest('notesList', 'GET', '/api/v1/notes', 'query')">
+                    List Notes
+                </button>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <input type="text" id="notesList_dl_filename" placeholder="Filename (no extension)" value="notes_visible">
+                    <button class="api-button" onclick="notesDownloadVisibleList()">Download Visible (CSV)</button>
+                </div>
+            </div>
+        </div>
+
         
         <h3>cURL Command:</h3>
         <pre id="notesList_curl">---</pre>
         
         <h3>Response:</h3>
         <pre id="notesList_response">---</pre>
+
+        <h3>Summary:</h3>
+        <div id="notesList_summary" class="api-summary">(no data)</div>
+
+        <h3>Notes (Table View):</h3>
+        <div class="table-responsive">
+            <table id="notesList_table" class="api-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>ID</th>
+                        <th>Version</th>
+                        <th>Last Modified</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="4"><em>No data</em></td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <div class="endpoint-section" id="notesSearch">
@@ -52,20 +82,55 @@
         </div>
 
         <div class="form-group">
+            <label for="notesSearch_limit">Limit:</label>
+            <input type="number" id="notesSearch_limit" value="10" min="1" max="100">
+        </div>
+
+        <div class="form-group">
             <label>
                 <input type="checkbox" id="notesSearch_include_keywords"> Include Keywords
             </label>
         </div>
         
-        <button class="api-button" onclick="makeRequest('notesSearch', 'GET', '/api/v1/notes/search', 'query')">
-            Search Notes
-        </button>
+        <div class="columns">
+            <div class="column">
+                <button class="api-button" onclick="makeRequest('notesSearch', 'GET', '/api/v1/notes/search', 'query')">
+                    Search Notes
+                </button>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <input type="text" id="notesSearch_dl_filename" placeholder="Filename (no extension)" value="notes_search">
+                    <button class="api-button" onclick="notesDownloadVisibleSearch()">Download Visible (CSV)</button>
+                </div>
+            </div>
+        </div>
         
         <h3>cURL Command:</h3>
         <pre id="notesSearch_curl">---</pre>
         
         <h3>Response:</h3>
         <pre id="notesSearch_response">---</pre>
+
+        <h3>Summary:</h3>
+        <div id="notesSearch_summary" class="api-summary">(no data)</div>
+
+        <h3>Notes (Table View):</h3>
+        <div class="table-responsive">
+            <table id="notesSearch_table" class="api-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>ID</th>
+                        <th>Version</th>
+                        <th>Last Modified</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="4"><em>No data</em></td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <div class="endpoint-section" id="notesGet">
@@ -89,6 +154,99 @@
 
         <h3>Response:</h3>
         <pre id="notesGet_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="notesExportGet">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/notes/export - Export Notes (GET)</span>
+        </h2>
+        <p>Export notes via GET. Supports JSON or CSV (use Download toggle for CSV).</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="notesExportGet_q">Query (optional):</label>
+                    <input type="text" id="notesExportGet_q" placeholder="Search query for filtering">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="notesExportGet_limit">Limit:</label>
+                    <input type="number" id="notesExportGet_limit" value="100" min="1" max="10000">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="notesExportGet_offset">Offset:</label>
+                    <input type="number" id="notesExportGet_offset" value="0" min="0">
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="notesExportGet_include_keywords"> Include Keywords
+                    </label>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="notesExportGet_format">Format:</label>
+                    <select id="notesExportGet_format">
+                        <option value="json">json</option>
+                        <option value="csv" selected>csv</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="notesExportGet_download"> Download
+                    </label>
+                    <input type="text" id="notesExportGet_filename" placeholder="Filename (no extension)" value="notes_export">
+                </div>
+            </div>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('notesExportGet', 'GET', '/api/v1/notes/export', 'query')">
+            Export (GET)
+        </button>
+
+        <h3>cURL Command:</h3>
+        <pre id="notesExportGet_curl">---</pre>
+
+        <h3>Response:</h3>
+        <pre id="notesExportGet_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="notesExportPost">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/notes/export - Export Notes (POST)</span>
+        </h2>
+        <p>Export selected notes via POST by specifying note_ids. For CSV, use GET above or copy IDs and set format=csv here to view inline.</p>
+
+        <div class="form-group">
+            <label for="notesExportPost_payload">Export Payload (JSON):</label>
+            <textarea id="notesExportPost_payload" class="code-input" rows="8">{
+  "note_ids": ["note-id-1", "note-id-2"],
+  "include_keywords": true,
+  "format": "json"
+}</textarea>
+        </div>
+
+        <button class="api-button" onclick="makeRequest('notesExportPost', 'POST', '/api/v1/notes/export', 'json')">
+            Export (POST)
+        </button>
+
+        <h3>cURL Command:</h3>
+        <pre id="notesExportPost_curl">---</pre>
+
+        <h3>Response:</h3>
+        <pre id="notesExportPost_response">---</pre>
     </div>
 </div>
 

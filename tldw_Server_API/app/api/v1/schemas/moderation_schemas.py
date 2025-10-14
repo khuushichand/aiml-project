@@ -55,6 +55,36 @@ class BlocklistDeleteResponse(BaseModel):
     count: int
 
 
+class BlocklistLintRequest(BaseModel):
+    lines: Optional[List[str]] = None
+    line: Optional[str] = None
+
+    @field_validator('line')
+    @classmethod
+    def _ensure_any(cls, v, info):
+        # Validation occurs after both fields parsed; check neither set later in endpoint
+        return v
+
+
+class BlocklistLintItem(BaseModel):
+    index: int
+    line: str
+    ok: bool
+    pattern_type: Optional[Literal['literal', 'regex', 'comment', 'empty']] = None
+    action: Optional[Literal['block', 'redact', 'warn']] = None
+    replacement: Optional[str] = None
+    categories: Optional[List[str]] = None
+    error: Optional[str] = None
+    warning: Optional[str] = None
+    sample: Optional[str] = None
+
+
+class BlocklistLintResponse(BaseModel):
+    items: List[BlocklistLintItem]
+    valid_count: int
+    invalid_count: int
+
+
 class ModerationTestRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="User ID to apply effective policy")
     phase: Literal['input', 'output'] = Field('input', description="Moderation phase to test")

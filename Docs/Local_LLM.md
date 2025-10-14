@@ -1,104 +1,84 @@
 Local LLM Module
-================
 
-Purpose
--------
-- Manage and run local inference backends: llama.cpp, llamafile, Ollama, and HuggingFace.
-- Provide consistent server lifecycle (start/stop/status) and inference calls.
-- Standardize HTTP via httpx with retries and readiness polling.
+Overview
+- Manages local inference backends: llama.cpp and llamafile.
+- Standardizes HTTP via httpx, with retry/backoff helpers and readiness polling.
+- Adds safety: strict allowlists, optional passthrough, denylist for secrets, and path restrictions.
 
-Components
-----------
-- `tldw_Server_API/app/core/Local_LLM/LLM_Inference_Manager.py` — orchestrates handlers
-- Handlers:
-  - `LlamaCpp_Handler.py` — runs `llama.cpp/server` with GGUF models
-  - `Llamafile_Handler.py` — manages `llamafile` binary + models
-  - `Ollama_Handler.py` — integrates with `ollama` (local REST)
-  - `Huggingface_Handler.py` — local transformers models (no HTTP)
-- Shared utilities: `http_utils.py` (httpx client, retries, readiness, redaction)
+Key Paths
+- Handlers: tldw_Server_API/app/core/Local_LLM/{LlamaCpp_Handler.py,Llamafile_Handler.py}
+- Schemas: tldw_Server_API/app/core/Local_LLM/LLM_Inference_Schemas.py
+- HTTP utils: tldw_Server_API/app/core/Local_LLM/http_utils.py
+- SSE helpers: tldw_Server_API/app/core/LLM_Calls/sse.py
 
-Configuration
--------------
-Pydantic models define defaults and types (see `LLM_Inference_Schemas.py`). Typical keys:
+Config (LlamaCppConfig/LlamafileConfig)
+- allow_unvalidated_args: bool (default False)
+  - When True, unknown server_args keys pass through as --key value.
+  - Still subject to denylist and path safety.
+- allow_cli_secrets: bool (default False)
+  - When False, secret-like args (e.g., hf_token) are rejected. Use env vars.
+  - Hugging Face token: set HF_TOKEN in environment.
+- port_autoselect: bool (default True)
+  - If the requested port is busy, probe a small range for a free port.
+- port_probe_max: int (default 10)
+  - Number of ports to probe beyond the starting port.
+- allowed_paths: list[Path] (optional)
+  - Additional base directories permitted for file flags (grammar_file, lora, caches, logs, etc.).
 
-- Llama.cpp (`LlamaCppConfig`):
-  - `executable_path`: path to `llama.cpp/server` executable
-  - `models_dir`: directory containing `.gguf` models
-  - `default_host`, `default_port`, `default_ctx_size`, `default_n_gpu_layers`, `default_threads`
+Flag Mapping (llama.cpp)
+- Core: port, host, threads/t (-t), threads_batch/tb (--threads-batch), ctx_size/c (-c), n_gpu_layers/ngl/gpu_layers (-ngl)
+- Batching: batch_size/b (-b), ubatch_size/ub (--ubatch-size)
+- GPU & memory: main_gpu/mg (--main-gpu), split_mode/sm (--split-mode), tensor_split (--tensor-split)
+- Rope & scaling: rope_freq_base, rope_freq_scale/rope_scale (--rope-freq-*)
+- Rope scaling type: rope_scaling/rope_scaling_type (--rope-scaling)
+- KV & offload: main_kv (--main-kv), no_kv_offload (--no-kv-offload), cache_type_k/cache_type_v
+- Features: flash_attn (--flash-attn), cont_batching (--cont-batching)
+- Adapters: lora (repeatable), lora_scaled, lora_base, control_vector
+- HF model download: hf_repo, hf_file, hf_token (DENY by default; prefer HF_TOKEN env), offline
+- Chat: conversation/cnv, no_conversation/no_cnv, interactive/i, interactive_first/if, single_turn/st, jinja,
+        chat_template, chat_template_file
+- I/O & prompts: in_prefix, in_suffix, in_prefix_bos, reverse_prompt/r, system_prompt/sys, prompt/-p
+- Generation: predict/n (-n), keep, ignore_eos, no_context_shift
+- Sampling: temp, seed/-s, dynatemp_range, top_k, top_p, min_p, typical
+- Penalties: repeat_penalty, repeat_last_n, presence_penalty, frequency_penalty
+- DRY/Mirostat: dry_multiplier, dry_base, dry_allowed_length, mirostat, mirostat_lr, mirostat_ent
+- CPU/NUMA: cpu_mask, cpu_range, numa
+- Structured: grammar, grammar_file, json_schema, json_schema_file, j
+- Caching/logging: prompt_cache, prompt_cache_all, prompt_cache_ro, log_file, log_colors, log_timestamps, log_verbosity, no_perf
 
-- Llamafile (`LlamafileConfig`):
-  - `llamafile_dir`: directory for `llamafile` executable
-  - `models_dir`: directory for `.llamafile` or `.gguf` models
-  - `default_host`, `default_port`
+Security Guidance
+- Use env vars for secrets. Example: export HF_TOKEN=...
+- Denylist blocks secret flags unless allow_cli_secrets=True. Prefer env over CLI to avoid leaking via ps/args.
+- Path safety: file flags must resolve under models_dir or allowed_paths. Absolute/traversal paths are rejected by default.
 
-- Ollama (`OllamaConfig`):
-  - `models_dir` (optional; Ollama manages its own)
-  - `default_port`
+Windows Notes
+- Handlers create processes with CREATE_NEW_PROCESS_GROUP.
+- stop_server prefers CTRL_BREAK_EVENT plus terminate/kill fallback.
+- On POSIX, processes start in new session via setsid and are terminated via process group signals (SIGTERM/SIGKILL).
 
-- HuggingFace (`HuggingFaceConfig`):
-  - `models_dir`: local HF model cache folder
-  - `default_device_map`: e.g., `auto`
-  - `default_torch_dtype`: e.g., `torch.bfloat16`
+Readiness & Observability
+- Handlers poll base_url for readiness (configurable window) before returning.
+- Metrics (no-op friendly): starts, stops, start_errors, readiness_time_sum/readiness_count, inference_count, inference_error_count, inference_time_sum (llama.cpp).
+- Query via handler.get_metrics() or observe logs.
+ - HTTP endpoints:
+   - GET /api/v1/llamacpp/status
+   - GET /api/v1/llamacpp/metrics
+   - GET /api/v1/llamafile/metrics
 
-HTTP Behavior
--------------
-- All HTTP requests are made with httpx (`http_utils.create_async_client`).
-- Simple retries on network errors and 5xx (`request_json`), default timeout 120s.
-- Readiness polling after server start (`wait_for_http_ready`) checks `/health` or `/v1/models` up to ~30s.
-- Command-line logs are redacted for sensitive flags like `--api-key`.
+Streaming Parity (llama.cpp)
+- stream_inference(prompt|messages, stream=True) returns SSE lines (data: ...), normalizing to OpenAI chunk format and [DONE].
+- Uses httpx AsyncClient with proper backpressure via aiter_lines().
 
 Examples
---------
-Programmatic usage via manager:
+- Start llama.cpp server with safe flags:
+  handler.start_server("q4.gguf", server_args={"port": 8081, "ngl": 30, "ctx_size": 4096, "threads": 8, "flash_attn": True})
 
-```python
-from tldw_Server_API.app.core.Local_LLM import (
-    LLMInferenceManager, LLMManagerConfig,
-    LlamaCppConfig, LlamafileConfig)
+- Allow passthrough in trusted environments (not recommended):
+  cfg = LlamaCppConfig(..., allow_unvalidated_args=True, allow_cli_secrets=False)
 
-cfg = LLMManagerConfig(
-    llamafile=LlamafileConfig(enabled=True),
-    ollama=None,
-    huggingface=None,
-    app_config={}
-)
-manager = LLMInferenceManager(cfg)
+- Constrain file flags to models dir:
+  cfg = LlamaCppConfig(..., allowed_paths=[Path("/opt/local_llm/templates")])
 
-# List local models
-models = await manager.list_local_models("llamafile")
-
-# Start/swap server with a model
-resp = await manager.start_server("llamafile", model_name="Qwen2.5-7B-Instruct-q4_k_m.gguf",
-                                 server_args={"port": 8080, "ngl": 99, "api_key": "..."})
-
-# Run inference (OpenAI-compatible)
-result = await manager.run_inference(
-    backend="llamafile",
-    model_name_or_path="unused",
-    prompt="Hello!",
-    port=8080,
-    temperature=0.7)
-
-# Stop server
-await manager.stop_server("llamafile", port=8080)
-```
-
-API Endpoints (llama.cpp)
--------------------------
-- `POST /api/v1/llamacpp/start_server` — body: `{ "model_filename": "...", "server_args": {"port": 8080, ...} }`
-- `POST /api/v1/llamacpp/stop_server`
-- `GET  /api/v1/llamacpp/status`
-- `POST /api/v1/llamacpp/inference` — body: OpenAI-compatible fields (messages, temperature, ...)
-
-Production Notes
-----------------
-- Bind to localhost by default; adjust host/port behind a reverse proxy for external access.
-- Redaction protects logs, but avoid logging payloads with secrets.
-- Run under a supervisor if using long-lived processes.
-- Ensure models are present and permissions set for the runtime user.
-
-Testing
--------
-- Unit tests mock subprocess and httpx to avoid external dependencies.
-- Integration tests can be enabled with appropriate markers in CI that provisions local backends.
-
+- Streaming inference:
+  async for line in handler.stream_inference(prompt="Hello"):
+      print(line.strip())

@@ -20,7 +20,7 @@ import os
 import re
 import hashlib
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple, Set
 
 from loguru import logger
@@ -38,7 +38,7 @@ class ModerationPolicy:
     redact_replacement: str = "[REDACTED]"
     per_user_overrides: bool = True
     # Compiled rules; each rule includes the regex and optional per-pattern action/replacement
-    block_patterns: List[object] = None  # list of PatternRule (backward field name)
+    block_patterns: List["PatternRule"] = field(default_factory=list)
     # Enabled categories filter (None or empty means allow all)
     categories_enabled: Optional[Set[str]] = None
 
@@ -205,6 +205,7 @@ class ModerationService:
         """
         if not s:
             return None, None, None, None
+        # Work on a copy we can mutate
         text = s
         action = None
         repl = None
@@ -217,8 +218,9 @@ class ModerationService:
             if cats:
                 categories = cats
                 text = before.strip()
-        if '->' in s:
-            parts = s.split('->', 1)
+        # Parse action/replacement from the (categories-trimmed) text
+        if '->' in text:
+            parts = text.split('->', 1)
             text = parts[0].strip()
             rhs = parts[1].strip()
             if rhs:
@@ -681,6 +683,68 @@ class ModerationService:
             ok = self.set_blocklist_lines(new_lines)
             state = self.get_blocklist_state() if ok else {"error": "persist failed"}
             return ok, state
+
+    # --------------- Lint helpers ---------------
+    def lint_blocklist_lines(self, lines: List[str]) -> Dict[str, object]:
+        """Validate blocklist lines without persisting.
+
+        Returns a dict with items [{index, line, ok, pattern_type, action, replacement, categories, error?, warning?, sample?}]
+        and summary counts.
+        """
+        results: List[Dict[str, object]] = []
+        valid_count = 0
+        invalid_count = 0
+        for idx, raw in enumerate(lines or []):
+            line = str(raw).rstrip("\n")
+            item: Dict[str, object] = {"index": idx, "line": line, "ok": False}
+            try:
+                if not line or not line.strip():
+                    item.update({"ok": True, "pattern_type": "empty", "warning": "blank line (ignored)"})
+                    results.append(item)
+                    valid_count += 1
+                    continue
+                if line.lstrip().startswith("#"):
+                    item.update({"ok": True, "pattern_type": "comment", "warning": "comment (ignored)"})
+                    results.append(item)
+                    valid_count += 1
+                    continue
+                expr, action, repl, cats = self._parse_rule_line(line)
+                if expr is None or expr == "":
+                    item.update({"ok": False, "error": "empty pattern after parsing"})
+                    results.append(item)
+                    invalid_count += 1
+                    continue
+                is_regex = len(expr) >= 2 and expr.startswith("/") and expr.endswith("/")
+                item.update({
+                    "action": action,
+                    "replacement": repl,
+                    "categories": sorted(list(cats)) if cats else [],
+                })
+                if is_regex:
+                    raw_pat = expr[1:-1]
+                    if self._is_regex_dangerous(raw_pat):
+                        item.update({"ok": False, "pattern_type": "regex", "error": "dangerous regex (nested quantifiers/too complex)"})
+                        results.append(item)
+                        invalid_count += 1
+                        continue
+                    try:
+                        re.compile(raw_pat, flags=re.IGNORECASE)
+                    except re.error as e:
+                        item.update({"ok": False, "pattern_type": "regex", "error": f"invalid regex: {e}"})
+                        results.append(item)
+                        invalid_count += 1
+                        continue
+                    item.update({"ok": True, "pattern_type": "regex", "sample": raw_pat})
+                    valid_count += 1
+                else:
+                    item.update({"ok": True, "pattern_type": "literal", "sample": expr})
+                    valid_count += 1
+                results.append(item)
+            except Exception as e:
+                item.update({"ok": False, "error": str(e)})
+                results.append(item)
+                invalid_count += 1
+        return {"items": results, "valid_count": valid_count, "invalid_count": invalid_count}
 
 
 # Singleton accessor

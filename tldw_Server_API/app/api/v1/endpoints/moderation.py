@@ -15,6 +15,9 @@ from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
     BlocklistAppendRequest,
     BlocklistAppendResponse,
     BlocklistDeleteResponse,
+    BlocklistLintRequest,
+    BlocklistLintResponse,
+    BlocklistLintItem,
     ModerationTestRequest,
     ModerationTestResponse,
     ModerationSettingsResponse,
@@ -201,6 +204,32 @@ async def delete_blocklist_item(
     items = state.get("items") or []
     response.headers["ETag"] = version
     return BlocklistDeleteResponse(version=version, count=len(items))
+
+
+@router.post(
+    "/moderation/blocklist/lint",
+    response_model=BlocklistLintResponse,
+    summary="Validate blocklist lines without persisting",
+    tags=["moderation"],
+)
+async def lint_blocklist(
+    payload: BlocklistLintRequest,
+    _: Any = Depends(require_admin),
+):
+    svc = get_moderation_service()
+    lines = []
+    if payload.lines:
+        lines = payload.lines
+    elif payload.line:
+        lines = [payload.line]
+    else:
+        raise HTTPException(status_code=400, detail="Provide 'lines' or 'line'")
+    try:
+        res = svc.lint_blocklist_lines(lines)
+        items = [BlocklistLintItem(**it) for it in (res.get("items") or [])]
+        return BlocklistLintResponse(items=items, valid_count=int(res.get("valid_count", 0)), invalid_count=int(res.get("invalid_count", 0)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(

@@ -422,8 +422,8 @@ class Settings(BaseSettings):
     def _validate_api_key(self):
         """Validate API key for single-user mode with deterministic test fallback."""
         if self.AUTH_MODE == "single_user":
-            # If an explicit key is provided via env/.env, honor it
-            explicit_env_key = os.getenv("SINGLE_USER_API_KEY")
+            # If an explicit key is provided via env/.env, honor it (legacy API_KEY supported)
+            explicit_env_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
             # Detect test contexts where the server should expose a stable key so client tests can authenticate
             # Only rely on environment of the server process, never trust request headers
@@ -438,12 +438,18 @@ class Settings(BaseSettings):
                     # Loaded by pydantic from env but still None here? Ensure it's applied
                     self.SINGLE_USER_API_KEY = explicit_env_key
                     logger.info("Using SINGLE_USER_API_KEY from environment for single-user mode")
+                elif in_test_context:
+                    # Deterministic key so tests can authenticate reliably.
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    self.SINGLE_USER_API_KEY = test_key
+                    logger.debug("Using deterministic SINGLE_USER_API_KEY for test context")
                 else:
-                    # Deterministic key so clients (including tests) can authenticate reliably
-                    # Projects should override via SINGLE_USER_API_KEY in production
-                    self.SINGLE_USER_API_KEY = "test-api-key-12345"
-                    logger.warning(
-                        "No SINGLE_USER_API_KEY provided. Using deterministic default for single-user mode."
+                    raise ValueError(
+                        "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
+                        "Generate a secure key by running:\n"
+                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
+                        "and follow the prompts (option \"Generate secure keys\").\n"
+                        "Then set SINGLE_USER_API_KEY in your environment or .env file."
                     )
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(

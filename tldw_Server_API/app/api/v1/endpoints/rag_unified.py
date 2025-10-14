@@ -748,9 +748,18 @@ async def unified_search_stream_endpoint(
             try:
                 if db_paths:
                     try:
-                        retriever = MultiDatabaseRetriever(db_paths, user_id=current_user.username if current_user else "0")
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=current_user.username if current_user else "0",
+                            media_db=media_db,
+                            chacha_db=chacha_db,
+                        )
                     except TypeError:
-                        retriever = MultiDatabaseRetriever(db_paths)
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=current_user.username if current_user else "0",
+                            media_db=media_db,
+                        )
                     config = RetrievalConfig(
                         max_results=request.top_k,
                         min_score=request.min_score,

@@ -9,7 +9,7 @@ import asyncio
 import json
 #
 # 3rd-party imports
-import redis
+from redis import asyncio as redis_async
 from redis.exceptions import RedisError
 from loguru import logger
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
@@ -42,7 +42,7 @@ class RateLimiter:
         """Initialize rate limiter"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client: Optional[redis_async.Redis] = None
         self.enabled = self.settings.RATE_LIMIT_ENABLED
         self._initialized = False
         
@@ -65,12 +65,12 @@ class RateLimiter:
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
-                self.redis_client = redis.from_url(
+                self.redis_client = redis_async.from_url(
                     self.settings.REDIS_URL,
                     decode_responses=True,
                     socket_connect_timeout=1
                 )
-                self.redis_client.ping()
+                await self.redis_client.ping()
                 logger.debug("Redis connected for rate limiting")
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis unavailable for rate limiting: {e}")
@@ -182,14 +182,14 @@ class RateLimiter:
                 pipe = self.redis_client.pipeline()
                 pipe.incr(key)
                 pipe.expire(key, lockout_duration_minutes * 60)
-                results = pipe.execute()
+                results = await pipe.execute()
                 
                 attempt_count = results[0]
                 
                 if attempt_count >= lockout_threshold:
                     # Set lockout key
                     lockout_key = f"lockout:{identifier}"
-                    self.redis_client.setex(
+                    await self.redis_client.setex(
                         lockout_key,
                         lockout_duration_minutes * 60,
                         json.dumps({
@@ -330,12 +330,12 @@ class RateLimiter:
         if self.redis_client:
             try:
                 lockout_key = f"lockout:{identifier}"
-                lockout_data = self.redis_client.get(lockout_key)
+                lockout_data = await self.redis_client.get(lockout_key)
                 if lockout_data:
                     data = json.loads(lockout_data)
                     locked_at = datetime.fromisoformat(data['locked_at'])
                     # Calculate expiry based on TTL
-                    ttl = self.redis_client.ttl(lockout_key)
+                    ttl = await self.redis_client.ttl(lockout_key)
                     if ttl > 0:
                         expires = now + timedelta(seconds=ttl)
                         return True, expires
@@ -381,8 +381,8 @@ class RateLimiter:
         # Clear from Redis
         if self.redis_client:
             try:
-                self.redis_client.delete(key)
-                self.redis_client.delete(f"lockout:{identifier}")
+                await self.redis_client.delete(key)
+                await self.redis_client.delete(f"lockout:{identifier}")
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error in reset_failed_attempts: {e}")
         
@@ -481,14 +481,14 @@ class RateLimiter:
             pipe.incr(window_key)
             pipe.expire(window_key, window_minutes * 60 + 10)  # Extra 10 seconds buffer
             
-            results = pipe.execute()
+            results = await pipe.execute()
             current_count = results[0]
             
             # Check burst by looking at previous window
             if current_count > limit - burst:
                 prev_window_start = window_start - timedelta(minutes=window_minutes)
                 prev_window_key = f"rate:{key}:{prev_window_start.strftime('%Y%m%d%H%M')}"
-                prev_count = self.redis_client.get(prev_window_key)
+                prev_count = await self.redis_client.get(prev_window_key)
                 prev_count = int(prev_count) if prev_count else 0
                 
                 if prev_count + current_count > limit + burst:
@@ -777,8 +777,8 @@ class RateLimiter:
                 # Clear Redis cache if available
                 if self.redis_client:
                     pattern = f"rate:{self._create_key(identifier, endpoint or '*')}:*"
-                    for key in self.redis_client.scan_iter(pattern):
-                        self.redis_client.delete(key)
+                    async for key in self.redis_client.scan_iter(pattern):
+                        await self.redis_client.delete(key)
                 
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Reset rate limit [redacted]")

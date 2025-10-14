@@ -17,6 +17,8 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_cohere,
     chat_with_qwen,
     chat_with_groq,
+    chat_with_google,
+    chat_with_bedrock,
     chat_with_openai_async,
     chat_with_mistral,
     chat_with_openrouter,
@@ -626,6 +628,128 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     @patch('requests.Session.post')
+    def test_google_gemini_stream_normalized(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        # Simulate Gemini SSE frames containing candidate text chunks
+        mock_response.iter_lines = Mock(return_value=[
+            b'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
+            b'data: {"candidates":[{"content":{"parts":[{"text":" Gemini"}]}}]}',
+        ])
+        mock_post.return_value = mock_response
+
+        gen = chat_with_google(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="test", streaming=True
+        )
+        chunks = list(gen)
+        # Expect two content chunks + DONE
+        assert len(chunks) == 3
+        assert chunks[0].startswith('data: ')
+        assert chunks[0].endswith('\n\n')
+        assert '[DONE]' in chunks[-1]
+
+    @patch('requests.Session.post')
+    def test_bedrock_stream_normalized(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=[
+            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+            b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
+        ])
+        mock_post.return_value = mock_response
+
+        gen = chat_with_bedrock(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", model="meta.llama3-8b-instruct", streaming=True
+        )
+        chunks = list(gen)
+        assert len(chunks) == 3
+        assert chunks[0].startswith('data: ')
+        assert chunks[0].endswith('\n\n')
+        assert '[DONE]' in chunks[-1]
+
+    @patch('requests.Session.post')
+    def test_bedrock_stream_error_chunked(self, mock_post):
+        class ErrIterator:
+            def __iter__(self):
+                raise requests.exceptions.ChunkedEncodingError('boom')
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=ErrIterator())
+        mock_post.return_value = mock_response
+
+        gen = chat_with_bedrock(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", model="meta.llama3-8b-instruct", streaming=True
+        )
+        chunks = list(gen)
+        assert any('bedrock_stream_error' in c for c in chunks)
+        assert all(c.startswith('data: ') for c in chunks)
+
+    @patch('requests.Session.post')
+    def test_gemini_stream_error_chunked(self, mock_post):
+        class ErrIterator:
+            def __iter__(self):
+                raise requests.exceptions.ChunkedEncodingError('boom')
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=ErrIterator())
+        mock_post.return_value = mock_response
+
+        gen = chat_with_google(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="test", streaming=True
+        )
+        chunks = list(gen)
+        assert any('gemini_stream_error' in c for c in chunks)
+        assert all(c.startswith('data: ') for c in chunks)
+
+    @patch('requests.Session.post')
+    def test_gemini_stream_finish_reason(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=[
+            b'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
+            b'data: {"candidates":[{"finishReason":"STOP"}]}',
+        ])
+        mock_post.return_value = mock_response
+
+        gen = chat_with_google(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="test", streaming=True
+        )
+        chunks = list(gen)
+        assert any('"finish_reason": "stop"' in c for c in chunks)
+        assert '[DONE]' in chunks[-1]
+
+    @patch('requests.Session.post')
+    def test_anthropic_stream_finish_reason(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=[
+            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
+            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+        ])
+        mock_post.return_value = mock_response
+
+        gen = chat_with_anthropic(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", streaming=True
+        )
+        chunks = list(gen)
+        assert any('"finish_reason": "stop"' in c for c in chunks)
+        assert any('[DONE]' in c for c in chunks)
+
+    @patch('requests.Session.post')
     def test_mistral_stream_normalized(self, mock_post):
         mock_response = Mock()
         mock_response.status_code = 200
@@ -688,7 +812,7 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.post')
+    @patch('requests.Session.post')
     def test_huggingface_stream_normalized(self, mock_post):
         mock_response = Mock()
         mock_response.status_code = 200
@@ -729,6 +853,66 @@ class TestSSENormalization:
         chunks = list(gen)
         # Should include a DONE sentinel at end
         assert any('[DONE]' in c for c in chunks)
+
+    @patch('requests.Session.post')
+    def test_anthropic_stream_error_chunked(self, mock_post):
+        class ErrIterator:
+            def __iter__(self):
+                raise requests.exceptions.ChunkedEncodingError('boom')
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=ErrIterator())
+        mock_post.return_value = mock_response
+
+        gen = chat_with_anthropic(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", streaming=True
+        )
+        chunks = list(gen)
+        assert any('anthropic_stream_error' in c for c in chunks)
+        assert any(c.startswith('data: ') for c in chunks)
+
+    @patch('requests.Session.post')
+    def test_mistral_stream_error_chunked(self, mock_post):
+        class ErrIterator:
+            def __iter__(self):
+                raise requests.exceptions.ChunkedEncodingError('boom')
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=ErrIterator())
+        mock_post.return_value = mock_response
+
+        gen = chat_with_mistral(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", streaming=True
+        )
+        chunks = list(gen)
+        assert any('mistral_stream_error' in c for c in chunks)
+        assert any(c.startswith('data: ') for c in chunks)
+
+    @patch('requests.Session.post')
+    def test_openrouter_stream_error_chunked(self, mock_post):
+        class ErrIterator:
+            def __iter__(self):
+                raise requests.exceptions.ChunkedEncodingError('boom')
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_lines = Mock(return_value=ErrIterator())
+        mock_post.return_value = mock_response
+
+        gen = chat_with_openrouter(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="key", streaming=True
+        )
+        chunks = list(gen)
+        assert any('openrouter_stream_error' in c for c in chunks)
+        assert any(c.startswith('data: ') for c in chunks)
 
 
 @pytest.mark.asyncio

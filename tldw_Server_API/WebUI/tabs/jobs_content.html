@@ -22,9 +22,7 @@
                     <label for="adminJobs_queue">Queue:</label>
                     <select id="adminJobs_queue">
                         <option value="">(any)</option>
-                        <option value="default">default</option>
-                        <option value="high">high</option>
-                        <option value="low">low</option>
+                        <!-- options populated dynamically from /api/v1/config/jobs -->
                     </select>
                 </div>
             </div>
@@ -41,6 +39,12 @@
             <button class="btn btn-secondary" onclick="adminStartJobsAutoRefresh()">Auto-Refresh (10s)</button>
             <button class="btn btn-secondary" onclick="adminStopJobsAutoRefresh()">Stop</button>
         </div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+            <div id="adminJobs_savedFiltersBadge" style="display:inline-block; padding:4px 8px; border:1px solid var(--color-border); border-radius:12px; font-size:12px; color:var(--color-text-secondary);">
+                Saved Filters: (none)
+            </div>
+            <button id="adminJobs_resetFilters" class="btn btn-secondary btn-sm" style="padding:2px 8px; border-radius:12px; font-size:12px;" title="Clear saved filters and reset inputs" onclick="adminJobsResetFilters()">Reset Filters</button>
+        </div>
 
         <div class="table-responsive mt-2">
             <table class="data-table">
@@ -49,12 +53,13 @@
                         <th>Domain</th>
                         <th>Queue</th>
                         <th>Job Type</th>
-                        <th>Queued</th>
+                        <th>Queued (ready)</th>
+                        <th>Scheduled</th>
                         <th>Processing</th>
                     </tr>
                 </thead>
                 <tbody id="adminJobs_tableBody">
-                    <tr><td colspan="5" class="text-muted">No data</td></tr>
+                    <tr><td colspan="6" class="text-muted">No data</td></tr>
                 </tbody>
             </table>
         </div>
@@ -87,13 +92,53 @@
                     <input type="number" id="adminJobs_olderDays" value="30" min="1" max="3650">
                 </div>
                 <div class="form-group">
+                    <label><input type="checkbox" id="adminJobs_dryRun" checked> Dry Run (count only)</label>
+                </div>
+                <div class="form-group">
                     <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()">Prune Jobs</button>
                 </div>
             </div>
         </div>
 
         <h3>Response:</h3>
+        <div id="adminJobsPrune_summary" class="text-muted" style="margin-bottom:6px;">—</div>
         <pre id="adminJobsPrune_result">---</pre>
+    </div>
+
+    <!-- TTL Sweep -->
+    <div class="endpoint-section" id="adminJobsTTL">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/jobs/ttl/sweep - TTL Sweep</span>
+        </h2>
+        <p>Cancel or fail jobs that exceed a max age (queued) or runtime (processing). Scoped by current filters.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_ttl_age">Max Age (seconds) for queued:</label>
+                    <input type="number" id="adminJobs_ttl_age" placeholder="e.g., 86400">
+                </div>
+                <div class="form-group">
+                    <label for="adminJobs_ttl_runtime">Max Runtime (seconds) for processing:</label>
+                    <input type="number" id="adminJobs_ttl_runtime" placeholder="e.g., 7200">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="adminJobs_ttl_action">Action:</label>
+                    <select id="adminJobs_ttl_action">
+                        <option value="cancel" selected>cancel</option>
+                        <option value="fail">fail</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <button id="adminJobsTTL_btn" class="btn btn-warning" onclick="adminRunTTLSweep()">Run TTL Sweep</button>
+                </div>
+            </div>
+        </div>
+        <h3>Response:</h3>
+        <div id="adminJobsTTL_summary" class="text-muted" style="margin-bottom:6px;">—</div>
+        <pre id="adminJobsTTL_result">---</pre>
     </div>
 
     <script>
@@ -113,7 +158,7 @@
                 const data = Array.isArray(res) ? res : (res?.data || []);
                 tbody.innerHTML = '';
                 if (!data.length) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No data</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No data</td></tr>';
                     return;
                 }
                 for (const row of data) {
@@ -123,18 +168,27 @@
                         <td>${row.queue ?? ''}</td>
                         <td>${row.job_type ?? ''}</td>
                         <td>${row.queued ?? 0}</td>
+                        <td>${row.scheduled ?? 0}</td>
                         <td>${row.processing ?? 0}</td>
                     `;
                     // Make rows clickable to apply filter
                     tr.style.cursor = 'pointer';
                     tr.title = 'Click to filter Admin → Jobs';
+                    tr.setAttribute('role', 'button');
+                    tr.setAttribute('tabindex', '0');
                     tr.addEventListener('click', () => {
                         adminApplyJobsFilter(row.domain || '', row.queue || '', row.job_type || '');
+                    });
+                    tr.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            adminApplyJobsFilter(row.domain || '', row.queue || '', row.job_type || '');
+                        }
                     });
                     tbody.appendChild(tr);
                 }
             } catch (e) {
-                tbody.innerHTML = `<tr><td colspan=\"5\" class=\"text-error\">${(e && e.message) || 'Failed to load'}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan=\"6\" class=\"text-error\">${(e && e.message) || 'Failed to load'}</td></tr>`;
             } finally {
                 Loading.hide(tbody.parentElement);
             }
@@ -151,6 +205,17 @@
             }
         }
 
+        function adminJobsSaveFilters() {
+            try {
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                const payload = { domain: d ? d.value.trim() : '', queue: q ? q.value.trim() : '', job_type: jt ? jt.value.trim() : '' };
+                if (typeof Utils !== 'undefined') Utils.saveToStorage('admin-jobs-filters', payload);
+                updateSavedFiltersBadge(payload);
+            } catch (e) { /* ignore */ }
+        }
+
         function adminApplyJobsFilter(domain, queue, jobType) {
             try {
                 const d = document.getElementById('adminJobs_domain');
@@ -164,7 +229,96 @@
                     const desc = `${domain || '(any)'}/${queue || '(any)'}/${jobType || '(any)'}`;
                     topbar.textContent = `Filter applied: ${desc}`;
                 }
+                updateSavedFiltersBadge({ domain, queue, job_type: jobType });
+                adminJobsSaveFilters();
                 adminFetchJobsStats();
+            } catch (e) { /* ignore */ }
+        }
+
+        async function adminJobsLoadQueues() {
+            try {
+                const sel = document.getElementById('adminJobs_queue');
+                if (!sel) return;
+                // Remove existing dynamic options (keep first (any))
+                while (sel.options.length > 1) sel.remove(1);
+                const res = await apiClient.makeRequest('GET', '/api/v1/config/jobs', { });
+                const queues = (res && res.standard_queues && Array.isArray(res.standard_queues)) ? res.standard_queues : ['default','high','low'];
+                queues.forEach(q => {
+                    const opt = document.createElement('option');
+                    opt.value = q;
+                    opt.textContent = q;
+                    sel.appendChild(opt);
+                });
+            } catch (e) {
+                // Silent fallback to defaults
+            }
+        }
+
+        function adminJobsRestoreFilters() {
+            try {
+                const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('admin-jobs-filters') : null;
+                if (!saved) return;
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                if (d) d.value = saved.domain || '';
+                if (jt) jt.value = saved.job_type || '';
+                if (q) {
+                    // Ensure saved option exists before selecting
+                    const found = Array.from(q.options).some(o => o.value === (saved.queue || ''));
+                    if (!found && saved.queue) {
+                        const opt = document.createElement('option');
+                        opt.value = saved.queue;
+                        opt.textContent = saved.queue;
+                        q.appendChild(opt);
+                    }
+                    q.value = saved.queue || '';
+                }
+                updateSavedFiltersBadge(saved);
+            } catch (e) { /* ignore */ }
+        }
+
+        function adminJobsBindPersist() {
+            try {
+                const ids = ['adminJobs_domain','adminJobs_queue','adminJobs_jobType'];
+                ids.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.addEventListener('change', adminJobsSaveFilters);
+                });
+            } catch (e) { /* ignore */ }
+        }
+
+        async function adminJobsInit() {
+            await adminJobsLoadQueues();
+            adminJobsRestoreFilters();
+            adminJobsBindPersist();
+            try { await adminFetchJobsStats(); } catch (e) { /* ignore */ }
+        }
+
+        function updateSavedFiltersBadge(values) {
+            try {
+                const badge = document.getElementById('adminJobs_savedFiltersBadge');
+                if (!badge) return;
+                const saved = values || (typeof Utils !== 'undefined' ? Utils.getFromStorage('admin-jobs-filters') : null) || { domain: '', queue: '', job_type: '' };
+                const domain = saved.domain || '(any)';
+                const queue = saved.queue || '(any)';
+                const jobType = saved.job_type || '(any)';
+                badge.textContent = `Saved Filters: domain=${domain}, queue=${queue}, job_type=${jobType}`;
+            } catch (e) { /* ignore */ }
+        }
+
+        function adminJobsResetFilters() {
+            try {
+                if (typeof Utils !== 'undefined') Utils.saveToStorage('admin-jobs-filters', { domain: '', queue: '', job_type: '' });
+                const d = document.getElementById('adminJobs_domain');
+                const q = document.getElementById('adminJobs_queue');
+                const jt = document.getElementById('adminJobs_jobType');
+                if (d) d.value = '';
+                if (q) q.value = '';
+                if (jt) jt.value = '';
+                updateSavedFiltersBadge({ domain: '', queue: '', job_type: '' });
+                adminFetchJobsStats();
+                Toast.info('Filters reset');
             } catch (e) { /* ignore */ }
         }
 
@@ -173,37 +327,105 @@
             const statuses = Array.from(document.querySelectorAll('.adminJobs_status:checked')).map(cb => cb.value);
             const olderDaysEl = document.getElementById('adminJobs_olderDays');
             const olderThanDays = Math.max(1, parseInt(olderDaysEl && olderDaysEl.value ? olderDaysEl.value : '30', 10));
+            const dryRun = !!(document.getElementById('adminJobs_dryRun') && document.getElementById('adminJobs_dryRun').checked);
+            const domain = (document.getElementById('adminJobs_domain')?.value || '').trim();
+            const queue = (document.getElementById('adminJobs_queue')?.value || '').trim();
+            const jobType = (document.getElementById('adminJobs_jobType')?.value || '').trim();
             const resultEl = document.getElementById('adminJobsPrune_result');
+            const summaryEl = document.getElementById('adminJobsPrune_summary');
             if (!statuses.length) {
                 Toast.error('Select at least one status to prune');
                 return;
             }
-            const confirmed = confirm(`Prune jobs with statuses [${statuses.join(', ')}] older than ${olderThanDays} days?`);
+            const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
+            const preview = dryRun ? ' (dry run)' : '';
+            const confirmed = confirm(`Prune${preview} jobs with statuses [${statuses.join(', ')}] older than ${olderThanDays} days${scope ? `, scoped to [${scope}]` : ''}?`);
             if (!confirmed) return;
             try {
                 if (btn) btn.disabled = true;
                 Loading.show(resultEl, 'Pruning jobs...');
-                const res = await apiClient.makeRequest('POST', '/api/v1/jobs/prune', {
-                    body: { statuses, older_than_days: olderThanDays }
-                });
+                if (summaryEl) summaryEl.textContent = dryRun ? 'Dry run: counting matching jobs…' : 'Deleting matching jobs…';
+                const body = { statuses, older_than_days: olderThanDays, dry_run: dryRun };
+                if (domain) body.domain = domain;
+                if (queue) body.queue = queue;
+                if (jobType) body.job_type = jobType;
+                const res = await apiClient.makeRequest('POST', '/api/v1/jobs/prune', { body });
                 const deleted = (res && typeof res.deleted === 'number') ? res.deleted : (res?.data?.deleted || 0);
                 resultEl.textContent = JSON.stringify(res, null, 2);
-                Toast.success(`Pruned ${deleted} job(s)`);
+                Toast.success(`${dryRun ? 'Would prune' : 'Pruned'} ${deleted} job(s)`);
                 const topbar = document.getElementById('adminJobs_topbar');
                 if (topbar) {
                     const ts = new Date().toLocaleString();
-                    topbar.textContent = `Pruned ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days] — ${ts}`;
+                    topbar.textContent = `${dryRun ? 'Dry run:' : 'Pruned'} ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days${scope ? `, ${scope}` : ''}] — ${ts}`;
                 }
+                if (summaryEl) summaryEl.textContent = dryRun
+                    ? `Dry run: would prune ${deleted} job(s) matching filters`
+                    : `Deleted ${deleted} job(s)`;
                 // Refresh stats after prune
                 if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
             } catch (e) {
                 const err = e && (e.response || e);
                 resultEl.textContent = JSON.stringify(err, null, 2);
                 Toast.error('Prune failed');
+                if (summaryEl) summaryEl.textContent = '—';
             } finally {
                 if (btn) btn.disabled = false;
                 Loading.hide(resultEl);
             }
         }
+
+        async function adminRunTTLSweep() {
+            const btn = document.getElementById('adminJobsTTL_btn');
+            const resultEl = document.getElementById('adminJobsTTL_result');
+            const summaryEl = document.getElementById('adminJobsTTL_summary');
+            const domain = (document.getElementById('adminJobs_domain')?.value || '').trim();
+            const queue = (document.getElementById('adminJobs_queue')?.value || '').trim();
+            const jobType = (document.getElementById('adminJobs_jobType')?.value || '').trim();
+            const ageSecondsStr = (document.getElementById('adminJobs_ttl_age')?.value || '').trim();
+            const runtimeSecondsStr = (document.getElementById('adminJobs_ttl_runtime')?.value || '').trim();
+            const action = (document.getElementById('adminJobs_ttl_action')?.value || 'cancel');
+            const body = { action };
+            const ageSeconds = parseInt(ageSecondsStr || '0', 10);
+            const runtimeSeconds = parseInt(runtimeSecondsStr || '0', 10);
+            if (ageSeconds > 0) body.age_seconds = ageSeconds;
+            if (runtimeSeconds > 0) body.runtime_seconds = runtimeSeconds;
+            if (domain) body.domain = domain;
+            if (queue) body.queue = queue;
+            if (jobType) body.job_type = jobType;
+            if (!body.age_seconds && !body.runtime_seconds) {
+                Toast.error('Provide age_seconds and/or runtime_seconds');
+                return;
+            }
+            try {
+                if (btn) btn.disabled = true;
+                Loading.show(resultEl, 'Sweeping TTL…');
+                if (summaryEl) summaryEl.textContent = 'Running TTL sweep…';
+                const res = await apiClient.makeRequest('POST', '/api/v1/jobs/ttl/sweep', { body });
+                resultEl.textContent = JSON.stringify(res, null, 2);
+                const affected = (res && typeof res.affected === 'number') ? res.affected : (res?.data?.affected || 0);
+                Toast.success(`TTL sweep affected ${affected} job(s)`);
+                const ts = new Date().toLocaleString();
+                const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
+                if (summaryEl) summaryEl.textContent = `TTL ${action} sweep affected ${affected} job(s) [${scope || 'unscoped'}] — ${ts}`;
+                if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
+            } catch (e) {
+                const err = e && (e.response || e);
+                resultEl.textContent = JSON.stringify(err, null, 2);
+                Toast.error('TTL sweep failed');
+                if (summaryEl) summaryEl.textContent = '—';
+            } finally {
+                if (btn) btn.disabled = false;
+                Loading.hide(resultEl);
+            }
+        }
+
+        // Initialize on load
+        (function(){
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', adminJobsInit);
+            } else {
+                adminJobsInit();
+            }
+        })();
     </script>
 </div>

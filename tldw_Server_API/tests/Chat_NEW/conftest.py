@@ -10,8 +10,8 @@ import os
 # Set test environment variables before any imports
 os.environ["TEST_MODE"] = "true"
 os.environ["DEFAULT_LLM_PROVIDER"] = "openai"
-os.environ["API_BEARER"] = "default-secret-key-for-single-user"
-os.environ["SINGLE_USER_API_KEY"] = "default-secret-key-for-single-user"
+os.environ["API_BEARER"] = os.environ.get("API_BEARER", "test-api-key-12345")
+os.environ["SINGLE_USER_API_KEY"] = os.environ.get("SINGLE_USER_API_KEY", "test-api-key-12345")
 # Deterministic chat rate limits for integration tests
 os.environ.setdefault("TEST_CHAT_PER_USER_RPM", "2")
 os.environ.setdefault("TEST_CHAT_PER_CONVERSATION_RPM", "2")
@@ -326,9 +326,10 @@ async def async_client(test_env_vars):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
+    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {
-        "Token": "Bearer default-secret-key-for-single-user",
-        "X-API-KEY": "default-secret-key-for-single-user",
+        "Token": f"Bearer {api_key}",
+        "X-API-KEY": api_key,
         "Content-Type": "application/json"
     }
 

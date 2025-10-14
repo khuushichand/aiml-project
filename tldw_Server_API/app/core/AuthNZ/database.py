@@ -252,7 +252,9 @@ class DatabasePool:
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                return await conn.execute(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                return await conn.execute(pg_query, *params)
             else:
                 # SQLite
                 # Flatten args if a single list/tuple was provided by an adapter
@@ -267,7 +269,9 @@ class DatabasePool:
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                row = await conn.fetchrow(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                row = await conn.fetchrow(pg_query, *params)
                 return dict(row) if row else None
             else:
                 # SQLite
@@ -291,7 +295,9 @@ class DatabasePool:
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                rows = await conn.fetch(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                rows = await conn.fetch(pg_query, *params)
                 return [dict(row) for row in rows]
             else:
                 # SQLite
@@ -307,7 +313,9 @@ class DatabasePool:
         async with self.acquire() as conn:
             if self.pool:
                 # PostgreSQL
-                return await conn.fetchval(query, *args)
+                params = _flatten_params(args)
+                pg_query = _convert_question_mark_to_dollar(query, params)
+                return await conn.fetchval(pg_query, *params)
             else:
                 # SQLite
                 params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
@@ -469,6 +477,34 @@ def _normalize_sqlite_sql(query: str) -> str:
         return query
     # Replace all occurrences of $N with '?' keeping ordering intact
     return _DOLLAR_PARAM.sub("?", query)
+
+
+def _flatten_params(args: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Support both variadic and single-sequence parameter passing."""
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        return tuple(args[0])
+    return tuple(args)
+
+
+def _convert_question_mark_to_dollar(query: str, params: tuple[Any, ...]) -> str:
+    """Convert '?' placeholders to Postgres-style '$N' placeholders when needed."""
+    if "?" not in query or "$" in query:
+        return query
+    count = query.count("?")
+    if count != len(params):
+        logger.warning(
+            "Query placeholder count mismatch (found {} '?', got {} params). Leaving query unchanged.",
+            count,
+            len(params),
+        )
+        return query
+    parts = query.split("?")
+    rebuilt = []
+    for idx, part in enumerate(parts[:-1]):
+        rebuilt.append(part)
+        rebuilt.append(f"${idx + 1}")
+    rebuilt.append(parts[-1])
+    return "".join(rebuilt)
 
 
 #

@@ -127,6 +127,71 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         
         # Fallback to language-specific splitting
         return self._split_with_regex(text)
+
+    def _split_sentences_with_spans(self, text: str) -> List[tuple[str, int, int]]:
+        """Split sentences and return (sentence, start, end) spans.
+
+        Uses the same underlying splitting as _split_sentences to ensure
+        parity, but carries start/end offsets robustly (avoids naive find()).
+        """
+        # Try pysbd first if available; if used, recover spans via rolling pointer
+        if self.pysbd_available:
+            try:
+                sentences = self._split_with_pysbd(text)
+                spans = []
+                pos = 0
+                for s in sentences:
+                    # Use simple forward scan to locate the next sentence occurrence
+                    # This is safe because segment order is preserved and we advance pos
+                    idx = text.find(s, pos)
+                    if idx == -1:
+                        idx = pos
+                    spans.append((s, idx, idx + len(s)))
+                    pos = idx + len(s)
+                return spans
+            except Exception:
+                pass
+
+        # Regex path: compute spans directly during reconstruction
+        delimiters = self.sentence_delimiters.get(
+            self.language,
+            self.sentence_delimiters['default']
+        )
+        delimiter_pattern = '|'.join(re.escape(d) for d in delimiters)
+        pattern = f'([{delimiter_pattern}])'
+
+        parts = re.split(pattern, text)
+
+        spans: List[tuple[str, int, int]] = []
+        cur_txt = ""
+        cur_start = 0
+        pos = 0
+        for part in parts:
+            if part in delimiters:
+                if cur_txt:
+                    sent = cur_txt + part
+                    start = cur_start
+                    end = pos + len(part)
+                    spans.append((sent.strip(), start, end))
+                    cur_txt = ""
+                    cur_start = end
+                pos += len(part)
+            else:
+                if not cur_txt:
+                    # Trim leading whitespace for the new sentence and adjust start
+                    lstripped = part.lstrip(" \t\r\f\v")
+                    ltrim = len(part) - len(lstripped)
+                    cur_start = pos + ltrim
+                    cur_txt += lstripped
+                else:
+                    cur_txt += part
+                pos += len(part)
+        if cur_txt.strip():
+            stripped = cur_txt.strip()
+            # Adjust start to match stripped content if leading whitespace remained
+            adjust = len(cur_txt) - len(cur_txt.lstrip(" \t\r\f\v"))
+            spans.append((stripped, cur_start + adjust, cur_start + adjust + len(stripped)))
+        return spans
     
     def _split_with_pysbd(self, text: str) -> List[str]:
         """

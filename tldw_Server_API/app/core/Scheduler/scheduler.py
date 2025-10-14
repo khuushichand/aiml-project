@@ -189,110 +189,19 @@ class Scheduler:
         if not self._started:
             raise SchedulerError("Scheduler not started")
         
-        # Use default queue if not specified
-        if queue_name is None:
-            queue_name = self.config.default_queue_name
-        
-        # Authorization check - MUST come first before any validation
-        if auth_context:
-            can_submit, reason = self.authorizer.can_submit_task(handler, queue_name, auth_context)
-            if not can_submit:
-                logger.warning(f"Task submission denied for handler '{handler}': {reason}")
-                raise PermissionError(f"Not authorized to submit task: {reason}")
-            
-            # Validate payload for this user/handler combination
-            valid, error = self.authorizer.validate_payload_for_handler(handler, payload, auth_context)
-            if not valid:
-                logger.warning(f"Payload validation failed for handler '{handler}': {error}")
-                raise ValueError(f"Payload validation failed: {error}")
-        
-        # Security validation
-        # 1. Validate handler name format (prevent injection attacks)
-        if not handler.replace('_', '').replace('-', '').isalnum():
-            logger.error(f"Invalid handler name format: {handler}")
-            raise ValueError(f"Handler name contains invalid characters: {handler}")
-        
-        # 2. Validate handler is registered (prevents arbitrary code execution)
-        if handler not in self.registry:
-            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
-            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
-        
-        # 3. Validate and sanitize payload (prevent resource exhaustion and injection attacks)
-        max_payload_size = self.config.max_payload_size if hasattr(self.config, 'max_payload_size') else 1048576  # 1MB default
-        if payload:
-            import json
-            
-            # Hard reject obvious code injection attempts
-            if self._has_code_injection(payload):
-                logger.warning("Code injection patterns detected in payload")
-                raise ValueError("Payload contains potentially malicious content")
-
-            # Sanitize payload - remove any potentially dangerous content
-            payload = self._sanitize_payload(payload)
-            
-            # Check size after sanitization
-            try:
-                payload_json = json.dumps(payload)
-                payload_size = len(payload_json)
-            except (TypeError, ValueError) as e:
-                logger.error(f"Payload serialization failed: {e}")
-                raise ValueError(f"Payload cannot be serialized to JSON: {e}")
-            
-            if payload_size > max_payload_size:
-                logger.error(f"Payload size {payload_size} exceeds maximum {max_payload_size}")
-                raise ValueError(f"Payload size {payload_size} bytes exceeds maximum allowed size of {max_payload_size} bytes")
-            
-            # Additional content validation: after sanitization, reject only if still suspicious
-            if self._contains_suspicious_content(payload_json):
-                logger.warning(f"Suspicious content still present after sanitization for handler {handler}")
-                raise ValueError("Payload contains potentially malicious content")
-        
-        # 4. Validate queue name
-        if queue_name and not queue_name.replace('_', '').replace('-', '').isalnum():
-            logger.error(f"Invalid queue name format: {queue_name}")
-            raise ValueError(f"Queue name contains invalid characters: {queue_name}")
-        
-        # 5. Validate idempotency key length
-        if idempotency_key:
-            if len(idempotency_key) > 255:
-                raise ValueError(f"Idempotency key too long: {len(idempotency_key)} > 255")
-            
-            # Check for existing task with this key
-            existing_task_id = await self.backend.get_task_by_idempotency_key(idempotency_key)
-            if existing_task_id:
-                logger.info(f"Idempotent task submission: key '{idempotency_key}' already exists, returning task {existing_task_id}")
-                return existing_task_id
-
-            # Also check pending tasks in the write buffer to ensure
-            # idempotency before the first task is flushed to the backend.
-            # This makes consecutive submissions return the same ID even if
-            # the buffer hasn't flushed yet (matches test expectations).
-            if self.write_buffer and hasattr(self.write_buffer, 'buffer'):
-                for pending in list(self.write_buffer.buffer):
-                    try:
-                        if getattr(pending, 'idempotency_key', None) == idempotency_key:
-                            logger.info(
-                                f"Idempotent (buffer) submission: key '{idempotency_key}' maps to task {pending.id}"
-                            )
-                            return pending.id
-                    except Exception:
-                        # Be defensive; continue scanning
-                        continue
-
-        # Prepare payload
-        if self.payload_service:
-            payload = self.payload_service.prepare_payload(payload)
-
-        # Create task
-        task = Task(
+        task, existing_task_id = await self._prepare_task_for_submission(
             handler=handler,
             payload=payload,
             priority=priority,
-            queue_name=queue_name or self.config.default_queue_name,
+            queue_name=queue_name,
             depends_on=depends_on,
             idempotency_key=idempotency_key,
-            # metadata=metadata  # Add this field to the Task class
+            metadata=metadata,
+            auth_context=auth_context
         )
+
+        if existing_task_id:
+            return existing_task_id
 
         # Add to write buffer
         add_result = self.write_buffer.add(task)
@@ -330,7 +239,7 @@ class Scheduler:
         logger.debug(f"Task {task_id} submitted to queue {task.queue_name}")
         return task_id
     
-    async def submit_batch(self, tasks: List[Dict[str, Any]]) -> List[str]:
+    async def submit_batch(self, tasks: List[Dict[str, Any]], auth_context: Optional[AuthContext] = None) -> List[str]:
         """
         Submit multiple tasks atomically.
         
@@ -339,6 +248,7 @@ class Scheduler:
         
         Args:
             tasks: List of task specifications
+            auth_context: Optional authorization context applied to every task in the batch
             
         Returns:
             List of task IDs
@@ -353,64 +263,94 @@ class Scheduler:
         if not tasks:
             return []
         
-        # First, validate all tasks before submitting any
-        validated_tasks = []
-        
+        pending_idempotency: Dict[str, str] = {}
+        prepared_tasks: List[tuple[int, Task]] = []
+        result_ids: List[str] = []
+
         for idx, task_spec in enumerate(tasks):
+            handler = task_spec.get('handler')
+            if not handler:
+                raise ValueError(f"Task {idx}: Missing handler")
+
+            payload = task_spec.get('payload')
+            priority = task_spec.get('priority', TaskPriority.NORMAL.value)
+            queue_name = task_spec.get('queue_name')
+            depends_on = task_spec.get('depends_on')
+            idempotency_key = task_spec.get('idempotency_key')
+            metadata = task_spec.get('metadata')
+
             try:
-                # Extract parameters
-                handler = task_spec.get('handler')
-                payload = task_spec.get('payload')
-                priority = task_spec.get('priority', TaskPriority.NORMAL.value)
-                queue_name = task_spec.get('queue_name', self.config.default_queue_name)
-                depends_on = task_spec.get('depends_on')
-                idempotency_key = task_spec.get('idempotency_key')
-                metadata = task_spec.get('metadata')
-                
-                # Apply same validation as single submission
-                if not handler:
-                    raise ValueError(f"Task {idx}: Missing handler")
-                
-                if handler not in self.registry:
-                    raise ValueError(f"Task {idx}: Handler '{handler}' not registered")
-                
-                if not handler.replace('_', '').replace('-', '').isalnum():
-                    raise ValueError(f"Task {idx}: Invalid handler name: {handler}")
-                
-                # Validate payload size
-                max_payload_size = self.config.max_payload_size if hasattr(self.config, 'max_payload_size') else 1048576
-                if payload:
-                    import json
-                    payload_size = len(json.dumps(payload))
-                    if payload_size > max_payload_size:
-                        raise ValueError(f"Task {idx}: Payload too large: {payload_size} bytes")
-                
-                # Create validated task (metadata field doesn't exist, ignoring)
-                task = Task(
+                task, existing_id = await self._prepare_task_for_submission(
                     handler=handler,
                     payload=payload,
                     priority=priority,
                     queue_name=queue_name,
                     depends_on=depends_on,
-                    idempotency_key=idempotency_key
+                    idempotency_key=idempotency_key,
+                    metadata=metadata,
+                    auth_context=auth_context,
+                    pending_idempotency=pending_idempotency
                 )
-                validated_tasks.append(task)
-                
-            except Exception as e:
-                logger.error(f"Batch validation failed at task {idx}: {e}")
-                raise ValueError(f"Batch submission failed - task {idx}: {e}")
-        
-        # All tasks validated, now submit them atomically
-        try:
-            # Use bulk enqueue for atomic submission
-            task_ids = await self.backend.bulk_enqueue(validated_tasks)
-            
-            logger.info(f"Successfully submitted batch of {len(task_ids)} tasks")
-            return task_ids
-            
-        except Exception as e:
-            logger.error(f"Batch submission failed: {e}")
-            raise SchedulerError(f"Failed to submit batch: {e}")
+            except PermissionError as exc:
+                logger.error(f"Batch validation failed at task {idx}: {exc}")
+                raise PermissionError(str(exc))
+            except Exception as exc:
+                logger.error(f"Batch validation failed at task {idx}: {exc}")
+                raise ValueError(f"Batch submission failed - task {idx}: {exc}")
+
+            if existing_id:
+                result_ids.append(existing_id)
+                if idempotency_key:
+                    pending_idempotency[idempotency_key] = existing_id
+                continue
+
+            if task is None:
+                raise SchedulerError("Internal error preparing task for submission")
+
+            prepared_tasks.append((idx, task))
+            result_ids.append(task.id)
+            if task.idempotency_key:
+                pending_idempotency[task.idempotency_key] = task.id
+
+        if self.dependency_service and prepared_tasks:
+            pending_ids = {task.id for _, task in prepared_tasks}
+            existing_ids = set(result_ids) - pending_ids
+
+            for idx, task in prepared_tasks:
+                if task.depends_on:
+                    missing_deps = await self.dependency_service.validate_dependencies(task)
+                    if missing_deps:
+                        missing_deps = [dep for dep in missing_deps if dep not in pending_ids and dep not in existing_ids]
+                    if missing_deps:
+                        raise ValueError(
+                            f"Batch submission failed - task {idx}: depends on non-existent tasks {missing_deps}"
+                        )
+
+                    try:
+                        if await self.dependency_service.detect_circular_dependencies(task.id):
+                            raise ValueError(
+                                f"Batch submission failed - task {idx}: circular dependency detected for {task.id}"
+                            )
+                    except Exception:
+                        # Best-effort detection; ignore if the graph cannot yet be built
+                        pass
+
+        tasks_to_enqueue = [task for _, task in prepared_tasks]
+
+        if tasks_to_enqueue:
+            try:
+                await self.backend.bulk_enqueue(tasks_to_enqueue)
+                logger.info(
+                    f"Successfully submitted batch of {len(tasks_to_enqueue)} tasks "
+                    f"({len(result_ids) - len(tasks_to_enqueue)} idempotent hits)"
+                )
+            except Exception as exc:
+                logger.error(f"Batch submission failed: {exc}")
+                raise SchedulerError(f"Failed to submit batch: {exc}")
+        else:
+            logger.info("Batch submission contained only idempotent tasks; nothing enqueued")
+
+        return result_ids
     
     async def get_task(self, task_id: str) -> Optional[Task]:
         """
@@ -573,6 +513,146 @@ class Scheduler:
         }
         
         return status
+
+    async def _prepare_task_for_submission(
+        self,
+        handler: str,
+        payload: Optional[Any],
+        priority: int,
+        queue_name: Optional[str],
+        depends_on: Optional[List[str]],
+        idempotency_key: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+        auth_context: Optional[AuthContext],
+        pending_idempotency: Optional[Dict[str, str]] = None
+    ) -> tuple[Optional[Task], Optional[str]]:
+        """Validate inputs and build a Task instance matching single-submit semantics."""
+
+        queue = queue_name or self.config.default_queue_name
+
+        # Authorization guard
+        if auth_context:
+            can_submit, reason = self.authorizer.can_submit_task(handler, queue, auth_context)
+            if not can_submit:
+                logger.warning(f"Task submission denied for handler '{handler}': {reason}")
+                raise PermissionError(f"Not authorized to submit task: {reason}")
+
+            valid, error = self.authorizer.validate_payload_for_handler(handler, payload, auth_context)
+            if not valid:
+                logger.warning(f"Payload validation failed for handler '{handler}': {error}")
+                raise ValueError(f"Payload validation failed: {error}")
+
+        # Handler validation
+        if not handler.replace('_', '').replace('-', '').isalnum():
+            logger.error(f"Invalid handler name format: {handler}")
+            raise ValueError(f"Handler name contains invalid characters: {handler}")
+
+        if handler not in self.registry:
+            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
+            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
+
+        # Queue validation
+        if queue and not queue.replace('_', '').replace('-', '').isalnum():
+            logger.error(f"Invalid queue name format: {queue}")
+            raise ValueError(f"Queue name contains invalid characters: {queue}")
+
+        # Metadata is required
+        metadata = self._validate_metadata(metadata)
+
+        sanitized_payload = payload
+        if payload is not None:
+            import json
+
+            if self._has_code_injection(payload):
+                logger.warning("Code injection patterns detected in payload")
+                raise ValueError("Payload contains potentially malicious content")
+
+            sanitized_payload = self._sanitize_payload(payload)
+
+            try:
+                payload_json = json.dumps(sanitized_payload)
+                payload_size = len(payload_json)
+            except (TypeError, ValueError) as exc:
+                logger.error(f"Payload serialization failed: {exc}")
+                raise ValueError(f"Payload cannot be serialized to JSON: {exc}")
+
+            max_payload_size = getattr(self.config, 'max_payload_size', 1048576)
+            if payload_size > max_payload_size:
+                logger.error(f"Payload size {payload_size} exceeds maximum {max_payload_size}")
+                raise ValueError(f"Payload size {payload_size} bytes exceeds maximum allowed size of {max_payload_size} bytes")
+
+            if self._contains_suspicious_content(payload_json):
+                logger.warning(f"Suspicious content still present after sanitization for handler {handler}")
+                raise ValueError("Payload contains potentially malicious content")
+
+        if idempotency_key:
+            if len(idempotency_key) > 255:
+                raise ValueError(f"Idempotency key too long: {len(idempotency_key)} > 255")
+
+            existing_task_id = await self.backend.get_task_by_idempotency_key(idempotency_key)
+            if existing_task_id:
+                logger.info(
+                    f"Idempotent task submission: key '{idempotency_key}' already exists, returning task {existing_task_id}"
+                )
+                return None, existing_task_id
+
+            if pending_idempotency and idempotency_key in pending_idempotency:
+                return None, pending_idempotency[idempotency_key]
+
+            if self.write_buffer and hasattr(self.write_buffer, 'buffer'):
+                for pending in list(self.write_buffer.buffer):
+                    try:
+                        if getattr(pending, 'idempotency_key', None) == idempotency_key:
+                            logger.info(
+                                f"Idempotent (buffer) submission: key '{idempotency_key}' maps to task {pending.id}"
+                            )
+                            return None, pending.id
+                    except Exception:
+                        continue
+
+        if self.payload_service:
+            sanitized_payload = self.payload_service.prepare_payload(sanitized_payload)
+
+        task = Task(
+            handler=handler,
+            payload=sanitized_payload,
+            priority=priority,
+            queue_name=queue,
+            depends_on=depends_on,
+            idempotency_key=idempotency_key,
+            metadata=metadata
+        )
+
+        return task, None
+
+    def _validate_metadata(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Validate required task metadata and return a defensive copy.
+
+        Args:
+            metadata: Metadata dictionary supplied with the task
+
+        Returns:
+            Sanitized metadata dictionary
+
+        Raises:
+            ValueError: If metadata is missing or invalid
+        """
+        if metadata is None:
+            raise ValueError("Task metadata is required")
+
+        if not isinstance(metadata, dict):
+            raise ValueError("Task metadata must be a dictionary")
+
+        user_id = metadata.get('user_id')
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("Task metadata must include a non-empty 'user_id'")
+
+        # Create a shallow copy to avoid caller mutation after submission
+        sanitized = dict(metadata)
+        sanitized['user_id'] = user_id.strip()
+
+        return sanitized
     
     async def _cleanup_loop(self) -> None:
         """Background task for cleanup operations."""

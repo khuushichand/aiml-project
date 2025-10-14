@@ -1,5 +1,5 @@
 # auth_permissions.py
-# Authentication and permissions system for Prompt Studio
+# Authentication and permissions system for Prompt Studio (Deprecated)
 
 import json
 import hashlib
@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timedelta
 from enum import Enum
 from loguru import logger
+import warnings
 import jwt
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
@@ -133,6 +134,13 @@ class AuthenticationManager:
             db: Database instance
             secret_key: Secret key for JWT tokens
         """
+        # Deprecation notice: use core AuthNZ/JWT and RBAC instead
+        warnings.warn(
+            "Prompt Studio AuthenticationManager is deprecated. "
+            "Use core AuthNZ (JWT/API key) and RBAC instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.db = db
         self.secret_key = secret_key
         self.algorithm = "HS256"
@@ -482,6 +490,12 @@ class PermissionManager:
         Args:
             db: Database instance
         """
+        warnings.warn(
+            "Prompt Studio PermissionManager is deprecated. "
+            "Use core AuthNZ RBAC and endpoint dependencies instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.db = db
     
     def check_permission(self, user_id: int, permission: Permission,

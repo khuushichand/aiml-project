@@ -1672,3 +1672,16 @@ pre:hover .copy-button {
 /* Simple progress bar (already styled inline in HTML) */
 .progress-container { position: relative; }
 .progress-bar { transition: width 0.2s ease; }
+
+/* ===========================
+   Moderation Lint Badges
+   =========================== */
+.lint-ok {
+    color: var(--color-success);
+    font-weight: 600;
+}
+.lint-invalid {
+    color: var(--color-error);
+    font-weight: 600;
+}
+.lint-icon { margin-right: 6px; }

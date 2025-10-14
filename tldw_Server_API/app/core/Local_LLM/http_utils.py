@@ -67,8 +67,12 @@ async def request_json(
                 continue
             resp.raise_for_status()
             return resp.json()
-        except httpx.HTTPStatusError:
-            # Do not retry on 4xx
+        except httpx.HTTPStatusError as e:
+            status = getattr(e.response, "status_code", None)
+            if status and status >= 500 and attempt < retries:
+                attempt += 1
+                await asyncio.sleep(backoff * attempt)
+                continue
             raise
         except httpx.RequestError:
             if attempt < retries:
@@ -104,3 +108,56 @@ async def wait_for_http_ready(
             await asyncio.sleep(interval)
     return False
 
+
+async def wait_for_ollama_ready(base_url: str, timeout_total: float = 30.0, interval: float = 0.5) -> bool:
+    """Poll Ollama until ready by checking common endpoints."""
+    return await wait_for_http_ready(
+        base_url,
+        paths=("/api/version", "/api/tags"),
+        timeout_total=timeout_total,
+        interval=interval,
+    )
+
+
+async def async_stream_download(
+    url: str,
+    dest_path: str,
+    *,
+    retries: int = DEFAULT_RETRIES,
+    backoff: float = DEFAULT_BACKOFF,
+    chunk_size: int = 8192,
+) -> None:
+    """Download a file via streaming with basic retry/backoff.
+
+    Overwrites existing file at `dest_path` on success. Removes partial
+    file if an error occurs.
+    """
+    attempt = 0
+    while True:
+        try:
+            async with create_async_client(timeout=300.0) as client:
+                async with client.stream("GET", url, follow_redirects=True) as resp:
+                    resp.raise_for_status()
+                    tmp_path = dest_path + ".part"
+                    with open(tmp_path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                    # Move temp to final name
+                    import os
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    os.replace(tmp_path, dest_path)
+                    return
+        except (httpx.HTTPError, Exception):
+            # Cleanup partial
+            import os
+            try:
+                os.remove(dest_path + ".part")
+            except Exception:
+                pass
+            if attempt < retries:
+                attempt += 1
+                await asyncio.sleep(backoff * attempt)
+                continue
+            raise

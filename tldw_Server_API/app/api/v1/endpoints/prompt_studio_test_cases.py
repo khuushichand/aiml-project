@@ -442,7 +442,7 @@ async def update_test_case(
     """
     try:
         manager = TestCaseManager(db)
-        
+
         # Get test case to check project
         test_case = manager.get_test_case(test_case_id)
         if not test_case:
@@ -450,24 +450,25 @@ async def update_test_case(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Test case {test_case_id} not found"
             )
-        
+
         # Check project access
         await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
-        
+
         # Update test case
-    try:
-        update_data = updates.model_dump(exclude_none=True)
-    except Exception:
-        update_data = {k: v for k, v in updates.dict().items() if v is not None}
+        try:
+            update_data = updates.model_dump(exclude_none=True)
+        except Exception:
+            update_data = {k: v for k, v in updates.dict().items() if v is not None}
+
         updated = manager.update_test_case(test_case_id, update_data)
-        
+
         logger.info(f"User {user_context['user_id']} updated test case {test_case_id}")
-        
+
         return StandardResponse(
             success=True,
             data=TestCaseResponse(**updated)
         )
-        
+
     except InputError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

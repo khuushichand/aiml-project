@@ -3,6 +3,7 @@ Integration tests for media endpoint with contextual chunking options.
 
 Tests the full flow of media ingestion with contextual features.
 """
+import os
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
@@ -43,10 +44,11 @@ class TestMediaEndpointContextualIntegration:
 
     @pytest.fixture
     def auth_headers(self):
-        # Real app runs in single_user mode by default in tests; use default API key
+        # Real app runs in single_user mode by default in tests; use test API key
+        api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
         return {
-            "X-API-KEY": "default-secret-key-for-single-user",
-            "x-api-key": "default-secret-key-for-single-user"
+            "X-API-KEY": api_key,
+            "x-api-key": api_key
         }
     
     @pytest.fixture

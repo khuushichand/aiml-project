@@ -2,6 +2,7 @@
 # Event broadcasting system for Prompt Studio real-time updates
 
 import json
+import uuid
 import asyncio
 from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
@@ -448,27 +449,21 @@ class EventBroadcaster:
             project_id: Associated project ID
         """
         try:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            # Store in sync_log for now (could add dedicated event log table)
-            cursor.execute("""
-                INSERT INTO sync_log (
-                    table_name, operation, entity_id, 
-                    entity_data, client_id, synced_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (
-                "prompt_studio_events",
-                event_type.value,
-                project_id or 0,
-                json.dumps(data),
-                self.client_id
-            ))
-            
-            conn.commit()
-            
+            # Route through DB helper to keep schema consistent across backends
+            payload = dict(data or {})
+            if project_id is not None:
+                payload.setdefault("project_id", project_id)
+            event_uuid = str(uuid.uuid4())
+            # _log_sync_event(entity, entity_uuid, operation, payload)
+            # The helper handles missing sync_log gracefully.
+            self.db._log_sync_event(
+                entity="prompt_studio_event",
+                entity_uuid=event_uuid,
+                operation=event_type.value,
+                payload=payload,
+            )
         except Exception as e:
-            logger.error(f"Failed to log event: {e}")
+            logger.debug(f"Failed to log event to sync_log (non-fatal): {e}")
 
 ########################################################################################################################
 # Event Hooks for Integration

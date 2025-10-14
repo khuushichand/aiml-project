@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   idempotency_key TEXT UNIQUE,
   payload TEXT,
   result TEXT,
-  status TEXT NOT NULL,
-  priority INTEGER DEFAULT 5,
-  max_retries INTEGER DEFAULT 3,
+  status TEXT NOT NULL CHECK (status IN ('queued','processing','completed','failed','cancelled')),
+  priority INTEGER DEFAULT 5 CHECK (priority >= 1 AND priority <= 10),
+  max_retries INTEGER DEFAULT 3 CHECK (max_retries >= 0 AND max_retries <= 100),
   retry_count INTEGER DEFAULT 0,
   available_at TEXT,
   started_at TEXT,
@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   cancel_requested_at TEXT,
   cancelled_at TEXT,
   cancellation_reason TEXT,
+  progress_percent REAL CHECK (progress_percent IS NULL OR (progress_percent >= 0 AND progress_percent <= 100)),
+  progress_message TEXT,
   created_at TEXT DEFAULT (DATETIME('now')),
   updated_at TEXT DEFAULT (DATETIME('now')),
   completed_at TEXT
@@ -57,6 +59,41 @@ FOR EACH ROW
 BEGIN
   UPDATE jobs SET updated_at = DATETIME('now') WHERE id = NEW.id;
 END;
+
+-- Optional archive table (schema-aligned, used when JOBS_ARCHIVE_BEFORE_DELETE=true)
+CREATE TABLE IF NOT EXISTS jobs_archive (
+  id INTEGER,
+  uuid TEXT,
+  domain TEXT NOT NULL,
+  queue TEXT NOT NULL,
+  job_type TEXT NOT NULL,
+  owner_user_id TEXT,
+  project_id INTEGER,
+  idempotency_key TEXT,
+  payload TEXT,
+  result TEXT,
+  status TEXT NOT NULL,
+  priority INTEGER,
+  max_retries INTEGER,
+  retry_count INTEGER,
+  available_at TEXT,
+  started_at TEXT,
+  leased_until TEXT,
+  lease_id TEXT,
+  worker_id TEXT,
+  acquired_at TEXT,
+  error_message TEXT,
+  last_error TEXT,
+  cancel_requested_at TEXT,
+  cancelled_at TEXT,
+  cancellation_reason TEXT,
+  progress_percent REAL,
+  progress_message TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  completed_at TEXT,
+  archived_at TEXT DEFAULT (DATETIME('now'))
+);
 """
 
 

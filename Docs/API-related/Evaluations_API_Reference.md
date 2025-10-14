@@ -782,12 +782,18 @@ When `webhook_url` is provided in a run request, the following payload is sent u
 
 ## Code Examples
 
+> ⚠️ Generate a strong API key and set it via `SINGLE_USER_API_KEY` before running these examples:
+> ```bash
+> export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+> ```
+> Replace `YOUR_API_KEY` below with that value (or load it from your environment at runtime).
+
 ### Python
 ```python
 import requests
 
 # Configuration
-API_KEY = "default-secret-key-for-single-user"
+API_KEY = "YOUR_API_KEY"
 BASE_URL = "http://localhost:8000"
 headers = {"Authorization": f"Bearer {API_KEY}"}
 
@@ -828,7 +834,7 @@ print(response.json())
 ### cURL
 ```bash
 # Set API key
-export API_KEY="default-secret-key-for-single-user"
+export API_KEY="YOUR_API_KEY"
 
 # Create evaluation
 curl -X POST http://localhost:8000/api/v1/evaluations \
@@ -856,7 +862,7 @@ curl http://localhost:8000/api/v1/evaluations/runs/run_xxx/results \
 
 ### JavaScript/TypeScript
 ```javascript
-const API_KEY = 'default-secret-key-for-single-user';
+const API_KEY = 'YOUR_API_KEY';
 const BASE_URL = 'http://localhost:8000';
 
 // Create evaluation

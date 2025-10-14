@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call,
+    chat_api_call_async as perform_chat_api_call_async,
 )
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
@@ -592,7 +593,8 @@ async def execute_streaming_call(
             except Exception:
                 pass
         else:
-            raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
+            # Prefer async handler when available to avoid thread blocking
+            raw_stream_iter = await perform_chat_api_call_async(**cleaned_args)
             metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
             try:
                 if provider_manager:
@@ -921,7 +923,8 @@ async def execute_non_stream_call(
             )
             llm_response = await fut
         else:
-            llm_response = await current_loop.run_in_executor(None, llm_call_func)
+            # Prefer async handler when available
+            llm_response = await perform_chat_api_call_async(**cleaned_args)
         llm_latency = time.time() - llm_start_time
         metrics.track_llm_call(provider, model, llm_latency, success=True)
         if provider_manager:
@@ -945,9 +948,8 @@ async def execute_non_stream_call(
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
                     cleaned_args["api_endpoint"] = fallback_provider
-                    llm_call_func = lambda: perform_chat_api_call(**cleaned_args)
                     try:
-                        llm_response = await current_loop.run_in_executor(None, llm_call_func)
+                        llm_response = await perform_chat_api_call_async(**cleaned_args)
                         provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
                         metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
                     except Exception as fallback_error:

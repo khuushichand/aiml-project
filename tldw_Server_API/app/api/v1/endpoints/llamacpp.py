@@ -104,6 +104,34 @@ async def get_llamacpp_status_endpoint():
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 
+@router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
+async def get_llamacpp_metrics_endpoint():
+    try:
+        if not llm_manager.llamacpp:
+            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
+        handler = llm_manager.llamacpp
+        if hasattr(handler, "get_metrics"):
+            return handler.get_metrics()  # type: ignore[attr-defined]
+        return {"message": "metrics not available"}
+    except Exception as e:
+        llm_manager.logger.error(f"Unexpected error getting Llama.cpp metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+
+@router.get("/llamafile/metrics", summary="Get Llamafile Metrics")
+async def get_llamafile_metrics_endpoint():
+    try:
+        if not getattr(llm_manager, "llamafile", None):
+            raise HTTPException(status_code=400, detail="Llamafile backend is not enabled or configured.")
+        handler = llm_manager.llamafile
+        if hasattr(handler, "get_metrics"):
+            return handler.get_metrics()  # type: ignore[attr-defined]
+        return {"message": "metrics not available"}
+    except Exception as e:
+        llm_manager.logger.error(f"Unexpected error getting Llamafile metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+
 @router.get("/llamacpp/models", summary="List available Llama.cpp models")
 async def list_llamacpp_models_endpoint():
     try:

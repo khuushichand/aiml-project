@@ -422,6 +422,7 @@ class MediaDatabase:
         ON ChunkingTemplates(name) WHERE deleted = 0;
     CREATE INDEX IF NOT EXISTS idx_template_is_builtin ON ChunkingTemplates(is_builtin);
     CREATE INDEX IF NOT EXISTS idx_template_deleted ON ChunkingTemplates(deleted);
+    CREATE INDEX IF NOT EXISTS idx_template_tags ON ChunkingTemplates(tags);
     """
 
     _TRIGGERS_SQL_V1 = """

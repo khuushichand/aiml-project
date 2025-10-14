@@ -2593,7 +2593,9 @@ async function createPrompt() {
         responseEl.textContent = 'Creating prompt...';
         
         // Generate cURL command
-        const curlCommand = apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload });
+        const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+            ? apiClient.generateCurlV2('POST', '/api/v1/prompts', { body: payload })
+            : apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload }));
         if (curlEl) {
             curlEl.textContent = curlCommand;
         }

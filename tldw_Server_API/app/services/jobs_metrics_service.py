@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Optional
+from datetime import datetime
 
 from loguru import logger
 
@@ -24,6 +25,10 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
     ensure_jobs_metrics_registered()
     jm = JobManager()
     interval = float(os.getenv("JOBS_METRICS_INTERVAL_SEC", "30") or "30")
+    ttl_enforce = str(os.getenv("JOBS_TTL_ENFORCE", "")).lower() in {"1","true","yes","y","on"}
+    ttl_age = int(os.getenv("JOBS_TTL_AGE_SECONDS", "0") or "0") or None
+    ttl_runtime = int(os.getenv("JOBS_TTL_RUNTIME_SECONDS", "0") or "0") or None
+    ttl_action = os.getenv("JOBS_TTL_ACTION", "cancel").lower()
 
     logger.info(f"Starting Jobs metrics gauge loop (every {interval}s)")
     while True:
@@ -50,13 +55,35 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                         cur.execute(
                             (
                                 "SELECT domain, queue, job_type, "
-                                "SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS q, "
+                                "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= NOW()) THEN 1 ELSE 0 END) AS q_ready, "
+                                "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) THEN 1 ELSE 0 END) AS q_sched, "
                                 "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p "
                                 "FROM jobs GROUP BY domain, queue, job_type"
                             )
                         )
-                        for (domain, queue, job_type, q, p) in cur.fetchall():
-                            set_queue_gauges(str(domain), str(queue), str(job_type), int(q or 0), int(p or 0), backlog=int(q or 0))
+                        for (domain, queue, job_type, q_ready, q_sched, p) in cur.fetchall():
+                            ready = int(q_ready or 0)
+                            sched = int(q_sched or 0)
+                            set_queue_gauges(str(domain), str(queue), str(job_type), ready, int(p or 0), backlog=(ready + sched), scheduled=sched)
+                        # Observe time to expiry for processing jobs
+                        try:
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                            reg = get_metrics_registry()
+                            cur.execute(
+                                "SELECT domain, queue, job_type, leased_until FROM jobs WHERE status='processing' AND leased_until IS NOT NULL"
+                            )
+                            for (domain, queue, job_type, leased_until) in cur.fetchall():
+                                try:
+                                    if leased_until is None:
+                                        continue
+                                    # leased_until from PG comes as datetime
+                                    now = datetime.utcnow()
+                                    secs = max(0.0, (leased_until - now).total_seconds())
+                                    reg.observe("prompt_studio.jobs.time_to_expiry_seconds", secs, {"domain": str(domain), "queue": str(queue), "job_type": str(job_type)})
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                 else:
                     # Stale processing counts
                     q = (
@@ -69,12 +96,40 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                     # Queue depth gauges per domain/queue/job_type
                     q2 = (
                         "SELECT domain, queue, job_type, "
-                        "SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS q, "
+                        "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) THEN 1 ELSE 0 END) AS q_ready, "
+                        "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) THEN 1 ELSE 0 END) AS q_sched, "
                         "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p "
                         "FROM jobs GROUP BY domain, queue, job_type"
                     )
-                    for (domain, queue, job_type, qd, pd) in conn.execute(q2).fetchall():
-                        set_queue_gauges(str(domain), str(queue), str(job_type), int(qd or 0), int(pd or 0), backlog=int(qd or 0))
+                    for (domain, queue, job_type, q_ready, q_sched, pd) in conn.execute(q2).fetchall():
+                        ready = int(q_ready or 0)
+                        sched = int(q_sched or 0)
+                        set_queue_gauges(str(domain), str(queue), str(job_type), ready, int(pd or 0), backlog=(ready + sched), scheduled=sched)
+                    # Observe time to expiry
+                    try:
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                        reg = get_metrics_registry()
+                        for (domain, queue, job_type, leased_until) in conn.execute(
+                            "SELECT domain, queue, job_type, leased_until FROM jobs WHERE status='processing' AND leased_until IS NOT NULL"
+                        ).fetchall():
+                            try:
+                                if not leased_until:
+                                    continue
+                                # leased_until stored as TEXT in SQLite
+                                from datetime import datetime as _dt
+                                lu = _dt.fromisoformat(str(leased_until)) if isinstance(leased_until, str) else leased_until
+                                secs = max(0.0, (lu - _dt.utcnow()).total_seconds())
+                                reg.observe("prompt_studio.jobs.time_to_expiry_seconds", secs, {"domain": str(domain), "queue": str(queue), "job_type": str(job_type)})
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                # Apply TTL policies if enabled
+                if ttl_enforce and (ttl_age or ttl_runtime):
+                    try:
+                        jm.apply_ttl_policies(age_seconds=ttl_age, runtime_seconds=ttl_runtime, action=ttl_action)
+                    except Exception as _e:
+                        logger.debug(f"TTL sweep error: {_e}")
             finally:
                 try:
                     conn.close()

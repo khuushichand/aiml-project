@@ -29,6 +29,10 @@ os.environ.setdefault("TLDB_DISABLE_FILE_LOGS", "1")
 # Default in code is 300s; use 15s for test runs
 os.environ.setdefault("TEST_EMBEDDINGS_UNLOAD_TIMEOUT_SECONDS", "15")
 
+# Provide deterministic API key for single-user mode during tests
+TEST_API_KEY = os.environ.setdefault("SINGLE_USER_API_KEY", "test-api-key-12345")
+os.environ.setdefault("API_BEARER", TEST_API_KEY)
+
 # Disable auto-download of large models during tests to avoid network/hangs
 os.environ.setdefault("TTS_AUTO_DOWNLOAD", "0")
 

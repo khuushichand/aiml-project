@@ -12,6 +12,9 @@ from typing import List, Optional, Dict, Any
 #
 # Third-party imports
 import asyncio
+import httpx
+import socket
+import time
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
@@ -48,7 +51,84 @@ class LlamafileHandler(BaseLLMHandler):
 
         # Corrected type hint for asyncio.subprocess.Process
         self._active_servers: Dict[int, asyncio.subprocess.Process] = {}
+
+        # Apply environment overrides
+        def _env_bool(name: str):
+            v = os.getenv(name)
+            if v is None:
+                return None
+            return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+        def _env_int(name: str):
+            v = os.getenv(name)
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                return None
+
+        def _env_paths(name: str):
+            v = os.getenv(name)
+            if not v:
+                return None
+            parts = [p.strip() for p in v.split(",") if p.strip()]
+            return [Path(p) for p in parts]
+
+        b = _env_bool("LOCAL_LLM_ALLOW_CLI_SECRETS")
+        if b is not None:
+            self.config.allow_cli_secrets = b
+        b = _env_bool("LOCAL_LLM_PORT_AUTOSELECT")
+        if b is not None:
+            self.config.port_autoselect = b
+        i = _env_int("LOCAL_LLM_PORT_PROBE_MAX")
+        if i is not None:
+            self.config.port_probe_max = i
+        paths = _env_paths("LOCAL_LLM_ALLOWED_PATHS")
+        if paths is not None:
+            self.config.allowed_paths = paths
+
         self._setup_signal_handlers()  # For cleaning up on exit
+        self.metrics = {"starts": 0, "stops": 0, "start_errors": 0, "readiness_time_sum": 0.0, "readiness_count": 0}
+
+    def get_metrics(self) -> Dict[str, Any]:
+        return dict(self.metrics)
+
+    def _is_port_free(self, host: str, port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((host, port))
+                return True
+            except OSError:
+                return False
+
+    def _pick_port(self, host: str, start_port: int) -> int:
+        if not getattr(self.config, "port_autoselect", True):
+            return start_port
+        max_probe = int(getattr(self.config, "port_probe_max", 10) or 0)
+        for i in range(max_probe + 1):
+            cand = start_port + i
+            if self._is_port_free(host, cand):
+                return cand
+        return start_port
+
+    def _denylist_check(self, args: Dict[str, Any]):
+        if not getattr(self.config, "allow_cli_secrets", False):
+            bad = [k for k in args.keys() if k in {"hf_token", "token"}]
+            if bad:
+                raise ServerError(f"Refusing secret flags {bad}. Use env (e.g., HF_TOKEN) or enable allow_cli_secrets.")
+
+    def _is_path_allowed(self, p: Path) -> bool:
+        try: pr = p.resolve()
+        except Exception: return False
+        bases = [self.models_dir.resolve()]
+        extra = getattr(self.config, "allowed_paths", None) or []
+        try:
+            bases.extend([Path(x).resolve() for x in extra])
+        except Exception:
+            pass
+        return any(str(pr).startswith(str(base)) for base in bases)
 
     # --- Llamafile Executable Management ---
     async def download_latest_llamafile_executable(self, force_download: bool = False) -> Path:
@@ -64,18 +144,12 @@ class LlamafileHandler(BaseLLMHandler):
         asset_name_prefix = "llamafile-"  # This needs to be accurate based on current releases
         latest_release_url = f"https://api.github.com/repos/{repo}/releases/latest"
 
-        try:
-            import httpx
-        except ImportError:
-            self.logger.error("httpx is not installed. Please install it: pip install httpx")
-            raise ImportError("httpx is required for downloading llamafile.")
+        from tldw_Server_API.app.core.Local_LLM.http_utils import request_json, async_stream_download
 
-        async with httpx.AsyncClient(timeout=60.0) as client:  # Increased timeout for fetching release info
+        async with create_async_client(timeout=60.0) as client:  # Increased timeout for fetching release info
             try:
                 self.logger.debug(f"Fetching latest release info from {latest_release_url}")
-                response = await client.get(latest_release_url)
-                response.raise_for_status()
-                latest_release_data = response.json()
+                latest_release_data = await request_json(client, "GET", latest_release_url)
                 tag_name = latest_release_data['tag_name']
                 self.logger.debug(f"Latest release tag: {tag_name}")
 
@@ -134,30 +208,8 @@ class LlamafileHandler(BaseLLMHandler):
                 # Ensure the target directory exists
                 output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Streaming download
-                async with client.stream("GET", asset_url, follow_redirects=True,
-                                         timeout=300.0) as response_download:  # Long timeout for download
-                    response_download.raise_for_status()
-                    total_size = int(response_download.headers.get('content-length', 0))
-
-                    # Using tqdm for progress if available, can be made optional
-                    try:
-                        from tqdm.asyncio import tqdm  # For async progress bar
-
-                        pbar = tqdm(total=total_size, unit='B', unit_scale=True, desc=output_path.name,
-                                    disable=self.logger.level > 10)  # Only show if debug
-                    except ImportError:
-                        pbar = None
-                        self.logger.info(f"tqdm not found, downloading {output_path.name} without progress bar.")
-
-                    with open(output_path, 'wb') as f:
-                        async for chunk in response_download.aiter_bytes():
-                            f.write(chunk)
-                            if pbar:
-                                pbar.update(len(chunk))
-                    if pbar:
-                        pbar.close()
-
+                # Streaming download with retries
+                await async_stream_download(asset_url, str(output_path))
                 await asyncio.to_thread(os.chmod, output_path, 0o755)
                 self.logger.info(f"Downloaded {output_path.name} successfully.")
                 return output_path
@@ -199,19 +251,15 @@ class LlamafileHandler(BaseLLMHandler):
         self.models_dir.mkdir(parents=True, exist_ok=True)  # Ensure models dir exists
         self.logger.info(f"Downloading model: {model_name} from {model_url} to {model_path}")
         try:
-            # project_utils.download_file needs to be a real function that can handle large files
-            # and ideally offer progress. If it's blocking, to_thread is correct.
-            await asyncio.to_thread(
-                download_file,  # This function must exist in your Utils.py
-                url=model_url,
-                dest_path=str(model_path),
-                expected_checksum=expected_hash  # Your download_file should handle this
-            )
+            from tldw_Server_API.app.core.Local_LLM.http_utils import async_stream_download
+            await async_stream_download(model_url, str(model_path))
+            if expected_hash:
+                is_valid = await asyncio.to_thread(verify_checksum, str(model_path), expected_hash)
+                if not is_valid:
+                    model_path.unlink(missing_ok=True)
+                    raise ModelDownloadError("Checksum verification failed for downloaded model.")
             self.logger.info(f"Downloaded model '{model_name}' ({filename}) successfully.")
             return model_path
-        except NotImplementedError:  # If placeholder download_file is used
-            self.logger.error("project_utils.download_file is not implemented. Cannot download model.")
-            raise ModelDownloadError("Model download function not implemented.")
         except Exception as e:
             self.logger.error(f"Failed to download model {model_name}: {e}", exc_info=True)
             if model_path.exists(): model_path.unlink(missing_ok=True)
@@ -243,7 +291,7 @@ class LlamafileHandler(BaseLLMHandler):
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
         args = server_args or {}
-        port = args.get("port", self.config.default_port)
+        port = self._pick_port(host, int(args.get("port", self.config.default_port)))
         host = args.get("host", self.config.default_host)
 
         # Corrected check using .returncode for asyncio.subprocess.Process
@@ -254,71 +302,96 @@ class LlamafileHandler(BaseLLMHandler):
             return {"status": "already_managed", "pid": active_pid, "port": port, "host": host,
                     "model": model_filename}
 
-        command = [str(llamafile_exe), "-m", str(model_path)]
-        command.extend(["--port", str(port)])
-        if host: command.extend(["--host", host])
-        if args.get("threads"): command.extend(["-t", str(args["threads"])])
-        if args.get("threads_batch"): command.extend(["-tb", str(args["threads_batch"])])  # Common short flag
-        if args.get("ctx_size") or args.get("c"): command.extend(["-c", str(args.get("ctx_size") or args.get("c"))])
-        if args.get("ngl") or args.get("gpu_layers"): command.extend(
-            ["-ngl", str(args.get("ngl") or args.get("gpu_layers"))])
-        if args.get("batch_size") or args.get("b"): command.extend(["-b", str(args.get("batch_size") or args.get("b"))])
-        if args.get("verbose"): command.append("-v")
-        if args.get("api_key"): command.extend(["--api-key", str(args.get("api_key"))])
-
-        # For boolean flags like --log-disable, or --memory-f32, --numa from your original script
-        bool_flags_map = {
-            "log_disable": "--log-disable",
-            "memory_f32": "--memory-f32",
-            "numa": "--numa",
-            "sane_defaults": "--sane-defaults",  # from your start_llamafile
-            # Add more as needed
+        # Allowlist of supported args
+        allowed_formatters: Dict[str, Any] = {
+            "port": lambda v: ["--port", str(int(v))],
+            "host": lambda v: ["--host", str(v)],
+            "threads": lambda v: ["-t", str(int(v))],
+            "threads_batch": lambda v: ["-tb", str(int(v))],
+            "ctx_size": lambda v: ["-c", str(int(v))],
+            "c": lambda v: ["-c", str(int(v))],
+            "ngl": lambda v: ["-ngl", str(int(v))],
+            "gpu_layers": lambda v: ["-ngl", str(int(v))],
+            "batch_size": lambda v: ["-b", str(int(v))],
+            "b": lambda v: ["-b", str(int(v))],
+            "verbose": lambda v: (["-v"] if v else []),
+            "api_key": lambda v: (["--api-key", str(v)] if v else []),
+            # Boolean toggles
+            "log_disable": lambda v: (["--log-disable"] if v else []),
+            "memory_f32": lambda v: (["--memory-f32"] if v else []),
+            "numa": lambda v: (["--numa"] if v else []),
+            "sane_defaults": lambda v: (["--sane-defaults"] if v else []),
+            # Extended safe flags commonly supported by llama.cpp-compatible CLIs
+            "no_mmap": lambda v: (["--no-mmap"] if v else []),
+            "mlock": lambda v: (["--mlock"] if v else []),
+            "main_gpu": lambda v: ["--main-gpu", str(int(v))],
+            "tensor_split": lambda v: ["--tensor-split", ",".join(map(str, v))] if isinstance(v, (list, tuple)) else ["--tensor-split", str(v)],
+            "rope_freq_base": lambda v: ["--rope-freq-base", str(float(v))],
+            "rope_freq_scale": lambda v: ["--rope-freq-scale", str(float(v))],
+            # Parity with llama.cpp handler
+            "main_kv": lambda v: ["--main-kv", str(int(v))],
+            "no_kv_offload": lambda v: (["--no-kv-offload"] if v else []),
+            "rope_scaling": lambda v: ["--rope-scaling", str(v)],
+            "flash_attn": lambda v: (["--flash-attn"] if v else []),
+            "cont_batching": lambda v: (["--cont-batching"] if v else []),
+            "lora": lambda v: sum((["--lora", str(x)] for x in (v if isinstance(v, (list, tuple)) else [v])), []),
+            "lora_base": lambda v: ["--lora-base", str(v)],
+            "cache_type_k": lambda v: ["--cache-type-k", str(v)],
+            "cache_type_v": lambda v: ["--cache-type-v", str(v)],
+            # Paths
+            "grammar_file": lambda v: ["--grammar-file", str(v)],
+            "json_schema_file": lambda v: ["--json-schema-file", str(v)],
+            "chat_template_file": lambda v: ["--chat-template-file", str(v)],
+            "prompt_cache": lambda v: ["--prompt-cache", str(v)],
+            "log_file": lambda v: ["--log-file", str(v)],
         }
-        for arg_key, flag_str in bool_flags_map.items():
-            if args.get(arg_key) is True:
-                if flag_str not in command: command.append(flag_str)
 
-        # For other key-value pairs not explicitly handled
-        explicitly_handled_keys = {
-            "port", "host", "threads", "threads_batch", "ctx_size", "c", "ngl", "gpu_layers",
-            "batch_size", "b", "verbose", "api_key"
-        }.union(bool_flags_map.keys())
+        self._denylist_check(args)
+        command = [str(llamafile_exe), "-m", str(model_path)]
+        command += ["--port", str(port)]
+        if host:
+            command += ["--host", host]
 
+        # Validate keys
+        invalid = [k for k in args.keys() if k not in allowed_formatters]
+        if invalid and not getattr(self.config, "allow_unvalidated_args", False):
+            raise ServerError(f"Unsupported llamafile server args: {sorted(invalid)}")
+
+        # Apply allowlisted flags (skip ones already included explicitly)
         for k, v in args.items():
-            if k not in explicitly_handled_keys:
-                # Skip if value is False (for flags that might be set to False to disable)
-                if v is False: continue
-
-                # Construct flag, try --k first, then -k if common
-                flag = f"--{k.replace('_', '-')}"  # common convention for multi-word args
-                alt_flag = f"-{k}"
-
-                # Check if flag or its value is already part of the command by some other means
-                # This is a bit tricky; the current explicit handling should cover most common cases.
-                # This part is mainly for less common or new llamafile arguments.
-                is_already_added = False
-                for item in command:
-                    if flag == item or alt_flag == item:
-                        is_already_added = True
-                        break
-
-                if not is_already_added:
-                    if v is True:  # Boolean flag
-                        command.append(flag)
-                    else:  # Key-value pair
-                        command.extend([flag, str(v)])
+            if k in ("port", "host"):
+                continue
+            if k in allowed_formatters:
+                if k in {"grammar_file", "json_schema_file", "chat_template_file", "prompt_cache", "log_file", "lora_base"}:
+                    if not self._is_path_allowed(Path(v)):
+                        raise ServerError(f"File path for '{k}' must be under allowed directories.")
+                if k == "lora":
+                    vals = v if isinstance(v, (list, tuple)) else [v]
+                    for item in vals:
+                        if not self._is_path_allowed(Path(item)):
+                            raise ServerError("LoRA path must be under allowed directories.")
+                command += allowed_formatters[k](v)
+            elif getattr(self.config, "allow_unvalidated_args", False):
+                flag = f"--{k.replace('_', '-')}"
+                if v is True:
+                    command.append(flag)
+                elif v is False or v is None:
+                    pass
+                else:
+                    command += [flag, str(v)]
 
         redacted_cmd = redact_cmd_args(command)
         self.logger.info(f"Starting llamafile server for {model_filename} with command: {' '.join(redacted_cmd)}")
 
         try:
             # Using create_subprocess_exec for better security with list of args
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                preexec_fn=os.setsid if platform.system() != "Windows" else None
-            )
+            cpe_kwargs = {"stdout": asyncio.subprocess.PIPE, "stderr": asyncio.subprocess.PIPE}
+            if platform.system() != "Windows":
+                cpe_kwargs["preexec_fn"] = os.setsid
+            else:
+                cpe_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            t0 = time.perf_counter()
+            process = await asyncio.create_subprocess_exec(*command, **cpe_kwargs)
             # Poll HTTP readiness instead of fixed sleep
             base_url = f"http://{host}:{port}"
             is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
@@ -335,9 +408,14 @@ class LlamafileHandler(BaseLLMHandler):
                     out_bytes = await process.stdout.read()
                     stdout_output = out_bytes.decode(errors='ignore').strip()
                 if stdout_output: self.logger.error(f"Llamafile server stdout: {stdout_output}")
+                self.metrics["start_errors"] += 1
                 raise ServerError(f"Llamafile server failed to start. Stderr: {stderr_output}")
 
             self._active_servers[port] = process
+            t1 = time.perf_counter()
+            self.metrics["starts"] += 1
+            self.metrics["readiness_time_sum"] += max(0.0, t1 - t0)
+            self.metrics["readiness_count"] += 1
             self.logger.info(f"Llamafile server started for {model_filename} on port {port} with PID {process.pid}.")
             return {"status": "started", "pid": process.pid, "port": port, "host": host, "model": model_filename,
                     "command": ' '.join(redacted_cmd)}  # Return redacted command
@@ -498,11 +576,11 @@ class LlamafileHandler(BaseLLMHandler):
                 return result
             except httpx.HTTPStatusError as e:
                 error_text = e.response.text
-                self.logger.error(f"Llamafile API error ({e.response.status_code}) from {api_url}: {error_text}",
+                self.logger.error("Llamafile API error ({}) from {}: {}", e.response.status_code, api_url, error_text,
                                   exc_info=True)
                 raise InferenceError(f"Llamafile API error ({e.response.status_code}): {error_text}")
             except httpx.RequestError as e:
-                self.logger.error(f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
+                self.logger.error("Could not connect or communicate with Llamafile server at {}: {}", api_url, e,
                                   exc_info=True)
                 raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
             except Exception as e:

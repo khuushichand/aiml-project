@@ -441,13 +441,13 @@ async def create_optimization(
         combined_config: Dict[str, Any] = (
             json.loads(opt_cfg.model_dump_json())
             if hasattr(opt_cfg, "model_dump_json")
-            else opt_cfg.dict()
+            else (opt_cfg.model_dump() if hasattr(opt_cfg, "model_dump") else opt_cfg.dict())
         )
         if optimization_data.bootstrap_config is not None:
             combined_config["bootstrap_config"] = (
                 json.loads(optimization_data.bootstrap_config.model_dump_json())
                 if hasattr(optimization_data.bootstrap_config, "model_dump_json")
-                else optimization_data.bootstrap_config.dict()
+                else (optimization_data.bootstrap_config.model_dump() if hasattr(optimization_data.bootstrap_config, "model_dump") else optimization_data.bootstrap_config.dict())
             )
 
         bootstrap_samples = (
@@ -1034,7 +1034,7 @@ async def add_optimization_iteration(
 
 @router.get(
     "/iterations/{optimization_id}",
-    response_model=ListResponse,
+    response_model=StandardResponse,
     openapi_extra={
         "responses": {
             "200": {
@@ -1089,11 +1089,8 @@ async def list_optimization_iterations(
         )
 
         metadata = PaginationMetadata(**result.get("pagination", {}))
-        return ListResponse(
-            success=True,
-            data=result.get("iterations", []),
-            metadata=metadata,
-        )
+        # Back-compat: wrap iterations under data.{iterations} for tests expecting this shape
+        return StandardResponse(success=True, data={"iterations": result.get("iterations", [])}, metadata=metadata.model_dump())
     except DatabaseError as exc:
         logger.error(f"Database error listing optimization iterations for {optimization_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list iterations")

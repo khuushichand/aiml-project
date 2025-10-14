@@ -66,7 +66,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[Any] = None
     error: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -142,6 +142,9 @@ class Task:
                     setattr(task, field_name, datetime.fromisoformat(value))
                 elif isinstance(value, datetime):
                     setattr(task, field_name, value)
+        
+        if task.metadata is None:
+            task.metadata = {}
         
         return task
     

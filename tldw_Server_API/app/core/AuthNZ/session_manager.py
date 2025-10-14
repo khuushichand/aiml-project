@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List
 import asyncio
 #
 # 3rd-party imports
-import redis
+from redis import asyncio as redis_async
 from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -47,7 +47,7 @@ class SessionManager:
         """Initialize session manager"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client: Optional[redis_async.Redis] = None
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
         self.cipher_suite: Optional[Fernet] = None
@@ -65,7 +65,7 @@ class SessionManager:
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
-                self.redis_client = redis.from_url(
+                self.redis_client = redis_async.from_url(
                     self.settings.REDIS_URL,
                     decode_responses=True,
                     socket_connect_timeout=1,
@@ -76,7 +76,7 @@ class SessionManager:
                 )
                 
                 # Test connection
-                self.redis_client.ping()
+                await self.redis_client.ping()
                 logger.info("Redis connected for session caching")
                 
             except (RedisConnectionError, RedisError) as e:
@@ -696,11 +696,7 @@ class SessionManager:
             # Check Redis cache first if available
             if self.redis_client:
                 try:
-                    blacklisted = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        self.redis_client.get,
-                        f"blacklist:{token_hash}"
-                    )
+                    blacklisted = await self.redis_client.get(f"blacklist:{token_hash}")
                     if blacklisted:
                         return True
                 except RedisError:
@@ -881,15 +877,15 @@ class SessionManager:
             ttl = int((expires_at - datetime.utcnow()).total_seconds())
             if ttl > 0:
                 # Cache session data
-                self.redis_client.setex(
+                await self.redis_client.setex(
                     f"session:{token_hash}",
                     ttl,
                     json.dumps(cache_data)
                 )
                 
                 # Add to user's session set
-                self.redis_client.sadd(f"user:{user_id}:sessions", session_id)
-                self.redis_client.expire(f"user:{user_id}:sessions", ttl)
+                await self.redis_client.sadd(f"user:{user_id}:sessions", session_id)
+                await self.redis_client.expire(f"user:{user_id}:sessions", ttl)
                 
         except RedisError as e:
             logger.warning(f"Failed to cache session: {e}")
@@ -900,7 +896,7 @@ class SessionManager:
             return None
         
         try:
-            cached = self.redis_client.get(f"session:{token_hash}")
+            cached = await self.redis_client.get(f"session:{token_hash}")
             if cached:
                 data = json.loads(cached)
                 expires = datetime.fromisoformat(data['expires_at'])
@@ -908,7 +904,7 @@ class SessionManager:
                     return data
                 else:
                     # Expired, remove from cache
-                    self.redis_client.delete(f"session:{token_hash}")
+                    await self.redis_client.delete(f"session:{token_hash}")
             return None
             
         except RedisError:
@@ -921,12 +917,12 @@ class SessionManager:
         
         try:
             # Find and delete session by scanning (not ideal but necessary)
-            for key in self.redis_client.scan_iter("session:*"):
-                data = self.redis_client.get(key)
+            async for key in self.redis_client.scan_iter("session:*"):
+                data = await self.redis_client.get(key)
                 if data:
                     session_data = json.loads(data)
                     if session_data.get('session_id') == session_id:
-                        self.redis_client.delete(key)
+                        await self.redis_client.delete(key)
                         break
                         
         except RedisError:
@@ -938,19 +934,16 @@ class SessionManager:
             return
         
         try:
-            # Get user's sessions
-            session_ids = self.redis_client.smembers(f"user:{user_id}:sessions")
-            
             # Clear each session
-            for key in self.redis_client.scan_iter("session:*"):
-                data = self.redis_client.get(key)
+            async for key in self.redis_client.scan_iter("session:*"):
+                data = await self.redis_client.get(key)
                 if data:
                     session_data = json.loads(data)
                     if session_data.get('user_id') == user_id:
-                        self.redis_client.delete(key)
+                        await self.redis_client.delete(key)
             
             # Clear user's session set
-            self.redis_client.delete(f"user:{user_id}:sessions")
+            await self.redis_client.delete(f"user:{user_id}:sessions")
             
         except RedisError:
             pass
@@ -962,10 +955,10 @@ class SessionManager:
         
         try:
             count = 0
-            for key in self.redis_client.scan_iter("session:*"):
-                ttl = self.redis_client.ttl(key)
+            async for key in self.redis_client.scan_iter("session:*"):
+                ttl = await self.redis_client.ttl(key)
                 if ttl == -1:  # No expiry set
-                    self.redis_client.delete(key)
+                    await self.redis_client.delete(key)
                     count += 1
             
             if count:
@@ -1010,7 +1003,12 @@ class SessionManager:
             logger.debug(f"SessionManager scheduler shutdown skipped: {e}")
         
         if self.redis_client:
-            self.redis_client.close()
+            try:
+                await self.redis_client.close()
+            except Exception as e:
+                logger.debug(f"Ignoring Redis client shutdown error: {e}")
+            finally:
+                self.redis_client = None
         
         logger.info("SessionManager shutdown complete")
 

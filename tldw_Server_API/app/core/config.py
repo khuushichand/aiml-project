@@ -370,7 +370,7 @@ def load_settings():
     single_user_fixed_id = int(os.getenv("SINGLE_USER_FIXED_ID", "1")) # Default to user ID 1
     # API Key for accessing the single-user instance
     # Check both SINGLE_USER_API_KEY (AuthNZ standard) and API_KEY (legacy) environment variables
-    single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY", "default-secret-key-for-single-user")
+    single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
     # --- Multi-User Settings (JWT) ---
     jwt_secret_key = os.getenv("JWT_SECRET_KEY", "a_very_insecure_default_secret_key_for_dev_only")
@@ -716,9 +716,13 @@ def load_settings():
     }
 
     # --- Warnings ---
-    if config_dict["SINGLE_USER_MODE"] and config_dict["SINGLE_USER_API_KEY"] == "default-secret-key-for-single-user":
-        logger.warning("Using default API_KEY for single-user mode. Set the API_KEY environment variable for security.")
-        logger.debug(f"Using default API_KEY for single-user mode: '{config_dict['SINGLE_USER_API_KEY']}'")
+    if config_dict["SINGLE_USER_MODE"]:
+        if not config_dict["SINGLE_USER_API_KEY"]:
+            logger.error(
+                "SINGLE_USER_API_KEY is not configured. The server will refuse to start in single-user mode.\n"
+                "Run `python -m tldw_Server_API.app.core.AuthNZ.initialize` and generate secure keys, "
+                "then set SINGLE_USER_API_KEY in your environment or .env file."
+            )
     if not config_dict["SINGLE_USER_MODE"] and config_dict["JWT_SECRET_KEY"] == "a_very_insecure_default_secret_key_for_dev_only":
         logger.critical("SECURITY WARNING: Using default JWT_SECRET_KEY in multi-user mode. Set a strong JWT_SECRET_KEY environment variable!")
     if not config_dict["SINGLE_USER_MODE"] and not config_dict["USERS_DB_CONFIGURED"]:

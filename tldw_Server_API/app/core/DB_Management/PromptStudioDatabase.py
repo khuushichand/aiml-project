@@ -597,9 +597,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "CREATE INDEX IF NOT EXISTS idx_ps_idem_entity ON prompt_studio_idempotency(entity_type, user_id)",
                     connection=conn,
                 )
-                # TODO(PS-IDEMPOTENCY-PG): Add _idem_lookup/_idem_record methods for Postgres backend
-                # mirroring the SQLite implementation. Scope lookups by (entity_type, idempotency_key, user_id)
-                # to avoid cross-user collisions in multi-user mode. Update endpoints/tests accordingly.
+                # Note: Postgres idempotency helpers are implemented in this class
+                # via _idem_lookup/_idem_record and scoped by (entity_type, idempotency_key, user_id).
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure idempotency table: {exc}") from exc
             # Ensure leasing columns exist on job queue
@@ -1989,6 +1988,58 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             },
         )
         return record
+
+    def list_optimization_iterations(
+        self,
+        optimization_id: int,
+        *,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> Dict[str, Any]:
+        """List persisted iterations for an optimization (SQLite backend)."""
+        if page < 1:
+            raise InputError("Page index must be >= 1")
+        if per_page < 1:
+            raise InputError("Items per page must be >= 1")
+
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            # Count total
+            cursor.execute(
+                "SELECT COUNT(*) FROM prompt_studio_optimization_iterations WHERE optimization_id = ?",
+                (optimization_id,),
+            )
+            row = cursor.fetchone()
+            total = int(row[0]) if row and row[0] is not None else 0
+
+            # Page slice
+            offset = max(page - 1, 0) * per_page
+            cursor.execute(
+                """
+                SELECT *
+                FROM prompt_studio_optimization_iterations
+                WHERE optimization_id = ?
+                ORDER BY iteration_number ASC, id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (optimization_id, per_page, offset),
+            )
+            rows = cursor.fetchall()
+            iterations = [self._row_to_dict(cursor, r) for r in rows if r]
+
+            return {
+                "iterations": iterations,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "total_pages": (total + per_page - 1) // per_page if per_page else 0,
+                },
+            }
+        except sqlite3.Error as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc
 
     def list_optimization_iterations(
         self,
@@ -5315,6 +5366,56 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             },
         )
         return record
+
+    def list_optimization_iterations(
+        self,
+        optimization_id: int,
+        *,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> Dict[str, Any]:
+        """List persisted iterations for an optimization (SQLite backend)."""
+        if page < 1:
+            raise InputError("Page index must be >= 1")
+        if per_page < 1:
+            raise InputError("Items per page must be >= 1")
+
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM prompt_studio_optimization_iterations WHERE optimization_id = ?",
+                (optimization_id,),
+            )
+            row = cursor.fetchone()
+            total = int(row[0]) if row and row[0] is not None else 0
+
+            offset = max(page - 1, 0) * per_page
+            cursor.execute(
+                """
+                SELECT *
+                FROM prompt_studio_optimization_iterations
+                WHERE optimization_id = ?
+                ORDER BY iteration_number ASC, id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (optimization_id, per_page, offset),
+            )
+            rows = cursor.fetchall()
+            iterations = [self._row_to_dict(cursor, r) for r in rows if r]
+
+            return {
+                "iterations": iterations,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "total_pages": (total + per_page - 1) // per_page if per_page else 0,
+                },
+            }
+        except sqlite3.Error as exc:  # noqa: BLE001
+            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc
 
     # --- Job queue helpers ---
 

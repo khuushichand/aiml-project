@@ -26,7 +26,7 @@ The Evaluations module in tldw_server provides a comprehensive framework for eva
 
 ### Prerequisites
 - tldw_server running (default: http://localhost:8000)
-- API key for authentication (default in dev mode: `default-secret-key-for-single-user`)
+- API key for authentication (`SINGLE_USER_API_KEY` set to a strong value, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
 - (Optional) LLM API key for model-graded evaluations (OpenAI, Anthropic, etc.)
 
 ### Quick Setup
@@ -38,7 +38,7 @@ curl http://localhost:8000/health
 
 2. **Set your authentication:**
 ```bash
-export TLDW_API_KEY="default-secret-key-for-single-user"  # or your API key
+export TLDW_API_KEY="${SINGLE_USER_API_KEY:-YOUR_API_KEY}"
 ```
 
 3. **Test with a simple evaluation:**

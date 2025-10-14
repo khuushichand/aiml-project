@@ -545,6 +545,8 @@ function openAdminJobsWithFilter(domain, queue, jobType) {
                         const desc = `${domain || '(any)'}/${queue || '(any)'}/${jobType || '(any)'}`;
                         topbar.textContent = `Filter applied: ${desc}`;
                     }
+                    try { if (typeof adminJobsSaveFilters === 'function') adminJobsSaveFilters(); } catch (e) { /* ignore */ }
+                    try { if (typeof updateSavedFiltersBadge === 'function') updateSavedFiltersBadge({ domain, queue, job_type: jobType }); } catch (e) { /* ignore */ }
                     if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
                     return true;
                 }

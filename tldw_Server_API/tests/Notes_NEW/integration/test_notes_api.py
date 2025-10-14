@@ -161,10 +161,12 @@ def test_list_and_search_pagination_and_404s(client_with_notes_db: TestClient):
     page1 = client.get("/api/v1/notes/", params={"limit": 2, "offset": 0})
     page2 = client.get("/api/v1/notes/", params={"limit": 2, "offset": 2})
     assert page1.status_code == 200 and page2.status_code == 200
-    assert isinstance(page1.json(), list) and isinstance(page2.json(), list)
+    d1, d2 = page1.json(), page2.json()
+    assert isinstance(d1, dict) and isinstance(d2, dict)
+    assert isinstance(d1.get("notes"), list) and isinstance(d2.get("notes"), list)
     # Verify disjointness of pages by IDs
-    ids1 = {n.get("id") for n in page1.json()}
-    ids2 = {n.get("id") for n in page2.json()}
+    ids1 = {n.get("id") for n in d1.get("notes", [])}
+    ids2 = {n.get("id") for n in d2.get("notes", [])}
     assert ids1.isdisjoint(ids2)
     # If both pages are full, combined count equals sum
     if len(ids1) == 2 and len(ids2) == 2:

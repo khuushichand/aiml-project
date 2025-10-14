@@ -428,7 +428,9 @@ class EndpointHelper {
 
         try {
             const { body, query, processedPath } = this.buildRequest(endpointId, path, bodyType);
-            const curlCommand = apiClient.generateCurl(method, processedPath, { body, query });
+            const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
+                ? apiClient.generateCurlV2(method, processedPath, { body, query })
+                : apiClient.generateCurl(method, processedPath, { body, query }));
             
             curlEl.textContent = curlCommand;
             curlEl.style.display = curlEl.style.display === 'none' ? 'block' : 'none';

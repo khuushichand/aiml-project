@@ -666,6 +666,20 @@ async def lifespan(app: FastAPI):
                 core_jobs_task.cancel()
         if 'claims_task' in locals() and claims_task:
             claims_task.cancel()
+        # Jobs metrics gauges worker shutdown
+        if 'jobs_metrics_task' in locals() and jobs_metrics_task:
+            try:
+                if 'jobs_metrics_stop_event' in locals() and jobs_metrics_stop_event:
+                    jobs_metrics_stop_event.set()
+                    await _asyncio.wait_for(jobs_metrics_task, timeout=5.0)
+                    logger.info("Jobs metrics gauge worker stopped via stop_event")
+                else:
+                    jobs_metrics_task.cancel()
+            except Exception:
+                try:
+                    jobs_metrics_task.cancel()
+                except Exception:
+                    pass
     except Exception:
         pass
 

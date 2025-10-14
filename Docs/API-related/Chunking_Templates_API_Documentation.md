@@ -398,6 +398,29 @@ The system comes with several pre-configured templates:
 - **Features**: Preserves code blocks and headers
 - **Tags**: code, documentation, technical, programming
 
+## Diagnostics Headers
+
+The templates endpoints emit optional diagnostic headers to help operators identify DB capability mismatches. These are present on list/create/apply/update/delete responses.
+
+- `X-Template-DB-Class`: Fully-qualified class name of the DB dependency instance used by the endpoint (e.g., `tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`).
+- `X-Template-DB-Capability`: `native` if the DB provides native template methods; `fallback` if the endpoint is using an in-memory fallback store due to missing methods.
+- `X-Template-DB-Missing`: Comma-separated list of missing DB methods (e.g., `create_chunking_template,get_chunking_template`).
+- `X-Template-DB-Hint`: A short suggestion to ensure the correct DB class is wired: `Ensure Media_DB_v2.MediaDatabase is used: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`.
+
+When you see `fallback`, templates are still functional (created/updated/applied) in-memory for the current process, but will not persist across server restarts. To fix this, ensure the dependency provider returns a `Media_DB_v2.MediaDatabase` instance.
+
+Example (curl):
+
+```
+curl -s -D - http://localhost:8000/api/v1/chunking/templates | head
+HTTP/1.1 200 OK
+X-Template-DB-Class: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase
+X-Template-DB-Capability: native
+...
+```
+
+If you see `fallback` and missing methods, review the DI wiring at `tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py` and ensure your override (in tests) or production container uses `Media_DB_v2.MediaDatabase`.
+
 ### 3. chat_conversation
 - **Description**: Template for processing chat conversations
 - **Method**: Sentences

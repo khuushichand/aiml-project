@@ -19,7 +19,7 @@
     
     // Default configuration (fallback values)
     const DEFAULT_CONFIG = {
-        api_key: 'default-secret-key-for-single-user',
+        api_key: 'YOUR_API_KEY',
         base_url: 'http://localhost:8000',
         configured: false,
         auth_mode: 'single_user',

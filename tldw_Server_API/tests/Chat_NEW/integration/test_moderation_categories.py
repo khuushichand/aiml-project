@@ -43,7 +43,7 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 def _auth_headers(client):
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
-    api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "default-secret-key-for-single-user")
+    api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {"X-API-KEY": api_key, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
 
 
@@ -160,4 +160,3 @@ def test_categories_disable_pii_redaction():
         except Exception:
             pass
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
-

@@ -8,9 +8,7 @@ import json
 import os
 from typing import Any, Generator, Union, Dict, Optional, List
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3 import Retry
+import httpx
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -143,65 +141,66 @@ def _chat_with_openai_compatible_local_server(
     chat_completions_path = "v1/chat/completions" # Standard OpenAI path
     full_api_url = api_base_url.rstrip('/') + "/" + chat_completions_path.lstrip('/')
 
-    logging.debug(
-        f"{provider_name}: Posting to {full_api_url}. Payload keys: {list(payload.keys())}")
+    logging.debug(f"{provider_name}: Posting to {full_api_url}. Payload keys: {list(payload.keys())}")
     logging.debug(f"{provider_name} Payload details (excluding messages): {{k: v for k, v in payload.items() if k != 'messages'}}")
 
 
+    def _post_with_retries(client: httpx.Client):
+        attempts = 0
+        while True:
+            try:
+                resp = client.post(full_api_url, headers=headers, json=payload, timeout=timeout)
+                if resp.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
+                    attempts += 1
+                    import time
+                    time.sleep(api_retry_delay * attempts)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError:
+                raise
+            except httpx.RequestError as e_req:
+                if attempts < api_retries:
+                    attempts += 1
+                    import time
+                    time.sleep(api_retry_delay * attempts)
+                    continue
+                logging.error(f"{provider_name}: Request Exception: {e_req}", exc_info=True)
+                raise ChatProviderError(provider=provider_name, message=f"Network error making request to {provider_name}: {e_req}", status_code=503)
+
     try:
-        session = requests.Session()
-        # Configure retries
-        retry_strategy = Retry(
-            total=api_retries,
-            backoff_factor=api_retry_delay,
-            status_forcelist=[429, 500, 502, 503, 504], # Retry on these HTTP status codes
-            allowed_methods=["POST"] # Important: Retry POST requests
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
+        with httpx.Client() as client:
+            if streaming:
+                with client.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
+                    response.raise_for_status()
+                    logging.debug(f"{provider_name}: Streaming response received.")
 
-        if streaming:
-            # Add a bit more timeout for the initial connection for streaming
-            response = session.post(full_api_url, headers=headers, json=payload, stream=True, timeout=timeout + 60)
-            response.raise_for_status()
-            logging.debug(f"{provider_name}: Streaming response received.")
-
-            def stream_generator():
-                try:
-                    for line in response.iter_lines(decode_unicode=True):
-                        if line and line.strip():
-                            yield line + "\n\n" # Pass through raw SSE line
-                except GeneratorExit:
-                    if response:
-                        response.close()
-                    raise
-                except requests.exceptions.ChunkedEncodingError as e_chunked:
-                    logging.error(f"{provider_name}: ChunkedEncodingError during stream: {e_chunked}", exc_info=False)
-                    error_content = {"error": {"message": f"Stream connection error: {str(e_chunked)}", "type": "stream_error", "code": "chunked_encoding_error"}}
-                    yield f"data: {json.dumps(error_content)}\n\n"
-                except Exception as e_stream:
-                    logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
-                    error_content = {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}}
-                    yield f"data: {json.dumps(error_content)}\n\n"
-                finally:
-                    if response:
-                        response.close()
-            return stream_generator()
-        else:
-            response = session.post(full_api_url, headers=headers, json=payload, timeout=timeout)
-            response.raise_for_status()
-            response_data = response.json()
-            logging.debug(f"{provider_name}: Non-streaming request successful.")
-            return response_data
-    except requests.exceptions.HTTPError as e_http:
-        # Logged by a higher level, but good to note here too
+                    def stream_generator():
+                        try:
+                            # Prefer iter_lines if available
+                            if hasattr(response, "iter_lines"):
+                                iterator = response.iter_lines()
+                            else:
+                                iterator = (line for line in response.iter_text())
+                            for line in iterator:
+                                if line and str(line).strip():
+                                    yield (str(line).rstrip("\n") + "\n\n")
+                        except GeneratorExit:
+                            raise
+                        except Exception as e_stream:
+                            logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
+                            error_content = {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}}
+                            yield f"data: {json.dumps(error_content)}\n\n"
+                    return stream_generator()
+            else:
+                response = _post_with_retries(client)
+                data = response.json()
+                logging.debug(f"{provider_name}: Non-streaming request successful.")
+                return data
+    except httpx.HTTPStatusError as e_http:
         logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
-        raise # Re-raise to be caught by chat_api_call's handler
-    except requests.RequestException as e_req:
-        logging.error(f"{provider_name}: Request Exception: {e_req}", exc_info=True)
-        raise ChatProviderError(provider=provider_name, message=f"Network error making request to {provider_name}: {e_req}", status_code=503) # 503 Service Unavailable
-    except (ValueError, KeyError, TypeError) as e_data: # Issues with payload construction or response parsing
+        raise
+    except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
 
@@ -500,15 +499,18 @@ def chat_with_kobold(
 
 
     try:
-        session = requests.Session()
-        retry_strategy = Retry(total=api_retries, backoff_factor=api_retry_delay, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["POST"])
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-
-        response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
-        response.raise_for_status()
-        response_data = response.json()
+        attempts = 0
+        with httpx.Client() as client:
+            while True:
+                response = client.post(api_url, headers=headers, json=payload, timeout=timeout)
+                if response.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
+                    attempts += 1
+                    import time
+                    time.sleep(api_retry_delay * attempts)
+                    continue
+                response.raise_for_status()
+                response_data = response.json()
+                break
 
         if response_data and 'results' in response_data and len(response_data['results']) > 0:
             # Kobold /generate usually returns a list of results, each with 'text'
@@ -522,10 +524,10 @@ def chat_with_kobold(
             logging.error(f"KoboldAI (Native): Unexpected response structure: {response_data}")
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
-    except requests.exceptions.HTTPError as e_http:
+    except httpx.HTTPStatusError as e_http:
         logging.error(f"KoboldAI (Native): HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
         raise
-    except requests.RequestException as e_req:
+    except httpx.RequestError as e_req:
         logging.error(f"KoboldAI (Native): Request Exception: {e_req}", exc_info=True)
         raise ChatProviderError(provider="kobold", message=f"Network error calling KoboldAI (Native): {e_req}", status_code=503)
     except (ValueError, KeyError, TypeError) as e_data:
@@ -1234,4 +1236,3 @@ def save_summary_to_file(summary: str, file_path: str): # Type hinting
 #
 #
 #######################################################################################################################
-
