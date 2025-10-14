@@ -28,7 +28,7 @@ The Chunking module turns raw text (or structured content) into smaller, semanti
     - Hierarchical helpers and streaming utilities
     - `create_chunker()` factory
   - `strategies/` – Strategy implementations
-    - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, …
+    - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, `code.py`, `code_ast.py`
   - `templates.py` – Template system (processor/manager/learner)
   - `template_initialization.py` – Built‑in chunking template seeding and updates (DB‑backed)
   - `Chunk_Lib.py` – Legacy v1 implementation (kept for tests/back‑compat)
@@ -160,6 +160,34 @@ When writing a new strategy:
   - `rows = chunker.process_text(text, options={...})` – returns a list of dicts with consistent metadata fields
 - Streaming a large file:
   - `for ch in chunker.chunk_file_stream(path, method="sentences", max_size=2048): ...`
+
+## Code Chunking (Python and JavaScript/TypeScript)
+
+- Method: `code`
+- Routing option: `code_mode` in options controls backend:
+  - `auto` (default): if `language` starts with `py`, routes to AST-based Python strategy; otherwise uses heuristic strategy.
+  - `ast`: force AST-based Python strategy (`strategies/code_ast.py`).
+  - `heuristic`: force heuristic strategy (`strategies/code.py`).
+
+- Python (AST): segments into import block, top-level classes, and functions with precise char offsets and greedy packing/overlap.
+- JavaScript/TypeScript (heuristic): recognizes `export default class Name`, `class Name`, `export function name(...)`, `function name(...)`,
+  `export const name = (...) => {}`, `const name = function (...)`, `export default function name(...)`, `export default function (...)`,
+  `export default (...) => {}`, `export interface Name {}`, and `export type Name = ...` and packs blocks accordingly.
+
+Example usage:
+
+```
+rows = chunker.process_text(
+    code_text,
+    options={
+        'method': 'code',
+        'language': 'python',
+        'code_mode': 'ast',
+        'max_size': 800,
+        'overlap': 50,
+    },
+)
+```
 
 ## Maintenance Notes
 
