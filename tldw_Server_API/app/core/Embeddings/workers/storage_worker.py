@@ -159,9 +159,22 @@ class StorageWorker(BaseWorker):
         documents: List[str],
         metadatas: List[Dict[str, Any]],
     ) -> None:
-        """Store a batch into the provided collection (test-friendly wrapper)."""
-        # Chroma-style collections expose .add(); wrap as async for symmetry in tests
-        collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+        """Upsert a batch into the provided collection (idempotent)."""
+        # Prefer upsert for idempotency; falls back to add if not available
+        try:
+            upsert = getattr(collection, "upsert", None)
+            if callable(upsert):
+                upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+            else:
+                collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+        except Exception:
+            # On duplicate id or capability issues, try update as a second-chance path
+            update = getattr(collection, "update", None)
+            if callable(update):
+                update(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+            else:
+                # Re-raise original behavior on persistent failure
+                raise
 
     def _infer_embedding_dim(self, embeddings: List[Any]) -> int:
         """Infer embedding dimension from the first item, with safe fallbacks."""

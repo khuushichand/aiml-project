@@ -4,6 +4,32 @@
 
 This document outlines the design for refactoring the current synchronous audio processing pipeline into a scalable, distributed fan-out architecture. The new design will enable horizontal scaling, prevent resource exhaustion, and improve overall system throughput while maintaining reliability and fault tolerance.
 
+## Implementation Status (WIP)
+
+- Current codebase does not implement this fan-out pipeline for audio yet.
+- File-based STT is synchronous within `api/v1/audio/transcriptions` and calls into existing libraries (Whisper/Nemo/Qwen2Audio).
+- Real-time STT is implemented via WebSocket (`/api/v1/audio/stream/transcribe`) using a unified streaming module (Parakeet/Canary/Whisper), but without distributed workers.
+- A production-grade Jobs module exists and is used elsewhere (Chatbooks, Prompt Studio). For audio, reusing that Jobs infrastructure is preferred over introducing a separate Redis-first queue.
+- This document should be treated as the architectural blueprint; see “Practical Migration Path” below for a minimal integration plan leveraging the existing Jobs module.
+
+### Practical Migration Path (suggested)
+
+1) Phase 0: Align with existing Jobs module
+- Define an Audio domain in Jobs with queues: `audio-download`, `audio-convert`, `audio-transcribe`, `audio-chunk`, `audio-analyze`, `audio-store`.
+- Add a thin “AudioJobManager” wrapper that emits stage tasks to the Jobs table and reuses the existing leasing/renewal patterns.
+
+2) Phase 1: Implement workers as FastAPI background tasks (single process)
+- Start with in-process background workers that poll the Jobs table (similar to current core jobs worker).
+- Validate stage boundaries, idempotency, and error propagation.
+
+3) Phase 2: Move heavy stages to separate worker processes/containers
+- Split GPU-bound transcription to a separate deployment unit with concurrency limits.
+- Keep Job orchestration in the main API or a dedicated orchestrator service.
+
+4) Phase 3: Optional Redis Streams adoption
+- If/when throughput requires, substitute the Jobs DB backend with Redis Streams for the audio domain only, retaining the same stage contracts.
+- This keeps the API stable while enabling higher fan-out baselines.
+
 ## Table of Contents
 
 1. [Current State Analysis](#current-state-analysis)

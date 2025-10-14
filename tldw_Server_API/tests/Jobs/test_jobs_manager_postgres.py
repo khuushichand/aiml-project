@@ -8,7 +8,7 @@ pytestmark = pytest.mark.pg_jobs
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup as _pg_schema_and_cleanup
+from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 
 
 pytestmark = pytest.mark.skipif(

@@ -29,6 +29,7 @@
 Legend: Stable = production-ready; WIP = actively evolving; Planned = upcoming
 
 - Docs Hub: `Docs/Documentation.md`
+- MCP Rate Limits Tuning: `Docs/Deployment/Operations/MCP_Rate_Limits_Tuning.md`
 - Database Backends & Migrations: `Docs/Database-Backends.md`
 - Moderation/Guardrails: `Docs/Moderation-Guardrails.md`
 - Usage & Cost Tracking: `Docs/User_Guides/Usage_Module.md`

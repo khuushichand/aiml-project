@@ -381,6 +381,65 @@ class Settings(BaseSettings):
         description="Enable Prometheus metrics"
     )
     
+    # ===== Security Alerting =====
+    SECURITY_ALERTS_ENABLED: bool = Field(
+        default=False,
+        description="Enable AuthNZ security alerts (file/webhook/email)."
+    )
+    SECURITY_ALERT_MIN_SEVERITY: str = Field(
+        default="high",
+        description="Minimum severity to dispatch security alerts (low|medium|high|critical)."
+    )
+    SECURITY_ALERT_FILE_PATH: str = Field(
+        default="Databases/security_alerts.log",
+        description="File path for security alert JSONL sink."
+    )
+    SECURITY_ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Webhook URL for security alerts (optional)."
+    )
+    SECURITY_ALERT_WEBHOOK_HEADERS: Optional[str] = Field(
+        default=None,
+        description="JSON object of additional headers to include in security alert webhooks."
+    )
+    SECURITY_ALERT_EMAIL_TO: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of email recipients for security alerts."
+    )
+    SECURITY_ALERT_EMAIL_FROM: Optional[str] = Field(
+        default=None,
+        description="Email sender address for security alerts."
+    )
+    SECURITY_ALERT_EMAIL_SUBJECT_PREFIX: str = Field(
+        default="[AuthNZ]",
+        description="Subject prefix for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_HOST: Optional[str] = Field(
+        default=None,
+        description="SMTP host for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_PORT: int = Field(
+        default=587,
+        description="SMTP port for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_STARTTLS: bool = Field(
+        default=True,
+        description="Use STARTTLS for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_USERNAME: Optional[str] = Field(
+        default=None,
+        description="SMTP username for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="SMTP password for security alert emails."
+    )
+    SECURITY_ALERT_SMTP_TIMEOUT: int = Field(
+        default=10,
+        ge=1,
+        description="Timeout (seconds) for SMTP connections when sending security alerts."
+    )
+    
     METRICS_PORT: int = Field(
         default=9090,
         ge=1024,

@@ -141,6 +141,12 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
+
+-- Per-run event sequence counters (optional optimization)
+CREATE TABLE IF NOT EXISTS workflow_event_counters (
+    run_id TEXT PRIMARY KEY,
+    next_seq INTEGER NOT NULL
+);
 """
 
 
@@ -433,6 +439,22 @@ class WorkflowsDatabase:
         self._conn.row_factory = sqlite3.Row
         self._enable_wal()
         self._create_schema()
+        # Optional lightweight SQLite connection pool for high-churn operations
+        try:
+            pool_size = int(os.getenv("WORKFLOWS_SQLITE_POOL_SIZE", "0"))
+        except Exception:
+            pool_size = 0
+        self._sqlite_pool: List[sqlite3.Connection] = []
+        if pool_size and pool_size > 0:
+            for _ in range(max(0, pool_size - 1)):
+                c = sqlite3.connect(self.db_path, check_same_thread=False)
+                c.row_factory = sqlite3.Row
+                try:
+                    c.execute("PRAGMA journal_mode=WAL;")
+                    c.execute("PRAGMA synchronous=NORMAL;")
+                except Exception:
+                    pass
+                self._sqlite_pool.append(c)
         logger.debug(f"Workflows DB initialized at {self.db_path}")
 
     # ------------------------------------------------------------------
@@ -524,6 +546,14 @@ class WorkflowsDatabase:
                     pool.close_all()
             return
 
+        # Close pooled connections first
+        if hasattr(self, "_sqlite_pool") and self._sqlite_pool:
+            for c in self._sqlite_pool:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            self._sqlite_pool = []
         if hasattr(self, "_conn") and self._conn is not None:
             try:
                 self._conn.close()
@@ -664,6 +694,15 @@ class WorkflowsDatabase:
         )
         backend.execute(
             f"CREATE INDEX IF NOT EXISTS {ident('idx_events_run_seq')} ON {ident('workflow_events')} ({ident('run_id')}, {ident('event_seq')})",
+            connection=conn,
+        )
+
+        # Event counters table (idempotent)
+        backend.execute(
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_event_counters')} ("
+            f"run_id TEXT PRIMARY KEY,"
+            f"next_seq INTEGER NOT NULL"
+            ")",
             connection=conn,
         )
 
@@ -810,6 +849,17 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")
         self._conn.commit()
 
+        # Optional per-run event counters for SQLite
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_event_counters (
+                run_id TEXT PRIMARY KEY,
+                next_seq INTEGER NOT NULL
+            );
+            """
+        )
+        self._conn.commit()
+
         # Attempt to add newly introduced columns if missing (SQLite tolerant pattern)
         for alter in [
             "ALTER TABLE workflow_runs ADD COLUMN tokens_input INTEGER",
@@ -851,6 +901,25 @@ class WorkflowsDatabase:
         self._conn.commit()
 
     # ---------- Definitions ----------
+
+    def _acquire_sqlite(self) -> sqlite3.Connection:
+        """Acquire a SQLite connection from pool if enabled, else return primary connection."""
+        if getattr(self, "_sqlite_pool", None):
+            try:
+                return self._sqlite_pool.pop() if self._sqlite_pool else self._conn
+            except Exception:
+                return self._conn
+        return self._conn
+
+    def _release_sqlite(self, conn: sqlite3.Connection) -> None:
+        if getattr(self, "_sqlite_pool", None) and conn is not self._conn:
+            try:
+                self._sqlite_pool.append(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     def create_definition(
         self,
         tenant_id: str,
@@ -1023,6 +1092,54 @@ class WorkflowsDatabase:
         row = self._conn.cursor().execute("SELECT * FROM workflow_runs WHERE run_id = ?", (run_id,)).fetchone()
         return WorkflowRun(**dict(row)) if row else None
 
+    def list_runs(
+        self,
+        *,
+        tenant_id: str,
+        user_id: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        workflow_id: Optional[int] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        order_by: str = "created_at",
+        order_desc: bool = True,
+    ) -> List[WorkflowRun]:
+        sql = "SELECT * FROM workflow_runs WHERE tenant_id = ?"
+        params: List[Any] = [tenant_id]
+        if user_id:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        if statuses:
+            placeholders = ",".join(["?"] * len(statuses))
+            sql += f" AND status IN ({placeholders})"
+            params.extend(list(statuses))
+        if workflow_id is not None:
+            sql += " AND workflow_id = ?"
+            params.append(int(workflow_id))
+        if created_after:
+            sql += " AND created_at >= ?"
+            params.append(created_after)
+        if created_before:
+            sql += " AND created_at <= ?"
+            params.append(created_before)
+        # Whitelist order_by to known columns
+        allowed_order = {"created_at", "started_at", "ended_at"}
+        ob = order_by if order_by in allowed_order else "created_at"
+        sql += f" ORDER BY {ob} {'DESC' if order_desc else 'ASC'} LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, tuple(params), connection=conn)
+            rows = self._rows_from_result(result)
+            return [WorkflowRun(**row.to_dict()) for row in rows]
+
+        cur = self._conn.cursor()
+        rows = cur.execute(sql, params).fetchall()
+        return [WorkflowRun(**dict(r)) for r in rows]
+
     def update_run_status(
         self,
         run_id: str,
@@ -1115,18 +1232,34 @@ class WorkflowsDatabase:
         payload: Optional[Dict[str, Any]] = None,
         step_run_id: Optional[str] = None,
     ) -> int:
+        # Prefer per-run counters when available
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                # PostgreSQL does not allow FOR UPDATE with aggregates; rely on
-                # transactional isolation here to compute next sequence safely.
-                seq_result = self._execute_backend(
-                    "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ?",
-                    (run_id,),
-                    connection=conn,
-                )
-                row = self._row_from_result(seq_result)
-                max_seq = int(row["max_seq"]) if row else 0
-                next_seq = max_seq + 1
+                # Increment or initialize per-run counter atomically
+                try:
+                    # Use upsert to bump counter and read back the new value
+                    inc = self._execute_backend(
+                        """
+                        INSERT INTO workflow_event_counters(run_id, next_seq)
+                        VALUES (?, 1)
+                        ON CONFLICT (run_id) DO UPDATE SET next_seq = workflow_event_counters.next_seq + 1
+                        RETURNING next_seq
+                        """,
+                        (run_id,),
+                        connection=conn,
+                    )
+                    r = self._row_from_result(inc)
+                    next_seq = int(r["next_seq"]) if r else 1
+                except Exception:
+                    # Fallback to aggregate
+                    seq_result = self._execute_backend(
+                        "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ?",
+                        (run_id,),
+                        connection=conn,
+                    )
+                    row = self._row_from_result(seq_result)
+                    max_seq = int(row["max_seq"]) if row else 0
+                    next_seq = max_seq + 1
                 self._execute_backend(
                     """
                     INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
@@ -1145,12 +1278,36 @@ class WorkflowsDatabase:
                 )
                 return next_seq
 
-        cur = self._conn.cursor()
-        row = cur.execute(
-            "SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM workflow_events WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
-        next_seq = int(row["max_seq"]) + 1
+        # SQLite path
+        conn = self._acquire_sqlite()
+        cur = conn.cursor()
+        try:
+            # Try per-run counter with a short critical section
+            row = cur.execute(
+                "SELECT next_seq FROM workflow_event_counters WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if not row:
+                next_seq = 1
+                cur.execute(
+                    "INSERT OR IGNORE INTO workflow_event_counters(run_id, next_seq) VALUES (?, ?)",
+                    (run_id, next_seq),
+                )
+            else:
+                current = int(row[0] if not isinstance(row, dict) else row.get("next_seq", 0))
+                next_seq = current + 1
+                cur.execute(
+                    "UPDATE workflow_event_counters SET next_seq = ? WHERE run_id = ?",
+                    (next_seq, run_id),
+                )
+        except Exception:
+            # Fallback to aggregate scan if counters table missing
+            row = cur.execute(
+                "SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM workflow_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            next_seq = int((row["max_seq"] if isinstance(row, dict) else row[0])) + 1
+
         cur.execute(
             """
             INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
@@ -1166,7 +1323,8 @@ class WorkflowsDatabase:
                 _utcnow_iso(),
             ),
         )
-        self._conn.commit()
+        conn.commit()
+        self._release_sqlite(conn)
         return next_seq
 
     def get_events(self, run_id: str, since: Optional[int] = None, limit: int = 500) -> List[Dict[str, Any]]:
@@ -1182,7 +1340,11 @@ class WorkflowsDatabase:
                 result = self._execute_backend(sql, tuple(params), connection=conn)
             rows = self._rows_from_result(result)
         else:
-            rows = self._conn.cursor().execute(sql, params).fetchall()
+            conn = self._acquire_sqlite()
+            try:
+                rows = conn.cursor().execute(sql, params).fetchall()
+            finally:
+                self._release_sqlite(conn)
 
         out: List[Dict[str, Any]] = []
         for r in rows:

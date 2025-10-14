@@ -30,6 +30,7 @@ from tldw_Server_API.app.services.storage_quota_service import StorageQuotaServi
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.scheduler import reset_authnz_scheduler
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import reset_token_blacklist
+from tldw_Server_API.app.core.AuthNZ.alerting import reset_security_alert_dispatcher
 
 # Test database configuration
 TEST_DB_NAME = "tldw_test"
@@ -93,6 +94,7 @@ async def reset_singletons():
     await reset_db_pool()
     await reset_session_manager()
     await reset_token_blacklist()
+    await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
     reset_settings()
     reset_jwt_service()
@@ -142,6 +144,7 @@ async def reset_singletons():
     await reset_db_pool()
     await reset_session_manager()
     await reset_token_blacklist()
+    await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
     reset_settings()
     reset_jwt_service()

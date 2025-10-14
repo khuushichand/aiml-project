@@ -240,6 +240,50 @@ MCP_LOG_LEVEL=INFO
 MCP_WS_AUTH_REQUIRED=1                  # Require authenticated WS (prod hardening)
 ```
 
+## 🔧 Rate Limits
+
+MCP supports global and per-category (tool-driven) rate limits.
+
+- Global limiter: configured via MCP_RATE_LIMIT_ENABLED, MCP_RATE_LIMIT_RPM, MCP_RATE_LIMIT_BURST.
+- Distributed deployments: enable Redis with MCP_RATE_LIMIT_USE_REDIS=1 and MCP_REDIS_URL.
+- Per-category limiters:
+  - Categories: free-form labels; project recognizes at least ‘ingestion’ and ‘read’.
+  - Category RPM/bursts via env:
+    - MCP_RATE_LIMIT_RPM_INGESTION, MCP_RATE_LIMIT_BURST_INGESTION
+    - MCP_RATE_LIMIT_RPM_READ (burst falls back to global burst)
+  - Tool → category mapping:
+    - JSON env (MCP_TOOL_CATEGORY_MAP)
+    - YAML file (MCP_TOOL_CATEGORY_MAP_FILE)
+
+Examples
+
+- JSON env mapping:
+```bash
+export MCP_TOOL_CATEGORY_MAP='{"ingest_media":"ingestion","media.search":"read","mock_ingest":"ingestion"}'
+```
+
+- YAML mapping file (recommended):
+```yaml
+# tldw_Server_API/Config_Files/mcp_tool_categories.yaml
+ingest_media: ingestion
+update_media: ingestion
+delete_media: ingestion
+
+media.search: read
+knowledge.search: read
+notes.search: read
+```
+Use with:
+```bash
+export MCP_TOOL_CATEGORY_MAP_FILE=tldw_Server_API/Config_Files/mcp_tool_categories.yaml
+```
+
+Notes
+- Config mapping takes precedence over the heuristic fallback (which classifies ingest_media/update_media/delete_media as ‘ingestion’).
+- If Redis is enabled, per-category limiters also use Redis; otherwise in-memory token buckets are used.
+
+See also: Ops tuning guide at Docs/Deployment/Operations/MCP_Rate_Limits_Tuning.md
+
 ### Docker Deployment
 ```bash
 docker build -f docker/Dockerfile -t mcp-unified .

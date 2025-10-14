@@ -198,7 +198,7 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
 - Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
 - Authentication:
   - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
-  - Multi-user JWT: not currently supported via WebSocket; use single-user token
+  - Multi-user JWT: not yet supported for this WS endpoint; use single-user token for now. Planned: `Authorization: Bearer <JWT>` header.
 - Protocol:
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
@@ -501,8 +501,8 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Future Enhancements
 
-- [ ] Batch transcription API
-- [ ] WebSocket support for live transcription
+- [ ] Batch transcription API (Jobs-backed, multi-stage fan-out)
+- [ ] WebSocket JWT auth + per-user quotas/limits
 - [ ] Speaker diarization with Nemo models
 - [ ] Custom vocabulary support
 - [ ] Fine-tuning support for domain-specific transcription

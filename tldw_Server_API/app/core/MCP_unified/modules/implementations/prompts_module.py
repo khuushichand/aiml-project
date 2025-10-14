@@ -34,6 +34,19 @@ class PromptsModule(BaseModule):
             checks["disk_space"] = free_gb > 1
         except Exception:
             checks["disk_space"] = False
+        # Optional ephemeral DB write test (heavy) for deeper validation
+        try:
+            import os
+            if str(os.getenv("MCP_HEALTHCHECK_DB_WRITE_TEST", "")).lower() in {"1", "true", "yes"}:
+                from tempfile import NamedTemporaryFile
+                with NamedTemporaryFile(prefix="mcp_prompts_health_", suffix=".db", delete=True) as tf:
+                    db = PromptsDatabase(db_path=tf.name, client_id=f"mcp_prompts_{self.config.name}")
+                    # Trivial read to confirm
+                    _ = db.get_prompt_by_name("nonexistent")
+                checks["ephemeral_db_ok"] = True
+        except Exception:
+            checks["ephemeral_db_ok"] = False
+
         return checks
 
     async def get_tools(self) -> List[Dict[str, Any]]:

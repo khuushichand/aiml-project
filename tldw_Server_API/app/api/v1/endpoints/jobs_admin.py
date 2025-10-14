@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, validator
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
@@ -97,7 +97,7 @@ class PruneResponse(BaseModel):
 
 @router.post("/jobs/prune", response_model=PruneResponse)
 async def prune_jobs_endpoint(
-    req: PruneRequest,
+    request: Request,
     user=Depends(require_admin),
     audit_service=Depends(get_audit_service_for_user),
 ) -> PruneResponse:
@@ -106,7 +106,15 @@ async def prune_jobs_endpoint(
     Requires authentication. Use cautiously.
     """
     try:
-        _enforce_domain_scope(user, req.domain)
+        # Pre-parse raw JSON to enforce RBAC before model validation to avoid 422s
+        try:
+            raw_body = await request.json()
+        except Exception:
+            raw_body = {}
+        # Enforce domain-scoped RBAC (403) even if request body is incomplete
+        _enforce_domain_scope(user, (raw_body or {}).get("domain"))
+        # Now validate the request body
+        req = PruneRequest(**(raw_body or {}))
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)

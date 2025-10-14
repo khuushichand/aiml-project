@@ -2,6 +2,9 @@
 <div id="tabWorkflowsDefinitions" class="tab-content">
   <h2>Workflows: Definitions</h2>
   <div class="form-group">
+    <button class="api-button" onclick="wfGetStepTypes()">Get Step Types</button>
+  </div>
+  <div class="form-group">
     <label for="wfDef_payload">Definition JSON</label>
     <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
@@ -43,6 +46,12 @@
       document.getElementById('wfDef_result').textContent = JSON.stringify(resp,null,2);
     }catch(e){ Toast.error('List failed: '+(e?.message||e)); }
   }
+  async function wfGetStepTypes(){
+    try{
+      const resp = await apiClient.makeRequest('GET','/api/v1/workflows/step-types');
+      document.getElementById('wfDef_result').textContent = JSON.stringify(resp,null,2);
+    }catch(e){ Toast.error('Step types failed: '+(e?.message||e)); }
+  }
   async function wfRunSaved(){
     try{
       const wid = document.getElementById('wfRun_workflow_id').value.trim();
@@ -59,6 +68,32 @@
 
 <div id="tabWorkflowsRuns" class="tab-content">
   <h2>Workflows: Runs</h2>
+  <div class="form-group">
+    <label>Status (comma)</label>
+    <input type="text" id="wfList_status" placeholder="succeeded,failed">
+    <label>Workflow ID</label>
+    <input type="text" id="wfList_workflow_id" placeholder="optional">
+    <label>Created After</label>
+    <input type="text" id="wfList_created_after" placeholder="YYYY-MM-DDTHH:MM:SSZ">
+    <label>Created Before</label>
+    <input type="text" id="wfList_created_before" placeholder="YYYY-MM-DDTHH:MM:SSZ">
+    <label>Order By</label>
+    <select id="wfList_order_by">
+      <option value="created_at" selected>created_at</option>
+      <option value="started_at">started_at</option>
+      <option value="ended_at">ended_at</option>
+    </select>
+    <label>Order</label>
+    <select id="wfList_order">
+      <option value="desc" selected>desc</option>
+      <option value="asc">asc</option>
+    </select>
+    <label>Limit</label>
+    <input type="number" id="wfList_limit" value="25" min="1" max="200" style="width:80px">
+    <label>Offset</label>
+    <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
+    <button class="api-button" onclick="wfListRuns()">List Runs</button>
+  </div>
   <div class="form-group">
     <label>Run ID</label>
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
@@ -77,6 +112,23 @@
   <pre id="wfRun_result" class="json-viewer"></pre>
   <div id="wfRun_artifacts" class="json-viewer"></div>
   <script>
+  async function wfListRuns(){
+    try{
+      const params = new URLSearchParams();
+      const statusText = (document.getElementById('wfList_status').value||'').trim();
+      if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
+      const wf = document.getElementById('wfList_workflow_id').value.trim(); if (wf){ params.set('workflow_id', wf); }
+      const ca = document.getElementById('wfList_created_after').value.trim(); if (ca){ params.set('created_after', ca); }
+      const cb = document.getElementById('wfList_created_before').value.trim(); if (cb){ params.set('created_before', cb); }
+      params.set('order_by', document.getElementById('wfList_order_by').value);
+      params.set('order', document.getElementById('wfList_order').value);
+      params.set('limit', document.getElementById('wfList_limit').value);
+      params.set('offset', document.getElementById('wfList_offset').value);
+      const url = '/api/v1/workflows/runs?' + params.toString();
+      const resp = await apiClient.makeRequest('GET', url);
+      set('wfRun_result', resp);
+    }catch(e){ Toast.error('List runs failed: '+(e?.message||e)); }
+  }
   async function wfGetRun(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
   async function wfGetEvents(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
   async function wfListArtifacts(){

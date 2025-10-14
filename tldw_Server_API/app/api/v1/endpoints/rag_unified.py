@@ -443,6 +443,9 @@ async def unified_search_endpoint(
             media_db_path=db_paths.get("media_db_path"),
             notes_db_path=db_paths.get("notes_db_path"),
             character_db_path=db_paths.get("character_db_path"),
+            # Database adapters (prefer adapters over raw SQL fallbacks)
+            media_db=media_db,
+            chacha_db=chacha_db,
             
             # Search configuration
             search_mode=request.search_mode,
@@ -628,6 +631,8 @@ async def unified_batch_endpoint(
         results = await unified_batch_pipeline(
             queries=request.queries,
             max_concurrent=request.max_concurrent,
+            media_db=media_db,
+            chacha_db=chacha_db,
             **kwargs
         )
         
@@ -864,6 +869,8 @@ async def advanced_search_endpoint(
             query=query,
             with_citations=with_citations,
             with_answer=with_answer,
+            media_db=media_db,
+            chacha_db=chacha_db,
             **db_paths
         )
         

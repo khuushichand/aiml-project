@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status # For status codes
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from fastapi import Request as _FastAPIRequest  # for rate limit key typing
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -44,7 +45,21 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
 from loguru import logger
 
 # Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address)
+def _rate_limit_key(request: _FastAPIRequest) -> str:
+    """Rate limit key that prefers authenticated user id over IP.
+
+    - Multi-user: per-user limits (fairness across users)
+    - Single-user or unauthenticated: fall back to client IP
+    """
+    try:
+        uid = getattr(request.state, "user_id", None)
+        if uid is not None:
+            return f"user:{uid}"
+    except Exception:
+        pass
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 
 router = APIRouter(

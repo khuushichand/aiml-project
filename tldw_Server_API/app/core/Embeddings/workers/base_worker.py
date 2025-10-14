@@ -226,6 +226,30 @@ class BaseWorker(ABC):
                     JobStatus.FAILED,
                     error_message=str(error)
                 )
+                # Publish to DLQ stream for operator intervention
+                try:
+                    dlq_stream = f"{self.config.queue_name}:dlq"
+                    payload = model_dump_compat(message)
+                    # Ensure JSON-safe payload serialization
+                    safe_payload = json.dumps(payload, default=str)
+                    await self.redis_client.xadd(
+                        dlq_stream,
+                        {
+                            "original_queue": self.config.queue_name,
+                            "consumer_group": self.config.consumer_group,
+                            "worker_id": self.config.worker_id,
+                            "job_id": getattr(message, "job_id", ""),
+                            "job_type": self.config.worker_type,
+                            "error": str(error),
+                            "retry_count": str(getattr(message, "retry_count", 0)),
+                            "max_retries": str(getattr(message, "max_retries", 0)),
+                            "failed_at": datetime.utcnow().isoformat(),
+                            "payload": safe_payload,
+                        },
+                    )
+                except Exception as dlq_err:
+                    # Log but do not raise: DLQ publishing must not crash the worker
+                    logger.error(f"Failed to publish message {message.job_id} to DLQ: {dlq_err}")
                 logger.error(f"Message {message.job_id} failed after {message.max_retries} retries")
                 
             # Always acknowledge to prevent reprocessing

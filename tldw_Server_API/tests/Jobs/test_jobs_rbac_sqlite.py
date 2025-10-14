@@ -21,6 +21,11 @@ def test_rbac_requires_domain_filter_and_allowlist(monkeypatch, tmp_path):
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
+    # Ensure no leaked dependency overrides from other tests
+    try:
+        app.dependency_overrides.clear()
+    except Exception:
+        pass
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:

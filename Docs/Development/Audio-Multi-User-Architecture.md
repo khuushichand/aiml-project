@@ -4,6 +4,21 @@
 
 While the fan-out design provides good horizontal scaling, a multi-user transcription system requires additional considerations for fairness, resource isolation, cost optimization, and user experience. This document proposes an improved architecture that better handles multiple concurrent users.
 
+## Implementation Status (WIP)
+
+- HTTP audio endpoints are AuthNZ-aware and enforce single-user API key or JWT depending on mode.
+- WebSocket real-time STT endpoint currently authenticates with single-user API key (query or first message). JWT over WebSocket is not implemented yet.
+- Per-user rate limiting for HTTP audio endpoints has been enabled (moved limiter key to prefer `request.state.user_id`; falls back to IP). Quotas and burst policies remain TODO.
+- No per-user resource quotas/concurrency guards for audio exist yet; proposed below.
+
+## Prioritized Backlog
+
+- JWT over WebSocket: Accept `Authorization: Bearer <JWT>` header and validate via AuthNZ; continue supporting `?token=` for single-user.
+- Per-user quotas: Daily minutes, concurrent streams/jobs, max file size per tier; persist usage in the AuthNZ/Usage subsystem.
+- Queue fairness: When audio fan-out is adopted, use Jobs domain queues with user-aware leasing (weighted fair scheduling) rather than raw FIFO.
+- Provider cost controls: Per-tier routing to economy/balanced/quality models; deny/queue when budget exhausted.
+- Observability: Per-user/per-tier metrics for concurrency, queue wait time, processing time, error rate.
+
 ## Key Improvements Over Basic Fan-Out
 
 ### 1. **User-Aware Priority Queue System**

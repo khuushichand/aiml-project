@@ -22,6 +22,8 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     AdhocRunRequest,
     WorkflowRunResponse,
     EventResponse,
+    WorkflowRunListItem,
+    WorkflowRunListResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
@@ -317,6 +319,69 @@ async def run_saved(
         error=run.error,
         definition_version=run.definition_version,
     )
+
+
+@router.get("/runs", response_model=WorkflowRunListResponse)
+async def list_runs(
+    status: Optional[List[str]] = Query(None, description="Filter by status (repeatable)"),
+    owner: Optional[str] = Query(None, description="Owner user id (admin only)"),
+    workflow_id: Optional[int] = Query(None),
+    created_after: Optional[str] = Query(None, description="ISO timestamp lower bound (created_at)"),
+    created_before: Optional[str] = Query(None, description="ISO timestamp upper bound (created_at)"),
+    last_n_hours: Optional[int] = Query(None, description="Convenience: set created_after to now - N hours"),
+    order_by: str = Query("created_at", description="Order by: created_at|started_at|ended_at"),
+    order: str = Query("desc", description="asc|desc"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    user_id = None
+    if owner and is_admin:
+        user_id = str(owner)
+    else:
+        user_id = str(current_user.id)
+    # Convenience: compute created_after from last_n_hours if provided
+    if last_n_hours is not None:
+        try:
+            import datetime as _dt
+            ca_dt = _dt.datetime.utcnow() - _dt.timedelta(hours=int(last_n_hours))
+            created_after = ca_dt.isoformat()
+        except Exception:
+            pass
+
+    rows = db.list_runs(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        statuses=status,
+        workflow_id=workflow_id,
+        created_after=created_after,
+        created_before=created_before,
+        limit=limit + 1,  # fetch one extra to decide next_offset
+        offset=offset,
+        order_by=(order_by or "created_at"),
+        order_desc=(str(order or "desc").lower() != "asc"),
+    )
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+    items: List[WorkflowRunListItem] = []
+    for r in rows:
+        items.append(
+            WorkflowRunListItem(
+                run_id=r.run_id,
+                workflow_id=r.workflow_id,
+                status=r.status,
+                status_reason=r.status_reason,
+                definition_version=r.definition_version,
+                created_at=r.created_at,
+                started_at=r.started_at,
+                ended_at=r.ended_at,
+            )
+        )
+    return WorkflowRunListResponse(runs=items, next_offset=(offset + limit) if has_more else None)
 
 
 @router.post("/run", response_model=WorkflowRunResponse)
@@ -676,6 +741,14 @@ async def get_chunker_options():
         "defaults": defaults,
         "parameter_schema": schema,
     }
+
+
+@router.get("/step-types")
+async def get_step_types():
+    """List available workflow step types for UI discovery."""
+    reg = StepTypeRegistry()
+    steps = reg.list()
+    return [{"name": s.name, "description": s.description} for s in steps]
 
 
 @router.post("/runs/{run_id}/{action}")

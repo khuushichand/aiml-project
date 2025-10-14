@@ -305,6 +305,42 @@ curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 ### Logging
 The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and scrape `/metrics` for Prometheus-formatted metrics.
 
+### Dead-Letter Queues (DLQ)
+
+Purpose
+- Persist messages that exceeded max retries for operator inspection and recovery.
+
+How it works
+- Each stage has a DLQ Redis Stream with suffix `:dlq`.
+  - Chunking DLQ: `embeddings:chunking:dlq`
+  - Embedding DLQ: `embeddings:embedding:dlq`
+  - Storage DLQ: `embeddings:storage:dlq`
+- When a worker exhausts `max_retries`, it marks the job `failed` and publishes the original payload and error to the stage DLQ. The worker still `XACK`s the failed message to prevent hot looping.
+
+Operator tasks
+- Inspect latest DLQ entries:
+```bash
+# Show the most recent 10 entries from the embedding DLQ
+redis-cli XREVRANGE embeddings:embedding:dlq + - COUNT 10
+```
+- Re-enqueue a DLQ entry back to the active stream after correcting the cause:
+```bash
+# Example: requeue a DLQ item back to the embedding stream
+# (Adjust fields to your payload; prefer re-using the original payload JSON)
+redis-cli XADD embeddings:embedding '*' job_id <JOB_ID> user_id <USER_ID> payload '<JSON>'
+```
+- Trim DLQs to control growth (approximate):
+```bash
+redis-cli XTRIM embeddings:embedding:dlq MAXLEN ~ 5000
+redis-cli XTRIM embeddings:chunking:dlq  MAXLEN ~ 5000
+redis-cli XTRIM embeddings:storage:dlq   MAXLEN ~ 5000
+```
+
+Recommendations
+- Alert on DLQ growth rate; sustained growth indicates systemic issues.
+- Build a small admin tool to list, filter by `job_id`, and requeue DLQ items safely.
+- Keep DLQ retention sized to your operating posture (e.g., 7–14 days worth of failures).
+
 ---
 
 ## Troubleshooting

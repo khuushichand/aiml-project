@@ -69,3 +69,20 @@ class EventResponse(BaseModel):
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     created_at: str
+
+
+# Listing schemas (lighter than full run response)
+class WorkflowRunListItem(BaseModel):
+    run_id: str
+    workflow_id: Optional[int] = None
+    status: str
+    status_reason: Optional[str] = None
+    definition_version: Optional[int] = None
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+
+
+class WorkflowRunListResponse(BaseModel):
+    runs: List[WorkflowRunListItem]
+    next_offset: Optional[int] = None

@@ -4,7 +4,7 @@
 # Imports
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 #
 # 3rd-party imports
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 
 #######################################################################################################################
 #
@@ -548,7 +549,13 @@ class AuthNZScheduler:
                     # Here you would trigger actual alerts (email, Slack, etc.)
                     await self._send_security_alert(
                         "High Authentication Failure Rate",
-                        f"{failure_count} failures from {unique_ips} IPs"
+                        f"{failure_count} failures from {unique_ips} IPs",
+                        severity="high",
+                        metadata={
+                            "failure_count": failure_count,
+                            "unique_ips": unique_ips,
+                            "window_minutes": 5,
+                        },
                     )
         except Exception as e:
             logger.error(f"Failed to monitor auth failures: {e}")
@@ -686,29 +693,48 @@ class AuthNZScheduler:
                 if len(results) > 10:
                     await self._send_security_alert(
                         "Multiple Rate Limit Violations",
-                        f"{len(results)} identifiers exceeding rate limits"
+                        f"{len(results)} identifiers exceeding rate limits",
+                        severity="high",
+                        metadata={
+                            "identifier_count": len(results),
+                            "threshold": rate_threshold,
+                            "window_minutes": 15,
+                        },
                     )
                     
         except Exception as e:
             logger.error(f"Failed to monitor rate limits: {e}")
     
-    async def _send_security_alert(self, subject: str, message: str):
+    async def _send_security_alert(
+        self,
+        subject: str,
+        message: str,
+        *,
+        severity: str = "high",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
-        Send security alert (placeholder for actual alerting)
+        Dispatch a security alert using the configured dispatcher.
         
-        In production, this would integrate with:
-        - Email service (SendGrid, SES, etc.)
-        - Slack/Discord webhooks
-        - PagerDuty or similar incident management
-        - SIEM systems
+        Returns:
+            True if the dispatcher attempted to send the alert, False otherwise.
         """
-        logger.critical(f"🚨 SECURITY ALERT: {subject} - {message}")
-        
-        # TODO: Implement actual alerting based on your infrastructure
-        # Example integrations:
-        # - await send_email_alert(subject, message)
-        # - await send_slack_alert(subject, message)
-        # - await trigger_pagerduty(subject, message)
+        dispatcher = get_security_alert_dispatcher()
+        payload_metadata: Dict[str, Any] = {"source": "authnz_scheduler"}
+        if metadata:
+            payload_metadata.update(metadata)
+
+        try:
+            return await dispatcher.dispatch(
+                subject=subject,
+                message=message,
+                severity=severity,
+                metadata=payload_metadata,
+            )
+        except Exception as exc:
+            logger.error(f"Security alert dispatch failed: {exc}")
+            logger.critical(f"🚨 SECURITY ALERT [{severity.upper()}]: {subject} - {message}")
+            return False
 
 
 #######################################################################################################################

@@ -32,6 +32,7 @@ Base prefix: `/api/v1/workflows`
 - Runs
   - `POST /{workflow_id}/run?mode=async|sync` → Run saved definition (idempotency supported)
   - `POST /run?mode=async|sync` → Run ad‑hoc definition (configurable rate‑limited)
+  - `GET /runs?status=&owner=&workflow_id=&limit=&offset=` → List runs (owner by default; admin may filter by `owner`), returns `runs` and optional `next_offset` for pagination
   - `GET /runs/{run_id}` → Run status and final outputs
   - `GET /runs/{run_id}/events?since=` → Ordered event stream (HTTP polling)
   - `WS /ws?run_id=...&token=...` → Live event stream (JWT required; run owner only)
@@ -44,6 +45,7 @@ Base prefix: `/api/v1/workflows`
   - `GET /runs/{run_id}/artifacts/download` → Zip and stream all eligible artifacts
 - Options discovery
   - `GET /options/chunkers` → Chunker methods, defaults, and basic param schema
+  - `GET /step-types` → List available step types for UI builders
 
 ## Definition Schema (v0.1)
 
@@ -102,10 +104,19 @@ See `adapters.py` for configuration keys and behavior of each step.
 ## Security Model
 
 - AuthNZ: All HTTP endpoints use standard API auth; WS requires a JWT and enforces run‑owner equality (subject must match `run.user_id`).
-- Tenant Isolation: Read operations enforce tenant boundaries. NOTE: Run‑level ownership checks are enforced on WS today; for HTTP reads a follow‑up change will align behavior (owner or admin).
+- Tenant Isolation: Read operations enforce tenant boundaries, and HTTP reads now enforce run‑owner or admin (consistent with WS).
 - Rate Limits: Ad‑hoc runs and run‑saved endpoints are rate‑limited via `slowapi` if available.
 - Egress Controls: Webhook step checks URL via `is_url_allowed` to block private IPs/SSRF; optional HMAC signature header.
 - Artifact Downloads: Only `file://` URIs; size and MIME allowlists enforced; basic path containment checks.
+
+### RBAC Claims Exposure
+
+`get_request_user` now enriches the request user with AuthNZ-backed RBAC claims:
+- `roles`: names from `user_roles`
+- `permissions`: aggregated from role permissions and explicit `user_permissions` overrides
+- `is_admin`: true if `admin` role or `is_superuser`
+
+In single-user mode, the fixed user is exposed with admin-like claims for compatibility.
 
 ## Configuration
 
@@ -114,6 +125,9 @@ See `adapters.py` for configuration keys and behavior of each step.
 - Artifacts: `WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES`, `WORKFLOWS_ARTIFACT_ALLOWED_MIME`, `WORKFLOWS_ARTIFACT_BULK_MAX_BYTES`
 - Webhooks: `WORKFLOWS_WEBHOOK_SECRET`, `WORKFLOWS_WEBHOOK_TIMEOUT`
 - DB URI (SQLite): `DATABASE_URL_WORKFLOWS=sqlite:///path/to/workflows.db`
+- Webhook global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` disables completion hooks globally
+- Artifact scope validation: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default true). When false, validation failures log a warning but do not block download.
+- SQLite connection pool: `WORKFLOWS_SQLITE_POOL_SIZE` (default 0 disables) enables a lightweight pool for hot paths (events).
 
 ## WebUI
 
@@ -127,12 +141,9 @@ See `adapters.py` for configuration keys and behavior of each step.
 
 ## Known Gaps (to address)
 
-- HTTP endpoints for run/events/artifacts enforce tenant isolation but not run‑owner RBAC; WS does enforce owner. Align HTTP with WS (owner or admin).
-- Approve/Reject endpoints perform direct SQL; migrate to methods on `WorkflowsDatabase` to keep all DB writes centralized.
-- Artifact path scope check is conservative; switch to robust `Path.is_relative_to` when available or `commonpath` fallback.
-- `WorkflowEngine._maybe_send_completion_webhook` is referenced but not yet implemented; add helper that honors PRD semantics.
-- Event sequence generation is `MAX(event_seq)+1`; consider transaction‑safe sequences or relying on `event_id` ordering to avoid races under heavy concurrent publishers.
-- SQLite connection is process‑wide; evaluate per‑thread connections to reduce lock contention under load.
+- Artifact path scope validation uses `commonpath` with a strict/relaxed toggle; consider moving to `Path.is_relative_to` when minimum Python supports it.
+- Per-run event counters reduce races; assess using DB-side sequences if needed under extreme concurrency.
+- SQLite still uses a lightweight pool; evaluate moving workflows to Postgres by default in production.
 
 ## Roadmap (v0.2+)
 
