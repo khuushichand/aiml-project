@@ -242,19 +242,21 @@ docker run -d \
   -e MCP_JWT_SECRET=$MCP_JWT_SECRET \
   -e MCP_API_KEY_SALT=$MCP_API_KEY_SALT \
   -p 8000:8000 \
-  -p 9090:9090 \
   mcp-unified
 ```
 
 ## 📈 Monitoring
 
 ### Prometheus Metrics
-Available at `/metrics` endpoint (port 9090):
-- Request rates and latencies
-- Module health status
-- Connection statistics
+Scrape MCP metrics at `GET /api/v1/mcp/metrics/prometheus` (text exposition format):
+- Request rates and latencies (per MCP method)
+- Module operation metrics (per module)
+- Connection statistics (WebSocket)
+- Rate limit hits
 - Cache hit/miss rates
 - System resource usage
+
+Security: The Prometheus endpoint is unauthenticated to support internal-only scraping. Ensure it’s exposed only on trusted networks or behind an ingress/proxy that enforces authentication.
 
 ### Health Checks
 - `/api/v1/mcp/health` - Overall health

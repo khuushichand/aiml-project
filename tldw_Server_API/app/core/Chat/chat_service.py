@@ -1,0 +1,1186 @@
+"""
+chat_service.py
+Lightweight helpers to keep the chat endpoint readable and testable without changing behavior.
+
+These functions encapsulate small, deterministic pieces of logic used by
+the /api/v1/chat/completions endpoint so the endpoint can orchestrate at a
+higher level. The goal is to reduce duplication and cognitive load while
+keeping the wire behavior identical.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator
+from fastapi import HTTPException, status
+from loguru import logger
+import base64
+import uuid as _uuid
+import asyncio
+import time
+import json as _json
+
+# Reuse existing helpers from chat_helpers and prompt templating
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+)
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (
+    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
+    load_template,
+    apply_template_to_string,
+)
+from tldw_Server_API.app.core.Chat.chat_orchestrator import (
+    chat_api_call as perform_chat_api_call,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    create_streaming_response_with_timeout,
+)
+from tldw_Server_API.app.core.Chat.request_queue import (
+    get_request_queue,
+    RequestPriority,
+)
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
+    ChatAPIError,
+    ChatProviderError,
+)
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.core.Chat.chat_exceptions import get_request_id
+from fastapi.encoders import jsonable_encoder
+from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
+from starlette.responses import StreamingResponse
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
+
+
+def parse_provider_model_for_metrics(
+    request_data: Any,
+    default_provider: str,
+) -> Tuple[str, str]:
+    """Parse provider and model for metrics logging without mutating request_data.
+
+    Accepts model strings like "anthropic/claude-3-opus" and an optional
+    api_provider on the request, falling back to the server default.
+
+    Returns (provider, model_for_metrics).
+    """
+    model_str = getattr(request_data, "model", None) or "unknown"
+    api_provider = getattr(request_data, "api_provider", None)
+    if "/" in model_str:
+        parts = model_str.split("/", 1)
+        if len(parts) == 2:
+            model_provider, model_name = parts
+            provider = (api_provider or model_provider).lower()
+            model = model_name
+        else:
+            provider = (api_provider or default_provider).lower()
+            model = model_str
+    else:
+        provider = (api_provider or default_provider).lower()
+        model = model_str
+    return provider, model
+
+
+def normalize_request_provider_and_model(
+    request_data: Any,
+    default_provider: str,
+) -> str:
+    """Normalize provider and model on the request.
+
+    If the request's model contains a provider prefix (e.g., "groq/llama-3"),
+    update request_data.model in-place to only the model component and return
+    the selected provider name. This mirrors the behavior already present in
+    the endpoint and avoids duplication.
+    """
+    model_str = getattr(request_data, "model", None) or ""
+    api_provider = getattr(request_data, "api_provider", None)
+    provider = (api_provider or default_provider).lower()
+    if "/" in model_str:
+        parts = model_str.split("/", 1)
+        if len(parts) == 2:
+            model_provider, actual_model = parts
+            if not api_provider:
+                provider = model_provider.lower()
+            # Update the request in place so downstream code sees the stripped model
+            setattr(request_data, "model", actual_model)
+    return provider
+
+
+def merge_api_keys_for_provider(
+    provider: str,
+    module_keys: Optional[Dict[str, Optional[str]]],
+    dynamic_keys: Dict[str, Optional[str]],
+    requires_key_map: Dict[str, bool],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Merge module-level and dynamic API keys, normalizing empties to None.
+
+    Returns a tuple of (raw_value, normalized_value). The raw value is the
+    original string (possibly empty) used to validate presence when a provider
+    requires a key. The normalized value is None if empty-string-like.
+    """
+    # Module-level keys (including patched values) override dynamic lookups
+    api_keys = {**dynamic_keys}
+    if module_keys:
+        api_keys.update(module_keys)
+
+    raw_val = api_keys.get(provider)
+    norm_val = raw_val if (raw_val is not None and str(raw_val) != "") else None
+
+    # No raise here — the caller enforces requirements using requires_key_map
+    return raw_val, norm_val
+
+
+def build_call_params_from_request(
+    request_data: Any,
+    target_api_provider: str,
+    provider_api_key: Optional[str],
+    templated_llm_payload: List[Dict[str, Any]],
+    final_system_message: Optional[str],
+) -> Dict[str, Any]:
+    """Construct the cleaned argument dictionary for chat_api_call.
+
+    Mirrors the transformation previously in the endpoint: renames OpenAI-style
+    params to the generic names expected by chat_api_call and attaches
+    provider/model/messages/system/stream flags.
+    """
+    call_params = request_data.model_dump(
+        exclude_none=True,
+        exclude={
+            "api_provider",
+            "messages",
+            "character_id",
+            "conversation_id",
+            "prompt_template_name",
+            "stream",
+            "save_to_db",
+        },
+    )
+
+    # Rename keys to match chat_api_call's generic signature
+    if "temperature" in call_params:
+        call_params["temp"] = call_params.pop("temperature")
+    if "top_p" in call_params:
+        top_p_value = call_params.pop("top_p")
+        call_params["topp"] = top_p_value
+        call_params["maxp"] = top_p_value
+    if "user" in call_params:
+        call_params["user_identifier"] = call_params.pop("user")
+
+    call_params.update(
+        {
+            "api_endpoint": target_api_provider,
+            "api_key": provider_api_key,
+            "messages_payload": templated_llm_payload,
+            "system_message": final_system_message,
+            "streaming": getattr(request_data, "stream", False),
+        }
+    )
+
+    # Filter Nones; keep explicit None for system_message only if provided
+    cleaned_args = {k: v for k, v in call_params.items() if v is not None}
+    if "system_message" not in cleaned_args and final_system_message is not None:
+        cleaned_args["system_message"] = final_system_message
+    return cleaned_args
+
+
+def estimate_tokens_from_json(request_json: str) -> int:
+    """Rough estimate: assume ~4 chars per token for rate limiting.
+
+    This matches the existing heuristic in the endpoint.
+    """
+    try:
+        return max(1, len(request_json) // 4)
+    except Exception:
+        return 1
+
+
+async def moderate_input_messages(
+    request_data: Any,
+    request: Any,
+    moderation_service: Any,
+    topic_monitoring_service: Optional[Any],
+    metrics: Any,
+    audit_service: Optional[Any],
+    audit_context: Optional[Any],
+    client_id: str,
+    audit_event_type: Optional[Any] = None,
+) -> None:
+    """Apply input moderation and redaction to user message text parts in-place.
+
+    - Emits topic monitoring alerts non-blockingly when configured.
+    - Tracks moderation metrics and audit events.
+    - Raises HTTPException(400) when input is blocked by policy.
+    """
+    # Determine user id context for policy and telemetry
+    req_user_id = None
+    try:
+        if request is not None and hasattr(request, "state"):
+            req_user_id = getattr(request.state, "user_id", None)
+    except Exception:
+        req_user_id = None
+
+    eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+    async def _moderate_text_in_place(text: str) -> str:
+        # Topic monitoring (non-blocking)
+        try:
+            mon = topic_monitoring_service
+            team_ids = None
+            org_ids = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    team_ids = getattr(request.state, "team_ids", None)
+                    org_ids = getattr(request.state, "org_ids", None)
+            except Exception:
+                pass
+            if mon is not None and text:
+                mon.evaluate_and_alert(
+                    user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                    text=text,
+                    source="chat.input",
+                    scope_type="user",
+                    scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                    team_ids=team_ids,
+                    org_ids=org_ids,
+                )
+        except Exception as _e:
+            logger.debug(f"Topic monitoring (input) skipped: {_e}")
+
+        if not eff_policy.enabled or not eff_policy.input_enabled:
+            return text
+
+        resolved_action = None
+        sample = None
+        redacted = None
+        category = None
+        if hasattr(moderation_service, "evaluate_action"):
+            try:
+                eval_res = moderation_service.evaluate_action(text, eff_policy, "input")
+                if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                    resolved_action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+                    category = eval_res[3] if len(eval_res) >= 4 else None
+                else:
+                    resolved_action, redacted, sample = eval_res  # type: ignore
+            except Exception:
+                resolved_action = None
+        if not resolved_action:
+            flagged, sample = moderation_service.check_text(text, eff_policy)
+            if not flagged:
+                return text
+            resolved_action = eff_policy.input_action
+            redacted = moderation_service.redact_text(text, eff_policy) if resolved_action == "redact" else None
+
+        if resolved_action == "pass" or (resolved_action == "warn" and sample is None):
+            return text
+
+        try:
+            metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
+        except Exception:
+            pass
+        try:
+            if audit_service and audit_context:
+                import asyncio as _asyncio
+                _asyncio.create_task(
+                    audit_service.log_event(
+                        event_type=audit_event_type,
+                        context=audit_context,
+                        action="moderation.input",
+                        result=("failure" if resolved_action == "block" else "success"),
+                        metadata={"phase": "input", "action": resolved_action, "pattern": sample},
+                    )
+                )
+        except Exception:
+            pass
+
+        if resolved_action == "block":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
+        if resolved_action == "redact" and redacted is not None:
+            return redacted
+        return text
+
+    # Apply moderation across request messages
+    try:
+        if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
+            for m in request_data.messages:
+                if getattr(m, "role", None) != "user":
+                    continue
+                if isinstance(m.content, str):
+                    m.content = await _moderate_text_in_place(m.content)
+                elif isinstance(m.content, list):
+                    for part in m.content:
+                        try_type = getattr(part, "type", None)
+                        if try_type == "text":
+                            current = getattr(part, "text", None)
+                            if isinstance(current, str):
+                                setattr(part, "text", await _moderate_text_in_place(current))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Moderation input processing error: {e}")
+
+
+async def build_context_and_messages(
+    chat_db: Any,
+    request_data: Any,
+    loop: Any,
+    metrics: Any,
+    default_save_to_db: bool,
+    final_conversation_id: Optional[str],
+    save_message_fn: Any,
+) -> Tuple[Dict[str, Any], Optional[int], str, bool, List[Dict[str, Any]], bool]:
+    """Resolve character/conversation context, load history, save current messages, and return LLM-ready payload.
+
+    Returns (character_card, character_db_id, final_conversation_id, conversation_created, llm_payload_messages, should_persist)
+    """
+    # Character context
+    character_card, character_db_id = await get_or_create_character_context(chat_db, request_data.character_id, loop)
+    if character_card:
+        system_prompt_preview = character_card.get("system_prompt")
+        if system_prompt_preview:
+            system_prompt_preview = system_prompt_preview[:50] + "..." if len(system_prompt_preview) > 50 else system_prompt_preview
+        else:
+            system_prompt_preview = "None"
+        logger.debug(f"Loaded character: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
+
+    if character_card:
+        try:
+            metrics.track_character_access(character_id=str(request_data.character_id or "default"), cache_hit=False)
+        except Exception:
+            pass
+
+    if not character_card:
+        logger.warning("No character context found; proceeding with ephemeral default context.")
+        character_card = {"name": "Default Character", "system_prompt": ""}
+        character_db_id = None
+
+    # Persistence decision
+    requested = getattr(request_data, "save_to_db", None)
+    should_persist: bool = bool(requested) if (requested is not None) else bool(default_save_to_db)
+
+    # Conversation resolution
+    client_id_from_db = getattr(chat_db, "client_id", None)
+    conversation_created = False
+    conv_id = final_conversation_id
+    if should_persist:
+        conv_id, conversation_created = await get_or_create_conversation(
+            chat_db,
+            conv_id,
+            character_db_id,
+            character_card.get("name", "Chat"),
+            client_id_from_db,
+            loop,
+        )
+    else:
+        if not conv_id:
+            conv_id = str(_uuid.uuid4())
+        conversation_created = False
+
+    if conv_id:
+        try:
+            metrics.track_conversation(conv_id, conversation_created)
+        except Exception:
+            pass
+    if not conv_id:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
+
+    # History loading (limit to 20 messages)
+    historical_msgs: List[Dict[str, Any]] = []
+    if conv_id and (not conversation_created):
+        raw_hist = await loop.run_in_executor(None, chat_db.get_messages_for_conversation, conv_id, 20, 0, "ASC")
+        for db_msg in raw_hist:
+            role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
+            char_name_hist = character_card.get("name", "Char") if character_card else "Char"
+            text_content = db_msg.get("content", "")
+            if text_content:
+                text_content = replace_placeholders(text_content, char_name_hist, "User")
+            msg_parts = []
+            if text_content:
+                msg_parts.append({"type": "text", "text": text_content})
+            img_data, img_mime = db_msg.get("image_data"), db_msg.get("image_mime_type")
+            if img_data and img_mime:
+                try:
+                    b64_img = await loop.run_in_executor(None, base64.b64encode, img_data)
+                    msg_parts.append({"type": "image_url", "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}})
+                except Exception as e:
+                    logger.warning(f"Error encoding DB image for history (msg_id {db_msg.get('id')}): {e}")
+            if msg_parts:
+                hist_entry = {"role": role, "content": msg_parts}
+                if role == "assistant" and character_card and character_card.get("name"):
+                    name = character_card.get("name", "").replace(" ", "_").replace("<", "").replace(">", "").replace("|", "").replace("\\", "").replace("/", "")
+                    if name:
+                        hist_entry["name"] = name
+                historical_msgs.append(hist_entry)
+        logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
+
+    # Process current turn messages (persist if needed)
+    current_turn: List[Dict[str, Any]] = []
+    for msg_model in request_data.messages:
+        if msg_model.role == "system":
+            continue
+        msg_dict = msg_model.model_dump(exclude_none=True)
+        msg_for_db = msg_dict.copy()
+        if msg_model.role == "assistant" and character_card:
+            msg_for_db["name"] = character_card.get("name", "Assistant")
+        if should_persist:
+            await save_message_fn(chat_db, conv_id, msg_for_db, use_transaction=True)
+        msg_for_llm = msg_dict.copy()
+        if msg_model.role == "assistant" and character_card and character_card.get("name"):
+            name = character_card.get("name", "").replace(" ", "_").replace("<", "").replace(">", "").replace("|", "").replace("\\", "").replace("/", "")
+            if name:
+                msg_for_llm["name"] = name
+        current_turn.append(msg_for_llm)
+
+    llm_payload_messages = historical_msgs + current_turn
+
+    return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
+
+
+def apply_prompt_templating(
+    request_data: Any,
+    character_card: Dict[str, Any],
+    llm_payload_messages: List[Dict[str, Any]],
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Compute final system message and apply content templating to payload messages.
+
+    Returns (final_system_message, templated_llm_payload)
+    """
+    active_template = load_template(getattr(request_data, "prompt_template_name", None) or DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name)
+    template_data: Dict[str, Any] = {}
+    if character_card:
+        template_data.update({k: v for k, v in character_card.items() if isinstance(v, (str, int, float))})
+        template_data["char_name"] = character_card.get("name", "Character")
+        template_data["character_system_prompt"] = character_card.get("system_prompt", "")
+
+    sys_msg_from_req = next((m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)), None)
+    template_data["original_system_message_from_request"] = sys_msg_from_req or ""
+
+    final_system_message: Optional[str] = None
+    logger.debug(
+        f"sys_msg_from_req: {sys_msg_from_req}, active_template: {active_template}, character: {character_card.get('name') if character_card else None}"
+    )
+    if active_template and active_template.system_message_template:
+        final_system_message = apply_template_to_string(active_template.system_message_template, template_data)
+        if not final_system_message and character_card and character_card.get("system_prompt"):
+            final_system_message = character_card.get("system_prompt")
+            system_prompt_preview = final_system_message[:50] if final_system_message else ""
+            logger.debug(f"Template empty, using character system prompt: {repr(system_prompt_preview)}...")
+    elif sys_msg_from_req:
+        final_system_message = sys_msg_from_req
+    elif character_card and character_card.get("system_prompt"):
+        final_system_message = character_card.get("system_prompt")
+        system_prompt_preview = final_system_message[:50] if final_system_message else ""
+        logger.debug(f"Using character system prompt: {repr(system_prompt_preview)}...")
+
+    logger.debug(f"Final system message: {repr(final_system_message)}")
+
+    templated_llm_payload: List[Dict[str, Any]] = []
+    if active_template:
+        for msg in llm_payload_messages:
+            templated_msg_content = msg.get("content")
+            role = msg.get("role")
+            content_template_str = None
+            if role == "user" and active_template.user_message_content_template:
+                content_template_str = active_template.user_message_content_template
+            elif role == "assistant" and active_template.assistant_message_content_template:
+                content_template_str = active_template.assistant_message_content_template
+            if content_template_str:
+                new_content_parts = []
+                msg_template_data = template_data.copy()
+                if isinstance(templated_msg_content, str):
+                    msg_template_data["message_content"] = templated_msg_content
+                    new_text = apply_template_to_string(content_template_str, msg_template_data)
+                    new_content_parts.append({"type": "text", "text": new_text or templated_msg_content})
+                elif isinstance(templated_msg_content, list):
+                    for part in templated_msg_content:
+                        if part.get("type") == "text":
+                            msg_template_data["message_content"] = part.get("text", "")
+                            new_text_part = apply_template_to_string(content_template_str, msg_template_data)
+                            new_content_parts.append({"type": "text", "text": new_text_part or part.get("text", "")})
+                        else:
+                            new_content_parts.append(part)
+                templated_llm_payload.append({**msg, "content": new_content_parts or templated_msg_content})
+            else:
+                templated_llm_payload.append(msg)
+    else:
+        templated_llm_payload = llm_payload_messages
+
+    return final_system_message, templated_llm_payload
+
+
+async def execute_streaming_call(
+    *,
+    current_loop: Any,
+    cleaned_args: Dict[str, Any],
+    selected_provider: str,
+    provider: str,
+    model: str,
+    request_json: str,
+    request: Any,
+    metrics: Any,
+    provider_manager: Any,
+    templated_llm_payload: List[Dict[str, Any]],
+    should_persist: bool,
+    final_conversation_id: str,
+    character_card_for_context: Optional[Dict[str, Any]],
+    chat_db: Any,
+    save_message_fn: Callable[..., Any],
+    audit_service: Optional[Any],
+    audit_context: Optional[Any],
+    client_id: str,
+    queue_execution_enabled: bool,
+    enable_provider_fallback: bool,
+    llm_call_func: Callable[[], Any],
+    moderation_getter: Optional[Callable[[], Any]] = None,
+) -> StreamingResponse:
+    """Execute a streaming LLM call with queue, failover, moderation, and persistence.
+
+    Returns a StreamingResponse that yields SSE chunks and handles:
+    - provider call invocation and fallback
+    - output moderation (chunk-wise)
+    - saving final assistant message to DB
+    - usage logging and audit success
+    """
+    llm_start_time = time.time()
+    raw_stream_iter: Optional[AsyncIterator[str] | Iterator[str]] = None
+    queue_for_exec = None
+    try:
+        try:
+            queue_for_exec = get_request_queue()
+        except Exception:
+            queue_for_exec = None
+
+        if queue_execution_enabled and queue_for_exec is not None:
+            # Submit streaming job to the queue and bridge chunks via channel
+            stream_channel: asyncio.Queue = asyncio.Queue(maxsize=100)
+            est_tokens_for_queue = max(1, len(request_json) // 4)
+            await queue_for_exec.enqueue(
+                request_id=(get_request_id() or "unknown"),
+                request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
+                client_id=str(client_id),
+                priority=RequestPriority.HIGH,
+                estimated_tokens=est_tokens_for_queue,
+                processor=llm_call_func,
+                processor_args=(),
+                processor_kwargs={},
+                streaming=True,
+                stream_channel=stream_channel,
+            )
+
+            async def _channel_stream():
+                while True:
+                    item = await stream_channel.get()
+                    if item is None:
+                        break
+                    yield item
+
+            raw_stream_iter = _channel_stream()
+            metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
+            try:
+                if provider_manager:
+                    provider_manager.record_success(selected_provider, time.time() - llm_start_time)
+            except Exception:
+                pass
+            # Explicit telemetry when queued streaming uses a fallback provider
+            try:
+                if selected_provider != provider:
+                    metrics.track_provider_fallback_success(
+                        requested_provider=provider,
+                        selected_provider=selected_provider,
+                        streaming=True,
+                        queued=True,
+                    )
+            except Exception:
+                pass
+        else:
+            raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
+            metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=True)
+            try:
+                if provider_manager:
+                    provider_manager.record_success(selected_provider, time.time() - llm_start_time)
+            except Exception:
+                pass
+    except HTTPException as he:
+        metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=False, error_type=type(he).__name__)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred.")
+    except Exception as e:
+        metrics.track_llm_call(provider, model, time.time() - llm_start_time, success=False, error_type=type(e).__name__)
+        if provider_manager and not (queue_execution_enabled and queue_for_exec is not None):
+            provider_manager.record_failure(selected_provider, e)
+            # Only fallback on upstream/server errors; skip fallback for client/config errors
+            name_lower_e = type(e).__name__.lower()
+            client_like_error = (
+                "authentication" in name_lower_e
+                or "ratelimit" in name_lower_e
+                or "rate_limit" in name_lower_e
+                or "badrequest" in name_lower_e
+                or "bad_request" in name_lower_e
+                or "configuration" in name_lower_e
+            )
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+                fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
+                if fallback_provider:
+                    logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
+                    cleaned_args["api_endpoint"] = fallback_provider
+                    llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
+                    try:
+                        raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
+                        provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
+                        metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
+                        # Explicit telemetry for direct (non-queued) streaming fallback success
+                        try:
+                            metrics.track_provider_fallback_success(
+                                requested_provider=provider,
+                                selected_provider=fallback_provider,
+                                streaming=True,
+                                queued=False,
+                            )
+                        except Exception:
+                            pass
+                    except Exception as fallback_error:
+                        provider_manager.record_failure(fallback_provider, fallback_error)
+                        raise fallback_error
+                else:
+                    raise
+            else:
+                raise
+        else:
+            raise
+
+    if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
+
+    async def save_callback(full_reply: str):
+        if should_persist and full_reply and final_conversation_id:
+            asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
+            asst_name = (
+                asst_name.replace(" ", "_")
+                .replace("<", "")
+                .replace(">", "")
+                .replace("|", "")
+                .replace("\\", "")
+                .replace("/", "")
+            )
+            await save_message_fn(
+                chat_db,
+                final_conversation_id,
+                {"role": "assistant", "name": asst_name, "content": full_reply},
+                use_transaction=True,
+            )
+        # Usage logging (estimated) after stream completes
+        try:
+            pt_est = 0
+            try:
+                pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+            except Exception:
+                pt_est = 0
+            ct_est = max(0, len(full_reply or "") // 4)
+            user_id = None
+            api_key_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    user_id = getattr(request.state, "user_id", None)
+                    api_key_id = getattr(request.state, "api_key_id", None)
+            except Exception:
+                pass
+            latency_ms = int((time.time() - llm_start_time) * 1000)
+            await log_llm_usage(
+                user_id=user_id,
+                key_id=api_key_id,
+                endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
+                operation="chat",
+                provider=provider,
+                model=model,
+                status=200,
+                latency_ms=latency_ms,
+                prompt_tokens=int(pt_est),
+                completion_tokens=int(ct_est),
+                total_tokens=int(pt_est + ct_est),
+                request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                estimated=True,
+            )
+        except Exception:
+            pass
+        # Audit success
+        try:
+            if audit_service and audit_context:
+                await audit_service.log_event(
+                    event_type=AuditEventType.API_RESPONSE,
+                    context=audit_context,
+                    action="chat_completion_success",
+                    result="success",
+                    metadata={
+                        "conversation_id": final_conversation_id,
+                        "provider": selected_provider,
+                        "model": model,
+                        "streaming": True,
+                    },
+                )
+        except Exception:
+            pass
+
+    async def tracked_streaming_generator():
+        async with metrics.track_streaming(final_conversation_id) as stream_tracker:
+            _get_mod = moderation_getter or get_moderation_service
+            moderation = _get_mod()
+            req_user_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    req_user_id = getattr(request.state, "user_id", None)
+            except Exception:
+                req_user_id = None
+            eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+            from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
+
+            stream_block_logged = False
+            stream_redact_logged = False
+
+            def _out_transform(s: str) -> str:
+                try:
+                    mon = None
+                    try:
+                        mon = get_topic_monitoring_service()
+                    except Exception:
+                        mon = None
+                    team_ids = None
+                    org_ids = None
+                    try:
+                        if request is not None and hasattr(request, "state"):
+                            team_ids = getattr(request.state, "team_ids", None)
+                            org_ids = getattr(request.state, "org_ids", None)
+                    except Exception:
+                        pass
+                    if mon is not None and s:
+                        mon.evaluate_and_alert(
+                            user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                            text=s,
+                            source="chat.output",
+                            scope_type="user",
+                            scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                            team_ids=team_ids,
+                            org_ids=org_ids,
+                        )
+                except Exception as _e:
+                    logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
+                if not eff_policy.enabled or not eff_policy.output_enabled:
+                    return s
+                resolved_action = None
+                sample = None
+                redacted_s = None
+                out_category = None
+                if hasattr(moderation, "evaluate_action"):
+                    try:
+                        eval_res = moderation.evaluate_action(s, eff_policy, "output")
+                        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                            resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                            out_category = eval_res[3] if len(eval_res) >= 4 else None
+                        else:
+                            resolved_action, redacted_s, sample = eval_res  # type: ignore
+                    except Exception:
+                        resolved_action = None
+                if not resolved_action:
+                    flagged, sample = moderation.check_text(s, eff_policy)
+                    if not flagged:
+                        return s
+                    resolved_action = eff_policy.output_action
+                    redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
+                if resolved_action == "block":
+                    try:
+                        if not stream_block_logged:
+                            metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
+                            stream_block_logged = True
+                    except Exception:
+                        pass
+                    try:
+                        if audit_service and audit_context and not stream_block_logged:
+                            import asyncio as _asyncio
+                            _asyncio.create_task(
+                                audit_service.log_event(
+                                    event_type=AuditEventType.SECURITY_VIOLATION,
+                                    context=audit_context,
+                                    action="moderation.output",
+                                    result="failure",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "block",
+                                        "pattern": sample,
+                                    },
+                                )
+                            )
+                    except Exception:
+                        pass
+                    raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
+                if resolved_action == "redact":
+                    try:
+                        if not stream_redact_logged:
+                            metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
+                            stream_redact_logged = True
+                    except Exception:
+                        pass
+                    try:
+                        if audit_service and audit_context and not stream_redact_logged:
+                            import asyncio as _asyncio
+                            _asyncio.create_task(
+                                audit_service.log_event(
+                                    event_type=AuditEventType.SECURITY_VIOLATION,
+                                    context=audit_context,
+                                    action="moderation.output",
+                                    result="success",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "redact",
+                                        "pattern": sample,
+                                    },
+                                )
+                            )
+                    except Exception:
+                        pass
+                    return redacted_s or moderation.redact_text(s, eff_policy)
+                return s
+
+            generator = create_streaming_response_with_timeout(
+                stream=raw_stream_iter,  # type: ignore[arg-type]
+                conversation_id=final_conversation_id,
+                model_name=model,
+                save_callback=save_callback,
+                idle_timeout=300,
+                heartbeat_interval=30,
+                text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None,
+            )
+            async for chunk in generator:
+                if "heartbeat" in chunk:
+                    stream_tracker.add_heartbeat()
+                else:
+                    stream_tracker.add_chunk()
+                yield chunk
+
+    streaming_generator = tracked_streaming_generator()
+    return StreamingResponse(
+        streaming_generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def execute_non_stream_call(
+    *,
+    current_loop: Any,
+    cleaned_args: Dict[str, Any],
+    selected_provider: str,
+    provider: str,
+    model: str,
+    request_json: str,
+    request: Any,
+    metrics: Any,
+    provider_manager: Any,
+    templated_llm_payload: List[Dict[str, Any]],
+    should_persist: bool,
+    final_conversation_id: str,
+    character_card_for_context: Optional[Dict[str, Any]],
+    chat_db: Any,
+    save_message_fn: Callable[..., Any],
+    audit_service: Optional[Any],
+    audit_context: Optional[Any],
+    client_id: str,
+    queue_execution_enabled: bool,
+    enable_provider_fallback: bool,
+    llm_call_func: Callable[[], Any],
+    moderation_getter: Optional[Callable[[], Any]] = None,
+) -> Dict[str, Any]:
+    """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
+
+    Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
+    """
+    llm_start_time = time.time()
+    llm_response = None
+    try:
+        queue_for_exec = None
+        try:
+            queue_for_exec = get_request_queue()
+        except Exception:
+            queue_for_exec = None
+        if queue_execution_enabled and queue_for_exec is not None:
+            est_tokens_for_queue = max(1, len(request_json) // 4)
+            fut = await queue_for_exec.enqueue(
+                request_id=(get_request_id() or "unknown"),
+                request_data={"endpoint": "/api/v1/chat/completions", "mode": "non-stream"},
+                client_id=str(client_id),
+                priority=RequestPriority.NORMAL,
+                estimated_tokens=est_tokens_for_queue,
+                processor=llm_call_func,
+                processor_args=(),
+                processor_kwargs={},
+                streaming=False,
+                stream_channel=None,
+            )
+            llm_response = await fut
+        else:
+            llm_response = await current_loop.run_in_executor(None, llm_call_func)
+        llm_latency = time.time() - llm_start_time
+        metrics.track_llm_call(provider, model, llm_latency, success=True)
+        if provider_manager:
+            provider_manager.record_success(selected_provider, llm_latency)
+    except Exception as e:
+        llm_latency = time.time() - llm_start_time
+        metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(e).__name__)
+        if provider_manager:
+            provider_manager.record_failure(selected_provider, e)
+            name_lower_e = type(e).__name__.lower()
+            client_like_error = (
+                "authentication" in name_lower_e
+                or "ratelimit" in name_lower_e
+                or "rate_limit" in name_lower_e
+                or "badrequest" in name_lower_e
+                or "bad_request" in name_lower_e
+                or "configuration" in name_lower_e
+            )
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+                fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
+                if fallback_provider:
+                    logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
+                    cleaned_args["api_endpoint"] = fallback_provider
+                    llm_call_func = lambda: perform_chat_api_call(**cleaned_args)
+                    try:
+                        llm_response = await current_loop.run_in_executor(None, llm_call_func)
+                        provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
+                        metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
+                    except Exception as fallback_error:
+                        provider_manager.record_failure(fallback_provider, fallback_error)
+                        raise fallback_error
+                else:
+                    raise
+            else:
+                raise
+        else:
+            raise
+
+    content_to_save: Optional[str] = None
+    if llm_response and isinstance(llm_response, dict):
+        choices = llm_response.get("choices")
+        if choices and isinstance(choices, list) and len(choices) > 0:
+            content_to_save = choices[0].get("message", {}).get("content")
+        usage = llm_response.get("usage")
+        if usage:
+            try:
+                prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+                completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+                metrics.track_tokens(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    model=model,
+                    provider=provider,
+                )
+                user_id = None
+                api_key_id = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        user_id = getattr(request.state, "user_id", None)
+                        api_key_id = getattr(request.state, "api_key_id", None)
+                except Exception:
+                    pass
+                await log_llm_usage(
+                    user_id=user_id,
+                    key_id=api_key_id,
+                    endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
+                    operation="chat",
+                    provider=provider,
+                    model=model,
+                    status=200,
+                    latency_ms=int((time.time() - llm_start_time) * 1000),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=int((usage.get("total_tokens") or 0) or (prompt_tokens + completion_tokens)),
+                    request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                )
+            except Exception:
+                pass
+        else:
+            # Estimate usage if not provided
+            try:
+                pt_est = 0
+                try:
+                    pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                except Exception:
+                    pt_est = 0
+                ct_est = max(0, len((content_to_save or "")) // 4)
+                user_id = None
+                api_key_id = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        user_id = getattr(request.state, "user_id", None)
+                        api_key_id = getattr(request.state, "api_key_id", None)
+                except Exception:
+                    pass
+                await log_llm_usage(
+                    user_id=user_id,
+                    key_id=api_key_id,
+                    endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
+                    operation="chat",
+                    provider=provider,
+                    model=model,
+                    status=200,
+                    latency_ms=int((time.time() - llm_start_time) * 1000),
+                    prompt_tokens=int(pt_est),
+                    completion_tokens=int(ct_est),
+                    total_tokens=int(pt_est + ct_est),
+                    request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                    estimated=True,
+                )
+            except Exception:
+                pass
+    elif isinstance(llm_response, str):
+        content_to_save = llm_response
+    elif llm_response is None:
+        raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
+
+    # Output moderation (non-streaming)
+    try:
+        if content_to_save:
+            _get_mod = moderation_getter or get_moderation_service
+            moderation = _get_mod()
+            req_user_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    req_user_id = getattr(request.state, "user_id", None)
+            except Exception:
+                req_user_id = None
+            eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+            if eff_policy.enabled and eff_policy.output_enabled:
+                resolved_action = None
+                sample = None
+                redacted_val = None
+                out_category2 = None
+                if hasattr(moderation, "evaluate_action"):
+                    try:
+                        eval_res = moderation.evaluate_action(content_to_save, eff_policy, "output")
+                        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                            resolved_action, redacted_val, sample = eval_res[0], eval_res[1], eval_res[2]
+                            out_category2 = eval_res[3] if len(eval_res) >= 4 else None
+                        else:
+                            resolved_action, redacted_val, sample = eval_res  # type: ignore
+                    except Exception:
+                        resolved_action = None
+                if not resolved_action:
+                    flagged, sample = moderation.check_text(content_to_save, eff_policy)
+                    if flagged:
+                        resolved_action = eff_policy.output_action
+                        redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == "redact" else None
+                # Topic monitoring (final output)
+                try:
+                    mon3 = None
+                    try:
+                        mon3 = get_topic_monitoring_service()
+                    except Exception:
+                        mon3 = None
+                    team_ids = None
+                    org_ids = None
+                    try:
+                        if request is not None and hasattr(request, "state"):
+                            team_ids = getattr(request.state, "team_ids", None)
+                            org_ids = getattr(request.state, "org_ids", None)
+                    except Exception:
+                        pass
+                    if mon3 is not None and content_to_save:
+                        mon3.evaluate_and_alert(
+                            user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                            text=content_to_save,
+                            source="chat.output",
+                            scope_type="user",
+                            scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
+                            team_ids=team_ids,
+                            org_ids=org_ids,
+                        )
+                except Exception as _ex:
+                    logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
+
+                if resolved_action == "block":
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
+                if resolved_action == "redact":
+                    try:
+                        if sample is not None:
+                            metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category=(out_category2 or "default"))
+                    except Exception:
+                        pass
+                    try:
+                        if audit_service and audit_context:
+                            await audit_service.log_event(
+                                event_type=audit_service.EventType.SECURITY_VIOLATION if hasattr(audit_service, "EventType") else None,
+                                context=audit_context,
+                                action="moderation.output",
+                                result="success",
+                                metadata={
+                                    "phase": "output",
+                                    "streaming": False,
+                                    "action": "redact",
+                                    "pattern": sample,
+                                },
+                            )
+                    except Exception:
+                        pass
+                    content_to_save = redacted_val or moderation.redact_text(content_to_save, eff_policy)
+                    # Update llm_response dict if applicable
+                    try:
+                        if isinstance(llm_response, dict):
+                            if llm_response.get("choices") and isinstance(llm_response["choices"], list) and llm_response["choices"]:
+                                msg = llm_response["choices"][0].get("message") or {}
+                                if isinstance(msg, dict):
+                                    msg["content"] = content_to_save
+                    except Exception:
+                        pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Moderation output processing error: {e}")
+
+    if should_persist and content_to_save:
+        asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
+        asst_name = (
+            asst_name.replace(" ", "_")
+            .replace("<", "")
+            .replace(">", "")
+            .replace("|", "")
+            .replace("\\", "")
+            .replace("/", "")
+        )
+        await save_message_fn(
+            chat_db,
+            final_conversation_id,
+            {"role": "assistant", "name": asst_name, "content": content_to_save},
+            use_transaction=True,
+        )
+
+    # Encode payload (large responses via CPU-bound handler)
+    if llm_response and isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
+        encoded_json = await process_large_json_async(llm_response)
+        encoded_payload = _json.loads(encoded_json)
+    else:
+        encoded_payload = await current_loop.run_in_executor(None, jsonable_encoder, llm_response)
+
+    if isinstance(encoded_payload, dict):
+        encoded_payload["tldw_conversation_id"] = final_conversation_id
+
+    # Audit success
+    if audit_service and audit_context:
+        try:
+            await audit_service.log_event(
+                event_type=AuditEventType.API_RESPONSE,
+                context=audit_context,
+                action="chat_completion_success",
+                result="success",
+                metadata={
+                    "conversation_id": final_conversation_id,
+                    "provider": selected_provider,
+                    "model": model,
+                    "streaming": False,
+                },
+            )
+        except Exception:
+            pass
+
+    return encoded_payload

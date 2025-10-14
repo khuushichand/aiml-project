@@ -113,3 +113,17 @@ Extensibility Notes
 Related Docs
 - Moderation/Guardrails details: Docs/Moderation-Guardrails.md
 
+Audit Export API
+- Endpoint: `GET /api/v1/audit/export` (admin only; single-user mode treats the sole user as admin)
+- Purpose: Export audit logs as JSON or CSV for analysis/compliance
+- Query params:
+  - `format`: `json` | `csv` (default: `json`)
+  - `start_time`, `end_time`: ISO8601 timestamps (e.g., `2025-01-01T00:00:00Z`)
+  - `event_type`: list of event types (enum name like `AUTH_LOGIN_SUCCESS` or value like `auth.login.success`)
+  - `category`: list of categories (enum name or value)
+  - `min_risk_score`: integer threshold
+  - `user_id`, `request_id`, `correlation_id`: filters
+  - `filename`: override attachment name
+- Example:
+  - `GET /api/v1/audit/export?format=csv&category=API_CALL&min_risk_score=70&start_time=2025-01-01T00:00:00Z`
+  - Returns `text/csv` with `Content-Disposition: attachment; filename=audit_export.csv`

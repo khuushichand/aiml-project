@@ -103,6 +103,8 @@ class MessageResponse(BaseModel):
     ranking: Optional[int] = Field(None, description="Message ranking/rating")
     has_image: bool = Field(False, description="Whether message has an attached image")
     version: int = Field(1, description="Version number for optimistic locking")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
+    metadata_extra: Optional[Dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
     
     model_config = {"from_attributes": True}
 

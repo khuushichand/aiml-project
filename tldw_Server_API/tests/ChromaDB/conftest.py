@@ -62,7 +62,18 @@ from tldw_Server_API.app.core.Embeddings.workers.storage_worker import StorageWo
 from tldw_Server_API.app.core.Embeddings.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Embeddings.error_recovery import ErrorRecoveryManager
-from tldw_Server_API.app.core.Embeddings.audit_logger import AuditLogger
+# Legacy Embeddings audit logger was removed. Provide a minimal stub to satisfy tests
+class AuditLogger:  # type: ignore
+    def __init__(self, *args, **kwargs):
+        pass
+    def log_event(self, *args, **kwargs):
+        return None
+    def log_security_event(self, *args, **kwargs):
+        return None
+    def log_resource_event(self, *args, **kwargs):
+        return None
+    def log_admin_operation(self, *args, **kwargs):
+        return None
 
 # =====================================================================
 # Test Markers
@@ -569,8 +580,8 @@ def connection_pool(temp_media_db):
 
 @pytest.fixture
 def audit_logger(temp_media_db):
-    """Create an audit logger for testing."""
-    return AuditLogger(db_path=temp_media_db)
+    """Create an audit logger for testing (stubbed)."""
+    return AuditLogger()
 
 @pytest.fixture
 def mock_metrics():

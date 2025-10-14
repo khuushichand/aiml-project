@@ -39,11 +39,28 @@ class JWTService:
         # JWT configuration
         self.algorithm = self.settings.JWT_ALGORITHM
         # Note: We don't cache timedeltas to allow dynamic configuration changes during testing
-        
-        # Get the persistent secret key
-        self.secret_key = self.settings.JWT_SECRET_KEY
-        if not self.secret_key:
-            raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured")
+
+        # Select signing/verification keys according to algorithm
+        alg_upper = (self.algorithm or "").upper()
+        if alg_upper.startswith("HS"):
+            # Symmetric HMAC
+            self._encode_key = self.settings.JWT_SECRET_KEY
+            self._decode_key = self.settings.JWT_SECRET_KEY
+            self._secondary_decode_key = self.settings.JWT_SECONDARY_SECRET
+            if not self._encode_key:
+                raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
+        elif alg_upper.startswith("RS") or alg_upper.startswith("ES"):
+            # Asymmetric (RSA/ECDSA)
+            self._encode_key = self.settings.JWT_PRIVATE_KEY
+            # Allow verifying with public if provided, else private
+            self._decode_key = self.settings.JWT_PUBLIC_KEY or self.settings.JWT_PRIVATE_KEY
+            self._secondary_decode_key = self.settings.JWT_SECONDARY_PUBLIC_KEY
+            if not self._encode_key:
+                raise ConfigurationError("JWT_PRIVATE_KEY", f"Private key required for {self.algorithm}")
+            if not self._decode_key:
+                raise ConfigurationError("JWT_PUBLIC_KEY", f"Public key (or private) required for {self.algorithm}")
+        else:
+            raise ConfigurationError("JWT_ALGORITHM", f"Unsupported algorithm: {self.algorithm}")
         
         logger.debug(f"JWTService initialized with algorithm: {self.algorithm}")
     
@@ -79,6 +96,11 @@ class JWTService:
             "jti": str(uuid4()),  # JWT ID for tracking
             "type": "access"
         }
+        # Optional issuer/audience
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
         
         # Add any additional claims
         if additional_claims:
@@ -86,7 +108,7 @@ class JWTService:
         
         # Encode the token
         try:
-            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.debug(f"Created access token for user {username} (ID: {user_id})")
             return token
             
@@ -123,6 +145,10 @@ class JWTService:
             "jti": str(uuid4()),
             "type": "refresh"
         }
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
         
         # Add any additional claims
         if additional_claims:
@@ -130,7 +156,7 @@ class JWTService:
         
         # Encode the token
         try:
-            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
             return token
             
@@ -155,11 +181,25 @@ class JWTService:
         """
         try:
             # Decode the token
-            payload = jwt.decode(
-                token,
-                self.secret_key,
-                algorithms=[self.algorithm]
-            )
+            # Enforce optional issuer/audience when configured
+            decode_kwargs = {
+                "algorithms": [self.algorithm],
+            }
+            if self.settings.JWT_AUDIENCE:
+                decode_kwargs["audience"] = self.settings.JWT_AUDIENCE
+            if self.settings.JWT_ISSUER:
+                decode_kwargs["issuer"] = self.settings.JWT_ISSUER
+            try:
+                payload = jwt.decode(token, self._decode_key, **decode_kwargs)
+            except JWTError as primary_err:
+                # Dual-key fallback during rotations
+                if getattr(self, "_secondary_decode_key", None):
+                    try:
+                        payload = jwt.decode(token, self._secondary_decode_key, **decode_kwargs)
+                    except JWTError:
+                        raise primary_err
+                else:
+                    raise
             
             # Check if token is blacklisted
             jti = payload.get("jti")
@@ -208,11 +248,23 @@ class JWTService:
         """
         try:
             # Decode the token
-            payload = jwt.decode(
-                token,
-                self.secret_key,
-                algorithms=[self.algorithm]
-            )
+            decode_kwargs = {
+                "algorithms": [self.algorithm],
+            }
+            if self.settings.JWT_AUDIENCE:
+                decode_kwargs["audience"] = self.settings.JWT_AUDIENCE
+            if self.settings.JWT_ISSUER:
+                decode_kwargs["issuer"] = self.settings.JWT_ISSUER
+            try:
+                payload = jwt.decode(token, self._decode_key, **decode_kwargs)
+            except JWTError as primary_err:
+                if getattr(self, "_secondary_decode_key", None):
+                    try:
+                        payload = jwt.decode(token, self._secondary_decode_key, **decode_kwargs)
+                    except JWTError:
+                        raise primary_err
+                else:
+                    raise
             
             # Verify token type if specified
             if token_type and payload.get("type") != token_type:
@@ -287,9 +339,9 @@ class JWTService:
         Returns:
             HMAC-SHA256 hash of the token
         """
-        # Use a portion of the JWT secret as HMAC key for consistency
-        # This ensures the same token always produces the same hash
-        hmac_key = self.secret_key[:32].encode() if len(self.secret_key) >= 32 else self.secret_key.encode()
+        # Prefer API_KEY_PEPPER; fallback to JWT secret; then safe default
+        material = (self.settings.API_KEY_PEPPER or self.settings.JWT_SECRET_KEY or "tldw_default_api_key_hmac")
+        hmac_key = (material[:32]).encode()
         return hmac.new(hmac_key, token.encode(), hashlib.sha256).hexdigest()
     
     def extract_jti(self, token: str) -> Optional[str]:
@@ -336,9 +388,13 @@ class JWTService:
             "jti": str(uuid4()),
             "type": "password_reset"
         }
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
         
         try:
-            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.info(f"Created password reset token for user {user_id}")
             return token
             
@@ -373,9 +429,13 @@ class JWTService:
             "jti": str(uuid4()),
             "type": "email_verification"
         }
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
         
         try:
-            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.info(f"Created email verification token for user {user_id}")
             return token
             
@@ -411,9 +471,13 @@ class JWTService:
             "jti": str(uuid4()),
             "type": "service"
         }
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
         
         try:
-            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.info(f"Created service account token for {service_name}")
             return token
             

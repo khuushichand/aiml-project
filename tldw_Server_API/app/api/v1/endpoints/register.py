@@ -36,10 +36,10 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     RegistrationDisabledError
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    get_unified_audit_service,
     AuditEventType,
     AuditContext
 )
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
 #######################################################################################################################
 #
@@ -154,7 +154,7 @@ async def register_user(
     db=Depends(get_db_transaction),
     password_service: PasswordService = Depends(get_password_service_dep),
     registration_service: RegistrationService = Depends(get_registration_service_dep),
-    audit_service=Depends(get_unified_audit_service)
+    audit_service=Depends(get_audit_service_for_user)
 ) -> RegistrationResponse:
     """
     Register a new user account

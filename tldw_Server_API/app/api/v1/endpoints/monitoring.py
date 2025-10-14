@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
+import os
+import json
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
@@ -20,9 +22,13 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     AlertsListResponse,
     AlertItem,
     MarkReadResponse,
+    NotificationSettings,
+    NotificationSettingsUpdate,
+    NotificationTestRequest,
 )
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB, TopicAlert
+from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
 
 
 router = APIRouter()
@@ -94,3 +100,62 @@ async def mark_alert_read(alert_id: int, _: Any = Depends(require_admin)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
     return MarkReadResponse(status="ok", id=alert_id)
 
+
+@router.get("/monitoring/notifications/settings", response_model=NotificationSettings, tags=["monitoring"], summary="Get notification settings")
+async def get_notifications_settings(_: Any = Depends(require_admin)):
+    svc = get_notification_service()
+    return NotificationSettings(**svc.get_settings())
+
+
+@router.put("/monitoring/notifications/settings", response_model=NotificationSettings, tags=["monitoring"], summary="Update notification settings (runtime only)")
+async def update_notifications_settings(payload: NotificationSettingsUpdate, _: Any = Depends(require_admin)):
+    svc = get_notification_service()
+    data = payload.model_dump(exclude_unset=True)
+    updated = svc.update_settings(**data)
+    return NotificationSettings(**updated)
+
+
+@router.post("/monitoring/notifications/test", tags=["monitoring"], summary="Send a test notification (critical by default)")
+async def send_test_notification(payload: NotificationTestRequest, _: Any = Depends(require_admin)):
+    notifier = get_notification_service()
+    alert = TopicAlert(
+        user_id=payload.user_id or "admin",
+        scope_type="user",
+        scope_id=payload.user_id or "admin",
+        source="monitoring.test",
+        watchlist_id="test",
+        rule_category="test",
+        rule_severity=payload.severity or "critical",
+        pattern="test",
+        text_snippet=payload.message or "Test notification",
+        metadata={"source": "admin_panel"},
+    )
+    try:
+        notifier.notify(alert)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return {"status": "ok"}
+
+
+@router.get("/monitoring/notifications/recent", tags=["monitoring"], summary="Tail recent notifications from file (JSONL)")
+async def get_recent_notifications(limit: int = Query(50, ge=1, le=500), _: Any = Depends(require_admin)):
+    svc = get_notification_service()
+    path = getattr(svc, 'file_path', None)
+    items: list[dict] = []
+    if not path or not os.path.exists(path):
+        return {"items": []}
+    try:
+        # Simple bounded tail: read last N lines
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()[-limit:]
+        for ln in lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                items.append(json.loads(ln))
+            except Exception:
+                items.append({"raw": ln})
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

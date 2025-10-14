@@ -1402,7 +1402,8 @@ Complete API documentation is available at:
 - `GET /api/v1/mcp/health` - Health check
 - `GET /api/v1/mcp/tools` - List available tools
 - `POST /api/v1/mcp/tools/execute` - Execute tool
-- `GET /api/v1/mcp/metrics` - Prometheus metrics
+- `GET /api/v1/mcp/metrics` - JSON metrics (admin-only)
+- `GET /api/v1/mcp/metrics/prometheus` - Prometheus scrape (internal-only)
 
 #### Authentication
 - `POST /api/v1/mcp/auth/token` - Get access token

@@ -6,6 +6,11 @@ from typing import Dict, List, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Chat.provider_config import (
+    PROVIDER_REQUIRES_KEY,
+    PROVIDER_CAPABILITIES,
+)
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 
 #######################################################################################################################
 #
@@ -659,6 +664,15 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             }
         }
         
+        # Optional: live health report
+        health_report = {}
+        try:
+            pm = get_provider_manager()
+            if pm:
+                health_report = pm.get_health_report()
+        except Exception:
+            health_report = {}
+
         # Process each provider
         for provider_name, provider_info in provider_mappings.items():
             section_name = provider_info.get('section')
@@ -740,7 +754,25 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             streaming_field = f'{provider_name}_streaming'
             if config_parser.has_option(section_name, streaming_field):
                 provider_data['supports_streaming'] = config_parser.get(section_name, streaming_field, fallback='False').lower() == 'true'
+
+            # Centralized capability diagnostics
+            try:
+                provider_data['requires_api_key'] = bool(PROVIDER_REQUIRES_KEY.get(provider_name, provider_info['type'] == 'commercial'))
+                capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
+                # Merge config-indicated streaming support as an override if provided
+                if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
+                    capabilities['supports_streaming'] = provider_data['supports_streaming']
+                provider_data['capabilities'] = capabilities
+            except Exception:
+                provider_data['requires_api_key'] = provider_info['type'] == 'commercial'
             
+            # Attach live health if available
+            try:
+                if provider_name in health_report:
+                    provider_data['health'] = health_report[provider_name]
+            except Exception:
+                pass
+
             providers.append(provider_data)
         
         # Get the default provider from config
@@ -811,6 +843,33 @@ async def get_llm_providers(include_deprecated: bool = False):
     """
     try:
         result = get_configured_providers(include_deprecated=include_deprecated)
+
+        # Inject Diagnostics UI interval bounds from server config if available
+        try:
+            cfg = load_comprehensive_config()
+            section = 'LLM_Diagnostics'
+            def _getint(key: str, fallback: int) -> int:
+                try:
+                    return cfg.getint(section, key, fallback=fallback)
+                except Exception:
+                    return fallback
+
+            qs_min = _getint('queue_status_auto_min_secs', 1)
+            qs_max = _getint('queue_status_auto_max_secs', 60)
+            qa_min = _getint('queue_activity_auto_min_secs', 1)
+            qa_max = _getint('queue_activity_auto_max_secs', 60)
+            # Normalize if misconfigured
+            if qs_min > qs_max:
+                qs_min, qs_max = qs_max, qs_min
+            if qa_min > qa_max:
+                qa_min, qa_max = qa_max, qa_min
+            result['diagnostics_ui'] = {
+                'queue_status_auto': {'min': int(max(1, qs_min)), 'max': int(max(1, qs_max))},
+                'queue_activity_auto': {'min': int(max(1, qa_min)), 'max': int(max(1, qa_max))},
+            }
+        except Exception:
+            # Best-effort; omit diagnostics_ui on failure
+            pass
         
         if result['total_configured'] == 0:
             logger.warning("No LLM providers are configured")

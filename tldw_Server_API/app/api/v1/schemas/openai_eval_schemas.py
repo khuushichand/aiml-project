@@ -11,6 +11,7 @@ Follows OpenAI's API conventions:
 
 from typing import Dict, List, Optional, Any, Literal, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import ConfigDict
 from datetime import datetime
 
 
@@ -18,14 +19,11 @@ from datetime import datetime
 
 class OpenAIBaseModel(BaseModel):
     """Base model with OpenAI conventions"""
-    
-    class Config:
-        # Allow population by field name or alias
-        populate_by_name = True
-        # Use snake_case for JSON
-        alias_generator = lambda field_name: field_name
-        # Include fields even if None
-        exclude_none = False
+    model_config = ConfigDict(
+        populate_by_name=True,
+        # Keep identity alias generator for explicitness
+        alias_generator=lambda field_name: field_name,
+    )
 
 
 # ============= Evaluation Models =============

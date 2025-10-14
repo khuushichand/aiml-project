@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import (
     TopicAlert,
 )
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
 
 
 @dataclass
@@ -192,16 +193,30 @@ class TopicMonitoringService:
         e = min(len(text), s + max_len)
         return text[s:e]
 
-    def _applicable_watchlists(self, user_id: Optional[str]) -> List[Tuple[str, Watchlist]]:
+    def _applicable_watchlists(self, user_id: Optional[str], team_ids: Optional[List[str]] = None, org_ids: Optional[List[str]] = None) -> List[Tuple[str, Watchlist]]:
         out: List[Tuple[str, Watchlist]] = []
         if not user_id:
             return out
         for wid, wl in self._watchlists.items():
             if not wl.enabled:
                 continue
-            # Phase 1: only per-user scoping behavior
+            # Phase 1: per-user scoping + simple global support
             if wl.scope_type == "user" and str(wl.scope_id) == str(user_id):
                 out.append((wid, wl))
+            elif wl.scope_type in ("global", "all"):
+                out.append((wid, wl))
+            elif wl.scope_type == "team" and team_ids:
+                try:
+                    if str(wl.scope_id) in {str(t) for t in team_ids}:
+                        out.append((wid, wl))
+                except Exception:
+                    pass
+            elif wl.scope_type == "org" and org_ids:
+                try:
+                    if str(wl.scope_id) in {str(o) for o in org_ids}:
+                        out.append((wid, wl))
+                except Exception:
+                    pass
             # Future: team/org support
         return out
 
@@ -212,6 +227,8 @@ class TopicMonitoringService:
         source: str,
         scope_type: str = "user",
         scope_id: Optional[str] = None,
+        team_ids: Optional[List[str]] = None,
+        org_ids: Optional[List[str]] = None,
     ) -> int:
         """Scan text for any watchlist matches and emit alerts.
         Returns count of alerts created.
@@ -220,7 +237,7 @@ class TopicMonitoringService:
             return 0
         scan = text[: self._max_scan_chars]
         total_created = 0
-        for wid, wl in self._applicable_watchlists(user_id):
+        for wid, wl in self._applicable_watchlists(user_id, team_ids=team_ids, org_ids=org_ids):
             compiled = self._compiled.get(wid) or []
             for cr in compiled:
                 m = cr.regex.search(scan)
@@ -236,10 +253,11 @@ class TopicMonitoringService:
                 ):
                     continue
                 snippet = self._snippet_around(scan, m.start(), m.end(), max_len=200)
+                # Scope reflects the matched watchlist's scope
                 alert = TopicAlert(
                     user_id=str(user_id),
-                    scope_type=scope_type,
-                    scope_id=scope_id or str(user_id),
+                    scope_type=str(wl.scope_type or scope_type),
+                    scope_id=str(wl.scope_id) if getattr(wl, 'scope_id', None) is not None else (scope_id or str(user_id)),
                     source=source,
                     watchlist_id=str(wid),
                     rule_category=cr.category,
@@ -249,6 +267,12 @@ class TopicMonitoringService:
                     metadata={"note": cr.note} if cr.note else None,
                 )
                 self._db.insert_alert(alert)
+                # Notify if configured and severity threshold met
+                try:
+                    notifier = get_notification_service()
+                    notifier.notify(alert)
+                except Exception as _ne:
+                    logger.debug(f"Topic monitoring notify skipped: {_ne}")
                 total_created += 1
         return total_created
 
@@ -261,4 +285,3 @@ def get_topic_monitoring_service() -> TopicMonitoringService:
     if _service_singleton is None:
         _service_singleton = TopicMonitoringService()
     return _service_singleton
-

@@ -12,8 +12,8 @@ import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from .claims_engine import HeuristicSentenceExtractor, LLMBasedClaimExtractor
 from tldw_Server_API.app.core.config import settings as _settings
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 try:
     # Local import for DB helper
@@ -44,21 +44,15 @@ def extract_claims_for_chunks(
 
         # Heuristic (default)
         if mode in {"heuristic", "simple"}:
+            # Deterministic sync path: replicate heuristic sentence splitting without asyncio
             sents: List[str] = []
-            try:
-                extractor = HeuristicSentenceExtractor()
-                import asyncio as _asyncio
-                extracted = _asyncio.get_event_loop().run_until_complete(extractor.extract(txt, max_per_chunk))
-                sents = [c.text for c in extracted]
-            except Exception:
-                # Fallback: simple regex split if event loop unavailable
-                parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-                for p in parts:
-                    t = (p or "").strip()
-                    if len(t) >= 12:
-                        sents.append(t)
-                    if len(sents) >= max_per_chunk:
-                        break
+            parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
+            for p in parts:
+                t = (p or "").strip()
+                if len(t) >= 12:
+                    sents.append(t)
+                if len(sents) >= max_per_chunk:
+                    break
 
         # LLM-based extractor via unified chat API (LLM_Calls)
         else:
@@ -79,54 +73,59 @@ def extract_claims_for_chunks(
                 except Exception:
                     temperature = 0.1
 
-                def _analyze(_api_name: str, _answer: Any, custom_prompt_arg: Optional[str] = None,
-                             api_key: Optional[str] = None, system_message: Optional[str] = None,
-                             temp: Optional[float] = None, **kwargs):
-                    # Use configured provider and optional model override
-                    messages = [{"role": "user", "content": custom_prompt_arg or ""}]
-                    resp = chat_api_call(
-                        api_endpoint=provider,
-                        messages_payload=messages,
-                        api_key=api_key,
-                        temp=temperature,
-                        system_message=system_message,
-                        streaming=False,
-                        model=model_override,
-                    )
-                    # Normalize response to string
-                    if isinstance(resp, str):
-                        return resp
-                    if isinstance(resp, dict):
-                        try:
-                            choices = resp.get("choices") or []
-                            if choices:
-                                msg = choices[0].get("message") or {}
-                                content = msg.get("content")
-                                if isinstance(content, str):
-                                    return content
-                        except Exception:
-                            pass
-                        return str(resp)
-                    # If generator or other types, consume into string
-                    try:
-                        import itertools as _it
-                        return "".join(list(resp))  # may raise if not iterable
-                    except Exception:
-                        return str(resp)
+                system = load_prompt("ingestion", "claims_extractor_system") or (
+                    "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
+                )
+                base = load_prompt("ingestion", "claims_extractor_prompt") or (
+                    "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
+                    "Each proposition should stand alone without the surrounding context, be specific and checkable. "
+                    "Return JSON: {\"claims\":[{\"text\":str}]}. Do not include explanations.\n\nANSWER:\n{answer}"
+                )
+                prompt = base.format(max_claims=max_per_chunk, answer=txt)
 
-                extractor = LLMBasedClaimExtractor(_analyze)
-                import asyncio as _asyncio
-                extracted = _asyncio.get_event_loop().run_until_complete(extractor.extract(txt, max_per_chunk))
-                sents = [c.text for c in extracted]
-            except Exception as e:
-                logger.debug(f"LLM-based claim extraction failed ({mode}): {e}; falling back to heuristic")
-                try:
-                    extractor = HeuristicSentenceExtractor()
-                    import asyncio as _asyncio
-                    extracted = _asyncio.get_event_loop().run_until_complete(extractor.extract(txt, max_per_chunk))
-                    sents = [c.text for c in extracted]
-                except Exception:
-                    sents = []
+                # Sync call to provider
+                messages = [{"role": "user", "content": prompt}]
+                resp = chat_api_call(
+                    api_endpoint=provider,
+                    messages_payload=messages,
+                    api_key=None,
+                    temp=temperature,
+                    system_message=system,
+                    streaming=False,
+                    model=model_override,
+                )
+
+                # Normalize response to string
+                if isinstance(resp, str):
+                    text = resp
+                elif isinstance(resp, dict):
+                    try:
+                        choices = resp.get("choices") or []
+                        if choices:
+                            msg = choices[0].get("message") or {}
+                            content = msg.get("content")
+                            text = content if isinstance(content, str) else str(resp)
+                        else:
+                            text = str(resp)
+                    except Exception:
+                        text = str(resp)
+                else:
+                    try:
+                        text = "".join(list(resp))
+                    except Exception:
+                        text = str(resp)
+
+                # Extract JSON block
+                m = re.search(r"\{[\s\S]*\}\s*$", text)
+                jtxt = m.group(0) if m else text
+                import json as _json
+                data = _json.loads(jtxt)
+                for c in (data.get("claims") or [])[:max_per_chunk]:
+                    t = (c or {}).get("text")
+                    if isinstance(t, str) and t.strip():
+                        sents.append(t.strip())
+                if not sents:
+                    # fallback to heuristic
                     parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
                     for p in parts:
                         t = (p or "").strip()
@@ -134,6 +133,16 @@ def extract_claims_for_chunks(
                             sents.append(t)
                         if len(sents) >= max_per_chunk:
                             break
+            except Exception as e:
+                logger.debug(f"LLM-based claim extraction failed ({mode}): {e}; falling back to heuristic")
+                sents = []
+                parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
+                for p in parts:
+                    t = (p or "").strip()
+                    if len(t) >= 12:
+                        sents.append(t)
+                    if len(sents) >= max_per_chunk:
+                        break
         for s in sents:
             claims.append({"chunk_index": idx, "claim_text": s})
     return claims

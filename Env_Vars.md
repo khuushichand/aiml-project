@@ -18,6 +18,42 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
+## Testing & CI Controls
+- `TEST_MODE`: Enables test-friendly behaviors (`true|1|yes`). Used across modules to:
+  - Relax or bypass certain rate limiter keys (e.g., client IP) to avoid false positives in tests.
+  - Skip heavy startup hooks when combined with `DISABLE_HEAVY_STARTUP` (see below).
+  - Prefer offline/test-safe code paths (e.g., RAG/Chunking avoid network downloads; health endpoints may expose additional diagnostics in tests).
+- `DISABLE_HEAVY_STARTUP`: Skip unrelated heavy startup work (`1|true|yes`).
+  - Skips MCP server, TTS initialization, chat workers, and other background loops in tests/CI.
+  - Also mentioned in README with additional context.
+- `DISABLE_NLTK_DOWNLOADS`: Prevent NLTK dataset downloads (`1|true|yes`).
+  - RAG query features and Chunking modules will not attempt to download `punkt`, `wordnet`, or `stopwords` when this is set; they degrade gracefully to local fallbacks.
+- `ALLOW_NLTK_DOWNLOADS`: Force-enable NLTK downloads even when running tests (`1|true|yes`).
+  - Overrides `TEST_MODE`/`DISABLE_NLTK_DOWNLOADS`/pytest auto-detection to allow downloads for development scenarios that require full NLTK resources.
+
+### Security Health (Audit Thresholds)
+- `AUDIT_SEC_CRITICAL_HIGH_RISK_MIN`: Minimum count of high-risk security events in the last 24h to mark status as `at_risk` and risk level `critical`. Default: `1`.
+- `AUDIT_SEC_ELEVATED_FAILURE_MIN`: Minimum count of failure events in the last 24h to mark status `elevated` and risk level `high`. Default: `50`.
+
+### Test Suite Toggles
+- `TLDW_TEST_POSTGRES_REQUIRED`: Require Postgres-backed AuthNZ tests; when unset and Postgres is unavailable, tests auto-skip.
+- `RUN_MCP_TESTS`: Enable MCP unified tests (defaults to skipped). Set to `1|true|yes` to run.
+- `RUN_MOCK_OPENAI`: Enable Mock OpenAI server tests (defaults to skipped). Set to `1|true|yes` to run.
+
+## Jobs Backend / Worker
+- `JOBS_DB_URL`: PostgreSQL DSN for the core Jobs backend (e.g., `postgresql://user:pass@host:5432/jobs`). When unset, SQLite is used (Databases/jobs.db).
+- `JOBS_LEASE_SECONDS`: Default lease granted when acquiring a job (default `60`).
+- `JOBS_LEASE_RENEW_SECONDS`: Renewal cadence while a worker processes a job (default `30`).
+- `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
+- `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
+- `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
+
+Pytest markers
+- `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).
+- `-m pg_jobs`: Run Postgres-only Jobs tests (requires JOBS_DB_URL and psycopg).
+- `-m pg_jobs_stress`: Run heavier multi-process concurrency tests for PG (opt-in only).
+  - Also set `RUN_PG_JOBS_STRESS=1` to enable these tests during runs.
+
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
 - `DATABASE_URL`: AuthNZ database URL. For production multi-user, use Postgres (e.g., `postgresql://user:pass@host:5432/db`). SQLite supported for dev.
@@ -41,6 +77,16 @@ Config file support (optional):
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
 
+### Tokenizer (Chat Dictionaries & World Books)
+- `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
+  - `whitespace` counts whitespace‑separated tokens.
+  - `char_approx` estimates by character length (≈ length/divisor).
+- `TOKEN_CHAR_APPROX_DIVISOR`: Integer divisor for `char_approx` (default `4`).
+
+Runtime overrides (non‑persistent) are available via API:
+- `GET /api/v1/config/tokenizer` → read current mode/divisor
+- `PUT /api/v1/config/tokenizer` → update mode/divisor in memory
+
 ## Embeddings
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma‑separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
 
@@ -62,3 +108,27 @@ Config file support (optional):
 
 ## Notes
 - Many subsystems also support file‑based configuration under `Config_Files/` and module‑specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
+
+## Monitoring & Alerts
+- Topic Monitoring (watchlists and alerting):
+  - `MONITORING_WATCHLISTS_FILE`: JSON file with watchlists (default `tldw_Server_API/Config_Files/monitoring_watchlists.json`).
+  - `MONITORING_ALERTS_DB`: SQLite DB path for topic alerts (default `Databases/monitoring_alerts.db`).
+  - `TOPIC_MONITOR_MAX_SCAN_CHARS`: Max characters scanned per text (default `200000`).
+  - `TOPIC_MONITOR_DEDUP_SECONDS`: Deduplication window to avoid repeated alerts for same (user,watchlist,pattern,source) (default `300`).
+
+- Notifications (scaffold; local-first with optional external hooks):
+  - `MONITORING_NOTIFY_ENABLED`: Enable notification output (`true|false`, default `false`).
+  - `MONITORING_NOTIFY_MIN_SEVERITY`: Minimum severity to notify (`info|warning|critical`, default `critical`).
+  - `MONITORING_NOTIFY_FILE`: JSONL file sink for notifications (default `Databases/monitoring_notifications.log`).
+  - `MONITORING_NOTIFY_WEBHOOK_URL`: Optional HTTP webhook URL (best-effort, async, retries).
+  - `MONITORING_NOTIFY_EMAIL_TO`: Optional email recipient (comma not supported; one address).
+  - `MONITORING_NOTIFY_EMAIL_FROM`: Sender email address (defaults to SMTP user if unset).
+  - `MONITORING_NOTIFY_SMTP_HOST`: SMTP server host (required for email).
+  - `MONITORING_NOTIFY_SMTP_PORT`: SMTP port (default `587`).
+  - `MONITORING_NOTIFY_SMTP_STARTTLS`: Enable STARTTLS (`true|false`, default `true`).
+  - `MONITORING_NOTIFY_SMTP_USER`: SMTP auth username (optional if server allows anon relay; not recommended).
+  - `MONITORING_NOTIFY_SMTP_PASSWORD`: SMTP auth password.
+
+Notes:
+- Monitoring alerts do not block or modify content; they create reviewable signals for admins.
+- Webhook/email delivery is best-effort and runs in background threads with small timeouts and retries.

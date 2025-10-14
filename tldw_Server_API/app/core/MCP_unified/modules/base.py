@@ -394,20 +394,47 @@ class BaseModule(ABC):
         # Basic validation - check required fields
         pass
     
-    def sanitize_input(self, input_data: Any) -> Any:
+    def sanitize_input(self, input_data: Any, _depth: int = 0) -> Any:
         """
-        Sanitize user input to prevent injection attacks.
+        Sanitize user input to prevent injection attacks (deep, recursive).
         
-        Override this to add custom sanitization.
+        This implementation recursively validates dicts/lists and inspects strings
+        for common injection/control patterns. Override to add module-specific
+        allowlisting or transforms. A small maximum depth guard prevents abuse.
         """
-        # Basic sanitization
-        if isinstance(input_data, str):
-            # Remove potential SQL injection patterns
-            dangerous_patterns = ["';", '";', '--', '/*', '*/', 'xp_', 'sp_']
+        # Depth guard
+        if _depth > 20:
+            raise ValueError("Input too deeply nested")
+
+        dangerous_patterns = [
+            "';",
+            '";',
+            "--",
+            "/*",
+            "*/",
+            "xp_",
+            "sp_",
+            "\\x00",
+        ]
+
+        def _check_str(s: str) -> str:
+            ls = s.lower()
             for pattern in dangerous_patterns:
-                if pattern in input_data.lower():
+                if pattern in ls:
                     raise ValueError(f"Potentially dangerous input detected: {pattern}")
+            # Strip NULs and control chars
+            return "".join(ch for ch in s if ch >= " " or ch == "\n")
+
+        if isinstance(input_data, str):
+            return _check_str(input_data)
         
+        if isinstance(input_data, dict):
+            return {k: self.sanitize_input(v, _depth + 1) for k, v in input_data.items()}
+
+        if isinstance(input_data, list):
+            return [self.sanitize_input(v, _depth + 1) for v in input_data]
+
+        # Pass-through for other primitives
         return input_data
 
 

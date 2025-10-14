@@ -161,7 +161,7 @@ Supported options (as query parameters or structured by clients that map to quer
 ```json
 {
   "manifest": {
-    "version": "1.0",
+    "version": "1.0.0",
     "name": "My Chatbook",
     "description": "Research collection",
     "author": "Jane Doe",
@@ -182,6 +182,11 @@ Supported options (as query parameters or structured by clients that map to quer
 **Description**: Download a completed export.
 
 **Response**: Binary file stream (application/zip)
+
+Signed URLs (optional):
+- If `CHATBOOKS_SIGNED_URLS=true` and `CHATBOOKS_SIGNING_SECRET` is set, the download link is signed and requires query params `exp` (Unix timestamp) and `token` (HMAC SHA256 of `"{job_id}:{exp}"`).
+- If `CHATBOOKS_ENFORCE_EXPIRY=true`, the server enforces job-level `expires_at` and returns `410` when expired.
+- Invalid or missing signature returns `403`; an expired `exp` parameter returns `410`.
 
 ### 5. List Export Jobs
 
@@ -288,8 +293,7 @@ Supported options (as query parameters or structured by clients that map to quer
 **Response**:
 ```json
 {
-  "deleted_count": 5,
-  "message": "Deleted 5 expired export files"
+  "deleted_count": 5
 }
 ```
 
@@ -613,3 +617,18 @@ When upgrading from the single-user version to multi-user with authentication:
 
 *Last updated: 2025-10-08*
 *API Version: 1.0.0*
+## Configuration
+
+Environment variables controlling Chatbooks job backends and downloads:
+
+- `CHATBOOKS_JOBS_BACKEND`: `core` | `prompt_studio`
+  - `core`: Uses the new core Jobs module (DB-backed queue with leasing) — default.
+  - `prompt_studio`: Uses Prompt Studio’s JobManager via an adapter for status/cancellation.
+- `TLDW_JOBS_BACKEND`: Module-wide default backend for jobs. Domain overrides (like `CHATBOOKS_JOBS_BACKEND`) take precedence.
+- Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` (use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead).
+
+Signed downloads:
+- `CHATBOOKS_SIGNED_URLS=true|false` — enable HMAC-signed download URLs.
+- `CHATBOOKS_SIGNING_SECRET` — shared secret for signing.
+- `CHATBOOKS_ENFORCE_EXPIRY=true|false` — enforce job `expires_at`.
+- `CHATBOOKS_URL_TTL_SECONDS` — default expiry TTL for generated links.

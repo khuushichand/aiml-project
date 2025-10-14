@@ -3,6 +3,7 @@ Webhook schemas for the Evaluations API.
 """
 
 from pydantic import BaseModel, Field, HttpUrl
+from pydantic import ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -34,14 +35,13 @@ class WebhookRegistrationRequest(BaseModel):
         min_length=32
     )
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "url": "https://example.com/webhook",
-                "events": ["evaluation.completed", "evaluation.failed"],
-                "secret": None
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "url": "https://example.com/webhook",
+            "events": ["evaluation.completed", "evaluation.failed"],
+            "secret": None
         }
+    })
 
 
 class WebhookRegistrationResponse(BaseModel):
@@ -53,17 +53,16 @@ class WebhookRegistrationResponse(BaseModel):
     active: bool = Field(..., description="Whether webhook is active")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "webhook_id": 1,
-                "url": "https://example.com/webhook",
-                "events": ["evaluation.completed", "evaluation.failed"],
-                "secret": "wh_secret_abc123...",
-                "active": True,
-                "created_at": "2024-01-18T12:00:00Z"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "webhook_id": 1,
+            "url": "https://example.com/webhook",
+            "events": ["evaluation.completed", "evaluation.failed"],
+            "secret": "wh_secret_abc123...",
+            "active": True,
+            "created_at": "2024-01-18T12:00:00Z"
         }
+    })
 
 
 class WebhookUpdateRequest(BaseModel):
@@ -98,24 +97,23 @@ class WebhookStatusResponse(BaseModel):
     )
     created_at: datetime = Field(..., description="Creation timestamp")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "webhook_id": 1,
-                "url": "https://example.com/webhook",
-                "events": ["evaluation.completed"],
-                "active": True,
-                "statistics": {
-                    "total_deliveries": 100,
-                    "successful_deliveries": 98,
-                    "failed_deliveries": 2,
-                    "success_rate": 0.98
-                },
-                "last_delivery_at": "2024-01-18T11:30:00Z",
-                "last_error": None,
-                "created_at": "2024-01-01T00:00:00Z"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "webhook_id": 1,
+            "url": "https://example.com/webhook",
+            "events": ["evaluation.completed"],
+            "active": True,
+            "statistics": {
+                "total_deliveries": 100,
+                "successful_deliveries": 98,
+                "failed_deliveries": 2,
+                "success_rate": 0.98
+            },
+            "last_delivery_at": "2024-01-18T11:30:00Z",
+            "last_error": None,
+            "created_at": "2024-01-01T00:00:00Z"
         }
+    })
 
 
 class WebhookTestRequest(BaseModel):
@@ -131,16 +129,15 @@ class WebhookTestResponse(BaseModel):
     response_body: Optional[str] = Field(None, description="Response body (truncated)")
     error: Optional[str] = Field(None, description="Error message if failed")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "status_code": 200,
-                "response_time_ms": 150,
-                "response_body": '{"status": "ok"}',
-                "error": None
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "success": True,
+            "status_code": 200,
+            "response_time_ms": 150,
+            "response_body": '{"status": "ok"}',
+            "error": None
         }
+    })
 
 
 class WebhookPayloadSchema(BaseModel):
@@ -150,20 +147,19 @@ class WebhookPayloadSchema(BaseModel):
     timestamp: str = Field(..., description="ISO timestamp")
     data: Dict[str, Any] = Field(..., description="Event data")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "event": "evaluation.completed",
-                "evaluation_id": "eval_abc123",
-                "timestamp": "2024-01-18T12:00:00Z",
-                "data": {
-                    "score": 0.95,
-                    "model": "gpt-4",
-                    "evaluation_type": "geval",
-                    "processing_time": 2.5
-                }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "event": "evaluation.completed",
+            "evaluation_id": "eval_abc123",
+            "timestamp": "2024-01-18T12:00:00Z",
+            "data": {
+                "score": 0.95,
+                "model": "gpt-4",
+                "evaluation_type": "geval",
+                "processing_time": 2.5
             }
         }
+    })
 
 
 class RateLimitStatusResponse(BaseModel):
@@ -174,38 +170,37 @@ class RateLimitStatusResponse(BaseModel):
     usage: Dict[str, Any] = Field(..., description="Current usage")
     remaining: Dict[str, Any] = Field(..., description="Remaining allowance")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": "user_123",
-                "tier": "premium",
-                "limits": {
-                    "per_minute": {
-                        "evaluations": 100,
-                        "batch_evaluations": 20,
-                        "burst_size": 25
-                    },
-                    "daily": {
-                        "evaluations": 10000,
-                        "tokens": 10000000,
-                        "cost": 100.0
-                    }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "user_id": "user_123",
+            "tier": "premium",
+            "limits": {
+                "per_minute": {
+                    "evaluations": 100,
+                    "batch_evaluations": 20,
+                    "burst_size": 25
                 },
-                "usage": {
-                    "today": {
-                        "evaluations": 150,
-                        "tokens": 50000,
-                        "cost": 1.50
-                    },
-                    "month": {
-                        "cost": 45.00
-                    }
-                },
-                "remaining": {
-                    "daily_evaluations": 9850,
-                    "daily_tokens": 9950000,
-                    "daily_cost": 98.50,
-                    "monthly_cost": 955.00
+                "daily": {
+                    "evaluations": 10000,
+                    "tokens": 10000000,
+                    "cost": 100.0
                 }
+            },
+            "usage": {
+                "today": {
+                    "evaluations": 150,
+                    "tokens": 50000,
+                    "cost": 1.50
+                },
+                "month": {
+                    "cost": 45.00
+                }
+            },
+            "remaining": {
+                "daily_evaluations": 9850,
+                "daily_tokens": 9950000,
+                "daily_cost": 98.50,
+                "monthly_cost": 955.00
             }
         }
+    })

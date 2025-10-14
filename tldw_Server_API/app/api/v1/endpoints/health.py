@@ -14,13 +14,13 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.Chatbooks.chatbook_service import audit_logger
+from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker, CircuitState
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
 from tldw_Server_API.app.core.Security.secret_manager import secret_manager
 from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_health, get_connection_stats
-
+#
 #######################################################################################################################
 #
 # Router Configuration
@@ -523,37 +523,45 @@ async def security_health_check() -> Dict[str, Any]:
     }
     
     try:
-        # Get recent security events from audit log
-        security_summary = audit_logger.get_security_summary(hours=24)
-        
+        # Get recent security summary from unified audit
+        svc = UnifiedAuditService()
+        await svc.initialize()
+        sec_summary = await svc.get_security_summary(hours=24)
         security_data["security_components"]["audit_events"] = {
             "status": "ok",
-            "high_severity_events": security_summary.get("severity_counts", {}).get("high", 0),
-            "critical_events": security_summary.get("severity_counts", {}).get("critical", 0),
-            "failure_events": sum(security_summary.get("failure_counts", {}).values()),
-            "unique_security_users": security_summary.get("unique_security_users", 0),
-            "top_failing_ips": security_summary.get("top_failing_ips", [])[:5]  # Top 5 only
+            **sec_summary,
         }
-        
-        # Determine risk level based on security events
-        critical_events = security_summary.get("severity_counts", {}).get("critical", 0)
-        high_events = security_summary.get("severity_counts", {}).get("high", 0)
-        failure_events = sum(security_summary.get("failure_counts", {}).values())
-        
-        if critical_events > 0:
+
+        # Thresholds (configurable via env). Defaults preserve historical behavior.
+        import os as _os
+        try:
+            _crit_high_risk_min = int(_os.getenv("AUDIT_SEC_CRITICAL_HIGH_RISK_MIN", "1") or "1")
+        except Exception:
+            _crit_high_risk_min = 1
+        try:
+            _elev_fail_min = int(_os.getenv("AUDIT_SEC_ELEVATED_FAILURE_MIN", "50") or "50")
+        except Exception:
+            _elev_fail_min = 50
+
+        high_risk_events = security_data["security_components"]["audit_events"]["high_risk_events"]
+        failure_events = security_data["security_components"]["audit_events"]["failure_events"]
+
+        # Determine risk level based on security events and thresholds
+        if _crit_high_risk_min > 0 and high_risk_events >= _crit_high_risk_min:
             security_data["risk_level"] = "critical"
             security_data["status"] = "at_risk"
-            security_data["recent_alerts"].append(f"{critical_events} critical security events in last 24h")
-        elif high_events > 10:
+            security_data["recent_alerts"].append(
+                f"{high_risk_events} high-risk security events in last 24h"
+            )
+        elif failure_events >= _elev_fail_min:
             security_data["risk_level"] = "high"
             security_data["status"] = "elevated"
-            security_data["recent_alerts"].append(f"{high_events} high-severity security events in last 24h")
-        elif failure_events > 50:
-            security_data["risk_level"] = "medium"
-            security_data["recent_alerts"].append(f"{failure_events} failure events in last 24h")
-        elif high_events > 0 or failure_events > 0:
+            security_data["recent_alerts"].append(
+                f"{failure_events} failure events in last 24h"
+            )
+        elif failure_events > 0:
             security_data["risk_level"] = "low"
-    
+
     except Exception as e:
         security_data["security_components"]["audit_events"] = {
             "status": "error",

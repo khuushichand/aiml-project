@@ -52,6 +52,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 # ChaChaNotes database
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 #
 # End of imports
@@ -163,6 +164,21 @@ def create_workflows_database(
         db_path=str(target_path),
         backend=backend_to_use,
     )
+
+
+def create_evaluations_database(
+    *,
+    db_path: Union[str, Path],
+    backend: Optional[DatabaseBackend] = None,
+) -> EvaluationsDatabase:
+    """Factory for EvaluationsDatabase with backend-aware wiring.
+
+    When a PostgreSQL content backend is configured, this returns an
+    EvaluationsDatabase instance bound to that backend; otherwise it
+    falls back to the SQLite file at `db_path`.
+    """
+    backend_to_use = backend or _CONTENT_DB_BACKEND
+    return EvaluationsDatabase(str(Path(db_path)), backend=backend_to_use)
 
 
 def get_db_config():

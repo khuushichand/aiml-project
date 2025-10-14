@@ -231,23 +231,24 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
         }
         # Metrics failure is not critical
     
-    # Audit logging health
+    # Audit logging health (unified)
     try:
-        from tldw_Server_API.app.core.Evaluations.audit_logger import audit_logger
-        # Test audit logging
-        audit_logger.get_recent_events(limit=1)
+        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+        svc = UnifiedAuditService()
+        import asyncio as _asyncio
+        _asyncio.get_event_loop().run_until_complete(svc.initialize())
+        events = _asyncio.get_event_loop().run_until_complete(svc.query_events(limit=1))
         health_data['components']['audit_logging'] = {
             'status': 'ok',
-            'message': 'Audit logging operational'
+            'message': 'Unified audit logging operational',
+            'recent_events': len(events)
         }
-        
     except Exception as e:
-        logger.error(f"Audit logging health check failed: {e}")
+        logger.error(f"Unified audit logging health check failed: {e}")
         health_data['components']['audit_logging'] = {
             'status': 'error',
             'error': str(e)
         }
-        # Audit logging failure is not critical for basic operations
     
     return health_data
 

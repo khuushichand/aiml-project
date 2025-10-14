@@ -35,6 +35,10 @@ from typing import Dict, List, Optional, Union, Any, Set, Tuple
 from pathlib import Path
 
 from loguru import logger
+try:
+    from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens  # Case-sensitive envs
+except Exception:  # fallback for alternate casing
+    from tldw_Server_API.app.core.utils.tokenizer import count_tokens as _count_tokens
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -995,7 +999,7 @@ class ChatDictionaryService:
 
     def count_tokens(self, text: str) -> int:
         """Public token counter to support tests; can be patched/mocked."""
-        return len(text.split())
+        return _count_tokens(text)
     
     def import_from_markdown(self, markdown_or_path: Union[str, Path], dictionary_name: Optional[str] = None) -> int:
         """

@@ -66,18 +66,18 @@ class AsyncChunker:
             List of text chunks
         """
         async with self._semaphore:
-            # Run CPU-bound chunking in thread pool
+            # Run CPU-bound chunking in thread pool, preserving keyword options
+            import functools
             loop = asyncio.get_event_loop()
-            chunks = await loop.run_in_executor(
-                self._executor,
+            func = functools.partial(
                 self._chunker.chunk_text,
                 text,
                 method,
                 max_size,
                 overlap,
-                options
+                **options,
             )
-            return chunks
+            return await loop.run_in_executor(self._executor, func)
     
     async def chunk_file(self,
                         file_path: Union[str, Path],
@@ -186,9 +186,17 @@ class AsyncChunker:
                 for chunk in chunks[:-1]:
                     yield chunk
                 
-                # Keep last chunk as overlap
+                # Keep last chunk as overlap (method-aware when possible)
                 if chunks and overlap_size > 0:
-                    overlap_buffer = chunks[-1][-overlap_size:] if len(chunks[-1]) > overlap_size else chunks[-1]
+                    last = chunks[-1]
+                    if (method or '').lower() == 'words':
+                        toks = last.split()
+                        if toks:
+                            overlap_buffer = ' '.join(toks[-overlap_size:])
+                        else:
+                            overlap_buffer = last[-overlap_size:]
+                    else:
+                        overlap_buffer = last[-overlap_size:] if len(last) > overlap_size else last
                 else:
                     overlap_buffer = ""
                 
@@ -223,17 +231,17 @@ class AsyncChunker:
             List of ChunkResult objects
         """
         async with self._semaphore:
+            import functools
             loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                self._executor,
+            func = functools.partial(
                 self._chunker.chunk_text_with_metadata,
                 text,
                 method,
                 max_size,
                 overlap,
-                options
+                **options,
             )
-            return results
+            return await loop.run_in_executor(self._executor, func)
     
     async def chunk_url(self,
                        url: str,

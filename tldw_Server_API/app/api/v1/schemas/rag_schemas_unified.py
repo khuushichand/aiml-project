@@ -7,6 +7,7 @@ providing a clean API interface with all features accessible.
 
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, validator
+from pydantic import ConfigDict
 
 # Load contextual retrieval defaults from settings (config.txt/env)
 try:
@@ -565,19 +566,18 @@ class UnifiedRAGRequest(BaseModel):
         example="session456"
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "query": "What is machine learning?",
-                "sources": ["media_db", "notes"],
-                "expand_query": True,
-                "expansion_strategies": ["synonym", "acronym"],
-                "enable_citations": True,
-                "enable_generation": True,
-                "enable_reranking": True,
-                "reranking_strategy": "hybrid"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "What is machine learning?",
+            "sources": ["media_db", "notes"],
+            "expand_query": True,
+            "expansion_strategies": ["synonym", "acronym"],
+            "enable_citations": True,
+            "enable_generation": True,
+            "enable_reranking": True,
+            "reranking_strategy": "hybrid"
         }
+    })
     
     @validator('sources')
     def validate_sources(cls, v):
@@ -688,44 +688,43 @@ class UnifiedRAGResponse(BaseModel):
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "documents": [
-                    {
-                        "id": "doc1",
-                        "content": "Machine learning is a subset of artificial intelligence...",
-                        "score": 0.95,
-                        "metadata": {"source": "media_db", "title": "ML Introduction"}
-                    }
-                ],
-                "query": "What is machine learning?",
-                "expanded_queries": ["machine learning definition", "ML explanation"],
-                "metadata": {
-                    "sources_searched": ["media_db", "notes"],
-                    "documents_retrieved": 10,
-                    "cache_hit": False
-                },
-                "timings": {
-                    "query_expansion": 0.05,
-                    "retrieval": 0.2,
-                    "reranking": 0.1,
-                    "total": 0.35
-                },
-                "citations": [
-                    {
-                        "text": "Machine learning is a subset of artificial intelligence",
-                        "source": "ML Introduction",
-                        "confidence": 0.95,
-                        "type": "exact"
-                    }
-                ],
-                "generated_answer": "Machine learning is a branch of AI that enables systems to learn from data...",
-                "cache_hit": False,
-                "errors": [],
-                "total_time": 0.35
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "documents": [
+                {
+                    "id": "doc1",
+                    "content": "Machine learning is a subset of artificial intelligence...",
+                    "score": 0.95,
+                    "metadata": {"source": "media_db", "title": "ML Introduction"}
+                }
+            ],
+            "query": "What is machine learning?",
+            "expanded_queries": ["machine learning definition", "ML explanation"],
+            "metadata": {
+                "sources_searched": ["media_db", "notes"],
+                "documents_retrieved": 10,
+                "cache_hit": False
+            },
+            "timings": {
+                "query_expansion": 0.05,
+                "retrieval": 0.2,
+                "reranking": 0.1,
+                "total": 0.35
+            },
+            "citations": [
+                {
+                    "text": "Machine learning is a subset of artificial intelligence",
+                    "source": "ML Introduction",
+                    "confidence": 0.95,
+                    "type": "exact"
+                }
+            ],
+            "generated_answer": "Machine learning is a branch of AI that enables systems to learn from data...",
+            "cache_hit": False,
+            "errors": [],
+            "total_time": 0.35
         }
+    })
 
 
 class UnifiedBatchRequest(BaseModel):
@@ -845,16 +844,15 @@ class UnifiedBatchRequest(BaseModel):
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "queries": ["What is AI?", "Explain neural networks"],
-                "max_concurrent": 5,
-                "expand_query": True,
-                "enable_citations": True,
-                "enable_reranking": True
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "queries": ["What is AI?", "Explain neural networks"],
+            "max_concurrent": 5,
+            "expand_query": True,
+            "enable_citations": True,
+            "enable_reranking": True
         }
+    })
 
 
 class UnifiedBatchResponse(BaseModel):
@@ -880,13 +878,12 @@ class UnifiedBatchResponse(BaseModel):
         description="Total batch processing time"
     )
     
-    class Config:
-        schema_extra = {
-            "example": {
-                "results": [],  # List of UnifiedRAGResponse objects
-                "total_queries": 2,
-                "successful": 2,
-                "failed": 0,
-                "total_time": 0.75
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "results": [],  # List of UnifiedRAGResponse objects
+            "total_queries": 2,
+            "successful": 2,
+            "failed": 0,
+            "total_time": 0.75
         }
+    })

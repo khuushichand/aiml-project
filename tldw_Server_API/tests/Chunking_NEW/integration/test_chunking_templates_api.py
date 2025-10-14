@@ -180,3 +180,45 @@ def test_apply_with_override_options(client_with_media_db: TestClient):
     # Prefer different chunk count with override; if equal, still accept successful apply
     if chunks_default and chunks_override:
         assert len(chunks_override) >= len(chunks_default)
+
+
+def test_validate_rejects_dangerous_boundary_patterns(client_with_media_db: TestClient):
+    client = client_with_media_db
+    # Dangerous nested-quantifier pattern should be rejected
+    payload = {
+        "chunking": {
+            "method": "sentences",
+            "config": {
+                "hierarchical": True,
+                "hierarchical_template": {
+                    "boundaries": [
+                        {"kind": "x", "pattern": r"(a+)+b", "flags": "m"}
+                    ]
+                }
+            }
+        }
+    }
+    resp = client.post("/api/v1/chunking/templates/validate", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("valid") is False
+    msgs = [e.get("message", "").lower() for e in body.get("errors", [])]
+    assert any("dangerous" in m or "regex" in m for m in msgs)
+
+    # Safe pattern should pass
+    safe_payload = {
+        "chunking": {
+            "method": "sentences",
+            "config": {
+                "hierarchical": True,
+                "hierarchical_template": {
+                    "boundaries": [
+                        {"kind": "chapter", "pattern": r"^chapter \d+$", "flags": "im"}
+                    ]
+                }
+            }
+        }
+    }
+    ok = client.post("/api/v1/chunking/templates/validate", json=safe_payload)
+    assert ok.status_code == 200
+    assert ok.json().get("valid") is True

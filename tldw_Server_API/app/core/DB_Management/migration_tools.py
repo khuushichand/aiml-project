@@ -411,6 +411,8 @@ def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Pat
         yield 'chacha', Path(args.chacha_sqlite)
     if args.analytics_sqlite:
         yield 'analytics', Path(args.analytics_sqlite)
+    if getattr(args, 'evaluations_sqlite', None):
+        yield 'evaluations', Path(args.evaluations_sqlite)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -418,6 +420,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
     parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')
     parser.add_argument('--analytics-sqlite', help='Path to Analytics.db to migrate (optional)')
+    parser.add_argument('--evaluations-sqlite', help='Path to evaluations.db to migrate (optional)')
     parser.add_argument('--workflows-sqlite', help='Path to workflows.db to migrate (optional)')
     parser.add_argument('--pg-host', default='localhost')
     parser.add_argument('--pg-port', default=5432, type=int)

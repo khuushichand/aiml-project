@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
 
 
 class UserRateLimiter:
@@ -130,20 +130,22 @@ class UserRateLimiter:
                 else:
                     retry_after = 1
                 
-                # Audit log the rate limit
-                audit_log(
-                    AuditEventType.RATE_LIMIT_EXCEEDED,
-                    user_id=user_id,
-                    ip_address=ip_address,
-                    details={
-                        "current_count": current_count,
-                        "limit": limit,
-                        "burst_limit": burst_limit,
-                        "cost": cost,
-                        "retry_after": retry_after
-                    },
-                    severity="WARNING"
-                )
+                # Unified audit (non-blocking)
+                try:
+                    log_security_violation(
+                        user_id=user_id,
+                        action="embeddings_rate_limit_exceeded",
+                        metadata={
+                            "current_count": current_count,
+                            "limit": limit,
+                            "burst_limit": burst_limit,
+                            "cost": cost,
+                            "retry_after": retry_after,
+                        },
+                        ip_address=ip_address,
+                    )
+                except Exception:
+                    pass
                 
                 logger.warning(
                     f"Rate limit exceeded for user {user_id}: "

@@ -63,8 +63,12 @@ Extractor options (argument `claim_extractor`):
 Verifier: `HybridClaimVerifier`
 - Retrieval: uses provided `retrieve_fn` to fetch context per claim, otherwise uses the base `documents` (top_k, default 5). Evidence snippets are collected (up to 3).
 - Numeric/date boosting: documents containing numbers/dates present in the claim receive a small score bonus.
-- NLI preference: tries a local NLI pipeline (default `roberta-large-mnli` or `RAG_NLI_MODEL[_PATH]` if set). If a confident decision (>= `conf_threshold`) is available, returns early.
-- LLM judge fallback: prompts `analyze_fn` with a strict-JSON judge instruction to produce `{label, confidence, rationale}`.
+- Strategy (`claim_verifier`):
+  - `hybrid` (default): NLI then fallback to LLM judge on low-confidence or unavailability.
+  - `nli`: NLI only; returns `nei` when NLI is unavailable or below threshold (no LLM fallback).
+  - `llm`: judge only; skips NLI entirely.
+- NLI: local pipeline (default `roberta-large-mnli` or `RAG_NLI_MODEL[_PATH]`).
+- LLM judge: prompts `analyze_fn` with a strict-JSON judge instruction to produce `{label, confidence, rationale}`.
 
 Notes:
 - `claim_extractor="auto"` in `ClaimsEngine.run` currently uses the LLM path by default with heuristic fallback. The ingestion-time module’s `auto` may behave differently (see above).
@@ -80,4 +84,3 @@ Prompts can be overridden via files in `tldw_Server_API/Config_Files/Prompts/` a
 
 - The RAG module re-exports the engine types via `core/RAG/rag_service/claims.py` for compatibility.
 - Stored claims can be indexed (FTS/vectors) and retrieved to support fact-seeking queries or faithfulness checks.
-

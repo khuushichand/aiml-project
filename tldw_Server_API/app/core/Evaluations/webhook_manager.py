@@ -20,7 +20,12 @@ from pathlib import Path
 from loguru import logger
 import secrets
 
-from tldw_Server_API.app.core.Chatbooks.chatbook_service import audit_logger
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_webhook_registration,
+    log_webhook_unregistration,
+)
+#
+# Local Imports
 from tldw_Server_API.app.core.Evaluations.db_adapter import (
     DatabaseAdapter, DatabaseConfig, DatabaseType, 
     DatabaseAdapterFactory, get_database_adapter
@@ -32,13 +37,14 @@ from tldw_Server_API.app.core.Evaluations.webhook_security import (
     WebhookValidationResult
 )
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
-from tldw_Server_API.app.core.Evaluations.audit_logger import (
-    AuditEventType,
-    AuditSeverity
-)
+# Remove legacy audit event types; use unified audit adapter
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
 from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
-
+#
+#
+#######################################################################################################################
+#
+# Functions:
 
 class WebhookEvent(Enum):
     """Webhook event types."""
@@ -210,18 +216,7 @@ class WebhookManager:
             )
             
             if not has_permission:
-                audit_logger.log_event(
-                    event_type=AuditEventType.WEBHOOK_REGISTER,
-                    action="Webhook registration denied - permission check failed",
-                    user_id=user_id,
-                    outcome="failure",
-                    severity=AuditSeverity.MEDIUM,
-                    details={
-                        "url": url[:100] + "..." if len(url) > 100 else url,
-                        "error": permission_error,
-                        "events": [e.value for e in events]
-                    }
-                )
+                log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=permission_error)
                 raise ValueError(f"Registration denied: {permission_error}")
             
             # URL security validation
@@ -235,18 +230,7 @@ class WebhookManager:
                 
                 if not validation_result.valid:
                     error_messages = [error.message for error in validation_result.errors]
-                    audit_logger.log_event(
-                        event_type=AuditEventType.WEBHOOK_REGISTER,
-                        action="Webhook registration failed - URL validation errors",
-                        user_id=user_id,
-                        outcome="failure",
-                        severity=AuditSeverity.HIGH,
-                        details={
-                            "url": url[:100] + "..." if len(url) > 100 else url,
-                            "validation_errors": error_messages,
-                            "security_score": validation_result.security_score
-                        }
-                    )
+                    log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error="; ".join(error_messages))
                     raise ValueError(f"URL validation failed: {'; '.join(error_messages)}")
             
             # Generate secret if not provided
@@ -308,21 +292,7 @@ class WebhookManager:
             )
             
             # Audit log successful registration
-            audit_logger.log_event(
-                event_type=AuditEventType.WEBHOOK_REGISTER,
-                action=f"Webhook {action.lower()} successfully",
-                user_id=user_id,
-                resource_id=str(webhook_id),
-                resource_type="webhook",
-                outcome="success",
-                severity=AuditSeverity.LOW,
-                details={
-                    "url": url[:100] + "..." if len(url) > 100 else url,
-                    "events": [e.value for e in events],
-                    "security_score": validation_result.security_score if validation_result else None,
-                    "processing_time_ms": int(processing_time * 1000)
-                }
-            )
+            log_webhook_registration(user_id=user_id, webhook_id=str(webhook_id), url=url, events=[e.value for e in events], success=True)
             
             # Prepare response
             response = {
@@ -358,18 +328,7 @@ class WebhookManager:
                 response_time=processing_time
             )
             
-            audit_logger.log_event(
-                event_type=AuditEventType.WEBHOOK_REGISTER,
-                action="Webhook registration failed - system error",
-                user_id=user_id,
-                outcome="failure",
-                severity=AuditSeverity.HIGH,
-                details={
-                    "url": url[:100] + "..." if len(url) > 100 else url,
-                    "error": str(e),
-                    "processing_time_ms": int(processing_time * 1000)
-                }
-            )
+            log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=str(e))
             
             logger.error(f"Failed to register webhook: {e}")
             raise ValueError(f"Webhook registration failed: {str(e)}")
@@ -394,17 +353,7 @@ class WebhookManager:
             )
             
             if not has_permission:
-                audit_logger.log_event(
-                    event_type=AuditEventType.WEBHOOK_UNREGISTER,
-                    action="Webhook unregistration denied - permission check failed",
-                    user_id=user_id,
-                    outcome="failure",
-                    severity=AuditSeverity.MEDIUM,
-                    details={
-                        "url": url[:100] + "..." if len(url) > 100 else url,
-                        "error": permission_error
-                    }
-                )
+                log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=permission_error)
                 return False
             
             # Perform unregistration
@@ -431,19 +380,7 @@ class WebhookManager:
                     # Transaction auto-commits
                     
                     # Audit log successful unregistration
-                    audit_logger.log_event(
-                        event_type=AuditEventType.WEBHOOK_UNREGISTER,
-                        action="Webhook unregistered successfully",
-                        user_id=user_id,
-                        resource_id=str(webhook_id),
-                        resource_type="webhook",
-                        outcome="success",
-                        severity=AuditSeverity.LOW,
-                        details={
-                            "url": url[:100] + "..." if len(url) > 100 else url,
-                            "events": json.loads(events_json) if events_json else []
-                        }
-                    )
+                    log_webhook_unregistration(user_id=user_id, webhook_id=str(webhook_id), url=url, events=json.loads(events_json) if events_json else [], success=True)
                     
                     logger.info(f"Unregistered webhook {webhook_id} for user {user_id}: {url}")
                     return True
@@ -451,17 +388,7 @@ class WebhookManager:
                 return False
                 
         except Exception as e:
-            audit_logger.log_event(
-                event_type=AuditEventType.WEBHOOK_UNREGISTER,
-                action="Webhook unregistration failed - system error",
-                user_id=user_id,
-                outcome="failure",
-                severity=AuditSeverity.MEDIUM,
-                details={
-                    "url": url[:100] + "..." if len(url) > 100 else url,
-                    "error": str(e)
-                }
-            )
+            log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=str(e))
             
             logger.error(f"Failed to unregister webhook: {e}")
             return False

@@ -36,6 +36,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 #
 #
 #######################################################################################################################
@@ -191,6 +192,16 @@ async def create_note(
         # The user context (user_id) is implicitly handled by `get_chacha_db_for_user`
         # The `db` instance is already specific to the authenticated user.
         logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{note_in.title[:30]}...'")
+        # Topic monitoring (non-blocking) for title and content
+        try:
+            mon = get_topic_monitoring_service()
+            uid = getattr(db, 'client_id', None)
+            if note_in.title:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.title, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+            if note_in.content:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+        except Exception:
+            pass
         note_id = db.add_note(
             title=note_in.title,
             content=note_in.content,
@@ -323,6 +334,16 @@ async def update_note(
     try:
         logger.info(
             f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
+        # Topic monitoring (non-blocking) for updated fields
+        try:
+            mon = get_topic_monitoring_service()
+            uid = getattr(db, 'client_id', None)
+            if 'title' in update_data and update_data['title']:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['title']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+            if 'content' in update_data and update_data['content']:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+        except Exception:
+            pass
         success = db.update_note(
             note_id=note_id,
             update_data=update_data,
@@ -470,6 +491,16 @@ async def bulk_create_notes(
 
     for item in request.notes:
         try:
+            # Topic monitoring (non-blocking) per item
+            try:
+                mon = get_topic_monitoring_service()
+                uid = getattr(db, 'client_id', None)
+                if getattr(item, 'title', None):
+                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.title, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+                if getattr(item, 'content', None):
+                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+            except Exception:
+                pass
             note_id = db.add_note(
                 title=item.title,
                 content=item.content,

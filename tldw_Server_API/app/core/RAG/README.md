@@ -332,7 +332,7 @@ RAG/
 ├── DEPRECATION_NOTICE.md       # Migration information
 ├── __init__.py                 # Module exports
 ├── exceptions.py               # Custom exceptions
-├── rag_audit_logger.py        # Audit logging (not used)
+├── (uses unified audit service) # Audit logging via DI
 ├── rag_custom_metrics.py      # Metrics collection
 ├── rag_service/               # Core implementation
 │   ├── unified_pipeline.py    # Unified pipeline entry point

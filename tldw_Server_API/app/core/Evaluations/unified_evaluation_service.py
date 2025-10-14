@@ -33,7 +33,15 @@ from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import Resp
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
-from tldw_Server_API.app.core.Evaluations.audit_logger import AuditLogger, AuditEventType
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_created,
+    log_evaluation_updated,
+    log_evaluation_deleted,
+    log_run_started,
+    log_run_cancelled,
+    log_dataset_created,
+    log_dataset_deleted,
+)
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
 
 
@@ -109,8 +117,7 @@ class UnifiedEvaluationService:
             )
         )
         
-        # Initialize audit logger bound to this DB
-        self.audit_logger = AuditLogger(db_path=db_path)
+        # Audit handled via unified audit adapter functions
 
         # Initialize per-service webhook manager bound to this DB
         try:
@@ -231,14 +238,8 @@ class UnifiedEvaluationService:
                 metadata=metadata
             )
             
-            # Log audit event
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_CREATE,
-                action="create",
-                user_id=created_by,
-                resource_id=eval_id,
-                details={"name": name, "type": eval_type}
-            )
+            # Unified audit
+            log_evaluation_created(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type)
             
             # Get and return created evaluation
             evaluation = self.db.get_evaluation(eval_id)
@@ -299,13 +300,7 @@ class UnifiedEvaluationService:
             success = self.db.update_evaluation(eval_id, updates)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_UPDATE,
-                    action="update",
-                    user_id=updated_by,
-                    resource_id=eval_id,
-                    details={"updates": list(updates.keys())}
-                )
+                log_evaluation_updated(user_id=updated_by, eval_id=eval_id, updates=updates)
             
             return success
             
@@ -323,12 +318,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_evaluation(eval_id)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_DELETE,
-                    action="delete",
-                    user_id=deleted_by,
-                    resource_id=eval_id
-                )
+                log_evaluation_deleted(user_id=deleted_by, eval_id=eval_id)
             
             return success
             
@@ -409,17 +399,8 @@ class UnifiedEvaluationService:
                 )
             )
             
-            # Log audit event
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_RUN,
-                action="create",
-                user_id=created_by,
-                resource_id=run_id,
-                details={
-                    "eval_id": eval_id,
-                    "target_model": target_model
-                }
-            )
+            # Unified audit
+            log_run_started(user_id=created_by, run_id=run_id, eval_id=eval_id, target_model=target_model)
             
             # Return run info
             run = self.db.get_run(run_id)
@@ -513,12 +494,7 @@ class UnifiedEvaluationService:
                 # Update status directly if not in runner
                 self.db.update_run_status(run_id, "cancelled")
             
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_RUN,
-                action="cancel",
-                user_id=cancelled_by,
-                resource_id=run_id
-            )
+            log_run_cancelled(user_id=cancelled_by, run_id=run_id)
             
             return True
             
@@ -1109,13 +1085,7 @@ class UnifiedEvaluationService:
                 metadata=metadata
             )
             
-            self.audit_logger.log_event(
-                event_type=AuditEventType.EVALUATION_CREATE,
-                action="create",
-                user_id=created_by,
-                resource_id=dataset_id,
-                details={"name": name, "samples": len(samples)}
-            )
+            log_dataset_created(user_id=created_by, dataset_id=dataset_id, name=name, samples=len(samples))
             
             return dataset_id
             
@@ -1153,12 +1123,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_dataset(dataset_id)
             
             if success:
-                self.audit_logger.log_event(
-                    event_type=AuditEventType.EVALUATION_DELETE,
-                    action="delete",
-                    user_id=deleted_by,
-                    resource_id=dataset_id
-                )
+                log_dataset_deleted(user_id=deleted_by, dataset_id=dataset_id)
             
             return success
             

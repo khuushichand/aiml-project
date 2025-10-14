@@ -199,7 +199,10 @@ class RateLimiter:
                         })
                     )
                     
-                    logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.warning("Account locked after failed attempts [redacted]")
+                    else:
+                        logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
                     
                     return {
                         "attempt_count": attempt_count,
@@ -289,7 +292,10 @@ class RateLimiter:
                         (identifier, lockout_expires.isoformat(), f"Too many failed {attempt_type} attempts")
                     )
                 
-                logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.warning("Account locked after failed attempts [redacted]")
+                else:
+                    logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
                 log_counter("auth_rate_limit_lockout", labels={"attempt_type": attempt_type})
                 
                 return {
@@ -774,7 +780,10 @@ class RateLimiter:
                     for key in self.redis_client.scan_iter(pattern):
                         self.redis_client.delete(key)
                 
-                logger.info(f"Reset rate limit for {identifier}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Reset rate limit [redacted]")
+                else:
+                    logger.info(f"Reset rate limit for {identifier}")
                 
         except Exception as e:
             logger.error(f"Failed to reset rate limit: {e}")

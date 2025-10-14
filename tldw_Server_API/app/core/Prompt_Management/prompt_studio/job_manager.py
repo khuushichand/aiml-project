@@ -251,14 +251,23 @@ class JobManager:
                 pass
         return success
     
-    def register_handler(self, job_type: JobType, handler: Callable):
+    def register_handler(self, job_type: JobType, handler: Optional[Callable] = None):
         """
         Register a handler function for a job type.
-        
-        Args:
-            job_type: Type of job
-            handler: Async function to handle the job
+
+        Supports decorator usage:
+            @jm.register_handler(JobType.OPTIMIZATION)
+            async def handle(payload, entity_id): ...
+
+        Or direct call:
+            jm.register_handler(JobType.OPTIMIZATION, handle)
         """
+        if handler is None:
+            def _decorator(fn: Callable):
+                self._job_handlers[job_type] = fn
+                logger.info(f"Registered handler for {job_type.value} jobs")
+                return fn
+            return _decorator
         self._job_handlers[job_type] = handler
         logger.info(f"Registered handler for {job_type.value} jobs")
     

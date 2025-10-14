@@ -183,7 +183,11 @@ async def login(
         # Get client info
         client_ip = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("User-Agent", "Unknown")
-        logger.info(f"Login attempt for user: {form_data.username} from IP: {client_ip}")
+        # PII-aware logging
+        if settings.PII_REDACT_LOGS:
+            logger.info("Login attempt [redacted]")
+        else:
+            logger.info(f"Login attempt for user: {form_data.username} from IP: {client_ip}")
         
         # Check if IP is locked out (only when rate limiting is enabled)
         is_locked = False
@@ -241,7 +245,10 @@ async def login(
         # Check if user exists
         if not user:
             # Log failed attempt
-            logger.warning(f"Failed login: User not found - {login_identifier}")
+            if settings.PII_REDACT_LOGS:
+                logger.warning("Failed login: user not found [redacted]")
+            else:
+                logger.warning(f"Failed login: User not found - {login_identifier}")
             
             # Track failed attempt by IP (only when rate limiting is enabled)
             if getattr(rate_limiter, 'enabled', False):
@@ -300,7 +307,10 @@ async def login(
                 pass
         if not is_valid:
             # Log failed attempt
-            logger.warning(f"Failed login: Invalid password for user {user['username']}")
+            if settings.PII_REDACT_LOGS:
+                logger.warning("Failed login: invalid password [redacted]")
+            else:
+                logger.warning(f"Failed login: Invalid password for user {user['username']}")
             
             # Audit log failed login
             await _safe_audit_log_login(
@@ -453,7 +463,10 @@ async def login(
             await db.commit()
         
         # Log successful login
-        logger.info(f"Successful login for user: {user['username']} (ID: {user['id']})")
+        if settings.PII_REDACT_LOGS:
+            logger.info("Successful login [redacted]")
+        else:
+            logger.info(f"Successful login for user: {user['username']} (ID: {user['id']})")
         
         # Reset failed login attempts on successful login
         if getattr(rate_limiter, 'enabled', False):
@@ -533,7 +546,15 @@ async def logout(
         # For now, invalidate all sessions for the user
         await session_manager.revoke_all_user_sessions(current_user['id'])
         
-        logger.info(f"User logged out: {current_user['username']} (ID: {current_user['id']})")
+        # PII-aware logging
+        try:
+            _settings = get_settings()
+        except Exception:
+            _settings = None
+        if _settings and getattr(_settings, 'PII_REDACT_LOGS', False):
+            logger.info("User logged out [redacted]")
+        else:
+            logger.info(f"User logged out: {current_user['username']} (ID: {current_user['id']})")
         
         log_counter("auth_logout_success")
         log_histogram("auth_logout_duration", time.perf_counter() - start_time)
@@ -649,6 +670,8 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Invalid user ID in refresh token")
+            # Capture session association when present
+            session_id = payload.get("session_id")
         
         # Fetch user
         user = None
@@ -683,20 +706,48 @@ async def refresh_token(
                 columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role']
                 user = dict(zip(columns[:len(user)], user))
         
-        # Generate new access token based on auth mode
+        # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":
             new_access_token = f"single-user-token-{user['id']}"
+            new_refresh_token = request.refresh_token  # no rotation in single-user mode
         else:
+            # Access token always refreshed; preserve session_id claim when available
+            add_claims = {"session_id": session_id} if session_id else None
             new_access_token = jwt_service.create_access_token(
                 user_id=user['id'],
                 username=user['username'],
-                role=user['role']
+                role=user['role'],
+                additional_claims=add_claims
             )
+            # Rotate refresh token if enabled
+            new_refresh_token = request.refresh_token
+            if getattr(settings, "ROTATE_REFRESH_TOKENS", False):
+                new_refresh_token = jwt_service.create_refresh_token(
+                    user_id=user['id'],
+                    username=user['username'],
+                    additional_claims=add_claims
+                )
+            # Update backing session to reflect new token(s)
+            try:
+                await session_manager.refresh_session(
+                    refresh_token=request.refresh_token,
+                    new_access_token=new_access_token,
+                    new_refresh_token=(new_refresh_token if new_refresh_token != request.refresh_token else None)
+                )
+            except Exception as _sess_e:
+                # Treat missing/invalid session mapping as invalid token usage
+                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    try:
+                        response.headers.setdefault("X-TLDW-Refresh-Stage", "session")
+                        response.headers.setdefault("X-TLDW-Refresh-Reason", f"session-error:{type(_sess_e).__name__}")
+                    except Exception:
+                        pass
+                raise InvalidTokenError("Invalid or expired session for refresh token")
         
-        # Keep the same refresh token
-        # Optionally, you could rotate refresh tokens here
-        
-        logger.info(f"Token refreshed for user: {user['username']} (ID: {user['id']})")
+        if settings.PII_REDACT_LOGS:
+            logger.info("Token refreshed [redacted]")
+        else:
+            logger.info(f"Token refreshed for user: {user['username']} (ID: {user['id']})")
         
         log_counter("auth_refresh_success")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
@@ -708,7 +759,7 @@ async def refresh_token(
                 pass
         return TokenResponse(
             access_token=new_access_token,
-            refresh_token=request.refresh_token,
+            refresh_token=new_refresh_token,
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )

@@ -6,7 +6,7 @@ Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 
 import uuid
 import json
-from typing import Dict, Any, Optional, List, Union, Callable, Literal
+from typing import Dict, Any, Optional, List, Union, Callable, Literal, Tuple
 from datetime import datetime, timezone
 from enum import IntEnum
 from pydantic import BaseModel, Field, validator
@@ -15,7 +15,11 @@ from loguru import logger
 from .modules.registry import get_module_registry
 import inspect
 from .auth.authnz_rbac import get_rbac_policy, Resource, Action
-from .auth.rate_limiter import get_rate_limiter
+from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
+import time
+from .monitoring.metrics import get_metrics_collector
+from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+import re
 
 
 # JSON-RPC 2.0 Error Codes
@@ -96,9 +100,13 @@ class RequestContext:
         self.session_id = session_id
         self.metadata = metadata or {}
         self.start_time = datetime.now(timezone.utc)
-        
-        # Add request ID to logger context
-        logger.contextualize(request_id=request_id)
+        # Build a bound logger for this request
+        self.logger = logger.bind(
+            request_id=request_id,
+            user_id=user_id,
+            client_id=client_id,
+            session_id=session_id,
+        )
 
 
 class MCPProtocol:
@@ -120,6 +128,10 @@ class MCPProtocol:
         self.rbac_policy = get_rbac_policy()
         self.rate_limiter = get_rate_limiter()
         self.protocol_version = "2024-11-05"
+        self.metrics = get_metrics_collector()
+        self.telemetry = get_telemetry_manager()
+        # Strict tool name validation regex
+        self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
         
         # Method handlers
         self.handlers: Dict[str, Callable] = {
@@ -139,9 +151,9 @@ class MCPProtocol:
     
     async def process_request(
         self,
-        request: Union[Dict[str, Any], MCPRequest],
+        request: Union[Dict[str, Any], List[Dict[str, Any]], MCPRequest],
         context: Optional[RequestContext] = None
-    ) -> MCPResponse:
+    ) -> Union[MCPResponse, List[MCPResponse], None]:
         """
         Process an MCP request and return response.
         
@@ -152,15 +164,35 @@ class MCPProtocol:
         Returns:
             MCP response
         """
-        # Parse request if dict
+        # Support batch requests
+        if isinstance(request, list):
+            responses: List[MCPResponse] = []
+            for item in request:
+                try:
+                    resp = await self.process_request(item, context)
+                    # Notifications return None; do not include in batch response
+                    if isinstance(resp, MCPResponse):
+                        responses.append(resp)
+                except Exception as e:
+                    # If parsing fails at top-level, try to include an error response for that item
+                    try:
+                        req_id = item.get("id") if isinstance(item, dict) else None
+                    except Exception:
+                        req_id = None
+                    responses.append(self._error_response(ErrorCode.INVALID_REQUEST, str(e), req_id))
+            # Per JSON-RPC, if the batch is empty or only notifications, return no response
+            return responses if responses else None
+
+        # Parse single request if dict
         if isinstance(request, dict):
             try:
                 request = MCPRequest(**request)
             except Exception as e:
+                req_id = request.get("id") if isinstance(request, dict) else None
                 return self._error_response(
                     ErrorCode.INVALID_REQUEST,
                     f"Invalid request format: {str(e)}",
-                    request.get("id") if isinstance(request, dict) else None
+                    req_id
                 )
         
         # Create context if not provided
@@ -170,13 +202,15 @@ class MCPProtocol:
                 client_id="unknown"
             )
         
+        # Bound logger for this request
+        log = context.logger
         # Log request
-        logger.info(
-            f"MCP request: method={request.method}, "
-            f"user={context.user_id}, client={context.client_id}",
+        log.info(
+            f"MCP request: method={request.method}, user={context.user_id}, client={context.client_id}",
             extra={"audit": True}
         )
         
+        start_ts = time.time()
         try:
             # Check rate limit
             if context.user_id:
@@ -225,36 +259,72 @@ class MCPProtocol:
                     data=hint_data
                 )
             
-            # Execute handler
-            result = await handler(request.params or {}, context)
+            # Execute handler within OTEL span
+            start_exec = time.time()
+            with self.telemetry.trace_context(
+                "mcp.request",
+                {
+                    "mcp.method": request.method,
+                    "mcp.request_id": str(request.id) if request.id is not None else "notification",
+                    "mcp.user_id": str(context.user_id or ""),
+                    "mcp.client_id": str(context.client_id or ""),
+                    "mcp.session_id": str(context.session_id or ""),
+                },
+            ) as span:
+                try:
+                    result = await handler(request.params or {}, context)
+                    span.set_attribute("mcp.status", "success")
+                except Exception as _span_e:
+                    span.set_attribute("mcp.status", "failure")
+                    span.set_attribute("mcp.error_type", _span_e.__class__.__name__)
+                    span.set_attribute("mcp.error_message", str(_span_e)[:200])
+                    raise
+                finally:
+                    span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - start_exec) * 1000.0))
             
-            # Log success
+            # Log success and record metrics
             elapsed = (datetime.now(timezone.utc) - context.start_time).total_seconds()
-            logger.info(
+            log.info(
                 f"MCP request completed: method={request.method}, "
                 f"elapsed={elapsed:.3f}s",
                 extra={"audit": True}
             )
+            try:
+                self.metrics.record_request(method=request.method, duration=elapsed, status="success")
+            except Exception:
+                pass
             
-            # Return success response
-            return MCPResponse(
-                result=result,
-                id=request.id
-            )
+            # Notification: do not return a response
+            if request.id is None:
+                return None
+            # Return success response for standard requests
+            return MCPResponse(result=result, id=request.id)
             
+        except RateLimitExceeded as rl:
+            # Record rate limit hit and re-raise for caller-specific mapping
+            try:
+                key_type = "user" if context.user_id else ("client" if context.client_id else "anonymous")
+                self.metrics.record_rate_limit_hit(key_type=key_type)
+            except Exception:
+                pass
+            raise
         except Exception as e:
             # Log error
-            logger.error(
+            log.error(
                 f"MCP request failed: method={request.method}, error={str(e)}",
                 extra={"audit": True}
             )
+            try:
+                elapsed = max(0.0, time.time() - start_ts)
+                self.metrics.record_request(method=request.method, duration=elapsed, status="failure")
+            except Exception:
+                pass
             
+            # Notification: do not return a response
+            if isinstance(request, MCPRequest) and request.id is None:
+                return None
             # Return error response
-            return self._error_response(
-                ErrorCode.INTERNAL_ERROR,
-                str(e),
-                request.id
-            )
+            return self._error_response(ErrorCode.INTERNAL_ERROR, str(e), request.id if isinstance(request, MCPRequest) else None)
     
     def _error_response(
         self,
@@ -398,7 +468,7 @@ class MCPProtocol:
                     tools.append(tool_copy)
                     
             except Exception as e:
-                logger.error(f"Error getting tools from module {module_id}: {e}")
+                context.logger.error(f"Error getting tools from module {module_id}: {e}")
         
         return {"tools": tools}
     
@@ -414,8 +484,8 @@ class MCPProtocol:
         if not tool_name:
             raise ValueError("Tool name is required")
         
-        # Sanitize tool name
-        if any(char in tool_name for char in ["'", '"', ';', '--']):
+        # Strictly validate tool name
+        if not self._tool_name_re.match(tool_name):
             raise ValueError("Invalid tool name")
         
         # Find module for tool
@@ -432,12 +502,32 @@ class MCPProtocol:
                     raise PermissionError(f"Permission denied for tool: {tool_name}")
         
         # Execute tool with circuit breaker
+        t0 = time.time()
         try:
-            result = await module.execute_with_circuit_breaker(
-                module.execute_tool,
-                tool_name,
-                tool_args
-            )
+            # Trace the tool call with OTEL
+            with self.telemetry.trace_context(
+                "mcp.tool_call",
+                {
+                    "mcp.tool": tool_name,
+                    "mcp.module": getattr(module, "name", "unknown"),
+                    "mcp.user_id": str(context.user_id or ""),
+                    "mcp.client_id": str(context.client_id or ""),
+                },
+            ) as span:
+                try:
+                    result = await module.execute_with_circuit_breaker(
+                        module.execute_tool,
+                        tool_name,
+                        tool_args
+                    )
+                    span.set_attribute("mcp.status", "success")
+                except Exception as _tool_e:
+                    span.set_attribute("mcp.status", "failure")
+                    span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                    span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                    raise
+                finally:
+                    span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - t0) * 1000.0))
             
             # Format result
             if isinstance(result, str):
@@ -448,10 +538,21 @@ class MCPProtocol:
                 content = [{"type": "text", "text": str(result)}]
             
             module_name = getattr(module, "name", None)
+            # Record module operation metrics
+            try:
+                duration = max(0.0, time.time() - t0)
+                self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
+            except Exception:
+                pass
             return {"content": content, "module": module_name, "tool": tool_name}
             
         except Exception as e:
-            logger.error(f"Tool execution failed: {tool_name} - {e}")
+            context.logger.error(f"Tool execution failed: {tool_name} - {e}")
+            try:
+                duration = max(0.0, time.time() - t0)
+                self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
+            except Exception:
+                pass
             raise
     
     async def _handle_resources_list(
@@ -474,7 +575,7 @@ class MCPProtocol:
                     resources.append(resource_copy)
                     
             except Exception as e:
-                logger.error(f"Error getting resources from module {module_id}: {e}")
+                context.logger.error(f"Error getting resources from module {module_id}: {e}")
         
         return {"resources": resources}
     
@@ -518,7 +619,7 @@ class MCPProtocol:
                     prompts.append(prompt_copy)
                     
             except Exception as e:
-                logger.error(f"Error getting prompts from module {module_id}: {e}")
+                context.logger.error(f"Error getting prompts from module {module_id}: {e}")
         
         return {"prompts": prompts}
     

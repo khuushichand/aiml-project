@@ -100,6 +100,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
 - Provider API keys are sourced from environment (`.env`) or `tldw_Server_API/Config_Files/config.txt`.
 - Optional failover: when enabled via server config, the Chat module may fallback to a healthy provider on upstream errors (disabled by default for stability).
+  - Config key: `[Chat-Module] enable_provider_fallback = True` (default: `False`)
 
 ## Streaming Behavior
 - Media type: `text/event-stream`.
@@ -203,6 +204,13 @@ When exceeded, the endpoint returns `429`.
 ## Observability
 - Metrics: Tracks request size, LLM latency, streaming chunks/heartbeats, DB transactions, and image processing.
 - Audit: When enabled, logs API request metadata (user_id, request_id, model/provider, streaming) via the unified audit service.
+
+### Queue Diagnostics (Admins)
+- Endpoints (read-only operational state):
+  - `GET /api/v1/chat/queue/status` – Queue size, concurrency, processed/rejected counts
+  - `GET /api/v1/chat/queue/activity?limit=50` – Recent processed job summaries (most recent last)
+- RBAC: Requires permission `system.logs`. In single-user mode, all actions are permitted.
+- Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
 ## WebUI
 - Location: `/webui` → Chat Completions tab.

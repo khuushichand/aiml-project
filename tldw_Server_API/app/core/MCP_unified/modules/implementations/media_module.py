@@ -6,6 +6,7 @@ Production-ready media management module with full MCP compliance.
 
 import os
 import asyncio
+import uuid
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from pathlib import Path

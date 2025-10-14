@@ -1,0 +1,55 @@
+name: MCP Metrics Smoke
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  mcp-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tldw_Server_API/requirements.txt
+
+      - name: Start server (background)
+        env:
+          MCP_JWT_SECRET: test_secret_key_for_ci_only_32_chars_minimum
+          MCP_API_KEY_SALT: test_salt_key_for_ci_only_32_chars_minimum
+          MCP_PROMETHEUS_PUBLIC: '1'
+        run: |
+          nohup python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for MCP status
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/api/v1/mcp/status >/dev/null; then
+              echo "MCP status OK"; exit 0; fi; sleep 2; done; exit 1
+
+      - name: Scrape Prometheus metrics
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/v1/mcp/metrics/prometheus -o mcp_metrics.txt
+          grep -q "mcp_requests_total" mcp_metrics.txt
+          grep -q "mcp_request_duration_seconds" mcp_metrics.txt
+          grep -q "mcp_active_connections" mcp_metrics.txt
+
+      - name: Print server logs (on failure)
+        if: failure()
+        run: |
+          echo '===== server.log ====='
+          cat server.log || true
+
+      - name: Stop server
+        if: always()
+        run: |
+          kill $(cat server.pid) || true
+

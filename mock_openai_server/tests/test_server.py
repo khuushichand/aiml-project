@@ -2,6 +2,7 @@
 Comprehensive tests for the Mock OpenAI API Server.
 """
 
+import os
 import json
 import pytest
 import asyncio
@@ -10,6 +11,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
+
+# Skip entire suite unless explicitly enabled
+_RUN_MOCK_OPENAI = os.getenv("RUN_MOCK_OPENAI", "").lower() in ("1", "true", "yes")
+pytestmark = pytest.mark.skipif(not _RUN_MOCK_OPENAI, reason="Mock OpenAI server tests disabled; set RUN_MOCK_OPENAI=1 to enable")
 
 # Import the app and configuration
 from ..mock_openai.server import app

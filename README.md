@@ -239,6 +239,34 @@ curl http://127.0.0.1:8000/api/v1/llamacpp/reranking \
 - **WebSocket Support** [Stable]: Real-time connections via MCP (Model Context Protocol)
 - **Comprehensive Docs** [Stable]: Auto-generated OpenAPI documentation at `/docs`
 
+## Tokenizer Configuration (Chat Dictionaries & World Books)
+
+Dictionary and World Book modules estimate tokens when enforcing token budgets. You can read and adjust the server’s token counting strategy via API:
+
+- GET `/api/v1/config/tokenizer` → returns current mode (`whitespace`|`char_approx`) and divisor
+- PUT `/api/v1/config/tokenizer` → updates mode and divisor (in‑memory; not persisted)
+
+Example:
+
+```
+GET /api/v1/config/tokenizer
+{
+  "mode": "whitespace",
+  "divisor": 4,
+  "available_modes": ["whitespace", "char_approx"]
+}
+
+PUT /api/v1/config/tokenizer
+{
+  "mode": "char_approx",
+  "divisor": 4
+}
+```
+
+Notes:
+- Affects token budgets in Chat Dictionary and World Book processing.
+- Process‑wide and non‑persistent; add to env/config for defaults if needed.
+
 ### Knowledge Management
 - **Note System** [Stable]: Create, search, and organize research notes
 - **Prompt Library** [Stable]: Store and manage reusable prompts with import/export
@@ -261,7 +289,7 @@ curl http://127.0.0.1:8000/api/v1/llamacpp/reranking \
 - **Sharing** [Stable]: Share curated collections with colleagues or team members
 
 ### Advanced Features
-- **MCP Unified** [Stable core]: Production MCP server + tools with JWT/RBAC and WS/HTTP; Experimental tag in 0.1 OpenAPI. Endpoints: `/api/v1/mcp/ws`, `/api/v1/mcp/request`, `/api/v1/mcp/tools`, `/api/v1/mcp/tools/execute`, `/api/v1/mcp/modules`, `/api/v1/mcp/modules/health`, `/api/v1/mcp/status`, `/api/v1/mcp/metrics`, `/api/v1/mcp/health` (see `app/api/v1/endpoints/mcp_unified_endpoint.py`).
+- **MCP Unified** [Stable core]: Production MCP server + tools with JWT/RBAC and WS/HTTP; Experimental tag in 0.1 OpenAPI. Endpoints: `/api/v1/mcp/ws`, `/api/v1/mcp/request`, `/api/v1/mcp/tools`, `/api/v1/mcp/tools/execute`, `/api/v1/mcp/modules`, `/api/v1/mcp/modules/health`, `/api/v1/mcp/status`, `/api/v1/mcp/metrics`, `/api/v1/mcp/metrics/prometheus`, `/api/v1/mcp/health` (see `app/api/v1/endpoints/mcp_unified_endpoint.py`).
 - **Database Migrations** [Stable]: Automatic schema updates with versioning
 - **Authentication** [Stable]: JWT-based auth with RBAC for MCP connections
 - **Evaluation Tools** [Stable]: Benchmark your configurations and LLM performance
@@ -929,6 +957,11 @@ Override config.txt with environment variables:
 - `ANTHROPIC_API_KEY`
 - `DATABASE_PATH`
 
+Chunking (regex safety)
+- `CHUNKING_REGEX_TIMEOUT` — float seconds to cap regex execution for chapter/section detection in the ebook chunker. Default: `2`. Values <= 0 are ignored. On timeout, the strategy falls back to size-based splitting. Example: `export CHUNKING_REGEX_TIMEOUT=0.5`.
+- `CHUNKING_DISABLE_MP` — disable process-based isolation for regex. Default: Enabled (multiprocessing is disabled) when unset, for cross‑platform stability. Set to `0`/`false`/`no` to enable the optional process fallback; set to `1`/`true`/`yes` to keep it disabled. Note: enabling MP may not be supported in restricted environments or on some platforms.
+- `CHUNKING_REGEX_SIMPLE_ONLY` — when set to `1`/`true`/`yes`, only a safe subset of regex constructs is permitted for custom chapter patterns (no grouping `()`, alternation `|`, wildcard `.`, `?`, `*`; allows literals, `^`/`$`, character classes, `\d`/`\w`, and `+` after safe atoms). Unsafe patterns are rejected during validation.
+
 Test/CI (Prompt Studio)
 - `TLDW_PS_BACKEND` = `sqlite` | `postgres` — select backend for the heavy optimization suite (default: `sqlite`).
 - `TLDW_PS_STRESS` = `1` — enable larger datasets/iterations in heavy tests.
@@ -997,6 +1030,30 @@ python -m pytest tests/Media_Ingestion_Modification/ -v
 # With coverage
 python -m pytest --cov=tldw_Server_API --cov-report=html
 ```
+
+### Test Suite Toggles and CI Profile
+- Postgres-backed AuthNZ integration tests are skipped unless Postgres is reachable. Force run by setting `TLDW_TEST_POSTGRES_REQUIRED=1`.
+- MCP Unified tests are disabled by default. Enable with `RUN_MCP_TESTS=1`.
+- Mock OpenAI server tests are disabled by default. Enable with `RUN_MOCK_OPENAI=1`.
+
+Recommended CI env for broad coverage without heavy services:
+```bash
+TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true \
+RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0 python -m pytest -q
+```
+Use targeted jobs to run MCP or Postgres suites by enabling the corresponding flags and ensuring dependencies are available.
+
+Suggested CI job profiles:
+- Baseline (fast, wide coverage):
+  - `TEST_MODE=true DISABLE_HEAVY_STARTUP=1 DISABLE_NLTK_DOWNLOADS=true SKIP_PROMPT_STUDIO_FTS=true`
+  - `RUN_MCP_TESTS=0 RUN_MOCK_OPENAI=0`
+- MCP Unified (integration):
+  - `RUN_MCP_TESTS=1`
+  - Do not set `DISABLE_HEAVY_STARTUP` for this job (MCP server initialization required)
+- AuthNZ Postgres (integration):
+  - `AUTH_MODE=multi_user` and `DATABASE_URL=postgresql://...`
+  - `TLDW_TEST_POSTGRES_REQUIRED=1` to fail-fast if Postgres is unreachable
+  - Provide Postgres service in CI (docker service/container)
 
 ### Pytest Markers
 Use markers to target the right slice of the suite:

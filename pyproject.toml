@@ -379,7 +379,8 @@ filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources:",
     "ignore::DeprecationWarning:speechbrain.pretrained:",
     "ignore::DeprecationWarning:transformers:",
-    "ignore::DeprecationWarning:torch:"
+    "ignore::DeprecationWarning:torch:",
+    "ignore:.*swigvarlink.*:DeprecationWarning"
 ]
 markers = [
     "asyncio: mark test as async",

@@ -23,8 +23,8 @@ This guide explains the Chat module’s architecture, key components, and how to
 
 ## Directory Map
 
-- `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` – Legacy central dispatcher used by the API endpoint today; also contains a duplicate provider mapping kept for back‑compat
+ - `tldw_Server_API/app/core/Chat/`
+  - `Chat_Functions.py` – Legacy central dispatcher used by the API endpoint today; provider mappings are no longer duplicated here
   - `chat_orchestrator.py` – Modern dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
   - `chat_helpers.py` – Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` & `provider_config.py` – Provider health/fallback management and authoritative handler/parameter mappings
@@ -60,8 +60,8 @@ Related:
 - Authoritative mappings live in `provider_config.py`:
   - `API_CALL_HANDLERS` maps provider keys (e.g., `openai`, `anthropic`, `groq`, `mistral`, `vllm`, `ollama`) to call functions in `core/LLM_Calls`.
   - `PROVIDER_PARAM_MAP` translates generic chat arguments (e.g., `messages_payload`, `system_message`, `top_p`, `max_tokens`) into each provider’s expected keyword names.
-- `Chat_Functions.py` retains a duplicate of these mappings for backward compatibility with the current endpoint. New work should reference `provider_config.py`.
-- At app startup, `main.py` uses `Chat_Functions.API_CALL_HANDLERS` to seed the `provider_manager` for health/fallback.
+- `Chat_Functions.py` no longer duplicates these mappings. `provider_config.py` is the single source of truth for handler/parameter mappings.
+- At app startup, `main.py` seeds the `provider_manager` from `provider_config.API_CALL_HANDLERS` to avoid drift with the endpoint mappings.
 
 Provider selection notes:
 - Requests may specify models with a provider prefix (e.g., `anthropic/claude-3-opus`). The endpoint extracts the provider and model automatically.
@@ -141,23 +141,30 @@ Provider selection notes:
 ## Testing
 
 - Unit tests:
-  - Schema validation (`tests/Chat/test_chat_request_schemas.py`)
-  - Prompt templates (`tests/Chat/test_prompt_template_manager.py`)
-  - Dispatch shape and mapping (update tests when changing provider mappings)
+  - Schema validation (`tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`)
+  - Chat functions (`tldw_Server_API/tests/Chat_NEW/unit/test_chat_functions.py`)
+  - Dispatch shape/mapping (update tests when changing provider mappings)
 - Integration tests:
-  - Endpoint flow for `/api/v1/chat/completions` (`tests/Chat/test_chat_completions_integration.py`, `tests/Chat/test_chat_endpoint.py`)
-  - Streaming normalization (`tests/Chat/test_chat_endpoint_streaming_normalization.py`)
+  - Endpoint flow for `/api/v1/chat/completions` (`tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`)
+  - Streaming normalization (`tldw_Server_API/tests/Chat/test_chat_endpoint_streaming_normalization.py`)
   - Consider provider mocks for deterministic behavior
 
 ## Maintenance Notes
 
-- Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. `Chat_Functions.py` retains a copy for backward compatibility.
+- Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
 - Log safe: escape curly braces and large payloads before logging (see existing patterns in exception handling).
 - Preserve OpenAI response compatibility in streaming and non‑streaming outputs to avoid client regressions.
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.
 
 Additional endpoint behavior to note:
-- Non‑stream responses include `tldw_conversation_id` in the JSON body for ease of client‑side state tracking.
+- Non‑stream responses include `tldw_conversation_id` in the JSON body for client‑side state tracking.
+- Streaming responses send a `stream_start` event and normalized `data:` deltas; a success audit event is emitted at stream completion.
+
+## Rate Limiting
+
+- Global SlowAPI middleware (production) provides coarse IP-based limits.
+- Chat limiter enforces per-user, per-conversation, and tokens-per-minute limits and is the primary control.
+- RBAC rate-limit dependency currently logs selected limits; future enforcement can leverage the same integration.
 
 ---
 

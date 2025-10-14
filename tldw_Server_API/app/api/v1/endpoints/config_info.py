@@ -5,6 +5,7 @@ Only exposes non-sensitive configuration suitable for documentation.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Dict, List, Optional
 import configparser
@@ -14,6 +15,7 @@ from pathlib import Path
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import settings as global_settings
 from loguru import logger
 import os
 
@@ -236,6 +238,66 @@ const response = await fetch(`${{BASE_URL}}/api/v1/evals`, {{
 
 const data = await response.json();
 console.log('Created evaluation:', data.id);"""
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer configuration readout and selection
+# ---------------------------------------------------------------------------
+
+class TokenizerConfig(BaseModel):
+    mode: str = Field(..., description="Current tokenizer mode: whitespace|char_approx")
+    divisor: int = Field(..., description="Char-based approx divisor (if applicable)")
+    available_modes: list[str] = Field(default_factory=lambda: ["whitespace", "char_approx"])
+
+
+class TokenizerUpdate(BaseModel):
+    mode: str = Field(..., pattern="^(whitespace|char_approx)$", description="New tokenizer mode")
+    divisor: int = Field(4, ge=1, description="Char-based approx divisor")
+
+
+@router.get("/config/tokenizer", response_model=TokenizerConfig)
+async def get_tokenizer_config() -> TokenizerConfig:
+    mode = str(global_settings.get("TOKEN_ESTIMATOR_MODE", "whitespace")).lower()
+    divisor = int(global_settings.get("TOKEN_CHAR_APPROX_DIVISOR", 4))
+    return TokenizerConfig(mode=mode, divisor=divisor)
+
+
+@router.put("/config/tokenizer", response_model=TokenizerConfig)
+async def update_tokenizer_config(update: TokenizerUpdate) -> TokenizerConfig:
+    # Update in-memory settings; non-persistent across restarts
+    global_settings["TOKEN_ESTIMATOR_MODE"] = update.mode
+    global_settings["TOKEN_CHAR_APPROX_DIVISOR"] = int(update.divisor)
+    return TokenizerConfig(mode=update.mode, divisor=int(update.divisor))
+
+
+@router.get("/config/jobs")
+async def get_jobs_config_info():
+    """Expose non-sensitive Jobs backend configuration and tuning flags.
+
+    Returns current backend selection (sqlite|postgres) and key lease/backoff parameters. Does not expose DSN.
+    """
+    backend = "postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else "sqlite"
+    def _to_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except Exception:
+            return default
+    def _to_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except Exception:
+            return default
+    return {
+        "backend": backend,
+        "configured": bool(os.getenv("JOBS_DB_URL")) or backend == "sqlite",
+        "flags": {
+            "JOBS_LEASE_SECONDS": _to_int("JOBS_LEASE_SECONDS", 60),
+            "JOBS_LEASE_RENEW_SECONDS": _to_int("JOBS_LEASE_RENEW_SECONDS", 30),
+            "JOBS_LEASE_RENEW_JITTER_SECONDS": _to_int("JOBS_LEASE_RENEW_JITTER_SECONDS", 5),
+            "JOBS_LEASE_MAX_SECONDS": _to_int("JOBS_LEASE_MAX_SECONDS", 3600),
+        },
+        "notes": "DSN is not exposed for security. Configure via JOBS_DB_URL to use PostgreSQL."
+    }
 
 
 @router.get("/config/quickstart")

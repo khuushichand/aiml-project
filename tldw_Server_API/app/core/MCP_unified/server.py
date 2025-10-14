@@ -19,6 +19,8 @@ from .auth.jwt_manager import get_jwt_manager
 from .auth.authnz_rbac import get_rbac_policy
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
+from .monitoring.metrics import get_metrics_collector
+import ipaddress
 
 
 class WebSocketConnection:
@@ -48,7 +50,7 @@ class WebSocketConnection:
             await self.websocket.send_json(data)
             self.last_activity = datetime.now(timezone.utc)
         except Exception as e:
-            logger.error(f"Error sending to WebSocket {self.connection_id}: {e}")
+            logger.bind(connection_id=self.connection_id).error(f"Error sending to WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
     
@@ -60,7 +62,7 @@ class WebSocketConnection:
             self.message_count += 1
             return data
         except Exception as e:
-            logger.error(f"Error receiving from WebSocket {self.connection_id}: {e}")
+            logger.bind(connection_id=self.connection_id).error(f"Error receiving from WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
     
@@ -69,7 +71,7 @@ class WebSocketConnection:
         try:
             await self.websocket.close(code=code, reason=reason)
         except Exception as e:
-            logger.error(f"Error closing WebSocket {self.connection_id}: {e}")
+            logger.bind(connection_id=self.connection_id).error(f"Error closing WebSocket {self.connection_id}: {e}")
 
 
 class MCPServer:
@@ -96,6 +98,7 @@ class MCPServer:
         # Connection management
         self.connections: Dict[str, WebSocketConnection] = {}
         self.connection_lock = asyncio.Lock()
+        self._ip_connection_counts: Dict[str, int] = {}
         
         # Server state
         self.initialized = False
@@ -118,6 +121,12 @@ class MCPServer:
         try:
             # Start module health monitoring
             await self.module_registry.start_health_monitoring()
+            
+            # Start metrics collection
+            try:
+                await get_metrics_collector().start_collection()
+            except Exception as e:
+                logger.warning(f"MCP metrics collector start failed: {e}")
             
             # Register default modules (will be implemented when migrating modules)
             await self._register_default_modules()
@@ -245,6 +254,8 @@ class MCPServer:
                 })
                 logger.info("MCP_ENABLE_MEDIA_MODULE=true; queuing MediaModule for registration")
 
+            # (no additional built-in modules)
+
             # Register all specified modules
             from .modules.base import ModuleConfig  # Local import to avoid cycles
             for m in modules_to_load:
@@ -321,6 +332,11 @@ class MCPServer:
                 connection = self.connections[conn_id]
                 await connection.close(code=1001, reason="Connection timeout")
                 del self.connections[conn_id]
+            # Update connection gauge
+            try:
+                get_metrics_collector().update_connection_count("websocket", len(self.connections))
+            except Exception:
+                pass
     
     async def _metrics_collection_loop(self):
         """Periodically collect and log metrics"""
@@ -353,6 +369,14 @@ class MCPServer:
         """
         connection_id = f"ws_{client_id or 'anonymous'}_{datetime.now().timestamp()}"
         user_id = None
+        # Determine client IP
+        try:
+            client_ip = getattr(websocket.client, "host", None) or (
+                websocket.client[0] if isinstance(websocket.client, (list, tuple)) else None
+            )
+            client_ip = client_ip or "unknown"
+        except Exception:
+            client_ip = "unknown"
         
         # Authenticate if token provided (MCP JWT, or fallback to AuthNZ JWT)
         if auth_token:
@@ -402,12 +426,24 @@ class MCPServer:
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
         
-        # Check connection limit
+        # Check connection limits (global and per-IP)
         async with self.connection_lock:
             if len(self.connections) >= self.config.ws_max_connections:
                 logger.warning("Maximum WebSocket connections reached")
                 await websocket.close(code=1013, reason="Server at capacity")
                 return
+            # Enforce per-IP cap if configured
+            if self.config.ws_max_connections_per_ip > 0:
+                count = self._ip_connection_counts.get(client_ip, 0)
+                if count >= self.config.ws_max_connections_per_ip:
+                    # Record rejection metric
+                    try:
+                        bucket = self._ip_bucket(client_ip)
+                        get_metrics_collector().record_ws_rejection("per_ip_cap", bucket)
+                    except Exception:
+                        pass
+                    await websocket.close(code=1013, reason="Too many connections from IP")
+                    return
             
             # Accept connection
             await websocket.accept()
@@ -422,10 +458,16 @@ class MCPServer:
             )
             
             self.connections[connection_id] = connection
+            # Track per-IP count
+            self._ip_connection_counts[client_ip] = self._ip_connection_counts.get(client_ip, 0) + 1
+            # Update connection gauge
+            try:
+                get_metrics_collector().update_connection_count("websocket", len(self.connections))
+            except Exception:
+                pass
         
-        logger.info(
-            f"WebSocket connected: {connection_id} "
-            f"(client={client_id}, user={user_id})"
+        logger.bind(connection_id=connection_id, user_id=user_id, client_id=client_id, client_ip=client_ip).info(
+            f"WebSocket connected: {connection_id} (client={client_id}, user={user_id}, ip={client_ip})"
         )
         
         try:
@@ -436,12 +478,16 @@ class MCPServer:
             
             # Handle messages
             await self._handle_websocket_messages(connection)
-            
+        
         except WebSocketDisconnect:
-            logger.info(f"WebSocket disconnected: {connection_id}")
+            logger.bind(connection_id=connection_id).info(f"WebSocket disconnected: {connection_id}")
         except Exception as e:
-            logger.error(f"WebSocket error for {connection_id}: {e}")
+            logger.bind(connection_id=connection_id).error(f"WebSocket error for {connection_id}: {e}")
             await connection.close(code=1011, reason="Internal error")
+            try:
+                get_metrics_collector().record_connection_error("websocket", "exception")
+            except Exception:
+                pass
         finally:
             # Cancel ping task
             ping_task.cancel()
@@ -450,8 +496,21 @@ class MCPServer:
             async with self.connection_lock:
                 if connection_id in self.connections:
                     del self.connections[connection_id]
+                # Decrement per-IP count
+                try:
+                    if client_ip in self._ip_connection_counts and self._ip_connection_counts[client_ip] > 0:
+                        self._ip_connection_counts[client_ip] -= 1
+                        if self._ip_connection_counts[client_ip] == 0:
+                            del self._ip_connection_counts[client_ip]
+                except Exception:
+                    pass
             
-            logger.info(f"WebSocket cleanup complete: {connection_id}")
+            logger.bind(connection_id=connection_id).info(f"WebSocket cleanup complete: {connection_id}")
+            # Update connection gauge
+            try:
+                get_metrics_collector().update_connection_count("websocket", len(self.connections))
+            except Exception:
+                pass
     
     async def _websocket_ping_loop(self, connection: WebSocketConnection):
         """Send periodic pings to keep connection alive"""
@@ -460,6 +519,10 @@ class MCPServer:
                 await asyncio.sleep(self.config.ws_ping_interval)
                 await connection.websocket.send_json({"type": "ping"})
             except Exception:
+                try:
+                    get_metrics_collector().record_connection_error("websocket", "ping_failure")
+                except Exception:
+                    pass
                 break
     
     async def _handle_websocket_messages(self, connection: WebSocketConnection):
@@ -504,10 +567,16 @@ class MCPServer:
                 metadata=connection.metadata
             )
             
-            # Process MCP request
+            # Process MCP request (supports single, notification, and batch)
             try:
                 response = await self.protocol.process_request(data, context)
-                await connection.send_json(response.dict())
+                if response is None:
+                    # Notification - no reply
+                    continue
+                if isinstance(response, list):
+                    await connection.send_json([r.model_dump() for r in response])
+                else:
+                    await connection.send_json(response.model_dump())
             except RateLimitExceeded as e:
                 await connection.send_json({
                     "jsonrpc": "2.0",
@@ -527,6 +596,22 @@ class MCPServer:
                     },
                     "id": data.get("id") if isinstance(data, dict) else None
                 })
+
+    def _ip_bucket(self, ip: str) -> str:
+        """Return a coarse bucket label for an IP to avoid high-cardinality metrics."""
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            if ip_obj.is_loopback:
+                return "loopback"
+            if ip_obj.is_private:
+                return "private"
+            if ip_obj.is_link_local:
+                return "link_local"
+            if ip_obj.is_reserved:
+                return "reserved"
+            return "public"
+        except Exception:
+            return "unknown"
     
     async def handle_http_request(
         self,

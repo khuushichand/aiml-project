@@ -10,7 +10,7 @@ import secrets
 from typing import Optional, Dict, Any, List
 from functools import lru_cache
 from pydantic import Field, validator, SecretStr
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
 
 
@@ -60,6 +60,7 @@ class MCPConfig(BaseSettings):
     
     # WebSocket Configuration
     ws_max_connections: int = Field(default=1000, env="MCP_WS_MAX_CONNECTIONS")
+    ws_max_connections_per_ip: int = Field(default=10, env="MCP_WS_MAX_CONNECTIONS_PER_IP")
     ws_max_message_size: int = Field(default=1048576, env="MCP_WS_MAX_MESSAGE_SIZE")  # 1MB
     ws_ping_interval: int = Field(default=30, env="MCP_WS_PING_INTERVAL")
     ws_ping_timeout: int = Field(default=60, env="MCP_WS_PING_TIMEOUT")
@@ -113,11 +114,12 @@ class MCPConfig(BaseSettings):
     audit_enabled: bool = Field(default=True, env="MCP_AUDIT_ENABLED")
     audit_log_file: str = Field(default="audit.log", env="MCP_AUDIT_LOG_FILE")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"  # Ignore extra fields that aren't in the schema
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
     
     @validator("jwt_secret_key", pre=True)
     def validate_jwt_secret(cls, v):

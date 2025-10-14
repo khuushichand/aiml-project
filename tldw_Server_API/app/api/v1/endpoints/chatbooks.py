@@ -20,13 +20,9 @@ from loguru import logger
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-# Import audit logging if available
-try:
-    from ....core.Evaluations.audit_logger import AuditLogger, AuditEventType
-    audit_logger = AuditLogger()
-except ImportError:
-    logger.warning("Audit logger not available, using fallback logging")
-    audit_logger = None
+# Unified audit service
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ....core.Chatbooks.chatbook_service import ChatbookService
@@ -48,7 +44,8 @@ from ..schemas.chatbook_schemas import (
     ListImportJobsResponse,
     CleanupExpiredExportsResponse,
     ChatbookErrorResponse,
-    ChatbookManifestResponse
+    ChatbookManifestResponse,
+    ChatbookVersion as SchemaChatbookVersion
 )
 
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
@@ -124,7 +121,8 @@ async def create_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Create a chatbook from selected content.
@@ -152,8 +150,8 @@ async def create_chatbook(
         if not valid:
             raise HTTPException(status_code=400, detail=error)
         
-        # Initialize quota manager
-        quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'))
+        # Initialize quota manager (DB-backed)
+        quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
         
         # Check export quota
         allowed, message = await quota_manager.check_export_quota()
@@ -190,6 +188,28 @@ async def create_chatbook(
         if success:
             if request_data.async_mode:
                 # Async mode - return job ID
+                # Audit export job creation
+                try:
+                    context = AuditContext(
+                        user_id=str(user.id),
+                        endpoint="/chatbooks/export",
+                        method="POST",
+                        ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.DATA_EXPORT,
+                        context=context,
+                        resource_type="chatbook_export_job",
+                        resource_id=result,
+                        action="chatbook_export_started",
+                        metadata={
+                            "name": request_data.name,
+                            "tags": request_data.tags,
+                        },
+                    )
+                except Exception:
+                    pass
+
                 return CreateChatbookResponse(
                     success=True,
                     message=message,
@@ -209,6 +229,11 @@ async def create_chatbook(
                 except Exception:
                     pass
 
+                # Expiry and signed download URL per configuration
+                ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
+                expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+                download_url = service._build_download_url(job_id, expires_at)
+
                 # Persist the completed job so the download endpoint can serve it
                 job = ExportJob(
                     job_id=job_id,
@@ -224,8 +249,8 @@ async def create_chatbook(
                     total_items=0,
                     processed_items=0,
                     file_size_bytes=file_size,
-                    download_url=f"/api/v1/chatbooks/download/{job_id}",
-                    expires_at=datetime.utcnow() + timedelta(days=30),
+                    download_url=download_url,
+                    expires_at=expires_at,
                 )
                 try:
                     # Save job using the service helper
@@ -233,11 +258,30 @@ async def create_chatbook(
                 except Exception as _e:
                     logger.warning(f"Failed to persist completed export job for sync path: {_e}")
 
+                # Audit completed export in sync path
+                try:
+                    context = AuditContext(
+                        user_id=str(user.id),
+                        endpoint="/chatbooks/export",
+                        method="POST",
+                        ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.DATA_EXPORT,
+                        context=context,
+                        resource_type="chatbook_export_job",
+                        resource_id=job_id,
+                        action="chatbook_export_completed_sync",
+                        metadata={"filename": file_path.name if file_path else None, "file_size": file_size},
+                    )
+                except Exception:
+                    pass
+
                 return CreateChatbookResponse(
                     success=True,
                     message=message,
                     job_id=job_id,
-                    download_url=f"/api/v1/chatbooks/download/{job_id}"
+                    download_url=download_url
                 )
         else:
             raise HTTPException(status_code=400, detail=message)
@@ -257,7 +301,8 @@ async def import_chatbook(
     file: UploadFile = File(...),
     import_request: ImportChatbookRequest = Depends(),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Import a chatbook file.
@@ -277,8 +322,8 @@ async def import_chatbook(
         ImportChatbookResponse with job ID (async) or import results (sync)
     """
     try:
-        # Initialize quota manager
-        quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'))
+        # Initialize quota manager (DB-backed)
+        quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
         
         # Check import quota
         allowed, message = await quota_manager.check_import_quota()
@@ -385,6 +430,23 @@ async def import_chatbook(
         if success:
             if import_request.async_mode:
                 # Async mode - return job ID
+                try:
+                    context = AuditContext(
+                        user_id=str(user.id),
+                        endpoint="/chatbooks/import",
+                        method="POST",
+                        ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.DATA_IMPORT,
+                        context=context,
+                        resource_type="chatbook_import_job",
+                        resource_id=result,
+                        action="chatbook_import_started",
+                        metadata={"filename": file.filename},
+                    )
+                except Exception:
+                    pass
                 return ImportChatbookResponse(
                     success=True,
                     message=message,
@@ -393,6 +455,21 @@ async def import_chatbook(
             else:
                 # Sync mode - return import results
                 # TODO: Parse message for imported item counts
+                try:
+                    context = AuditContext(
+                        user_id=str(user.id),
+                        endpoint="/chatbooks/import",
+                        method="POST",
+                        ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.DATA_IMPORT,
+                        context=context,
+                        action="chatbook_import_completed_sync",
+                        metadata={"filename": file.filename},
+                    )
+                except Exception:
+                    pass
                 return ImportChatbookResponse(
                     success=True,
                     message=message
@@ -420,7 +497,8 @@ async def preview_chatbook(
     request: Request,
     file: UploadFile = File(...),
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Preview a chatbook without importing it.
@@ -496,7 +574,16 @@ async def preview_chatbook(
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
-        
+
+        # Validate archive using centralized validator prior to extracting
+        ok, err = ChatbookValidator.validate_zip_file(str(temp_file))
+        if not ok:
+            try:
+                temp_file.unlink()
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail=err or "Invalid archive")
+
         # Preview chatbook
         manifest, error = service.preview_chatbook(str(temp_file))
         
@@ -508,8 +595,12 @@ async def preview_chatbook(
         
         if manifest:
             # Convert manifest to response model
+            # Coerce model enum to schema enum value safely, map legacy 1.0 -> 1.0.0
+            ver_str = getattr(manifest.version, 'value', str(manifest.version))
+            if ver_str == "1.0":
+                ver_str = "1.0.0"
             manifest_response = ChatbookManifestResponse(
-                version=manifest.version,
+                version=SchemaChatbookVersion(ver_str),
                 name=manifest.name,
                 description=manifest.description,
                 author=manifest.author,
@@ -535,6 +626,23 @@ async def preview_chatbook(
                 language=manifest.language,
                 license=manifest.license
             )
+            # Audit successful preview
+            try:
+                context = AuditContext(
+                    user_id=str(user.id),
+                    endpoint="/chatbooks/preview",
+                    method="POST",
+                    ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.DATA_READ,
+                    context=context,
+                    resource_type="chatbook_preview",
+                    action="chatbook_preview",
+                    metadata={"filename": file.filename},
+                )
+            except Exception:
+                pass
             return PreviewChatbookResponse(manifest=manifest_response)
         else:
             return PreviewChatbookResponse(error=error)
@@ -762,7 +870,8 @@ async def download_chatbook(
     job_id: str,
     request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Download an exported chatbook file by job ID.
@@ -792,6 +901,36 @@ async def download_chatbook(
         # Verify job is completed
         if job.status != ExportStatus.COMPLETED:
             raise HTTPException(status_code=400, detail=f"Export job is {job.status.value}, not completed")
+
+        # Enforce expiration (config-gated)
+        enforce_expiry = str(os.getenv("CHATBOOKS_ENFORCE_EXPIRY", "true")).lower() in {"1","true","yes"}
+        if enforce_expiry and getattr(job, 'expires_at', None) is not None:
+            from datetime import datetime as _dt
+            if _dt.utcnow() > job.expires_at:
+                raise HTTPException(status_code=410, detail="Download link has expired")
+
+        # Validate signed URL if configured
+        use_signed = str(os.getenv("CHATBOOKS_SIGNED_URLS", "false")).lower() in {"1","true","yes"}
+        secret = os.getenv("CHATBOOKS_SIGNING_SECRET", "")
+        if use_signed and secret:
+            token = request.query_params.get("token")
+            exp = request.query_params.get("exp")
+            if not token or not exp:
+                raise HTTPException(status_code=403, detail="Missing signature")
+            try:
+                exp_int = int(exp)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid exp")
+            # Check exp against current time
+            import time
+            if time.time() > exp_int:
+                raise HTTPException(status_code=410, detail="Signed URL expired")
+            # Verify signature
+            import hmac, hashlib
+            msg = f"{job_id}:{exp_int}".encode("utf-8")
+            expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, token):
+                raise HTTPException(status_code=403, detail="Invalid signature")
         
         # Get secure file path from job
         if not job.output_path:
@@ -809,34 +948,52 @@ async def download_chatbook(
         import os as _os
         if _os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
             logger.warning(f"Path traversal attempt detected for user {user.id}")
-            # Log security event if audit logger is available
-            if audit_logger:
-                audit_logger.log_security_event(
-                    event_type="PATH_TRAVERSAL_ATTEMPT",
+            # Log security event via unified audit service
+            try:
+                context = AuditContext(
                     user_id=str(user.id),
-                    details={
-                        "endpoint": "/chatbooks/download",
-                        "job_id": job_id,
-                        "attempted_path": str(file_path)[:100]  # Truncate for safety
-                    },
-                    severity="HIGH"
+                    endpoint="/chatbooks/download",
+                    method="GET",
+                    ip_address=request.client.host if request and hasattr(request, 'client') else None,
                 )
+                await audit_service.log_event(
+                    event_type=AuditEventType.SECURITY_VIOLATION,
+                    context=context,
+                    action="chatbook_download_path_traversal",
+                    result="failure",
+                    metadata={
+                        "job_id": job_id,
+                        "attempted_path": str(file_path)[:100]
+                    }
+                )
+            except Exception:
+                pass
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get filename from path
         filename = file_path.name
         
-        # Log successful download if audit logger is available
-        if audit_logger:
-            audit_logger.log_event(
-                event_type="CHATBOOK_DOWNLOAD",
+        # Log successful download via unified audit service
+        try:
+            context = AuditContext(
                 user_id=str(user.id),
-                details={
-                    "job_id": job_id,
+                endpoint="/chatbooks/download",
+                method="GET",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_EXPORT,
+                context=context,
+                resource_type="chatbook",
+                resource_id=job_id,
+                action="chatbook_download",
+                metadata={
                     "filename": filename,
                     "file_size": file_path.stat().st_size
                 }
             )
+        except Exception:
+            pass
         
         # Return file with security headers
         return FileResponse(
@@ -861,7 +1018,8 @@ async def download_chatbook(
 @router.post("/cleanup", response_model=CleanupExpiredExportsResponse)
 async def cleanup_expired_exports(
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Clean up expired export files.
@@ -879,8 +1037,7 @@ async def cleanup_expired_exports(
         deleted_count = service.cleanup_expired_exports()
         
         return CleanupExpiredExportsResponse(
-            deleted_count=deleted_count,
-            message=f"Deleted {deleted_count} expired export files"
+            deleted_count=deleted_count
         )
         
     except Exception as e:
@@ -892,7 +1049,8 @@ async def cleanup_expired_exports(
 async def cancel_export_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Cancel an export job.
@@ -906,14 +1064,20 @@ async def cancel_export_job(
         Success message
     """
     try:
-        job = service.get_export_job(job_id)
-        
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        
-        # TODO: Implement job cancellation in service
-        # For now, just mark as cancelled in database
-        
+        ok = service.cancel_export_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Cannot cancel completed or failed job")
+        try:
+            context = AuditContext(user_id=str(user.id), endpoint="/chatbooks/export/jobs/{job_id}", method="DELETE")
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_export_job",
+                resource_id=job_id,
+                action="chatbook_export_job_cancelled",
+            )
+        except Exception:
+            pass
         return {"message": f"Export job {job_id} cancelled"}
         
     except HTTPException:
@@ -927,7 +1091,8 @@ async def cancel_export_job(
 async def cancel_import_job(
     job_id: str,
     service: ChatbookService = Depends(get_chatbook_service),
-    user: User = Depends(get_request_user)
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     """
     Cancel an import job.
@@ -941,14 +1106,20 @@ async def cancel_import_job(
         Success message
     """
     try:
-        job = service.get_import_job(job_id)
-        
-        if not job:
-            raise HTTPException(status_code=404, detail="Import job not found")
-        
-        # TODO: Implement job cancellation in service
-        # For now, just mark as cancelled in database
-        
+        ok = service.cancel_import_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Cannot cancel completed or failed job")
+        try:
+            context = AuditContext(user_id=str(user.id), endpoint="/chatbooks/import/jobs/{job_id}", method="DELETE")
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_import_job",
+                resource_id=job_id,
+                action="chatbook_import_job_cancelled",
+            )
+        except Exception:
+            pass
         return {"message": f"Import job {job_id} cancelled"}
         
     except HTTPException:

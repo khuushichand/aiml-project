@@ -13,6 +13,7 @@ from loguru import logger
 import re
 
 from .base import ChunkerConfig
+from .regex_safety import check_pattern as _rx_check
 from .chunker import Chunker
 from .exceptions import TemplateError
 
@@ -679,6 +680,9 @@ class TemplateClassifier:
             pat = classifier.get(key)
             if isinstance(pat, str) and pat and text:
                 try:
+                    # Light guardrails: ignore overlong/unsafe patterns
+                    if len(pat) > 128 or _rx_check(pat, max_len=128):
+                        continue
                     if re.search(pat, text, re.IGNORECASE):
                         regex_hits += 1
                 except Exception:

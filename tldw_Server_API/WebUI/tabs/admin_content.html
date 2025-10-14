@@ -273,6 +273,1146 @@
         }
     </script>
 
+    <!-- Audit Export -->
+    <div class="endpoint-section" id="adminAuditExport">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/audit/export - Audit Logs Export</span>
+        </h2>
+        <p>Export audit logs (JSON or CSV). Admin-only. Use presets or custom filters.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="audit_format">Format:</label>
+                    <select id="audit_format">
+                        <option value="json">json</option>
+                        <option value="csv">csv</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="audit_min_risk">Min Risk Score:</label>
+                    <input type="number" id="audit_min_risk" placeholder="e.g., 70" min="0" max="100" />
+                </div>
+                <div class="form-group">
+                    <label for="audit_user_id">User ID:</label>
+                    <input type="text" id="audit_user_id" placeholder="optional" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="audit_event_type">Event Type(s):</label>
+                    <input type="text" id="audit_event_type" placeholder="e.g., API_REQUEST,DATA_READ" />
+                </div>
+                <div class="form-group">
+                    <label for="audit_category">Category(ies):</label>
+                    <input type="text" id="audit_category" placeholder="e.g., API_CALL,SECURITY" />
+                </div>
+                <div class="form-group">
+                    <label for="audit_filename">Filename:</label>
+                    <input type="text" id="audit_filename" placeholder="audit_export.csv or .json" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="audit_start">Start Time (ISO):</label>
+                    <input type="text" id="audit_start" placeholder="YYYY-MM-DDTHH:MM:SS+00:00" />
+                </div>
+                <div class="form-group">
+                    <label for="audit_end">End Time (ISO):</label>
+                    <input type="text" id="audit_end" placeholder="YYYY-MM-DDTHH:MM:SS+00:00" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="adminAuditDownload()">Download</button>
+            <button class="api-button" onclick="adminAuditDownloadLast24hHighRisk()">Last 24h High-Risk (CSV)</button>
+            <button class="api-button" onclick="adminAuditDownloadApiEventsCSV()">API Events (CSV)</button>
+            <button class="api-button" onclick="adminAuditPreviewJSON()">Preview JSON</button>
+        </div>
+
+        <h3>Preview:</h3>
+        <pre id="adminAuditPreview">---</pre>
+
+        <script>
+            function _buildAuditQueryParams(overrides = {}) {
+                const q = new URLSearchParams();
+                const fmt = (overrides.format ?? document.getElementById('audit_format').value || 'json');
+                q.append('format', fmt);
+                const minRisk = overrides.min_risk_score ?? document.getElementById('audit_min_risk').value.trim();
+                const userId = overrides.user_id ?? document.getElementById('audit_user_id').value.trim();
+                const ev = overrides.event_type ?? document.getElementById('audit_event_type').value.trim();
+                const cat = overrides.category ?? document.getElementById('audit_category').value.trim();
+                const fname = overrides.filename ?? document.getElementById('audit_filename').value.trim();
+                const start = overrides.start_time ?? document.getElementById('audit_start').value.trim();
+                const end = overrides.end_time ?? document.getElementById('audit_end').value.trim();
+                if (minRisk) q.append('min_risk_score', minRisk);
+                if (userId) q.append('user_id', userId);
+                if (ev) q.append('event_type', ev);
+                if (cat) q.append('category', cat);
+                if (fname) q.append('filename', fname);
+                if (start) q.append('start_time', start);
+                if (end) q.append('end_time', end);
+                return q.toString();
+            }
+
+            async function _fetchAuditAndDownload(qs, format) {
+                try {
+                    const url = `${apiClient.baseUrl}/api/v1/audit/export?${qs}`;
+                    const headers = {};
+                    if (apiClient.token) {
+                        if (apiClient.authMode === 'single-user' || (apiClient.authMode === 'multi-user' && apiClient.preferApiKeyInMultiUser)) {
+                            headers['X-API-KEY'] = apiClient.token;
+                        } else if (apiClient.authMode === 'multi-user') {
+                            headers['Authorization'] = `Bearer ${apiClient.token}`;
+                        } else {
+                            headers['X-API-KEY'] = apiClient.token;
+                        }
+                    }
+                    const res = await fetch(url, { headers });
+                    const text = await res.text();
+                    if (!res.ok) {
+                        throw new Error(text || `HTTP ${res.status}`);
+                    }
+                    const fname = (new URLSearchParams(qs).get('filename')) || (format === 'csv' ? 'audit_export.csv' : 'audit_export.json');
+                    const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
+                    Utils.downloadData(text, fname, mime);
+                    Toast.success('Audit export downloaded');
+                } catch (e) {
+                    console.error('Audit export failed:', e);
+                    Toast.error(`Audit export failed: ${e.message || e}`);
+                }
+            }
+
+            function adminAuditDownload() {
+                const fmt = document.getElementById('audit_format').value || 'json';
+                const qs = _buildAuditQueryParams({ format: fmt });
+                _fetchAuditAndDownload(qs, fmt);
+            }
+
+            function adminAuditDownloadLast24hHighRisk() {
+                const now = new Date();
+                const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                const isoStart = dayAgo.toISOString().replace('Z', '+00:00');
+                const overrides = {
+                    format: 'csv',
+                    min_risk_score: '70',
+                    start_time: isoStart,
+                    filename: 'audit_24h_high_risk.csv'
+                };
+                const qs = _buildAuditQueryParams(overrides);
+                _fetchAuditAndDownload(qs, 'csv');
+            }
+
+            function adminAuditDownloadApiEventsCSV() {
+                const overrides = {
+                    format: 'csv',
+                    category: 'API_CALL',
+                    filename: 'audit_api_events.csv'
+                };
+                const qs = _buildAuditQueryParams(overrides);
+                _fetchAuditAndDownload(qs, 'csv');
+            }
+
+            async function adminAuditPreviewJSON() {
+                try {
+                    // Force JSON preview irrespective of chosen format
+                    const overrides = { format: 'json' };
+                    const qs = _buildAuditQueryParams(overrides);
+                    const url = `${apiClient.baseUrl}/api/v1/audit/export?${qs}`;
+                    const headers = {};
+                    if (apiClient.token) {
+                        if (apiClient.authMode === 'single-user' || (apiClient.authMode === 'multi-user' && apiClient.preferApiKeyInMultiUser)) {
+                            headers['X-API-KEY'] = apiClient.token;
+                        } else if (apiClient.authMode === 'multi-user') {
+                            headers['Authorization'] = `Bearer ${apiClient.token}`;
+                        } else {
+                            headers['X-API-KEY'] = apiClient.token;
+                        }
+                    }
+                    const res = await fetch(url, { headers });
+                    const text = await res.text();
+                    if (!res.ok) {
+                        throw new Error(text || `HTTP ${res.status}`);
+                    }
+                    // Pretty-print if JSON
+                    let display = text;
+                    try {
+                        const parsed = JSON.parse(text);
+                        display = JSON.stringify(parsed.slice ? parsed.slice(0, 20) : parsed, null, 2);
+                    } catch (e) { /* keep raw */ }
+                    document.getElementById('adminAuditPreview').textContent = display;
+                } catch (e) {
+                    document.getElementById('adminAuditPreview').textContent = `Preview failed: ${e.message || e}`;
+                }
+            }
+        </script>
+    </div>
+
+    <div id="tabMonitoring" class="tab-content">
+        <div class="btn-group" style="margin-bottom: 12px;">
+            <button class="api-button subtle danger" onclick="monitoringResetAllMonitoringUI()" title="Clear watchlist filters and notification drafts">Reset All UI</button>
+        </div>
+        <!-- Monitoring: Watchlists -->
+        <div class="endpoint-section" id="monitoringWatchlists">
+            <h2>
+                <span class="endpoint-method get">GET/POST/DELETE</span>
+                <span class="endpoint-path">/api/v1/monitoring/watchlists - Manage Watchlists</span>
+            </h2>
+            <p>Create and manage topic watchlists. Global watchlists apply to all users; per-user watchlists apply to the specified user ID.</p>
+
+            <div class="btn-group">
+                <button class="api-button" onclick="monitoringListWatchlists()">List</button>
+                <button class="api-button" onclick="monitoringReloadWatchlists()">Reload from file</button>
+            </div>
+
+            <h3>Current Watchlists</h3>
+            <details>
+                <summary>Filters</summary>
+                <div class="columns">
+                    <div class="column">
+                        <div class="form-group">
+                            <label for="monWl_filter_scope_type">Scope:</label>
+                            <select id="monWl_filter_scope_type">
+                                <option value="">All</option>
+                                <option value="global">global</option>
+                                <option value="user">user</option>
+                                <option value="team">team</option>
+                                <option value="org">org</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="column">
+                        <div class="form-group">
+                            <label for="monWl_filter_scope_id">Scope ID:</label>
+                            <input id="monWl_filter_scope_id" type="text" placeholder="id or *" />
+                        </div>
+                    </div>
+                    <div class="column">
+                        <div class="form-group">
+                            <label>Columns:</label>
+                            <label><input type="checkbox" id="monWl_col_id" checked /> ID</label>
+                            <label><input type="checkbox" id="monWl_col_scope" checked /> Scope</label>
+                            <label><input type="checkbox" id="monWl_col_rules" checked /> Rules</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label>&nbsp;</label>
+                        <button class="btn" id="monWl_filters_reset" type="button">Reset Filters</button>
+                    </div>
+                </div>
+            </details>
+            <div id="monitoringWatchlists_list"></div>
+
+            <h3>Create/Update Watchlist</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monWl_id">ID (leave blank to create new):</label>
+                        <input id="monWl_id" type="text" placeholder="auto-generated if blank" />
+                    </div>
+                    <div class="form-group">
+                        <label for="monWl_name">Name:</label>
+                        <input id="monWl_name" type="text" placeholder="Kid-Safe Defaults — Custom" />
+                    </div>
+                    <div class="form-group">
+                        <label for="monWl_desc">Description:</label>
+                        <input id="monWl_desc" type="text" placeholder="Description" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monWl_enabled">Enabled:</label>
+                        <select id="monWl_enabled">
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="monWl_scope_type">Scope Type:</label>
+                        <select id="monWl_scope_type">
+                            <option value="global" selected>global</option>
+                            <option value="user">user</option>
+                            <option value="team">team</option>
+                            <option value="org">org</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="monWl_scope_id">Scope ID:</label>
+                        <input id="monWl_scope_id" type="text" placeholder="* or user/team/org id" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="monWl_rules">Rules (JSON array of {pattern,category,severity,note}):</label>
+                <textarea id="monWl_rules" class="code-input" rows="8" placeholder='[{"pattern":"/\\bnsfw\\b/i","category":"adult","severity":"warning"}]'></textarea>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" onclick="monitoringUpsertWatchlist()">Save Watchlist</button>
+                <button class="api-button danger" onclick="monitoringDeleteWatchlist()">Delete Watchlist</button>
+            </div>
+            <pre id="monitoringWatchlists_result">---</pre>
+
+            <h3>Quick Apply Kid-Safe Defaults to Team/Org</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monQuick_team">Team ID:</label>
+                        <input id="monQuick_team" type="text" placeholder="team id" />
+                    </div>
+                    <button class="api-button" onclick="monitoringQuickApplyDefaults('team')">Apply to Team</button>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monQuick_org">Org ID:</label>
+                        <input id="monQuick_org" type="text" placeholder="org id" />
+                    </div>
+                    <button class="api-button" onclick="monitoringQuickApplyDefaults('org')">Apply to Org</button>
+                </div>
+            </div>
+
+            <h3>Bulk Apply Kid-Safe Defaults</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monBulk_scope">Scope Type:</label>
+                        <select id="monBulk_scope"><option value="team">team</option><option value="org">org</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monBulk_ids">IDs (one per line or comma-separated):</label>
+                        <textarea id="monBulk_ids" class="code-input" rows="4" placeholder="team123\nteam456 or org123,org456"></textarea>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="btn-group" style="margin-top:24px;">
+                        <button class="api-button" onclick="monitoringBulkApplyDefaults()">Apply Defaults to IDs</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Monitoring: Alerts -->
+        <div class="endpoint-section" id="monitoringAlerts">
+            <h2>
+                <span class="endpoint-method get">GET/POST</span>
+                <span class="endpoint-path">/api/v1/monitoring/alerts - View and mark alerts read</span>
+            </h2>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_user">Filter user_id:</label>
+                        <input id="monAlerts_user" type="text" placeholder="optional" />
+                    </div>
+                    <div class="form-group">
+                        <label for="monAlerts_since">Since (ISO 8601):</label>
+                        <input id="monAlerts_since" type="text" placeholder="e.g., 2025-10-12T00:00:00Z" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_unread">Unread only:</label>
+                        <select id="monAlerts_unread">
+                            <option value="false">false</option>
+                            <option value="true">true</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="monAlerts_limit">Limit:</label>
+                        <input id="monAlerts_limit" type="number" value="50" min="1" max="500" />
+                    </div>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" onclick="monitoringListAlerts()">List Alerts</button>
+            </div>
+            <div id="monitoringAlerts_list"></div>
+
+            <h3>Recent Alerts (Compact)</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_recent_limit">Limit:</label>
+                        <input id="monAlerts_recent_limit" type="number" value="10" min="1" max="100" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_recent_unread">Unread only:</label>
+                        <select id="monAlerts_recent_unread"><option value="true">true</option><option value="false">false</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="btn-group" style="margin-top:24px;">
+                        <button class="api-button" onclick="monitoringLoadRecentAlerts()">Load</button>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_auto">Auto Refresh:</label>
+                        <select id="monAlerts_auto"><option value="false">false</option><option value="true">true</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_auto_interval">Interval (s):</label>
+                        <input id="monAlerts_auto_interval" type="number" value="30" min="5" max="300" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monAlerts_auto_start">Auto Start on Load:</label>
+                        <select id="monAlerts_auto_start"><option value="false">false</option><option value="true">true</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label>Last Update:</label>
+                        <span id="monAlerts_last_update">—</span>
+                    </div>
+                </div>
+            </div>
+            <div id="monitoringAlerts_recent"></div>
+        </div>
+
+        <script>
+            async function monitoringListWatchlists() {
+                try {
+                    const res = await apiClient.get('/api/v1/monitoring/watchlists');
+                    const listEl = document.getElementById('monitoringWatchlists_list');
+                    let wls = (res && res.watchlists) || [];
+                    const fScope = (document.getElementById('monWl_filter_scope_type').value || '').trim();
+                    const fId = (document.getElementById('monWl_filter_scope_id').value || '').trim();
+                    if (fScope) {
+                        wls = wls.filter(w => (w.scope_type || '') === fScope);
+                    }
+                    if (fId) {
+                        wls = wls.filter(w => String(w.scope_id || '') === fId);
+                    }
+                    const showId = document.getElementById('monWl_col_id').checked;
+                    const showScope = document.getElementById('monWl_col_scope').checked;
+                    const showRules = document.getElementById('monWl_col_rules').checked;
+                    let html = '<table class="api-table"><thead><tr>';
+                    if (showId) html += '<th>ID</th>';
+                    html += '<th>Name</th>';
+                    if (showScope) html += '<th>Scope</th>';
+                    html += '<th>Enabled</th>';
+                    if (showRules) html += '<th>Rules</th>';
+                    html += '<th>Actions</th></tr></thead><tbody>';
+                    for (const wl of wls) {
+                        html += '<tr>';
+                        if (showId) html += `<td>${wl.id || ''}</td>`;
+                        html += `<td>${wl.name || ''}</td>`;
+                        if (showScope) html += `<td>${wl.scope_type || ''}:${wl.scope_id || ''}</td>`;
+                        html += `<td>${wl.enabled}</td>`;
+                        if (showRules) html += `<td>${(wl.rules||[]).length}</td>`;
+                        // Actions column: quick apply defaults to this scope if team/org
+                        if (wl.scope_type === 'team' || wl.scope_type === 'org') {
+                            html += `<td><button class="btn" onclick="monitoringApplyDefaultsToScope('${wl.scope_type}','${wl.scope_id}')">Apply Defaults to Scope</button></td>`;
+                        } else {
+                            html += '<td></td>';
+                        }
+                        html += '</tr>';
+                    }
+                    html += '</tbody></table>';
+                    listEl.innerHTML = html;
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to list watchlists');
+                }
+            }
+
+            // Persist watchlist filters and column visibility
+            (function () {
+                const scopeSel = document.getElementById('monWl_filter_scope_type');
+                const scopeId = document.getElementById('monWl_filter_scope_id');
+                const colId = document.getElementById('monWl_col_id');
+                const colScope = document.getElementById('monWl_col_scope');
+                const colRules = document.getElementById('monWl_col_rules');
+                const resetBtn = document.getElementById('monWl_filters_reset');
+                try {
+                    const vScope = localStorage.getItem('monWl_filter_scope_type'); if (vScope !== null) scopeSel.value = vScope;
+                    const vScopeId = localStorage.getItem('monWl_filter_scope_id'); if (vScopeId !== null) scopeId.value = vScopeId;
+                    const vColId = localStorage.getItem('monWl_col_id'); if (vColId !== null) colId.checked = (vColId === 'true');
+                    const vColScope = localStorage.getItem('monWl_col_scope'); if (vColScope !== null) colScope.checked = (vColScope === 'true');
+                    const vColRules = localStorage.getItem('monWl_col_rules'); if (vColRules !== null) colRules.checked = (vColRules === 'true');
+                } catch (e) {}
+                function saveAndRefresh() {
+                    try {
+                        localStorage.setItem('monWl_filter_scope_type', scopeSel.value);
+                        localStorage.setItem('monWl_filter_scope_id', scopeId.value);
+                        localStorage.setItem('monWl_col_id', String(colId.checked));
+                        localStorage.setItem('monWl_col_scope', String(colScope.checked));
+                        localStorage.setItem('monWl_col_rules', String(colRules.checked));
+                    } catch (e) {}
+                    monitoringListWatchlists();
+                }
+                function resetAndRefresh() {
+                    scopeSel.value = '';
+                    scopeId.value = '';
+                    colId.checked = true;
+                    colScope.checked = true;
+                    colRules.checked = true;
+                    saveAndRefresh();
+                    Toast.info('Filters reset');
+                }
+                scopeSel.addEventListener('change', saveAndRefresh);
+                scopeId.addEventListener('input', saveAndRefresh);
+                colId.addEventListener('change', saveAndRefresh);
+                colScope.addEventListener('change', saveAndRefresh);
+                colRules.addEventListener('change', saveAndRefresh);
+                if (resetBtn) resetBtn.addEventListener('click', resetAndRefresh);
+                // Initial render reflects persisted prefs
+                monitoringListWatchlists();
+            })();
+
+            async function monitoringApplyDefaultsToScope(scopeType, scopeId) {
+                try {
+                    if (!scopeType || !scopeId) { Toast.error('Missing scope'); return; }
+                    const listed = await apiClient.get('/api/v1/monitoring/watchlists');
+                    const wls = (listed && listed.watchlists) || [];
+                    const defaults = wls.filter(w => (w.scope_type === 'global' || w.scope_type === 'all') && ((w.name || '').startsWith('Kid-Safe Defaults')));
+                    if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
+                    let created = 0;
+                    for (const wl of defaults) {
+                        const payload = {
+                            id: null,
+                            name: `${wl.name} [${scopeType}:${scopeId}]`,
+                            description: wl.description || '',
+                            enabled: true,
+                            scope_type: scopeType,
+                            scope_id: scopeId,
+                            rules: wl.rules || []
+                        };
+                        try { await apiClient.post('/api/v1/monitoring/watchlists', payload); created += 1; } catch (e) {}
+                    }
+                    Toast.success(`Applied ${created} default watchlists to ${scopeType}:${scopeId}`);
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to apply defaults');
+                }
+            }
+
+            async function monitoringReloadWatchlists() {
+                try {
+                    const res = await apiClient.post('/api/v1/monitoring/reload');
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(res, null, 2);
+                    Toast.success('Reloaded');
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to reload');
+                }
+            }
+
+            async function monitoringUpsertWatchlist() {
+                try {
+                    const id = (document.getElementById('monWl_id').value || '').trim() || null;
+                    const name = (document.getElementById('monWl_name').value || '').trim();
+                    const description = (document.getElementById('monWl_desc').value || '').trim() || null;
+                    const enabled = (document.getElementById('monWl_enabled').value === 'true');
+                    const scope_type = document.getElementById('monWl_scope_type').value;
+                    const scope_id = (document.getElementById('monWl_scope_id').value || '').trim() || '*';
+                    const rulesText = document.getElementById('monWl_rules').value || '[]';
+                    let rules;
+                    try {
+                        rules = JSON.parse(rulesText);
+                    } catch (e) {
+                        Toast.error('Rules must be valid JSON array');
+                        return;
+                    }
+                    const body = { id, name, description, enabled, scope_type, scope_id, rules };
+                    const res = await apiClient.post('/api/v1/monitoring/watchlists', body);
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(res, null, 2);
+                    Toast.success('Saved watchlist');
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to save watchlist');
+                }
+            }
+
+            async function monitoringDeleteWatchlist() {
+                try {
+                    const id = (document.getElementById('monWl_id').value || '').trim();
+                    if (!id) { Toast.error('Enter watchlist ID to delete'); return; }
+                    if (!confirm('Delete watchlist ' + id + '?')) return;
+                    const res = await apiClient.delete(`/api/v1/monitoring/watchlists/${encodeURIComponent(id)}`);
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(res, null, 2);
+                    Toast.success('Deleted');
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to delete watchlist');
+                }
+            }
+
+            async function monitoringQuickApplyDefaults(scopeType) {
+                try {
+                    const id = (scopeType === 'team') ? (document.getElementById('monQuick_team').value || '').trim()
+                                                      : (document.getElementById('monQuick_org').value || '').trim();
+                    if (!id) { Toast.error(`Enter a ${scopeType} id`); return; }
+                    const listed = await apiClient.get('/api/v1/monitoring/watchlists');
+                    const wls = (listed && listed.watchlists) || [];
+                    // Select global defaults (Kid-Safe Defaults — ...)
+                    const defaults = wls.filter(w => (w.name || '').startsWith('Kid-Safe Defaults'));
+                    if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
+                    let created = 0;
+                    for (const wl of defaults) {
+                        const payload = {
+                            id: null,
+                            name: `${wl.name} [${scopeType}:${id}]`,
+                            description: wl.description || '',
+                            enabled: true,
+                            scope_type: scopeType,
+                            scope_id: id,
+                            rules: wl.rules || []
+                        };
+                        try {
+                            await apiClient.post('/api/v1/monitoring/watchlists', payload);
+                            created += 1;
+                        } catch (e) {
+                            // collect but continue
+                        }
+                    }
+                    Toast.success(`Applied ${created} default watchlists to ${scopeType}:${id}`);
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to apply defaults');
+                }
+            }
+
+            async function monitoringBulkApplyDefaults() {
+                try {
+                    const scopeType = document.getElementById('monBulk_scope').value;
+                    const raw = (document.getElementById('monBulk_ids').value || '').trim();
+                    if (!raw) { Toast.error('Enter at least one ID'); return; }
+                    // Parse IDs by newline and comma
+                    const parts = raw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
+                    if (parts.length === 0) { Toast.error('No valid IDs found'); return; }
+                    const listed = await apiClient.get('/api/v1/monitoring/watchlists');
+                    const wls = (listed && listed.watchlists) || [];
+                    const defaults = wls.filter(w => (w.scope_type === 'global' || w.scope_type === 'all') && ((w.name || '').startsWith('Kid-Safe Defaults')));
+                    if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
+                    let totalCreated = 0;
+                    for (const sid of parts) {
+                        for (const wl of defaults) {
+                            const payload = {
+                                id: null,
+                                name: `${wl.name} [${scopeType}:${sid}]`,
+                                description: wl.description || '',
+                                enabled: true,
+                                scope_type: scopeType,
+                                scope_id: sid,
+                                rules: wl.rules || []
+                            };
+                            try { await apiClient.post('/api/v1/monitoring/watchlists', payload); totalCreated += 1; } catch (e) {}
+                        }
+                    }
+                    Toast.success(`Applied ${totalCreated} watchlists to ${parts.length} ${scopeType} id(s)`);
+                    await monitoringListWatchlists();
+                } catch (e) {
+                    document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Bulk apply failed');
+                }
+            }
+
+            async function monitoringListAlerts() {
+                try {
+                    const user = (document.getElementById('monAlerts_user').value || '').trim() || null;
+                    const since = (document.getElementById('monAlerts_since').value || '').trim() || null;
+                    const unreadOnly = document.getElementById('monAlerts_unread').value === 'true';
+                    const limit = parseInt(document.getElementById('monAlerts_limit').value || '50', 10);
+                    const qs = new URLSearchParams();
+                    if (user) qs.set('user_id', user);
+                    if (since) qs.set('since', since);
+                    if (unreadOnly) qs.set('unread_only', 'true');
+                    qs.set('limit', String(limit));
+                    const res = await apiClient.get(qs.toString() ? `/api/v1/monitoring/alerts?${qs}` : '/api/v1/monitoring/alerts');
+                    const items = (res && res.items) || [];
+                    let html = '<table class="api-table"><thead><tr><th>ID</th><th>Time</th><th>User</th><th>Source</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Snippet</th><th>Actions</th></tr></thead><tbody>';
+                    for (const it of items) {
+                        html += `<tr>
+                            <td>${it.id}</td>
+                            <td>${it.created_at}</td>
+                            <td>${it.user_id || ''}</td>
+                            <td>${it.source}</td>
+                            <td>${it.rule_category || ''}</td>
+                            <td>${it.rule_severity || ''}</td>
+                            <td>${(it.pattern || '').slice(0,80)}</td>
+                            <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,120)}</td>
+                            <td>${it.is_read ? '' : `<button class="btn" onclick="monitoringMarkRead(${it.id})">Mark read</button>`}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                    document.getElementById('monitoringAlerts_list').innerHTML = html;
+                } catch (e) {
+                    document.getElementById('monitoringAlerts_list').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    Toast.error('Failed to list alerts');
+                }
+            }
+
+            async function monitoringMarkRead(id) {
+                try {
+                    const res = await apiClient.post(`/api/v1/monitoring/alerts/${id}/read`);
+                    Toast.success('Marked as read');
+                    await monitoringListAlerts();
+                } catch (e) {
+                    Toast.error('Failed to mark as read');
+                }
+            }
+
+            async function monitoringLoadRecentAlerts() {
+                try {
+                    const limit = parseInt(document.getElementById('monAlerts_recent_limit').value || '10', 10);
+                    const unreadOnly = document.getElementById('monAlerts_recent_unread').value === 'true';
+                    const qs = new URLSearchParams();
+                    qs.set('limit', String(limit));
+                    if (unreadOnly) qs.set('unread_only', 'true');
+                    const res = await apiClient.get(qs.toString() ? `/api/v1/monitoring/alerts?${qs}` : '/api/v1/monitoring/alerts');
+                    const items = (res && res.items) || [];
+                    let html = '<table class="api-table"><thead><tr><th>Time</th><th>User</th><th>Source</th><th>Category</th><th>Severity</th><th>Snippet</th></tr></thead><tbody>';
+                    for (const it of items) {
+                        html += `<tr>
+                            <td>${it.created_at || ''}</td>
+                            <td>${it.user_id || ''}</td>
+                            <td>${it.source || ''}</td>
+                            <td>${it.rule_category || ''}</td>
+                            <td>${it.rule_severity || ''}</td>
+                            <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,100)}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                    document.getElementById('monitoringAlerts_recent').innerHTML = html;
+                    try {
+                        document.getElementById('monAlerts_last_update').textContent = new Date().toLocaleString();
+                        const upd = document.getElementById('monAlerts_updated');
+                        if (upd) { upd.textContent = 'Updated'; setTimeout(() => { upd.textContent = ''; }, 1500); }
+                        if (window._monAlertsTick === 'auto') {
+                            const toastSel = document.getElementById('monAlerts_tick_toast');
+                            if (toastSel && toastSel.value === 'true') { Toast.info('Alerts updated'); }
+                        }
+                    } catch (e) {}
+                    window._monAlertsTick = null;
+                } catch (e) {
+                    document.getElementById('monitoringAlerts_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    Toast.error('Failed to load recent alerts');
+                }
+            }
+
+            // Auto refresh for alerts
+            (function () {
+                if (!window._monAlertsTimer) window._monAlertsTimer = null;
+                const toggle = document.getElementById('monAlerts_auto');
+                const intervalEl = document.getElementById('monAlerts_auto_interval');
+                const startSel = document.getElementById('monAlerts_auto_start');
+                const toastSel = document.getElementById('monAlerts_tick_toast');
+                // Restore persisted
+                try {
+                    const sAuto = localStorage.getItem('monAlerts_auto'); if (sAuto !== null) toggle.value = sAuto;
+                    const sInt = localStorage.getItem('monAlerts_auto_interval'); if (sInt !== null) intervalEl.value = sInt;
+                    const sStart = localStorage.getItem('monAlerts_auto_start'); if (sStart !== null) startSel.value = sStart;
+                    const sToast = localStorage.getItem('monAlerts_tick_toast'); if (sToast !== null) toastSel.value = sToast;
+                } catch (e) {}
+                function applyAutoAlerts(runNow=false) {
+                    if (window._monAlertsTimer) { clearInterval(window._monAlertsTimer); window._monAlertsTimer = null; }
+                    if (toggle.value === 'true') {
+                        const ms = Math.max(5000, (parseInt(intervalEl.value || '30', 10) * 1000));
+                        window._monAlertsTimer = setInterval(() => { window._monAlertsTick = 'auto'; monitoringLoadRecentAlerts(); }, ms);
+                    }
+                    if (runNow) { monitoringLoadRecentAlerts(); }
+                }
+                toggle.addEventListener('change', () => { try { localStorage.setItem('monAlerts_auto', toggle.value); } catch (e) {} applyAutoAlerts(); });
+                intervalEl.addEventListener('change', () => { try { localStorage.setItem('monAlerts_auto_interval', intervalEl.value); } catch (e) {} applyAutoAlerts(); });
+                startSel.addEventListener('change', () => { try { localStorage.setItem('monAlerts_auto_start', startSel.value); } catch (e) {} });
+                toastSel.addEventListener('change', () => { try { localStorage.setItem('monAlerts_tick_toast', toastSel.value); } catch (e) {} });
+                if (startSel && startSel.value === 'true') { window._monAlertsTick = 'auto'; applyAutoAlerts(true); }
+            })();
+        </script>
+        <div class="endpoint-section" id="monitoringNotifications">
+            <h2>
+                <span class="endpoint-method get">GET/PUT/POST</span>
+                <span class="endpoint-path">/api/v1/monitoring/notifications/* - Notification Settings & Test</span>
+            </h2>
+            <p>Runtime-only notification settings (file/webhook/email). Use env/Config_Files for persistent config.</p>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_enabled">Enabled:</label>
+                        <select id="monNotif_enabled"><option value="true">true</option><option value="false">false</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="monNotif_min_sev">Min Severity:</label>
+                        <select id="monNotif_min_sev"><option>critical</option><option>warning</option><option>info</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="monNotif_file">File Sink:</label>
+                        <input id="monNotif_file" type="text" placeholder="Databases/monitoring_notifications.log" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_webhook">Webhook URL:</label>
+                        <input id="monNotif_webhook" type="text" placeholder="https://example/hook" />
+                    </div>
+                    <div class="form-group">
+                        <label for="monNotif_email_to">Email To:</label>
+                        <input id="monNotif_email_to" type="email" placeholder="owner@example.com" />
+                    </div>
+                    <details>
+                        <summary>SMTP (optional)</summary>
+                        <div class="form-group">
+                            <label for="monNotif_smtp_host">SMTP Host:</label>
+                            <input id="monNotif_smtp_host" type="text" placeholder="smtp.example.com" />
+                        </div>
+                        <div class="form-group">
+                            <label for="monNotif_smtp_port">SMTP Port:</label>
+                            <input id="monNotif_smtp_port" type="number" placeholder="587" />
+                        </div>
+                        <div class="form-group">
+                            <label for="monNotif_smtp_starttls">STARTTLS:</label>
+                            <select id="monNotif_smtp_starttls"><option value="true">true</option><option value="false">false</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="monNotif_smtp_user">SMTP User:</label>
+                            <input id="monNotif_smtp_user" type="text" placeholder="user@example.com" />
+                        </div>
+                        <div class="form-group">
+                            <label for="monNotif_smtp_pass">SMTP Password:</label>
+                            <input id="monNotif_smtp_pass" type="password" placeholder="••••••" />
+                        </div>
+                        <div class="form-group">
+                            <label for="monNotif_email_from">From Address:</label>
+                            <input id="monNotif_email_from" type="email" placeholder="alerts@example.com" />
+                        </div>
+                    </details>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" onclick="monitoringLoadNotifSettings()">Load</button>
+                <button class="api-button" onclick="monitoringSaveNotifSettings()">Save</button>
+                <button class="api-button subtle" onclick="monitoringClearNotifDrafts()" title="Remove locally saved draft values">Clear Drafts</button>
+                <button class="api-button subtle" onclick="monitoringRestoreNotifDefaults()" title="Reload from server and overwrite drafts">Restore Defaults</button>
+            </div>
+            <h3>Test Notification</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_test_sev">Severity:</label>
+                        <select id="monNotif_test_sev"><option>critical</option><option>warning</option><option>info</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_test_msg">Message:</label>
+                        <input id="monNotif_test_msg" type="text" placeholder="Test notification" />
+                    </div>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" onclick="monitoringSendNotifTest()">Send Test</button>
+            </div>
+            <pre id="monitoringNotif_result">---</pre>
+            <h3>Recent Notifications</h3>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_recent_limit">Limit:</label>
+                        <input id="monNotif_recent_limit" type="number" value="50" min="1" max="500" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="btn-group" style="margin-top: 24px;">
+                        <button class="api-button" onclick="monitoringLoadRecentNotifications()">Load Recent</button>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_auto">Auto Refresh:</label>
+                        <select id="monNotif_auto"><option value="false">false</option><option value="true">true</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_auto_interval">Interval (s):</label>
+                        <input id="monNotif_auto_interval" type="number" value="30" min="5" max="300" />
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_auto_start">Auto Start on Load:</label>
+                        <select id="monNotif_auto_start"><option value="false">false</option><option value="true">true</option></select>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label>Last Update:</label>
+                        <span id="monNotif_last_update">—</span>
+                        <span id="monNotif_updated" style="margin-left:8px;color:#28a745;"></span>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label for="monNotif_tick_toast">Tick Toast:</label>
+                        <select id="monNotif_tick_toast"><option value="false">false</option><option value="true">true</option></select>
+                    </div>
+                </div>
+            </div>
+            <div id="monitoringNotif_recent"></div>
+        </div>
+
+        <script>
+        async function monitoringLoadNotifSettings() {
+            try {
+                const s = await apiClient.get('/api/v1/monitoring/notifications/settings');
+                document.getElementById('monNotif_enabled').value = String(!!s.enabled);
+                document.getElementById('monNotif_min_sev').value = s.min_severity || 'critical';
+                document.getElementById('monNotif_file').value = s.file || '';
+                document.getElementById('monNotif_webhook').value = s.webhook_url || '';
+                document.getElementById('monNotif_email_to').value = s.email_to || '';
+                document.getElementById('monNotif_smtp_host').value = s.smtp_host || '';
+                document.getElementById('monNotif_smtp_port').value = s.smtp_port || 587;
+                document.getElementById('monNotif_smtp_starttls').value = String(!!s.smtp_starttls);
+                document.getElementById('monNotif_smtp_user').value = s.smtp_user || '';
+                document.getElementById('monNotif_email_from').value = s.email_from || '';
+                document.getElementById('monitoringNotif_result').textContent = JSON.stringify(s, null, 2);
+                // Persist loaded values as draft
+                try {
+                    localStorage.setItem('monNotif_enabled', String(!!s.enabled));
+                    localStorage.setItem('monNotif_min_sev', s.min_severity || 'critical');
+                    localStorage.setItem('monNotif_file', s.file || '');
+                    localStorage.setItem('monNotif_webhook', s.webhook_url || '');
+                    localStorage.setItem('monNotif_email_to', s.email_to || '');
+                    localStorage.setItem('monNotif_smtp_host', s.smtp_host || '');
+                    localStorage.setItem('monNotif_smtp_port', String(s.smtp_port || 587));
+                    localStorage.setItem('monNotif_smtp_starttls', String(!!s.smtp_starttls));
+                    localStorage.setItem('monNotif_smtp_user', s.smtp_user || '');
+                    localStorage.setItem('monNotif_email_from', s.email_from || '');
+                } catch (e) {}
+                Toast.success('Loaded notification settings');
+            } catch (e) {
+                document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2);
+                Toast.error('Failed to load notification settings');
+            }
+        }
+
+            async function monitoringSaveNotifSettings() {
+                try {
+                    const body = {
+                        enabled: document.getElementById('monNotif_enabled').value === 'true',
+                        min_severity: document.getElementById('monNotif_min_sev').value,
+                        file: (document.getElementById('monNotif_file').value || '').trim(),
+                        webhook_url: (document.getElementById('monNotif_webhook').value || '').trim(),
+                        email_to: (document.getElementById('monNotif_email_to').value || '').trim(),
+                        smtp_host: (document.getElementById('monNotif_smtp_host').value || '').trim(),
+                        smtp_port: parseInt(document.getElementById('monNotif_smtp_port').value || '587', 10),
+                        smtp_starttls: document.getElementById('monNotif_smtp_starttls').value === 'true',
+                        smtp_user: (document.getElementById('monNotif_smtp_user').value || '').trim(),
+                        smtp_password: (document.getElementById('monNotif_smtp_pass').value || '').trim(),
+                        email_from: (document.getElementById('monNotif_email_from').value || '').trim(),
+                    };
+                    const s = await apiClient.put('/api/v1/monitoring/notifications/settings', body);
+                    document.getElementById('monitoringNotif_result').textContent = JSON.stringify(s, null, 2);
+                    // Persist saved draft values
+                    try {
+                        localStorage.setItem('monNotif_enabled', document.getElementById('monNotif_enabled').value);
+                        localStorage.setItem('monNotif_min_sev', document.getElementById('monNotif_min_sev').value);
+                        localStorage.setItem('monNotif_file', (document.getElementById('monNotif_file').value || '').trim());
+                        localStorage.setItem('monNotif_webhook', (document.getElementById('monNotif_webhook').value || '').trim());
+                        localStorage.setItem('monNotif_email_to', (document.getElementById('monNotif_email_to').value || '').trim());
+                        localStorage.setItem('monNotif_smtp_host', (document.getElementById('monNotif_smtp_host').value || '').trim());
+                        localStorage.setItem('monNotif_smtp_port', String(parseInt(document.getElementById('monNotif_smtp_port').value || '587', 10)));
+                        localStorage.setItem('monNotif_smtp_starttls', document.getElementById('monNotif_smtp_starttls').value);
+                        localStorage.setItem('monNotif_smtp_user', (document.getElementById('monNotif_smtp_user').value || '').trim());
+                        localStorage.setItem('monNotif_email_from', (document.getElementById('monNotif_email_from').value || '').trim());
+                    } catch (e) {}
+                    Toast.success('Saved (runtime) notification settings');
+                } catch (e) {
+                    document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to save settings');
+                }
+            }
+
+            function monitoringClearNotifDrafts() {
+                if (!confirm('Clear locally saved notification drafts?')) { return; }
+                try {
+                    const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from'];
+                    for (const id of ids) { localStorage.removeItem(id); }
+                    // Reset form to blanks/defaults (does not touch password)
+                    document.getElementById('monNotif_enabled').value = 'false';
+                    document.getElementById('monNotif_min_sev').value = 'critical';
+                    document.getElementById('monNotif_file').value = '';
+                    document.getElementById('monNotif_webhook').value = '';
+                    document.getElementById('monNotif_email_to').value = '';
+                    document.getElementById('monNotif_smtp_host').value = '';
+                    document.getElementById('monNotif_smtp_port').value = 587;
+                    document.getElementById('monNotif_smtp_starttls').value = 'true';
+                    document.getElementById('monNotif_smtp_user').value = '';
+                    document.getElementById('monNotif_email_from').value = '';
+                    Toast.info('Notification drafts cleared');
+                } catch (e) {
+                    Toast.error('Failed to clear drafts');
+                }
+            }
+
+            async function monitoringRestoreNotifDefaults() {
+                if (!confirm('Reload notification settings from server and overwrite drafts?')) { return; }
+                try {
+                    await monitoringLoadNotifSettings();
+                    Toast.success('Restored notification settings from server');
+                } catch (e) {
+                    Toast.error('Failed to restore settings');
+                }
+            }
+
+            function monitoringResetAllMonitoringUI() {
+                if (!confirm('Reset all Monitoring UI preferences (watchlist filters/columns + notification drafts)?')) { return; }
+                try {
+                    // Clear watchlist filter prefs
+                    const wlKeys = ['monWl_filter_scope_type','monWl_filter_scope_id','monWl_col_id','monWl_col_scope','monWl_col_rules'];
+                    for (const k of wlKeys) localStorage.removeItem(k);
+                    // Reset filter controls
+                    try {
+                        document.getElementById('monWl_filter_scope_type').value = '';
+                        document.getElementById('monWl_filter_scope_id').value = '';
+                        document.getElementById('monWl_col_id').checked = true;
+                        document.getElementById('monWl_col_scope').checked = true;
+                        document.getElementById('monWl_col_rules').checked = true;
+                        monitoringListWatchlists();
+                    } catch (e) {}
+                    // Clear notification drafts (reuse helper without confirm)
+                    try {
+                        const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from'];
+                        for (const id of ids) { localStorage.removeItem(id); }
+                        document.getElementById('monNotif_enabled').value = 'false';
+                        document.getElementById('monNotif_min_sev').value = 'critical';
+                        document.getElementById('monNotif_file').value = '';
+                        document.getElementById('monNotif_webhook').value = '';
+                        document.getElementById('monNotif_email_to').value = '';
+                        document.getElementById('monNotif_smtp_host').value = '';
+                        document.getElementById('monNotif_smtp_port').value = 587;
+                        document.getElementById('monNotif_smtp_starttls').value = 'true';
+                        document.getElementById('monNotif_smtp_user').value = '';
+                        document.getElementById('monNotif_email_from').value = '';
+                    } catch (e) {}
+                    Toast.success('Monitoring UI preferences reset');
+                } catch (e) {
+                    Toast.error('Failed to reset UI');
+                }
+            }
+
+            async function monitoringSendNotifTest() {
+                try {
+                    const body = {
+                        severity: document.getElementById('monNotif_test_sev').value,
+                        message: document.getElementById('monNotif_test_msg').value || 'Test notification from admin panel',
+                    };
+                    const res = await apiClient.post('/api/v1/monitoring/notifications/test', body);
+                    document.getElementById('monitoringNotif_result').textContent = JSON.stringify(res, null, 2);
+                    Toast.success('Test sent (check file/webhook/email)');
+                } catch (e) {
+                    document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2);
+                    Toast.error('Failed to send test');
+                }
+            }
+
+            async function monitoringLoadRecentNotifications() {
+                try {
+                    const limit = parseInt(document.getElementById('monNotif_recent_limit').value || '50', 10);
+                    const res = await apiClient.get(`/api/v1/monitoring/notifications/recent?limit=${limit}`);
+                    const items = (res && res.items) || [];
+                    let html = '<table class="api-table"><thead><tr><th>Time</th><th>Source</th><th>User</th><th>Category</th><th>Severity</th><th>Snippet</th></tr></thead><tbody>';
+                    for (const it of items) {
+                        html += `<tr>
+                            <td>${it.ts || ''}</td>
+                            <td>${it.source || ''}</td>
+                            <td>${it.user_id || ''}</td>
+                            <td>${it.rule_category || ''}</td>
+                            <td>${it.rule_severity || ''}</td>
+                            <td>${(it.snippet || '').replace(/</g,'&lt;').slice(0,140)}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                    document.getElementById('monitoringNotif_recent').innerHTML = html;
+                    try {
+                        document.getElementById('monNotif_last_update').textContent = new Date().toLocaleString();
+                        const upd = document.getElementById('monNotif_updated');
+                        if (upd) { upd.textContent = 'Updated'; setTimeout(() => { upd.textContent = ''; }, 1500); }
+                        // Auto-tick toast
+                        if (window._monNotifTick === 'auto') {
+                            const toastSel = document.getElementById('monNotif_tick_toast');
+                            if (toastSel && toastSel.value === 'true') {
+                                Toast.info('Notifications updated');
+                            }
+                        }
+                    } catch (e) {}
+                    window._monNotifTick = null;
+                } catch (e) {
+                    document.getElementById('monitoringNotif_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    Toast.error('Failed to load recent notifications');
+                }
+            }
+
+            // Auto refresh for notifications + persist form drafts
+            (function () {
+                if (!window._monNotifTimer) window._monNotifTimer = null;
+                const toggle = document.getElementById('monNotif_auto');
+                const intervalEl = document.getElementById('monNotif_auto_interval');
+                const startSel = document.getElementById('monNotif_auto_start');
+                const toastSel = document.getElementById('monNotif_tick_toast');
+                // Restore persisted settings
+                try {
+                    const sAuto = localStorage.getItem('monNotif_auto'); if (sAuto !== null) toggle.value = sAuto;
+                    const sInt = localStorage.getItem('monNotif_auto_interval'); if (sInt !== null) intervalEl.value = sInt;
+                    const sStart = localStorage.getItem('monNotif_auto_start'); if (sStart !== null) startSel.value = sStart;
+                    const sToast = localStorage.getItem('monNotif_tick_toast'); if (sToast !== null) toastSel.value = sToast;
+                } catch (e) {}
+                // Restore draft values for notification settings form
+                try {
+                    const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from'];
+                    for (const id of ids) {
+                        const el = document.getElementById(id);
+                        const v = localStorage.getItem(id);
+                        if (el && v !== null) { el.value = v; }
+                    }
+                } catch (e) {}
+                // Save draft on changes (excluding password)
+                (function attachDraftSavers() {
+                    const ids = ['monNotif_enabled','monNotif_min_sev','monNotif_file','monNotif_webhook','monNotif_email_to','monNotif_smtp_host','monNotif_smtp_port','monNotif_smtp_starttls','monNotif_smtp_user','monNotif_email_from'];
+                    for (const id of ids) {
+                        const el = document.getElementById(id);
+                        if (!el) continue;
+                        const ev = (el.tagName === 'INPUT' && el.type === 'text') || (el.tagName === 'INPUT' && el.type === 'email') || (el.tagName === 'INPUT' && el.type === 'number') ? 'input' : 'change';
+                        el.addEventListener(ev, () => { try { localStorage.setItem(id, el.value); } catch (e) {} });
+                    }
+                })();
+                function applyAutoNotif(runNow=false) {
+                    if (window._monNotifTimer) { clearInterval(window._monNotifTimer); window._monNotifTimer = null; }
+                    if (toggle.value === 'true') {
+                        const ms = Math.max(5000, (parseInt(intervalEl.value || '30', 10) * 1000));
+                        window._monNotifTimer = setInterval(() => { window._monNotifTick = 'auto'; monitoringLoadRecentNotifications(); }, ms);
+                    }
+                    if (runNow) { monitoringLoadRecentNotifications(); }
+                }
+                toggle.addEventListener('change', () => { try { localStorage.setItem('monNotif_auto', toggle.value); } catch (e) {} applyAutoNotif(); });
+                intervalEl.addEventListener('change', () => { try { localStorage.setItem('monNotif_auto_interval', intervalEl.value); } catch (e) {} applyAutoNotif(); });
+                startSel.addEventListener('change', () => { try { localStorage.setItem('monNotif_auto_start', startSel.value); } catch (e) {} });
+                toastSel.addEventListener('change', () => { try { localStorage.setItem('monNotif_tick_toast', toastSel.value); } catch (e) {} });
+                if (startSel && startSel.value === 'true') {
+                    window._monNotifTick = 'auto';
+                    applyAutoNotif(true);
+                }
+            })();
+        </script>
+    </div>
+
     <!-- LLM Usage Charts -->
     <div class="endpoint-section" id="adminLLMUsageCharts">
         <h2>LLM Usage Charts</h2>

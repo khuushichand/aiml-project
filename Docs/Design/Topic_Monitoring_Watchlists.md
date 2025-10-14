@@ -4,8 +4,8 @@ Goal: Provide a configurable, privacy‑respecting content monitoring feature th
 
 ## Scope (Phase 1)
 - Rule‑based “watchlists” (literals/regex) with optional categories and severities.
-- Scopes: per‑user; future: per‑team, per‑org.
-- Integration points: chat input and output only (initial). Hooks emit alerts but NEVER block content.
+- Scopes: global (all users), per‑user; basic support for per‑team and per‑org when caller provides membership.
+- Integration points: chat input and output; notes (create/update/bulk); RAG search (unified/simple/advanced). Hooks emit alerts but NEVER block content.
 - Alert storage and retrieval API with mark‑as‑read.
 - Admin endpoints to manage watchlists and list alerts.
 
@@ -57,17 +57,25 @@ Goal: Provide a configurable, privacy‑respecting content monitoring feature th
 - `POST /api/v1/monitoring/reload`            reload config file (admin)
 
 ## Integration (chat only for Phase 1)
-At existing moderation hook sites in `chat.py`, call MonitoringService for:
-- input text (pre‑LLM) with `source=chat.input`
-- output tokens/chunks (stream and non‑stream) with `source=chat.output`
+At moderation/processing sites in endpoints, MonitoringService is called for:
+- chat input (pre‑LLM) with `source=chat.input`
+- chat output (stream and non‑stream) with `source=chat.output`
+- notes creation/update/bulk with `source=notes.*`
+- RAG queries with `source=rag.*`
 
-Monitoring emits alerts without changing moderation behavior.
+Monitoring emits alerts without changing moderation behavior or endpoint results.
 
 ## Security & Privacy
 - Admin‑only APIs. Extend to org/team leads later.
 - Opt‑in via config or explicit creation of watchlists.
 - Store minimal snippets (e.g., first 200 chars around the match).
 - All local; no external calls.
+
+## Notifications (Phase 1 scaffolding)
+- Local JSONL file sink gated by severity threshold.
+- Configure via env or config:
+  - `MONITORING_NOTIFY_ENABLED`, `MONITORING_NOTIFY_MIN_SEVERITY`, `MONITORING_NOTIFY_FILE`
+  - Placeholder knobs: `MONITORING_NOTIFY_WEBHOOK_URL`, `MONITORING_NOTIFY_EMAIL_TO` (not delivered offline)
 
 ## Phase 2 (planned)
 - Delivery channels: email, webhook, Slack.
@@ -78,4 +86,3 @@ Monitoring emits alerts without changing moderation behavior.
 ## Tests
 - Unit tests for rule parsing, safe regex checks, and alert creation.
 - Endpoint tests for list/create/reload/alerts.
-

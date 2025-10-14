@@ -3,6 +3,7 @@
 #
 # Imports
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Any, Dict
@@ -256,7 +257,8 @@ class DatabasePool:
                 # SQLite
                 # Flatten args if a single list/tuple was provided by an adapter
                 params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cursor = await conn.execute(query, params)
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 await conn.commit()
                 return cursor
     
@@ -270,7 +272,8 @@ class DatabasePool:
             else:
                 # SQLite
                 params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cursor = await conn.execute(query, params)
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 if row:
                     # Convert Row to dict
@@ -293,7 +296,8 @@ class DatabasePool:
             else:
                 # SQLite
                 params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cursor = await conn.execute(query, params)
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 rows = await cursor.fetchall()
                 # Return native Row objects to support both index and key access
                 return list(rows)
@@ -307,7 +311,8 @@ class DatabasePool:
             else:
                 # SQLite
                 params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cursor = await conn.execute(query, params)
+                q = _normalize_sqlite_sql(query)
+                cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 return row[0] if row else None
     
@@ -448,6 +453,22 @@ async def execute_migration(migration_sql: str) -> bool:
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         return False
+
+
+# --- Internal helpers ---
+_DOLLAR_PARAM = re.compile(r"\$\d+")
+
+def _normalize_sqlite_sql(query: str) -> str:
+    """Convert Postgres-style $1 placeholders to SQLite '?' when needed.
+
+    The admin endpoints and services generally branch on backend, but this
+    normalization provides a safety net to avoid aiosqlite warnings when a
+    $-style query slips through the SQLite path.
+    """
+    if "$" not in query:
+        return query
+    # Replace all occurrences of $N with '?' keeping ordering intact
+    return _DOLLAR_PARAM.sub("?", query)
 
 
 #

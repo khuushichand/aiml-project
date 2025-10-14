@@ -73,6 +73,7 @@ class ClaimVerifier(Protocol):
         retrieve_fn: Optional[Any] = None,
         top_k: int = 5,
         conf_threshold: float = 0.7,
+        mode: str = "hybrid",
     ) -> ClaimVerification:
         ...
 
@@ -145,7 +146,61 @@ class LLMBasedClaimExtractor:
         prompt = base.format(max_claims=max_claims, answer=answer)
 
         try:
-            raw = await asyncio.to_thread(self._analyze, "openai", answer, prompt, None, system, 0.1)
+            # Resolve provider/model/temperature from [Claims] with sensible fallbacks
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+            except Exception:
+                _settings = {}
+
+            provider = None
+            model_override = None
+            temperature = 0.1
+            try:
+                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
+            except Exception:
+                provider = None
+            try:
+                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+            except Exception:
+                model_override = None
+            try:
+                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
+            except Exception:
+                temperature = 0.1
+
+            # Fallback to RAG defaults then global default_api
+            if provider is None:
+                try:
+                    rag_cfg = _settings.get("RAG", {}) or {}
+                    provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
+                except Exception:
+                    provider = None
+            if provider is None:
+                try:
+                    provider = str(_settings.get("default_api", "openai")).strip() or "openai"
+                except Exception:
+                    provider = "openai"
+            if model_override is None:
+                try:
+                    rag_cfg = _settings.get("RAG", {}) or {}
+                    model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
+                except Exception:
+                    model_override = None
+
+            raw = await asyncio.to_thread(
+                self._analyze,
+                provider or "openai",
+                answer,
+                prompt,
+                None,
+                system,
+                temperature,
+                streaming=False,
+                recursive_summarization=False,
+                chunked_summarization=False,
+                chunk_options=None,
+                model_override=model_override,
+            )
             text = raw if isinstance(raw, str) else str(raw)
             # find JSON block
             jtxt = text
@@ -214,6 +269,7 @@ class HybridClaimVerifier:
         retrieve_fn: Optional[Any] = None,
         top_k: int = 5,
         conf_threshold: float = 0.7,
+        mode: str = "hybrid",
     ) -> ClaimVerification:
         claim_text = claim.text.strip()
         nums_dates = _extract_numbers_and_dates(claim_text)
@@ -241,31 +297,50 @@ class HybridClaimVerifier:
         evidence_snips = _first_n_snippets(candidate_docs, n=min(3, top_k))
         evidence_text = "\n\n".join([f"[doc:{e.doc_id}] {e.snippet}" for e in evidence_snips])
 
-        # NLI first, if available
-        nli = await self._get_nli()
-        nli_decision: Optional[Tuple[str, float, int]] = None
-        if nli is not None:
-            try:
-                best_tuple = ("nei", 0.0, -1)
-                for i, ev in enumerate(evidence_snips):
-                    scores = nli({"text": ev.snippet, "text_pair": claim_text})
-                    if isinstance(scores, list) and scores:
-                        lab, sc = self._nli_best_label(scores[0])
-                        if sc > best_tuple[1]:
-                            best_tuple = (lab, sc, i)
-                if best_tuple[1] >= conf_threshold:
-                    return ClaimVerification(
-                        claim=claim,
-                        label=best_tuple[0],
-                        confidence=best_tuple[1],
-                        evidence=evidence_snips,
-                        citations=[],
-                        rationale=f"NLI-{best_tuple[0]} {best_tuple[1]:.2f}",
-                    )
-                else:
-                    nli_decision = best_tuple
-            except Exception as e:
-                logger.warning(f"NLI verification failed; falling back to LLM judge: {e}")
+        # NLI verification path (optional depending on mode)
+        nli = None
+        if mode in ("hybrid", "nli"):
+            nli = await self._get_nli()
+            nli_decision: Optional[Tuple[str, float, int]] = None
+            if nli is not None:
+                try:
+                    best_tuple = ("nei", 0.0, -1)
+                    for i, ev in enumerate(evidence_snips):
+                        scores = nli({"text": ev.snippet, "text_pair": claim_text})
+                        if isinstance(scores, list) and scores:
+                            lab, sc = self._nli_best_label(scores[0])
+                            if sc > best_tuple[1]:
+                                best_tuple = (lab, sc, i)
+                    if best_tuple[1] >= conf_threshold:
+                        return ClaimVerification(
+                            claim=claim,
+                            label=best_tuple[0],
+                            confidence=best_tuple[1],
+                            evidence=evidence_snips,
+                            citations=[],
+                            rationale=f"NLI-{best_tuple[0]} {best_tuple[1]:.2f}",
+                        )
+                    else:
+                        nli_decision = best_tuple
+                except Exception as e:
+                    if mode == "hybrid":
+                        logger.warning(f"NLI verification failed; falling back to LLM judge: {e}")
+                    else:
+                        logger.warning(f"NLI verification failed under nli mode: {e}")
+
+            # If mode is strict NLI and we didn't return, finish with NEI (no LLM fallback)
+            if mode == "nli":
+                conf = 0.0
+                if nli_decision is not None:
+                    conf = float(nli_decision[1])
+                return ClaimVerification(
+                    claim=claim,
+                    label="nei",
+                    confidence=conf,
+                    evidence=evidence_snips,
+                    citations=[],
+                    rationale="NLI unavailable/low confidence",
+                )
 
         system = "You are a precise fact-checking judge. Output strict JSON only."
         judge_prompt = (
@@ -320,6 +395,7 @@ class ClaimsEngine:
         claims_max: int = 25,
         retrieve_fn: Optional[Any] = None,
         nli_model: Optional[str] = None,
+        claims_concurrency: int = 8,
     ) -> Dict[str, Any]:
         if not answer or not isinstance(answer, str):
             return {"claims": [], "summary": {}}
@@ -415,9 +491,22 @@ class ClaimsEngine:
                 retrieve_fn=retrieve_fn,
                 top_k=claims_top_k,
                 conf_threshold=claims_conf_threshold,
+                mode=(claim_verifier or "hybrid").strip().lower(),
             )
 
-        tasks = [_verify_one(c) for c in claims]
+        # Concurrency cap to avoid over-parallelization of verifications
+        try:
+            max_conc = int(claims_concurrency)
+        except Exception:
+            max_conc = 8
+        max_conc = max(1, min(32, max_conc))
+        sem = asyncio.Semaphore(max_conc)
+
+        async def _bounded_verify(c: Claim) -> ClaimVerification:
+            async with sem:
+                return await _verify_one(c)
+
+        tasks = [_bounded_verify(c) for c in claims]
         if tasks:
             verifications = await asyncio.gather(*tasks)
 

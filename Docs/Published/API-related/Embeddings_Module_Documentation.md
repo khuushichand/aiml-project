@@ -68,10 +68,10 @@ The Embeddings Module provides a unified interface for generating text embedding
                  │
 ┌────────────────▼────────────────────────────────────────┐
 │              Storage Layer                               │
-│  ┌──────────────┐           ┌─────────────────────┐    │
-│  │  ChromaDB    │           │   Audit Logger      │    │
-│  │(Vector Store)│           │  (Security Events)  │    │
-│  └──────────────┘           └─────────────────────┘    │
+│  ┌──────────────┐           ┌──────────────────────────┐│
+│  │  ChromaDB    │           │ Unified Audit Service    ││
+│  │(Vector Store)│           │ (Security Events; DI)    ││
+│  └──────────────┘           └──────────────────────────┘│
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -83,7 +83,7 @@ app/core/Embeddings/
 ├── README.md                          # Architecture overview
 ├── ChromaDB_Library.py                # Vector storage management
 ├── circuit_breaker.py                 # Fault tolerance
-├── audit_logger.py                    # Security audit logging
+├── (uses unified audit service)       # Security audit logging via DI
 ├── rate_limiter.py                    # Per-user rate limiting
 ├── embeddings_config.yaml             # Configuration file
 ├── job_manager.py                     # Job lifecycle management

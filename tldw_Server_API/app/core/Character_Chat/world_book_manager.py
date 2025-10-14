@@ -33,6 +33,10 @@ from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
+try:
+    from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
+except Exception:
+    from tldw_Server_API.app.core.utils.tokenizer import count_tokens as _count_tokens
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -1564,7 +1568,7 @@ class WorldBookService:
         return (kw or '').strip().lower()
 
     def count_tokens(self, text: str) -> int:
-        return len((text or '').split())
+        return _count_tokens(text)
 
 
 # Export main classes

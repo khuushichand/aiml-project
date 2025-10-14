@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 from loguru import logger
 import tiktoken
 
@@ -768,12 +769,11 @@ class DuplicateStoreRequest(BaseModel):
     new_name: str = Field(..., description="Name for the duplicated store")
     dimensions: Optional[int] = None
 
-    class Config:
-        json_schema_extra = {
-            "examples": [
-                {"new_name": "CopyOfStore", "dimensions": 1536}
-            ]
-        }
+    model_config = ConfigDict(json_schema_extra={
+        "examples": [
+            {"new_name": "CopyOfStore", "dimensions": 1536}
+        ]
+    })
 
 
 @router.post("/vector_stores/{store_id}/duplicate")

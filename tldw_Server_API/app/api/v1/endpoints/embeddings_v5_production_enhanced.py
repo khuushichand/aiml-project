@@ -23,6 +23,7 @@ import atexit
 import os
 
 from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 import tiktoken
 from loguru import logger
@@ -51,10 +52,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from pathlib import Path
 import configparser
 
-# Audit logging
-from tldw_Server_API.app.core.Embeddings.audit_logger import (
-    get_audit_logger, AuditEventType
-)
+# Audit logging: unify later via unified audit DI; legacy import removed (unused here)
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
@@ -526,6 +524,76 @@ def apply_rate_limit(limit_string: str):
         return wrapper
     return decorator
 
+@asynccontextmanager
+async def _embeddings_router_lifespan(app):
+    # Startup
+    logger.info("Starting embeddings service v5 enhanced (with circuit breaker)")
+    await embedding_cache.start_cleanup_task()
+    if not EMBEDDINGS_AVAILABLE:
+        logger.error("Embeddings implementation not available - service will not function")
+    try:
+        ci = os.getenv("CI", "").lower() == "true"
+        auto_dl = os.getenv("AUTO_DOWNLOAD_MODELS", "true").lower() == "true"
+        if ci and auto_dl:
+            async def _preload_models_on_startup():
+                try:
+                    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+                    preload_list = []
+                    env_models = os.getenv("PRELOAD_EMBEDDING_MODELS")
+                    if env_models:
+                        preload_list.extend([m.strip() for m in env_models.split(",") if m.strip()])
+                    try:
+                        cfg_preload = cfg.get("preload_models", []) or []
+                        if isinstance(cfg_preload, list):
+                            preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
+                    except Exception:
+                        pass
+                    default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
+                    default_provider = cfg.get("embedding_provider") or "huggingface"
+                    if default_model:
+                        if ":" in default_model:
+                            preload_list.append(default_model)
+                        else:
+                            preload_list.append(f"{default_provider}:{default_model}")
+                    seen = set(); final_models = []
+                    for m in preload_list:
+                        if m and m not in seen:
+                            seen.add(m); final_models.append(m)
+                    if final_models:
+                        logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
+                        for full in final_models:
+                            try:
+                                if ":" in full:
+                                    prov, mdl = full.split(":", 1)
+                                    provider = prov.strip().lower(); model = mdl.strip()
+                                else:
+                                    model = full.strip(); provider = guess_provider_for_model(model)
+                                if not is_model_allowed(provider, model):
+                                    logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
+                                    continue
+                                if provider == "openai" and not settings.get("OPENAI_API_KEY"):
+                                    logger.info("Skipping OpenAI preload due to missing OPENAI_API_KEY")
+                                    continue
+                                await create_embeddings_batch_async(texts=["ci preload"], provider=provider, model_id=model)
+                                logger.info(f"Preloaded model {provider}:{model}")
+                            except Exception as e:
+                                logger.warning(f"Failed to preload model {full}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error during preload task: {e}")
+            asyncio.create_task(_preload_models_on_startup())
+    except Exception as e:
+        logger.error(f"Failed to schedule model preloads: {e}")
+    logger.info("Embeddings service started successfully")
+
+    try:
+        yield
+    finally:
+        # Shutdown
+        logger.info("Shutting down embeddings service")
+        await embedding_cache.stop_cleanup_task()
+        await connection_manager.close_all()
+        logger.info("Embeddings service shutdown complete")
+
 router = APIRouter(
     tags=["embeddings"],
     responses={
@@ -534,105 +602,10 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"},
         500: {"description": "Internal server error"},
         503: {"description": "Service unavailable"}
-    }
+    },
+    lifespan=_embeddings_router_lifespan,
 )
 
-# ============================================================================
-# Startup and Shutdown Events
-# ============================================================================
-
-@router.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
-    logger.info("Starting embeddings service v5 enhanced (with circuit breaker)")
-    
-    await embedding_cache.start_cleanup_task()
-    
-    if not EMBEDDINGS_AVAILABLE:
-        logger.error("Embeddings implementation not available - service will not function")
-    
-    # In CI/CD (or when AUTO_DOWNLOAD_MODELS=true), proactively download/preload models
-    try:
-        ci = os.getenv("CI", "").lower() == "true"
-        auto_dl = os.getenv("AUTO_DOWNLOAD_MODELS", "true").lower() == "true"
-        if ci and auto_dl:
-            async def _preload_models_on_startup():
-                try:
-                    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
-                    # Collect candidate models to preload
-                    preload_list = []
-                    # 1) From env PRELOAD_EMBEDDING_MODELS (comma-separated, supports provider:model)
-                    env_models = os.getenv("PRELOAD_EMBEDDING_MODELS")
-                    if env_models:
-                        preload_list.extend([m.strip() for m in env_models.split(",") if m.strip()])
-                    # 2) From config key 'preload_models' (list)
-                    try:
-                        cfg_preload = cfg.get("preload_models", []) or []
-                        if isinstance(cfg_preload, list):
-                            preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
-                    except Exception:
-                        pass
-                    # 3) Always include default model
-                    default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
-                    default_provider = cfg.get("embedding_provider") or "huggingface"
-                    if default_model:
-                        if ":" in default_model:
-                            preload_list.append(default_model)
-                        else:
-                            preload_list.append(f"{default_provider}:{default_model}")
-                    # De-duplicate while preserving order
-                    seen = set()
-                    final_models = []
-                    for m in preload_list:
-                        if m and m not in seen:
-                            seen.add(m)
-                            final_models.append(m)
-                    if not final_models:
-                        logger.info("No models specified for preload in CI; skipping preload")
-                        return
-                    logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
-                    for full in final_models:
-                        try:
-                            if ":" in full:
-                                prov, mdl = full.split(":", 1)
-                                provider = prov.strip().lower()
-                                model = mdl.strip()
-                            else:
-                                model = full.strip()
-                                provider = guess_provider_for_model(model)
-                            if not is_model_allowed(provider, model):
-                                logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
-                                continue
-                            if provider == "openai" and not settings.get("OPENAI_API_KEY"):
-                                logger.info("Skipping OpenAI preload due to missing OPENAI_API_KEY")
-                                continue
-                            # Trigger a tiny embedding to force download
-                            await create_embeddings_batch_async(
-                                texts=["ci preload"],
-                                provider=provider,
-                                model_id=model
-                            )
-                            logger.info(f"Preloaded model {provider}:{model}")
-                        except Exception as e:
-                            logger.warning(f"Failed to preload model {full}: {e}")
-                except Exception as e:
-                    logger.error(f"Unexpected error during preload task: {e}")
-            # Fire and forget
-            asyncio.create_task(_preload_models_on_startup())
-    except Exception as e:
-        logger.error(f"Failed to schedule model preloads: {e}")
-    
-    logger.info("Embeddings service started successfully")
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down embeddings service")
-    
-    await embedding_cache.stop_cleanup_task()
-    await connection_manager.close_all()
-    
-    logger.info("Embeddings service shutdown complete")
 
 # Register cleanup on process exit
 def cleanup_on_exit():
@@ -1096,7 +1069,8 @@ async def create_embeddings_batch_async(
         
         if cached:
             embeddings.append(cached)
-            embedding_cache_hits.labels(provider=provider, model=model_id).inc()
+            # Ensure Prometheus labels are always strings
+            embedding_cache_hits.labels(provider=provider, model=(model_id or "default")).inc()
         else:
             embeddings.append(None)
             uncached_texts.append(text)

@@ -169,14 +169,21 @@ async def isolated_test_environment(monkeypatch):
     db_name = f"tldw_test_{uuid_lib.uuid4().hex[:8]}"
     logger.info(f"Creating isolated test database: {db_name}")
     
-    # 2. Create the unique database
-    conn = await asyncpg.connect(
-        host=TEST_DB_HOST,
-        port=TEST_DB_PORT,
-        user=TEST_DB_USER,
-        password=TEST_DB_PASSWORD,
-        database="postgres"
-    )
+    # 2. Create the unique database (skip gracefully if Postgres is unavailable and not required)
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
+    try:
+        conn = await asyncpg.connect(
+            host=TEST_DB_HOST,
+            port=TEST_DB_PORT,
+            user=TEST_DB_USER,
+            password=TEST_DB_PASSWORD,
+            database="postgres"
+        )
+    except Exception as e:
+        if not require_pg:
+            import pytest
+            pytest.skip(f"PostgreSQL not available ({e}); skipping AuthNZ integration tests. Set TLDW_TEST_POSTGRES_REQUIRED=1 to enforce.")
+        raise
     
     try:
         # Drop if exists (cleanup from failed tests)

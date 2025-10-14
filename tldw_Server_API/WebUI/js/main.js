@@ -283,6 +283,9 @@ class WebUI {
     }
 
     showContent(contentId) {
+        // Determine previously active tabs for cleanup hooks
+        const previouslyActive = Array.from(document.querySelectorAll('.tab-content.active')).map(el => el.id);
+
         // Hide all tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.remove('active');
@@ -296,6 +299,15 @@ class WebUI {
         } else {
             console.warn(`Tab content not found: ${contentId}`);
         }
+
+        // Cleanup timers when leaving certain tabs
+        try {
+            if (previouslyActive.includes('tabLLMDiagnostics') && contentId !== 'tabLLMDiagnostics') {
+                if (typeof window.cleanupLLMDiagnosticsTimers === 'function') {
+                    window.cleanupLLMDiagnosticsTimers();
+                }
+            }
+        } catch (e) { /* ignore */ }
     }
 
     loadDefaultTab() {

@@ -39,21 +39,19 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
     MAX_REGEX_LENGTH = 500  # Maximum length of custom regex pattern
     REGEX_TIMEOUT = 2  # Seconds before regex timeout
     MAX_CHAPTER_MARKERS = 10000  # Hard cap on detected markers
+    # Heuristic patterns to catch nested-quantifier risks in Python's 're'.
+    # Note: Python re does not support PCRE features like recursion or DEFINE;
+    # we therefore focus on constructs that can cause catastrophic backtracking.
     DANGEROUS_PATTERNS = [
-        r'\(\*',  # Possessive quantifiers
-        r'\(\?R\)',  # Recursive patterns
-        r'\(\?\(DEFINE\)',  # DEFINE patterns
-        r'{\d{4,}}',  # Large repetition ranges
-        r'[*+]{2,}',  # Consecutive quantifiers
-        r'\([^)]*[*+].*[*+].*\)',  # Multiple quantifiers in group
-        # Additional patterns to catch nested quantifiers (ReDoS prevention)
-        r'\([^)]*[+*]\)[+*?]',  # Group with quantifier followed by quantifier: (a+)+, (a*)*
-        r'\([^)]*[+*]\){',  # Group with quantifier followed by range: (a+){n,m}
-        r'\(\w+\+\)\+',  # Explicit (x+)+ pattern
-        r'\(\w+\*\)\*',  # Explicit (x*)* pattern
-        r'\(\w+\?\)\?',  # Explicit (x?)? pattern
-        r'\([^)]*\|[^)]*[+*]\)[+*]',  # Alternative with quantifier: (a|b+)+
-        r'\(\([^)]+\)[+*]\)[+*]',  # Nested groups with quantifiers: ((a)+)+
+        r'{\d{4,}}',                  # Very large bounded repetitions
+        r'[*+]{2,}',                   # Repeated quantifiers like '++' or '**'
+        r'\([^)]*[+*]\)[+*?]',       # (a+)+, (a*)*, (a+)?
+        r'\([^)]*[+*]\){',           # (a+){n,m}
+        r'\(\w+\+\)\+',           # (word+)+
+        r'\(\w+\*\)\*',           # (word*)*
+        r'\(\w+\?\)\?',           # (word?)?
+        r'\([^)]*\|[^)]*[+*]\)[+*]',  # (a|b+)+
+        r'\(\([^)]+\)[+*]\)[+*]',  # ((a)+)+
     ]
     
     def __init__(self, language: str = 'en'):

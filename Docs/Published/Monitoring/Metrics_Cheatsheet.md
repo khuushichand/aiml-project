@@ -114,8 +114,28 @@ Notes:
 - Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
-- MCP exposes a JSON metrics view at `GET /api/v1/mcp/metrics` (admin‑only).
-- Prometheus‑style MCP metrics require the module’s Prometheus collector to be enabled; when enabled, include those metrics in your scraping setup.
+- JSON metrics: `GET /api/v1/mcp/metrics` (admin‑only).
+- Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
+  - Security: expose only on trusted networks or behind an authing proxy.
+  - If Prometheus client is not installed, the endpoint returns a placeholder comment.
+
+Prometheus scrape_config example:
+```yaml
+scrape_configs:
+  - job_name: 'tldw-mcp'
+    metrics_path: /api/v1/mcp/metrics/prometheus
+    static_configs:
+      - targets: ['tldw-server.local:8000']
+```
+
+Sample PromQL queries:
+- Total requests (5m): `sum(rate(mcp_requests_total[5m])) by (method, status)`
+- p50 latency per method (5m):
+  `histogram_quantile(0.50, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le, method))`
+- p95 latency per method (5m):
+  `histogram_quantile(0.95, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le, method))`
+- p99 latency per method (5m):
+  `histogram_quantile(0.99, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le, method))`
 
 ## Prompt Studio
 - Executions: `prompt_studio.executions.total{provider,model,status}`, `prompt_studio.executions.duration_seconds{provider,model}`.

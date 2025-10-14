@@ -96,5 +96,30 @@ Tip: You can also use the convenience script from the repo root:
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
 - See Production Hardening and Multi‑User Deployment guides for production use
 
+## Optional: Tokenizer strategy (Chat Dictionaries & World Books)
+
+The server estimates tokens when enforcing budgets in Chat Dictionary and World Book processing. You can adjust this strategy at runtime:
+
+- `GET /api/v1/config/tokenizer` → view current mode (`whitespace` or `char_approx`) and divisor
+- `PUT /api/v1/config/tokenizer` → update mode and divisor (in‑memory; not persisted)
+
+Example:
+```
+GET /api/v1/config/tokenizer
+{
+  "mode": "whitespace",
+  "divisor": 4
+}
+
+PUT /api/v1/config/tokenizer
+{
+  "mode": "char_approx",
+  "divisor": 4
+}
+```
+
+To set defaults, you can also add environment or config values:
+- `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
+- `TOKEN_CHAR_APPROX_DIVISOR`: integer (default `4`)
 
 

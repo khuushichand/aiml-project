@@ -4,6 +4,8 @@
 
 Successfully investigated and resolved the authentication token requirement issue in the tldw_server API's single-user mode. Identified that the API uses an `X-API-KEY` header authentication mechanism, discovered the correct API key (`test-api-key-12345`), and improved test pass rate from 48% to 55%.
 
+Note: The legacy `auth_utils.py` mentioned in this document has been removed in favor of AuthNZ (`User_DB_Handling`, `jwt_service`). References to it below are historical context only.
+
 ## Investigation Process
 
 ### 1. Initial Problem

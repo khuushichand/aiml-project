@@ -1376,6 +1376,7 @@ async def unified_rag_pipeline(
                                     retrieve_fn=_retrieve_for_claim,
                                     top_k=claims_top_k,
                                     conf_threshold=claims_conf_threshold,
+                                    mode=(claim_verifier or "hybrid").strip().lower(),
                                 )
                                 verifications.append(cv)
                             supported = sum(1 for v in verifications if v.label == "supported")

@@ -76,6 +76,34 @@ See `app/main.py` for router includes and full route namespaces.
 - The `GET /api/v1/llm/providers` endpoint reflects configured providers and models.
 - Chat request validation is in `app/api/v1/schemas/chat_request_schemas.py` and related modules.
 
+### Chatbooks Job Backend Configuration
+
+- `CHATBOOKS_JOBS_BACKEND`: Selects job backend for Chatbooks. Values: `core` (default) or `prompt_studio`.
+- `TLDW_JOBS_BACKEND`: Module-wide default job backend (domain overrides take precedence).
+- Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` — use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead.
+
+- `CHATBOOKS_CORE_WORKER_ENABLED`: Enable/disable the shared core worker when using the `core` backend (default `true`). Set to `false` to skip starting the background worker even if `core` is selected.
+
+- `JOBS_DB_URL`: Optional. If set to a PostgreSQL DSN (e.g., `postgresql://user:pass@host:5432/dbname`), the core Jobs backend uses PostgreSQL instead of SQLite.
+  - Requirements: install extras `db_postgres` to pull `psycopg` and `psycopg-pool`.
+  - Schema: created automatically via `app/core/Jobs/pg_migrations.py` on first use.
+  - Notes: JSON fields (`payload`, `result`) are stored as JSONB in Postgres and as TEXT in SQLite.
+
+When `core` is selected, a shared background worker starts at app startup (unless heavy startup is disabled) to process Chatbooks jobs across users.
+
+Lease behavior and backoff
+- Leases: the worker acquires jobs with a lease (`JOBS_LEASE_SECONDS`, default 60) and renews periodically (`JOBS_LEASE_RENEW_SECONDS`, default 30).
+- Lease limits: cap lease/renew duration via `JOBS_LEASE_MAX_SECONDS` (default 3600).
+- Renew jitter: add jitter to renewal timing via `JOBS_LEASE_RENEW_JITTER_SECONDS` (default 5 seconds) to avoid herd effects.
+- Reclaim: expired processing leases are reclaimed fairly by priority and enqueue time.
+- Backoff: retryable failures use exponential backoff with jitter; the next attempt’s `available_at` advances with each retry.
+
+Signed download URLs (optional):
+- `CHATBOOKS_SIGNED_URLS=true|false` — enable HMAC-signed download URLs.
+- `CHATBOOKS_SIGNING_SECRET` — shared secret used to sign download links.
+- `CHATBOOKS_ENFORCE_EXPIRY=true|false` — enforce job `expires_at` with `410` when expired.
+- `CHATBOOKS_URL_TTL_SECONDS` — default expiry TTL for generated links (default 86400 seconds).
+
 ## Running Tests
 
 ```bash

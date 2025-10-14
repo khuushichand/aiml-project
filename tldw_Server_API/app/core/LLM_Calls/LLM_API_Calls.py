@@ -404,7 +404,10 @@ def chat_with_openai(
     }
     logging.debug(f"OpenAI Request Payload (excluding messages): {{k: v for k, v in payload.items() if k != 'messages'}}")
 
-    api_url = openai_config.get('api_base_url', 'https://api.openai.com/v1').rstrip('/') + '/chat/completions'
+    # Allow environment override for API base URL (useful for mock servers in tests)
+    env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
+    api_base = env_api_base or openai_config.get('api_base_url', 'https://api.openai.com/v1')
+    api_url = api_base.rstrip('/') + '/chat/completions'
     try:
         if final_streaming:
             logging.debug("OpenAI: Posting request (streaming)")

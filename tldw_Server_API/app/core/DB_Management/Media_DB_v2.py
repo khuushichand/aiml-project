@@ -2691,9 +2691,23 @@ class MediaDatabase:
                         where_clause = "WHERE " + " AND ".join(new_conditions) if new_conditions else ""
                         count_sql = f"SELECT {count_select} FROM Media m WHERE m.deleted = 0 AND m.is_trash = 0"
                         if search_query:
-                            # Add a simple LIKE condition on title and content
-                            count_sql += f" AND (m.title LIKE ? OR m.content LIKE ?)"
-                            count_params = (f"%{search_query}%", f"%{search_query}%")
+                            # Add a backend-aware case-insensitive LIKE on title and content
+                            like_clauses: List[str] = []
+                            like_params_local: List[Any] = []
+                            self._append_case_insensitive_like(
+                                like_clauses,
+                                like_params_local,
+                                "m.title",
+                                f"%{search_query}%",
+                            )
+                            self._append_case_insensitive_like(
+                                like_clauses,
+                                like_params_local,
+                                "m.content",
+                                f"%{search_query}%",
+                            )
+                            count_sql += f" AND (" + " OR ".join(like_clauses) + ")"
+                            count_params = tuple(like_params_local)
                         else:
                             count_params = ()
 
@@ -2738,8 +2752,23 @@ class MediaDatabase:
                         # Simplified fallback query
                         fallback_sql = f"SELECT DISTINCT {', '.join(base_select_parts)} FROM Media m WHERE m.deleted = 0 AND m.is_trash = 0"
                         if search_query:
-                            fallback_sql += f" AND (m.title LIKE ? OR m.content LIKE ?)"
-                            fallback_params = (f"%{search_query}%", f"%{search_query}%", results_per_page, offset)
+                            # Add a backend-aware case-insensitive LIKE on title and content
+                            like_clauses: List[str] = []
+                            like_params_local: List[Any] = []
+                            self._append_case_insensitive_like(
+                                like_clauses,
+                                like_params_local,
+                                "m.title",
+                                f"%{search_query}%",
+                            )
+                            self._append_case_insensitive_like(
+                                like_clauses,
+                                like_params_local,
+                                "m.content",
+                                f"%{search_query}%",
+                            )
+                            fallback_sql += f" AND (" + " OR ".join(like_clauses) + ")"
+                            fallback_params = (*like_params_local, results_per_page, offset)
                         else:
                             fallback_params = (results_per_page, offset)
 
@@ -3417,6 +3446,19 @@ class MediaDatabase:
         final_chunk_status = "completed" if chunks is not None else "pending"
 
         logging.info("add_media_with_keywords: url=%s, title=%s, client=%s", url, title, client_id)
+        # Topic monitoring (non-blocking) for ingestion text (bounded at service level)
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            uid = str(client_id) if client_id is not None else None
+            if title:
+                mon.evaluate_and_alert(user_id=uid, text=title, source="ingestion.media", scope_type="user", scope_id=uid)
+            if content:
+                mon.evaluate_and_alert(user_id=uid, text=content, source="ingestion.media", scope_type="user", scope_id=uid)
+            if analysis_content:
+                mon.evaluate_and_alert(user_id=uid, text=analysis_content, source="ingestion.media", scope_type="user", scope_id=uid)
+        except Exception:
+            pass
 
         # ------------------------------------------------------------------
         # Helper builders

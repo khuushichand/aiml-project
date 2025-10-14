@@ -5,6 +5,8 @@
 import secrets
 import hashlib
 from typing import Optional, Set, Callable
+import hmac
+import base64
 from datetime import datetime, timedelta
 #
 # 3rd-party imports
@@ -52,15 +54,34 @@ class CSRFTokenManager:
             "text/plain",
         }
     
-    def generate_token(self) -> str:
+    def _hmac_key(self) -> bytes:
+        s = get_settings()
+        material = (s.API_KEY_PEPPER or s.JWT_SECRET_KEY or "tldw_default_csrf_hmac")
+        return (material[:32]).encode()
+
+    def _bind_suffix(self, user_id: Optional[int]) -> Optional[str]:
+        """Return HMAC suffix for user binding if enabled and user_id provided."""
+        s = get_settings()
+        if not s.CSRF_BIND_TO_USER or user_id is None:
+            return None
+        digest = hmac.new(self._hmac_key(), str(user_id).encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest)[:16].decode()
+
+    def generate_token(self, request: Request) -> str:
         """Generate a new CSRF token"""
-        return secrets.token_urlsafe(self.token_length)
+        base = secrets.token_urlsafe(self.token_length)
+        try:
+            uid = getattr(request.state, 'user_id', None)
+        except Exception:
+            uid = None
+        suffix = self._bind_suffix(uid)
+        return f"{base}.{suffix}" if suffix else base
     
     def hash_token(self, token: str) -> str:
         """Create a hash of the token for comparison"""
         return hashlib.sha256(token.encode()).hexdigest()
     
-    def validate_token(self, cookie_token: str, header_token: str) -> bool:
+    def validate_token(self, cookie_token: str, header_token: str, user_id: Optional[int] = None) -> bool:
         """
         Validate CSRF token using double-submit cookie pattern
         
@@ -75,7 +96,17 @@ class CSRFTokenManager:
             return False
         
         # Constant-time comparison to prevent timing attacks
-        return secrets.compare_digest(cookie_token, header_token)
+        if not secrets.compare_digest(cookie_token, header_token):
+            return False
+        # If token includes binding suffix, validate it
+        parts = cookie_token.split('.')
+        if len(parts) == 2 and get_settings().CSRF_BIND_TO_USER:
+            suffix = parts[1]
+            if not suffix or user_id is None:
+                return False
+            expected = self._bind_suffix(user_id)
+            return secrets.compare_digest(suffix, expected)
+        return True
     
     def should_protect(self, request: Request) -> bool:
         """
@@ -187,7 +218,8 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             header_token = request.headers.get(self.token_manager.token_header_name)
             
             # Validate tokens
-            if not self.token_manager.validate_token(cookie_token, header_token):
+            uid = getattr(request.state, 'user_id', None)
+            if not self.token_manager.validate_token(cookie_token, header_token, uid):
                 logger.warning(
                     f"CSRF token validation failed for {request.method} {request.url.path} "
                     f"from {request.client.host if request.client else 'unknown'}"
@@ -204,7 +236,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         
         # Set CSRF token cookie if not present
         if self.token_manager.token_cookie_name not in request.cookies:
-            token = self.token_manager.generate_token()
+            token = self.token_manager.generate_token(request)
             self.token_manager.set_cookie(response, token)
             
             # Also add token to response header for easy access

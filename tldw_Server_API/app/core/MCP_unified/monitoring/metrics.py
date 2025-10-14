@@ -124,6 +124,14 @@ class MetricsCollector:
             registry=self.registry
         )
         
+        # WebSocket rejection metrics (e.g., per-IP caps)
+        self.ws_rejections = Counter(
+            'mcp_ws_rejections_total',
+            'Total WebSocket connection rejections',
+            ['reason', 'ip_bucket'],
+            registry=self.registry
+        )
+        
         # Rate limiting metrics
         self.rate_limit_hits = Counter(
             'mcp_rate_limit_hits_total',
@@ -271,6 +279,18 @@ class MetricsCollector:
                 type=connection_type,
                 error=error
             ).inc()
+
+    def record_ws_rejection(self, reason: str, ip_bucket: str = "unknown"):
+        """Record a WebSocket rejection (e.g., per-IP cap)."""
+        metric = MetricData(
+            name="ws_rejection",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"reason": reason, "ip_bucket": ip_bucket},
+        )
+        self._metrics["ws_rejection"].append(metric)
+        if self.enable_prometheus:
+            self.ws_rejections.labels(reason=reason, ip_bucket=ip_bucket).inc()
     
     def record_rate_limit_hit(self, key_type: str = "user"):
         """Record a rate limit hit"""

@@ -179,3 +179,38 @@ async def list_team_members(team_id: int) -> List[Dict[str, Any]]:
             return [
                 {"user_id": r[0], "role": r[1], "status": r[2], "added_at": r[3]} for r in rows
             ]
+
+
+async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
+    """List team memberships (and org_id) for a given user.
+
+    Returns: list of {team_id, org_id, role}
+    """
+    pool = await get_db_pool()
+    if pool.pool:
+        rows = await pool.fetchall(
+            """
+            SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+            FROM team_members tm JOIN teams t ON tm.team_id = t.id
+            WHERE tm.user_id = $1
+            ORDER BY tm.team_id
+            """,
+            user_id,
+        )
+        # rows already dict in postgres path
+        return rows
+    else:
+        async with pool.acquire() as conn:
+            cur = await conn.execute(
+                """
+                SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                FROM team_members tm JOIN teams t ON tm.team_id = t.id
+                WHERE tm.user_id = ?
+                ORDER BY tm.team_id
+                """,
+                (user_id,),
+            )
+            rows = await cur.fetchall()
+            return [
+                {"team_id": r[0], "user_id": r[1], "role": r[2], "org_id": r[3]} for r in rows
+            ]

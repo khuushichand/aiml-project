@@ -30,11 +30,11 @@ from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
     WorldBookImportRequest, WorldBookImportResponse, WorldBookExport,
     WorldBookStatistics, BulkEntryOperation, BulkOperationResponse
 )
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import import_and_save_character_from_file, \
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import import_and_save_character_from_file, \
     search_characters_by_query_text, delete_character_from_db, get_character_details, update_existing_character_details, \
     create_new_character_from_data
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError, InputError, CharactersRAGDBError
 #
 #######################################################################################################################
@@ -111,12 +111,25 @@ async def import_character_endpoint(
         logger.info(f"API: Importing character from file: {character_file.filename}")
         
         # import_and_save_character_from_file handles all file types including JSON
-        char_id = import_and_save_character_from_file(db, file_content_bytes)
+        inferred_type = None
+        try:
+            fname = character_file.filename or ""
+            lower = fname.lower()
+            if lower.endswith((".png", ".webp")):
+                inferred_type = "image"
+            elif lower.endswith((".json", ".yaml", ".yml", ".txt", ".md")):
+                inferred_type = "json"
+        except Exception:
+            inferred_type = None
+
+        success, message, char_id = import_and_save_character_from_file(
+            db, file_content=file_content_bytes, file_type=inferred_type
+        )
         
-        if not char_id:
+        if not success or not char_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to import character"
+                detail=message or "Failed to import character"
             )
         
         # Retrieve the imported character
@@ -279,7 +292,7 @@ async def filter_characters_by_tags(
         # If no tags specified, return all characters
         if not tags:
             results = db.list_character_cards(limit=limit, offset=offset)
-            return [_convert_db_character_to_response(char) for char in results]
+            return [_convert_db_char_to_response_model(char) for char in results]
         
         # Get all characters (we'll filter in memory for now)
         all_characters = db.list_character_cards(limit=1000, offset=0)
@@ -321,24 +334,24 @@ async def filter_characters_by_tags(
 
 
 
-# --- World Book List (moved up to avoid route conflicts) ---
+# --- World Book List (deduplicated, defined before /{character_id}) ---
 
-## list_world_books route moved above to avoid conflict with /{character_id}
-@router.get("/world-books", response_model=WorldBookListResponse, summary="List world books", tags=["World Books"], include_in_schema=False)
-async def list_world_books_prioritized(
+
+@router.get("/world-books", response_model=WorldBookListResponse, summary="List world books", tags=["World Books"])
+async def list_world_books(
         include_disabled: bool = Query(False, description="Include disabled world books"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
-    """List all world books for the user (priority route)."""
+    """List all world books for the user."""
     try:
         service = WorldBookService(db)
         books = service.list_world_books(include_disabled=include_disabled)
-        
+
         # Add entry counts
         for book in books:
             entries = service.get_entries(book['id'], enabled_only=False)
             book['entry_count'] = len(entries)
-        
+
         # Convert to response models (filter unexpected fields)
         allowed_keys = {
             'id', 'name', 'description', 'scan_depth', 'token_budget',
@@ -350,25 +363,24 @@ async def list_world_books_prioritized(
             filtered_dict = {k: book.get(k) for k in allowed_keys if k in book}
             filtered.append(WorldBookResponse(**filtered_dict))
         book_responses = filtered
-        
+
         # Calculate statistics
         enabled_count = sum(1 for b in book_responses if b.enabled)
         disabled_count = len(book_responses) - enabled_count
-        
+
         return WorldBookListResponse(
             world_books=book_responses,
             total=len(book_responses),
             enabled_count=enabled_count,
             disabled_count=disabled_count
         )
-        
+
     except CharactersRAGDBError as e:
         logger.error(f"DB error listing world books: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
-
 
 @router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
@@ -551,51 +563,6 @@ async def create_world_book(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
-@router.get("/world-books", response_model=WorldBookListResponse, summary="List world books", tags=["World Books"])
-async def list_world_books(
-        include_disabled: bool = Query(False, description="Include disabled world books"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
-):
-    """List all world books for the user."""
-    try:
-        service = WorldBookService(db)
-        books = service.list_world_books(include_disabled=include_disabled)
-        
-        # Add entry counts
-        for book in books:
-            entries = service.get_entries(book['id'], enabled_only=False)
-            book['entry_count'] = len(entries)
-        
-        # Convert to response models (filter unexpected fields)
-        allowed_keys = {
-            'id', 'name', 'description', 'scan_depth', 'token_budget',
-            'recursive_scanning', 'enabled', 'created_at', 'last_modified',
-            'version', 'entry_count'
-        }
-        filtered = []
-        for book in books:
-            filtered_dict = {k: book.get(k) for k in allowed_keys if k in book}
-            filtered.append(WorldBookResponse(**filtered_dict))
-        book_responses = filtered
-        
-        # Calculate statistics
-        enabled_count = sum(1 for b in book_responses if b.enabled)
-        disabled_count = len(book_responses) - enabled_count
-        
-        return WorldBookListResponse(
-            world_books=book_responses,
-            total=len(book_responses),
-            enabled_count=enabled_count,
-            disabled_count=disabled_count
-        )
-        
-    except CharactersRAGDBError as e:
-        logger.error(f"DB error listing world books: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
-        logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
-
 
 @router.get("/world-books/{world_book_id}", response_model=WorldBookWithEntries,
             summary="Get world book with entries", tags=["World Books"])
@@ -776,7 +743,7 @@ async def add_world_book_entry(
         
         # Get the created entry
         entries = service.get_entries(world_book_id, enabled_only=False)
-        created_entry = next((e for e in entries if e.entry_id == entry_id), None)
+        created_entry = next((e for e in entries if (getattr(e, 'id', None) == entry_id) or (isinstance(e, dict) and e.get('id') == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
         
         if not created_entry:
             raise HTTPException(
@@ -784,10 +751,15 @@ async def add_world_book_entry(
                 detail="Failed to retrieve entry after creation"
             )
         
-        entry_dict = created_entry.to_dict()
+        if hasattr(created_entry, 'to_api_dict'):
+            entry_dict = created_entry.to_api_dict()
+        elif hasattr(created_entry, '_d'):
+            entry_dict = dict(created_entry._d)
+        else:
+            entry_dict = dict(created_entry)
         entry_dict['created_at'] = book['created_at']
         entry_dict['last_modified'] = book['last_modified']
-        
+
         return WorldBookEntryResponse(**entry_dict)
         
     except HTTPException:
@@ -827,7 +799,12 @@ async def list_world_book_entries(
         # Convert to response models
         entry_responses = []
         for entry in entries:
-            entry_dict = entry.to_dict()
+            if hasattr(entry, 'to_api_dict'):
+                entry_dict = entry.to_api_dict()
+            elif hasattr(entry, '_d'):
+                entry_dict = dict(entry._d)
+            else:
+                entry_dict = dict(entry)
             entry_dict['created_at'] = book['created_at']
             entry_dict['last_modified'] = book['last_modified']
             entry_responses.append(WorldBookEntryResponse(**entry_dict))
@@ -880,7 +857,7 @@ async def update_world_book_entry(
         # Find the updated entry
         # We need to search through all world books to find this entry
         all_entries = service.get_entries(enabled_only=False)
-        updated_entry = next((e for e in all_entries if e.entry_id == entry_id), None)
+        updated_entry = next((e for e in all_entries if (getattr(e, 'id', None) == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
         
         if not updated_entry:
             raise HTTPException(
@@ -889,8 +866,17 @@ async def update_world_book_entry(
             )
         
         # Get the world book for timestamps
-        book = service.get_world_book(updated_entry.world_book_id)
-        entry_dict = updated_entry.to_dict()
+        # Resolve world book id and entry dict from hybrid entry
+        wb_id_resolved = getattr(updated_entry, 'world_book_id', None)
+        if not wb_id_resolved and hasattr(updated_entry, 'get'):
+            wb_id_resolved = updated_entry.get('world_book_id')
+        book = service.get_world_book(wb_id_resolved)
+        if hasattr(updated_entry, 'to_api_dict'):
+            entry_dict = updated_entry.to_api_dict()
+        elif hasattr(updated_entry, '_d'):
+            entry_dict = dict(updated_entry._d)
+        else:
+            entry_dict = dict(updated_entry)
         entry_dict['created_at'] = book['created_at'] if book else datetime.utcnow()
         entry_dict['last_modified'] = book['last_modified'] if book else datetime.utcnow()
         
@@ -1016,7 +1002,7 @@ async def detach_world_book_from_character(
     try:
         service = WorldBookService(db)
         
-        success = service.detach_from_character(character_id, world_book_id)
+        success = service.detach_from_character(world_book_id, character_id)
         
         if not success:
             raise HTTPException(

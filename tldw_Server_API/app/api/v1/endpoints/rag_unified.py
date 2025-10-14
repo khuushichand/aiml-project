@@ -398,6 +398,31 @@ async def unified_search_endpoint(
     """
     try:
         logger.info(f"Unified RAG search: query='{request.query}', user={current_user.username if current_user else 'anonymous'}")
+        # Topic monitoring (non-blocking) for query text
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            uid = (current_user.username if current_user else request.user_id) or None
+            team_ids = None
+            org_ids = None
+            try:
+                if hasattr(request_raw, 'state'):
+                    team_ids = getattr(request_raw.state, 'team_ids', None)
+                    org_ids = getattr(request_raw.state, 'org_ids', None)
+            except Exception:
+                pass
+            if request.query:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=request.query,
+                    source="rag.search",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    team_ids=team_ids,
+                    org_ids=org_ids,
+                )
+        except Exception:
+            pass
         
         # Set up database paths
         db_paths = {
@@ -655,6 +680,14 @@ async def simple_search_endpoint(
     """
     try:
         logger.info(f"Simple search: query='{query}'")
+        # Topic monitoring (non-blocking)
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            # simple endpoint has no user dependency; best-effort from query param user_id if any later
+            mon.evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
+        except Exception:
+            pass
         
         # Use the simple_search wrapper
         documents = await simple_search(query, top_k)
@@ -800,6 +833,13 @@ async def advanced_search_endpoint(
     """
     try:
         logger.info(f"Advanced search: query='{query}'")
+        # Topic monitoring (non-blocking)
+        try:
+            from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+            mon = get_topic_monitoring_service()
+            mon.evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
+        except Exception:
+            pass
         
         # Set up database paths
         db_paths = {

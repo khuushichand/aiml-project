@@ -1,0 +1,194 @@
+"""
+Negative tests for world books and limiter scenarios, plus the new non-legacy
+Character_Chat completions endpoint that enforces a per-minute limiter.
+"""
+
+import os
+import shutil
+import tempfile
+import uuid as _uuid
+
+import httpx
+import pytest
+
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+@pytest.mark.asyncio
+async def test_world_book_negative_paths_and_duplicate_name():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_wb_neg_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Duplicate world-book name should 409
+            name = f"WB {_uuid.uuid4()}"
+            create = {"name": name, "description": "d", "scan_depth": 3, "token_budget": 500, "recursive_scanning": False, "enabled": True}
+            r1 = await client.post("/api/v1/characters/world-books", headers=headers, json=create)
+            assert r1.status_code == 201
+            r2 = await client.post("/api/v1/characters/world-books", headers=headers, json=create)
+            assert r2.status_code == 409
+
+            # Non-existent world-book GET/PUT/DELETE -> 404
+            missing_id = 999999
+            r = await client.get(f"/api/v1/characters/world-books/{missing_id}", headers=headers)
+            assert r.status_code == 404
+            r = await client.put(f"/api/v1/characters/world-books/{missing_id}", headers=headers, json={"name": "new"})
+            assert r.status_code == 404
+            r = await client.delete(f"/api/v1/characters/world-books/{missing_id}", headers=headers)
+            assert r.status_code == 404
+
+            # Attach/detach non-existent world-book to a valid character -> 404
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post(
+                f"/api/v1/characters/{character_id}/world-books",
+                headers=headers,
+                json={"world_book_id": missing_id}
+            )
+            assert r.status_code == 404
+
+            r = await client.delete(
+                f"/api/v1/characters/{character_id}/world-books/{missing_id}",
+                headers=headers,
+            )
+            assert r.status_code == 404
+
+            # Create a real world book and entry
+            create2 = {"name": f"WB {_uuid.uuid4()}", "description": "d", "scan_depth": 3, "token_budget": 500, "recursive_scanning": False, "enabled": True}
+            r = await client.post("/api/v1/characters/world-books", headers=headers, json=create2)
+            assert r.status_code == 201
+            wb2 = r.json()["id"]
+
+            entry_payload = {"keywords": ["k"], "content": "c", "priority": 1, "enabled": True}
+            r = await client.post(f"/api/v1/characters/world-books/{wb2}/entries", headers=headers, json=entry_payload)
+            assert r.status_code == 201
+            entry_id = r.json()["id"]
+
+            # Invalid update: empty content -> 400
+            r = await client.put(f"/api/v1/characters/world-books/entries/{entry_id}", headers=headers, json={"content": ""})
+            assert r.status_code == 400
+
+            # Invalid regex: regex_match + bad pattern -> 400
+            r = await client.put(
+                f"/api/v1/characters/world-books/entries/{entry_id}",
+                headers=headers,
+                json={"keywords": ["[invalid"], "regex_match": True}
+            )
+            assert r.status_code == 400
+
+            # Bulk operation set_priority missing 'priority' -> success false, failed ids include target
+            r = await client.post(
+                "/api/v1/characters/world-books/entries/bulk",
+                headers=headers,
+                json={"entry_ids": [entry_id, 123456789], "operation": "set_priority"}
+            )
+            assert r.status_code == 200
+            data = r.json()
+            assert data.get("success") is False
+            assert entry_id in data.get("failed_ids", [])
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
+    # Ensure limiter picks up env by setting before import and resetting singleton
+    tmpdir = tempfile.mkdtemp(prefix="chacha_limits_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    os.environ["MAX_MESSAGES_PER_CHAT"] = "3"
+    os.environ["MAX_CHATS_PER_USER"] = "1"
+    os.environ["MAX_CHAT_COMPLETIONS_PER_MINUTE"] = "1"
+    try:
+        from tldw_Server_API.app.main import app
+        # Reset rate limiter singleton to read new env
+        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl
+        crl._rate_limiter = None
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Pick a character
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            # Create first chat should succeed
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            # Second chat creation should hit cap (403)
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 403
+
+            # Send 3 messages -> OK, 4th -> 403 (max_messages_per_chat)
+            for i in range(3):
+                resp = await client.post(
+                    f"/api/v1/chats/{chat_id}/messages",
+                    headers=headers,
+                    json={"role": "user", "content": f"m{i}"}
+                )
+                assert resp.status_code == 201
+            resp = await client.post(
+                f"/api/v1/chats/{chat_id}/messages",
+                headers=headers,
+                json={"role": "user", "content": "exceed"}
+            )
+            assert resp.status_code == 403
+
+            # New per-minute completions endpoint: first ok, second 429
+            payload = {"include_character_context": True, "append_user_message": "go"}
+            r1 = await client.post(f"/api/v1/chats/{chat_id}/completions", headers=headers, json=payload)
+            assert r1.status_code == 200
+            r2 = await client.post(f"/api/v1/chats/{chat_id}/completions", headers=headers, json=payload)
+            assert r2.status_code in (429,)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_complete_v2_operational_and_persists():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_complete_v2_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    try:
+        from tldw_Server_API.app.main import app
+        # Ensure no external calls for local-llm
+        os.environ["ALLOW_LOCAL_LLM_CALLS"] = "false"
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Character and chat
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            # Call complete-v2
+            payload = {"append_user_message": "Hello there", "save_to_db": True}
+            r = await client.post(f"/api/v1/chats/{chat_id}/complete-v2", headers=headers, json=payload)
+            assert r.status_code == 200
+            data = r.json()
+            assert data.get("saved") is True
+            # Offline sim echoes last user content; assistant_content should match
+            assert data.get("assistant_content")
+
+            # Verify messages persisted
+            r = await client.get(f"/api/v1/chats/{chat_id}/messages", headers=headers)
+            assert r.status_code == 200
+            msgs = r.json().get("messages", [])
+            assert any(m.get("sender") == "user" and m.get("content") == "Hello there" for m in msgs)
+            assert any(m.get("sender") == "assistant" and isinstance(m.get("content"), str) for m in msgs)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

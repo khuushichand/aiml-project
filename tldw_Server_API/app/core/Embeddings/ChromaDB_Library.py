@@ -38,7 +38,9 @@ except Exception:
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
     def create_embeddings_batch(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
-from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+    log_security_violation,
+)
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
@@ -67,12 +69,8 @@ def validate_user_id(user_id: str) -> str:
     # First, check raw input for forbidden characters (before trimming)
     if any(pattern in raw_user_id for pattern in ['..', '/', '\\', '\x00', '\n', '\r']):
         logger.error(f"Potential path traversal attempt detected in user_id: {user_id[:50]}")
-        audit_log(
-            AuditEventType.PATH_TRAVERSAL_ATTEMPT,
-            user_id=raw_user_id[:50],
-            details={"attempted_value": raw_user_id[:100]},
-            severity="WARNING"
-        )
+        # Best-effort unified audit (non-blocking)
+        log_security_violation(user_id=raw_user_id[:50], action="path_traversal_attempt", metadata={"attempted_value": raw_user_id[:100]})
         raise ValueError("Invalid user_id: contains forbidden characters")
     
     # Now trim safe leading/trailing whitespace
@@ -81,12 +79,7 @@ def validate_user_id(user_id: str) -> str:
     # Only allow alphanumeric, underscore, and hyphen
     if not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
         logger.error(f"Invalid user_id format: {user_id[:50]}")
-        audit_log(
-            AuditEventType.INVALID_USER_ID,
-            user_id=user_id[:50],
-            details={"reason": "invalid_characters"},
-            severity="WARNING"
-        )
+        log_security_violation(user_id=user_id[:50], action="invalid_user_id", metadata={"reason": "invalid_characters"})
         raise ValueError("Invalid user_id: must contain only alphanumeric characters, underscores, and hyphens")
     
     # Limit length to prevent DoS

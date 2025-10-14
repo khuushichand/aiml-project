@@ -52,6 +52,10 @@ JWT-based authentication with user management:
 - **Features**: User registration, roles, permissions; API key CRUD endpoints are not yet public
 - **Use Case**: Team deployments, production environments
 
+Signing algorithms:
+- Default HS256 with `JWT_SECRET_KEY`.
+- Recommended RS256 with `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` for multi-service deployments.
+
 ## API Endpoints
 
 ### Authentication Endpoints
@@ -102,10 +106,16 @@ POST /api/v1/auth/refresh
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
   "token_type": "bearer",
   "expires_in": 1800
 }
 ```
+
+Notes:
+- In multi-user mode, refresh ties to the server-side session. If the session is missing or revoked, refresh fails with 401.
+- When `ROTATE_REFRESH_TOKENS=true` (default), the endpoint returns a new refresh token and invalidates the previous one for the session. Clients must persist the returned refresh token for subsequent refreshes.
+- Tokens optionally include `iss` and `aud` claims when configured. See Authentication Setup for `JWT_ISSUER` and `JWT_AUDIENCE`.
 
 #### Logout
 ```http

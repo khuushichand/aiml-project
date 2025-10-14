@@ -289,10 +289,11 @@ async def lifespan(app: FastAPI):
         # Initialize Provider Manager
         try:
             from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-            from tldw_Server_API.app.core.Chat.Chat_Functions import API_CALL_HANDLERS
-            
-            # Get list of configured providers
-            providers = list(API_CALL_HANDLERS.keys())
+            # Seed from authoritative provider configuration to avoid drift
+            from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+
+            # Get list of configured providers (authoritative mapping)
+            providers = list(PROVIDER_API_CALL_HANDLERS.keys())
             provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
             await provider_manager.start_health_checks()
             logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
@@ -376,8 +377,9 @@ async def lifespan(app: FastAPI):
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
 
-    # Start background workers: ephemeral collections cleanup, claims rebuild
+    # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), claims rebuild
     cleanup_task = None
+    core_jobs_task = None
     claims_task = None
     try:
         import os as _os
@@ -432,6 +434,26 @@ async def lifespan(app: FastAPI):
                 logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
+
+    # Core Jobs worker (Chatbooks, if backend=core)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.core_jobs_worker import run_chatbooks_core_jobs_worker as _run_cb_jobs
+        _backend = (_os.getenv("CHATBOOKS_JOBS_BACKEND") or _os.getenv("TLDW_JOBS_BACKEND") or "").lower()
+        _is_core = (_backend == "core") or (not _backend)
+        _core_worker_enabled = (_os.getenv("CHATBOOKS_CORE_WORKER_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"})
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping core Jobs worker (Chatbooks)")
+        else:
+            if _is_core and _core_worker_enabled:
+                core_jobs_stop_event = _asyncio.Event()
+                core_jobs_task = _asyncio.create_task(_run_cb_jobs(core_jobs_stop_event))
+                logger.info("Core Jobs worker (Chatbooks) started with explicit stop_event signal")
+            else:
+                logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
+    except Exception as e:
+        logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
 
     # Claims rebuild worker (periodic)
     try:
@@ -600,10 +622,21 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cancel background worker(s)
+    # Cancel/stop background worker(s)
     try:
         if 'cleanup_task' in locals() and cleanup_task:
             cleanup_task.cancel()
+        if 'core_jobs_task' in locals() and core_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if 'core_jobs_stop_event' in locals() and core_jobs_stop_event:
+                try:
+                    core_jobs_stop_event.set()
+                    await _asyncio.wait_for(core_jobs_task, timeout=5.0)
+                    logger.info("Core Jobs worker (Chatbooks) stopped via stop_event")
+                except Exception:
+                    core_jobs_task.cancel()
+            else:
+                core_jobs_task.cancel()
         if 'claims_task' in locals() and claims_task:
             claims_task.cancel()
     except Exception:
@@ -672,13 +705,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
     
-    # Shutdown Audit Logger
+    # Shutdown Unified Audit Services (via DI cache)
     try:
-        if 'audit_logger' in locals():
-            await audit_logger.stop()
-            logger.info("App Shutdown: Audit logger stopped")
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            shutdown_all_audit_services,
+        )
+        await shutdown_all_audit_services()
+        logger.info("App Shutdown: Unified audit services stopped")
     except Exception as e:
-        logger.error(f"App Shutdown: Error stopping audit logger: {e}")
+        logger.error(f"App Shutdown: Error stopping unified audit services: {e}")
     
     # Cleanup CPU pools
     try:
@@ -993,9 +1028,8 @@ else:
 # Display API key information on startup for single user mode
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 
-@app.on_event("startup")
-async def display_startup_info():
-    """Display important startup information including API key in single user mode."""
+async def _display_startup_info_and_warm():
+    """Startup banner and optional warm-up tasks (moved to lifespan)."""
     if is_single_user_mode():
         settings = get_settings()
         api_key = settings.SINGLE_USER_API_KEY
@@ -1006,23 +1040,15 @@ async def display_startup_info():
             return f"{_key[:4]}...{_key[-4:]}"
         _is_prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
         _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
-        
-        # Create a visually prominent display
         logger.info("="*70)
         logger.info("🚀 TLDW Server Started in SINGLE USER MODE")
         logger.info("="*70)
-        logger.info("")
         logger.info("📌 API Key for authentication:")
-        if _is_prod and not _show_key:
-            logger.info(f"   {_mask_key(api_key)} (masked)")
-        else:
-            logger.info(f"   {api_key}")
-        logger.info("")
+        logger.info(f"   {_mask_key(api_key) if (_is_prod and not _show_key) else api_key}")
         logger.info("🌐 Access URLs:")
         logger.info("   WebUI:    http://localhost:8000/webui/")
         logger.info("   API Docs: http://localhost:8000/docs")
         logger.info("   ReDoc:    http://localhost:8000/redoc")
-        logger.info("")
         logger.info("💡 The WebUI will automatically use this API key")
         logger.info("="*70)
     else:
@@ -1032,17 +1058,13 @@ async def display_startup_info():
         logger.info("Authentication required via JWT tokens")
         logger.info("="*70)
 
-    # Skip evaluation manager pre-warm in tests/heavy-disabled mode
+    # Optional pre-warm
     import os as _event_os
-    if _event_os.getenv("TEST_MODE", "").lower() == "true" or _event_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() in {"1", "true", "yes", "on"}:
-        logger.info("Test mode/heavy-startup disabled: Skipping evaluation manager pre-warm")
-    else:
+    if _event_os.getenv("TEST_MODE", "").lower() != "true" and _event_os.getenv("DISABLE_HEAVY_STARTUP", "").lower() not in {"1", "true", "yes", "on"}:
         try:
             await asyncio.to_thread(get_cached_evaluation_manager)
         except Exception as exc:
             logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
-            raise
-
     try:
         if needs_setup():
             logger.info("First-time setup is enabled. Open http://localhost:8000/setup to configure the server.")
@@ -1285,6 +1307,8 @@ from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring
 app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
 app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
 app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
+app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
 
 # Router for authentication endpoints (NEW)
 app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])

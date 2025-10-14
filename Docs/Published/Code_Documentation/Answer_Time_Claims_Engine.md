@@ -25,8 +25,12 @@ Prompts (override via `Config_Files/Prompts/`):
 Verifier: `HybridClaimVerifier` (per claim)
 - Retrieval: uses provided `retrieve_fn(claim_text, top_k)` when available; otherwise uses passed `documents` (top_k default 5).
 - Evidence selection: collects up to 3 snippets; boosts documents containing numbers/dates that appear in the claim.
-- NLI first: attempts a local NLI model (default `roberta-large-mnli`, override with `RAG_NLI_MODEL`/`RAG_NLI_MODEL_PATH`). If confidence ≥ `conf_threshold` (default 0.7), returns `supported|refuted|nei` immediately.
-- LLM judge fallback: calls the provided `analyze` function with a strict-JSON judging prompt to return `{ label, confidence, rationale }`.
+- Strategy (`claim_verifier`):
+  - `"hybrid"` (default): try NLI first; if unavailable/low-confidence, fall back to LLM judge.
+  - `"nli"`: use only NLI; if unavailable or below threshold, return `nei` (no LLM fallback).
+  - `"llm"`: skip NLI entirely and use only the LLM judge.
+- NLI: local model (default `roberta-large-mnli`, override with `RAG_NLI_MODEL`/`RAG_NLI_MODEL_PATH`).
+- LLM judge: calls the provided `analyze` function with a strict-JSON judging prompt to return `{ label, confidence, rationale }`.
 
 ## Output
 
@@ -93,4 +97,3 @@ print(result["summary"])
 - `claim_extractor="auto"` currently prefers the LLM extractor with heuristic fallback; APS requires an LLM.
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.
-

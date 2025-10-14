@@ -111,9 +111,9 @@ Notes:
 - Concurrency: SQLite uses WAL/busy timeouts in some modules (e.g., Prompts DB, Users SQLite schema initialization). Triggers enforce optimistic concurrency where applicable.
 
 ## Dependency Injection (FastAPI)
-- ChaChaNotes: tldw_Server_API/app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py:1 (`get_chacha_db_for_user`)
-- Prompts/Prompt Studio: tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py:1 (`get_prompts_db_for_user`)
-- Evaluations audit logger: tldw_Server_API/app/api/v1/API_Deps/Evaluations_DB_Deps.py:1 (`get_evaluations_logger_for_user`)
+- ChaChaNotes: `tldw_Server_API/app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py`:1 (`get_chacha_db_for_user`)
+- Prompts/Prompt Studio: `tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py`:1 (`get_prompts_db_for_user`)
+- Unified audit service: `tldw_Server_API/app/api/v1/API_Deps/Audit_DB_Deps.py`:1 (`get_audit_service_for_user`)
 
 ## Configuration Reference
 - `USER_DB_BASE_DIR`: Base dir for per‑user SQLite and ChromaDB storage.

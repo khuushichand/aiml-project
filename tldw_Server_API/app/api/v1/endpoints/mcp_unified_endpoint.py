@@ -16,6 +16,9 @@ from tldw_Server_API.app.core.MCP_unified import (
     MCPResponse,
     get_config
 )
+from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
+from fastapi import Response
 from tldw_Server_API.app.core.MCP_unified.auth import (
     JWTManager,
     UserRole,
@@ -294,6 +297,62 @@ async def mcp_request(
     return response
 
 
+@router.post("/request/batch", response_model=list[MCPResponse])
+async def mcp_request_batch(
+    requests: list[MCPRequest],
+    client_id: Optional[str] = Query(None, description="Client identifier"),
+    user: Optional[TokenData] = Depends(get_current_user),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+):
+    """
+    Process a batch of MCP requests via HTTP.
+    Accepts a JSON array of JSON-RPC 2.0 requests and returns an array
+    of responses. Notifications (no id) are dropped per spec.
+    """
+    server = get_mcp_server()
+    if not server.initialized:
+        await server.initialize()
+
+    # Attach org/team metadata when auth via API key
+    metadata: Dict[str, Any] = {}
+    if x_api_key:
+        try:
+            api_mgr = await get_api_key_manager()
+            info = await api_mgr.validate_api_key(x_api_key)
+            if info:
+                if info.get('org_id') is not None:
+                    metadata['org_id'] = info.get('org_id')
+                if info.get('team_id') is not None:
+                    metadata['team_id'] = info.get('team_id')
+        except Exception as e:
+            logger.debug(f"Batch API key metadata attach failed: {e}")
+
+    # Derive user id with a robust single-user fallback
+    derived_user_id: Optional[str] = user.sub if user else None
+    if derived_user_id is None:
+        try:
+            if x_api_key and is_single_user_mode():
+                settings = get_settings()
+                if x_api_key == settings.SINGLE_USER_API_KEY:
+                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
+        except Exception:
+            pass
+
+    # Build context and process via protocol directly to leverage batch support
+    ctx = RequestContext(
+        request_id="http_batch",
+        user_id=derived_user_id,
+        client_id=client_id,
+        metadata=metadata,
+    )
+    payload = [r.model_dump() for r in requests]
+    resp = await server.protocol.process_request(payload, ctx)
+    # If only notifications were sent, return empty list
+    if resp is None:
+        return []
+    return resp
+
+
 @router.get("/status", response_model=ServerStatusResponse)
 async def get_server_status():
     """
@@ -335,6 +394,42 @@ async def get_server_metrics(
     
     metrics = await server.get_metrics()
     return ServerMetricsResponse(**metrics)
+
+
+@router.get("/metrics/prometheus")
+async def get_prometheus_metrics(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+):
+    """
+    Prometheus scrape endpoint for MCP metrics.
+
+    Security: By default, requires admin authentication. Set MCP_PROMETHEUS_PUBLIC=1
+    to allow unauthenticated internal-only scraping. When public, ensure it is
+    exposed only on trusted networks or behind an ingress/proxy that enforces
+    authentication in production environments.
+    """
+    import os
+    public = os.getenv("MCP_PROMETHEUS_PUBLIC", "").lower() in {"1", "true", "yes"}
+    if not public:
+        # Require admin
+        user = await get_current_user(credentials, x_api_key)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        try:
+            if is_single_user_mode():
+                pass
+            else:
+                if UserRole.ADMIN.value not in (user.roles or []):
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+        except Exception:
+            # If settings not available, fall back to role check only
+            if UserRole.ADMIN.value not in (user.roles or []):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    collector = get_metrics_collector()
+    content = collector.get_prometheus_metrics()
+    # Use standard Prometheus content type regardless of availability
+    return Response(content=content, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @router.get("/tools")
@@ -589,18 +684,21 @@ async def create_token(
     auth_request: AuthTokenRequest
 ):
     """
-    Create authentication token.
-    
-    Supports authentication via:
-    - Username/password
-    - API key
-    
-    Returns JWT access token and optional refresh token.
+    Issue an MCP access token.
+
+    Note: Direct username/password authentication for MCP is disabled by default.
+    Use the primary AuthNZ login flow to obtain a JWT, or enable this endpoint
+    explicitly via MCP_ENABLE_DEMO_AUTH=1 for development/testing only.
     """
+    import os
+    if os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Direct MCP auth is disabled. Use AuthNZ bearer tokens."
+        )
+
+    # Demo-only behavior (opt-in)
     jwt_manager = get_jwt_manager()
-    
-    # TODO: Implement actual user authentication
-    # For now, create a demo token
     if auth_request.username == "admin" and auth_request.password == "admin":
         access_token = jwt_manager.create_access_token(
             subject="admin_user",
@@ -608,19 +706,14 @@ async def create_token(
             roles=[UserRole.ADMIN.value],
             permissions=["*"]
         )
-        
         refresh_token, _ = jwt_manager.create_refresh_token("admin_user")
-        
         return AuthTokenResponse(
             access_token=access_token,
-            expires_in=1800,  # 30 minutes
+            expires_in=1800,
             refresh_token=refresh_token
         )
-    
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid credentials"
-    )
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)

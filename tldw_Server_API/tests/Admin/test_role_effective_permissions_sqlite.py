@@ -4,6 +4,7 @@ import importlib
 
 from fastapi.testclient import TestClient
 
+from pathlib import Path
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 
@@ -25,9 +26,23 @@ def _fresh_client() -> TestClient:
     except Exception:
         pass
 
+    # Ensure SQLite AuthNZ schema exists (migrations) for the fresh DB
+    try:
+        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+        ensure_authnz_tables(Path(tmp_path))
+    except Exception:
+        pass
+
     from tldw_Server_API.app import main as app_main
     importlib.reload(app_main)
     client = TestClient(app_main.app, headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]})
+    # Fallback: ensure RBAC seed for single-user SQLite if not already present
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(ensure_single_user_rbac_seed_if_needed())
+    except Exception:
+        pass
     client._tmp_auth_db_path = tmp_path  # type: ignore[attr-defined]
     return client
 
@@ -69,4 +84,3 @@ def test_role_effective_permissions_sqlite():
         # all_permissions should contain both categories
         union_set = set(eff2["permissions"]) | set(eff2["tool_permissions"])
         assert set(eff2["all_permissions"]) == union_set
-

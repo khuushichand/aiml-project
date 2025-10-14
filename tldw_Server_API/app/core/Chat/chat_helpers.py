@@ -237,7 +237,7 @@ async def load_conversation_history(
             if text_content:
                 # Apply placeholder replacement if using character context
                 if character_card:
-                    from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_placeholders
+                    from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
                     char_name = character_card.get('name', "Assistant")
                     text_content = replace_placeholders(text_content, char_name, "User")
                 msg_parts.append({"type": "text", "text": text_content})

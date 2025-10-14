@@ -63,6 +63,7 @@ class ExportStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 class ImportStatus(Enum):
@@ -221,9 +222,6 @@ class ChatbookManifest:
     categories: List[str] = field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
-    
-    # User info (sanitized for export)
-    user_id: Optional[str] = None  # Anonymized user identifier
     
     def to_dict(self) -> dict:
         """Convert manifest to dictionary for JSON serialization."""

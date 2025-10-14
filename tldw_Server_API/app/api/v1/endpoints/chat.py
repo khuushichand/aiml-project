@@ -6,13 +6,6 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
-from tldw_Server_API.app.core.Auth.auth_utils import (
-    extract_bearer_token,
-    validate_api_token,
-    get_expected_api_token,
-    is_authentication_required
-)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Utils.image_validation import (
     validate_data_uri,
@@ -54,14 +47,25 @@ from requests import RequestException, HTTPError
 
 # Import new modules for integration
 from tldw_Server_API.app.core.DB_Management.async_db_wrapper import create_async_db
+# Temporary shim for test patch compatibility. Prefer real AuthNZ util if present.
+try:
+    from tldw_Server_API.app.core.AuthNZ.auth_utils import (
+        is_authentication_required as is_authentication_required,  # pragma: no cover
+    )
+except Exception:  # pragma: no cover - fallback for tests
+    def is_authentication_required() -> bool:
+        """Fallback used in tests, can be monkeypatched by tests.
+        Defaults to True to enforce auth when not patched.
+        """
+        return True
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Chat.request_queue import get_request_queue, RequestPriority
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    get_unified_audit_service, 
-    AuditEventType, 
-    AuditContext
+    AuditEventType,
+    AuditContext,
 )
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
 
@@ -91,15 +95,19 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
 )
-from tldw_Server_API.app.core.Chat.Chat_Functions import (
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
     ChatBadRequestError,
     ChatConfigurationError,
-    ChatDictionary,
     ChatProviderError,
     ChatRateLimitError,
+)
+from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call,
+)
+from tldw_Server_API.app.core.Chat.Chat_Functions import (
+    ChatDictionary,
     process_user_input,
     update_chat_content,
 )
@@ -152,10 +160,24 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
     validate_max_tokens,
     validate_request_size,
 )
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib import replace_placeholders
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
+from tldw_Server_API.app.core.Chat.chat_service import (
+    parse_provider_model_for_metrics,
+    normalize_request_provider_and_model,
+    merge_api_keys_for_provider,
+    build_call_params_from_request,
+    estimate_tokens_from_json,
+    moderate_input_messages,
+    build_context_and_messages,
+    apply_prompt_templating,
+    execute_streaming_call,
+    execute_non_stream_call,
+)
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
@@ -186,6 +208,16 @@ MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10)
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
 
+# Feature flag: queued execution of chat calls via workers (default disabled)
+_env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
+try:
+    QUEUED_EXECUTION: bool = (
+        (_env_queued.strip().lower() in {"1", "true", "yes", "on"}) if _env_queued is not None
+        else _chat_config.get('queued_execution', 'False').lower() == 'true'
+    )
+except Exception:
+    QUEUED_EXECUTION = False
+
 # Default persistence behavior for chats
 def _to_bool(val: str) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -213,9 +245,6 @@ else:
         DEFAULT_SAVE_TO_DB = _to_bool(auto_save_default) if auto_save_default is not None else False
 
 # --- Helper Functions ---
-
-def _check_mime(mime: str) -> bool:
-    return mime.lower() in ALLOWED_IMAGE_MIME_TYPES
 
 async def _process_content_for_db_sync(
     content_iterable: Any, # Can be list of dicts or string
@@ -434,6 +463,7 @@ async def create_chat_completion(
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
     request: Request = None,  # Optional Request object for audit logging and rate limiting
+    audit_service=Depends(get_audit_service_for_user),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
     current_loop = asyncio.get_running_loop()
@@ -447,39 +477,13 @@ async def create_chat_completion(
     # Initialize metrics collector
     metrics = get_chat_metrics()
     
-    # Parse provider and model for metrics
-    # Handle model strings with provider prefix (e.g., "anthropic/claude-3-opus")
-    model_str = request_data.model or "unknown"
-    if "/" in model_str:
-        parts = model_str.split("/", 1)
-        if len(parts) == 2:
-            model_provider, model_name = parts
-            # If no explicit api_provider was set, use the one from the model string
-            if not request_data.api_provider:
-                provider = model_provider.lower()
-                model = model_name
-            else:
-                provider = request_data.api_provider.lower()
-                model = model_name
-        else:
-            provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
-            model = model_str
-    else:
-        provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
-        model = model_str
+    # Parse provider and model for metrics (no mutation)
+    provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)
     
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
     
-    # Initialize audit logger with error handling
-    audit_service = None
-    try:
-        audit_service = await get_unified_audit_service()
-    except Exception as audit_error:
-        logger.warning(f"Failed to initialize audit service: {audit_error}")
-        # Continue without audit logging rather than failing the request
-    
-    # Get user ID for rate limiting and audit (extract from token or use client_id)
-    user_id = client_id  # In production, extract from JWT token
+    # Get user ID for rate limiting and audit (use authenticated user)
+    user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
     
     # Initialize audit context for logging
     context = None
@@ -488,7 +492,9 @@ async def create_chat_completion(
             context = AuditContext(
                 user_id=user_id,
                 request_id=request_id,
-                ip_address=request.client.host if request and hasattr(request, 'client') else None
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+                endpoint="/chat/completions",
+                method="POST",
             )
             await audit_service.log_event(
                 event_type=AuditEventType.API_REQUEST,
@@ -585,8 +591,8 @@ async def create_chat_completion(
             except Exception:
                 rate_limiter = None
         if rate_limiter:
-            # Estimate tokens for rate limiting
-            estimated_tokens = len(request_json) // 4  # Rough estimate: 4 chars per token
+            # Estimate tokens for rate limiting (heuristic)
+            estimated_tokens = estimate_tokens_from_json(request_json)
             
             allowed, rate_error = await rate_limiter.check_rate_limit(
                 user_id=user_id,
@@ -614,125 +620,28 @@ async def create_chat_completion(
     # Moderation: apply global/per-user policy to input messages (redact or block)
     try:
         moderation = get_moderation_service()
-        # Prefer authenticated user_id from request state, fall back to client_id
-        req_user_id = None
         try:
-            if request is not None and hasattr(request, 'state'):
-                req_user_id = getattr(request.state, 'user_id', None)
+            mon = get_topic_monitoring_service()
         except Exception:
-            req_user_id = None
-        eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
-
-        async def _moderate_text_in_place(text: str) -> str:
-            # Topic monitoring (non-blocking): emit alerts if configured
-            try:
-                try:
-                    mon = get_topic_monitoring_service()
-                except Exception:
-                    mon = None
-                if mon is not None and text:
-                    mon.evaluate_and_alert(
-                        user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                        text=text,
-                        source="chat.input",
-                        scope_type="user",
-                        scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                    )
-            except Exception as _e:
-                logger.debug(f"Topic monitoring (input) skipped: {_e}")
-            if not eff_policy.enabled or not eff_policy.input_enabled:
-                return text
-            resolved_action = None
-            sample = None
-            redacted = None
-            if hasattr(moderation, 'evaluate_action'):
-                try:
-                    eval_res = moderation.evaluate_action(text, eff_policy, 'input')
-                    # Backward compatible unpacking
-                    if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                        resolved_action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
-                        category = eval_res[3] if len(eval_res) >= 4 else None
-                    else:
-                        resolved_action, redacted, sample = eval_res  # type: ignore
-                        category = None
-                except Exception:
-                    resolved_action = None
-            if not resolved_action:
-                flagged, sample = moderation.check_text(text, eff_policy)
-                if not flagged:
-                    return text
-                resolved_action = eff_policy.input_action
-                redacted = moderation.redact_text(text, eff_policy) if resolved_action == 'redact' else None
-            if resolved_action == 'pass' or (resolved_action == 'warn' and sample is None):
-                return text
-            logger.info(f"Input moderation flag (user={req_user_id or client_id}): pattern={sample}")
-            # Metrics + Audit (input)
-            try:
-                metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
-            except Exception:
-                pass
-            try:
-                if audit_service and context:
-                    import asyncio as _asyncio
-                    _asyncio.create_task(
-                        audit_service.log_event(
-                            event_type=AuditEventType.SECURITY_VIOLATION,
-                            context=context,
-                            action="moderation.input",
-                            result=("failure" if resolved_action == 'block' else "success"),
-                            metadata={
-                                "phase": "input",
-                                "action": resolved_action,
-                                "pattern": sample,
-                            }
-                        )
-                    )
-            except Exception:
-                pass
-            if resolved_action == 'block':
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
-            if resolved_action == 'redact' and redacted is not None:
-                return redacted
-            return text
-
-        if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
-            for m in request_data.messages:
-                if getattr(m, 'role', None) != 'user':
-                    continue
-                if isinstance(m.content, str):
-                    m.content = await _moderate_text_in_place(m.content)
-                elif isinstance(m.content, list):
-                    for part in m.content:
-                        try_type = getattr(part, 'type', None)
-                        if try_type == 'text':
-                            current = getattr(part, 'text', None)
-                            if isinstance(current, str):
-                                setattr(part, 'text', await _moderate_text_in_place(current))
+            mon = None
+        await moderate_input_messages(
+            request_data=request_data,
+            request=request,
+            moderation_service=moderation,
+            topic_monitoring_service=mon,
+            metrics=metrics,
+            audit_service=audit_service,
+            audit_context=context,
+            client_id=client_id,
+            audit_event_type=AuditEventType.SECURITY_VIOLATION,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"Moderation input processing error: {e}")
 
-    # Parse provider from model string if it contains a provider prefix (e.g., "anthropic/claude-3-opus")
-    model_str = request_data.model or ""
-    actual_model = model_str
-    
-    # Check if model contains provider prefix
-    if "/" in model_str:
-        parts = model_str.split("/", 1)
-        if len(parts) == 2:
-            model_provider, actual_model = parts
-            # If no explicit api_provider was set, use the one from the model string
-            if not request_data.api_provider:
-                provider = model_provider.lower()
-            else:
-                provider = request_data.api_provider.lower()
-            # Update the model to just be the model name without provider prefix
-            request_data.model = actual_model
-        else:
-            provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
-    else:
-        provider = (request_data.api_provider or DEFAULT_LLM_PROVIDER).lower()
+    # Normalize provider/model on the request for downstream logic
+    provider = normalize_request_provider_and_model(request_data, DEFAULT_LLM_PROVIDER)
     
     user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
     logger.info(
@@ -753,271 +662,57 @@ async def create_chat_completion(
         import os as _os_keys
         module_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
         dynamic_keys = get_api_keys()
-        if module_keys:
-            # Module-level keys (including patched values) override dynamic lookups
-            api_keys = {**dynamic_keys, **module_keys}
-        else:
-            api_keys = dynamic_keys
-        # Normalize empty strings to None so optional providers don't receive "" as a key
-        _raw_key = api_keys.get(target_api_provider)
-        provider_api_key = _raw_key if (_raw_key is not None and str(_raw_key) != "") else None
+        _raw_key, provider_api_key = merge_api_keys_for_provider(
+            target_api_provider,
+            module_keys,
+            dynamic_keys,
+            requires_key_map={},
+        )
 
-        # Simplified list, actual check might be in Chat_Functions or per-provider
-        # FIXME - This should be a more dynamic check based on the provider's requirements.
-        providers_requiring_keys = ["openai", "anthropic", "cohere", "groq", "openrouter", "deepseek", "mistral", "google", "huggingface"]
+        # Centralized provider capabilities
+        try:
+            from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+        except Exception:
+            PROVIDER_REQUIRES_KEY = {}
         # Use the raw value for validation so empty strings are treated as missing
-        if target_api_provider in providers_requiring_keys and not _raw_key:
+        if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key:
             logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
         # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
         # This avoids depending on external network calls in CI and matches integration test expectations.
         _test_mode_flag = _os_keys.getenv("TEST_MODE", "").lower() == "true"
-        if _test_mode_flag and provider_api_key and target_api_provider in providers_requiring_keys:
+        if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
             # Treat keys with obvious invalid patterns as authentication failures in test mode.
             invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
             if any(str(provider_api_key).lower().startswith(p) for p in invalid_patterns):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
-        conversation_created_this_turn = False
-
-        # --- Character and Conversation Context ---
-        # Use helper function to get or create character context
-        character_card_for_context, final_character_db_id = await get_or_create_character_context(
-            chat_db,
-            request_data.character_id,
-            current_loop
+        # --- Character/Conversation Context, History, and Current Turn ---
+        character_card_for_context, final_character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            chat_db=chat_db,
+            request_data=request_data,
+            loop=current_loop,
+            metrics=metrics,
+            default_save_to_db=DEFAULT_SAVE_TO_DB,
+            final_conversation_id=final_conversation_id,
+            save_message_fn=_save_message_turn_to_db,
         )
-        if character_card_for_context:
-            system_prompt_preview = character_card_for_context.get('system_prompt')
-            if system_prompt_preview:
-                system_prompt_preview = system_prompt_preview[:50] + "..." if len(system_prompt_preview) > 50 else system_prompt_preview
-            else:
-                system_prompt_preview = "None"
-            logger.debug(f"Loaded character: {character_card_for_context.get('name')} with system_prompt: {system_prompt_preview}")
-        
-        # Track character access
-        if character_card_for_context:
-            metrics.track_character_access(
-                character_id=str(request_data.character_id or "default"),
-                cache_hit=False  # Could be enhanced to track actual cache hits
-            )
-        
-        if not character_card_for_context:
-            # Do not hard-fail — operate in ephemeral mode with a minimal default context
-            logger.warning("No character context found; proceeding with ephemeral default context.")
-            character_card_for_context = {"name": "Default Character", "system_prompt": ""}
-            final_character_db_id = None
 
-        # Multi-User Security FIXME
-        client_id_from_db = getattr(chat_db, 'client_id', None)
-        # if not client_id_from_db: # Should be set by get_chacha_db_for_user
-        #      logger.critical("Client ID missing on chat_db instance. This is a server configuration issue.")
-        #      raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error: Client identification for DB operations failed.")
-
-        # Determine persistence behavior
-        # If request specifies save_to_db, honor it; otherwise use server default
-        _requested = getattr(request_data, 'save_to_db', None)
-        should_persist: bool = bool(_requested) if (_requested is not None) else DEFAULT_SAVE_TO_DB
-
-        # Use helper function to get or create conversation only if persisting
-        if should_persist:
-            final_conversation_id, conversation_created_this_turn = await get_or_create_conversation(
-                chat_db,
-                final_conversation_id,
-                final_character_db_id,
-                character_card_for_context.get('name', 'Chat'),
-                client_id_from_db,
-                current_loop
-            )
-        else:
-            # Ephemeral conversation id (no DB writes)
-            if not final_conversation_id:
-                import uuid as _uuid
-                final_conversation_id = str(_uuid.uuid4())
-            conversation_created_this_turn = False
-        
-        # Track conversation creation/resumption
-        if final_conversation_id:
-            metrics.track_conversation(final_conversation_id, conversation_created_this_turn)
-        
-        if not final_conversation_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
-
-        # --- History Loading ---
-        historical_openai_messages: List[Dict[str, Any]] = []
-        # Load history when a valid conversation exists, even if not persisting this turn
-        if final_conversation_id and (not conversation_created_this_turn):
-            # Limit history length (e.g., 20 messages = 10 turns)
-            raw_hist = await current_loop.run_in_executor(None, chat_db.get_messages_for_conversation, final_conversation_id, 20, 0, "ASC")
-            for db_msg in raw_hist:
-                role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
-                char_name_hist = character_card_for_context.get('name', "Char") if character_card_for_context else "Char"
-
-                text_content = db_msg.get("content", "")
-                if text_content: # Apply placeholder replacement
-                     text_content = replace_placeholders(text_content, char_name_hist, "User") # Assuming "User" for {{user}} placeholder
-
-                msg_parts = []
-                if text_content:
-                    msg_parts.append({"type": "text", "text": text_content})
-
-                img_data, img_mime = db_msg.get("image_data"), db_msg.get("image_mime_type")
-                if img_data and img_mime:
-                    try:
-                        b64_img = await current_loop.run_in_executor(None, base64.b64encode, img_data)
-                        msg_parts.append({"type": "image_url", "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}})
-                    except Exception as e: logger.warning(f"Error encoding DB image for history (msg_id {db_msg.get('id')}): {e}")
-
-                if msg_parts:
-                    hist_entry = {"role": role, "content": msg_parts}
-                    if role == "assistant" and character_card_for_context and character_card_for_context.get('name'):
-                        # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
-                        name = character_card_for_context.get('name', '')
-                        name = name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
-                        if name:  # Only add if name is not empty after sanitization
-                            hist_entry["name"] = name
-                    historical_openai_messages.append(hist_entry)
-            logger.info(f"Loaded {len(historical_openai_messages)} historical messages for conv_id '{final_conversation_id}'.")
-
-        # --- User Message Processing & DB Save ---
-        current_turn_messages_for_llm: List[Dict[str, Any]] = []
-        for msg_model in request_data.messages:
-            if msg_model.role == "system": continue # Handled by templating
-
-            msg_dict = msg_model.model_dump(exclude_none=True)
-            msg_for_db = msg_dict.copy()
-            if msg_model.role == "assistant" and character_card_for_context:
-                msg_for_db["name"] = character_card_for_context.get('name', "Assistant")
-
-            # Save user/assistant input only if persisting this chat
-            if should_persist:
-                await _save_message_turn_to_db(chat_db, final_conversation_id, msg_for_db, use_transaction=True)
-
-            msg_for_llm = msg_dict.copy()
-            if msg_model.role == "assistant" and character_card_for_context and character_card_for_context.get('name'):
-                # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
-                name = character_card_for_context.get('name', '')
-                name = name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
-                if name:  # Only add if name is not empty after sanitization
-                    msg_for_llm["name"] = name
-            current_turn_messages_for_llm.append(msg_for_llm)
-
-        # --- Prompt Templating ---
-        llm_payload_messages = historical_openai_messages + current_turn_messages_for_llm
-        active_template = load_template(request_data.prompt_template_name or DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name)
-        template_data: Dict[str, Any] = {}
-        if character_card_for_context:
-            template_data.update({k: v for k, v in character_card_for_context.items() if isinstance(v, (str, int, float))}) # Basic fields
-            template_data["char_name"] = character_card_for_context.get("name", "Character") # Ensure common alias
-            # Add specific character fields used by templates if not covered by above
-            template_data["character_system_prompt"] = character_card_for_context.get('system_prompt', "")
-
-        sys_msg_from_req = next((m.content for m in request_data.messages if m.role == 'system' and isinstance(m.content, str)), None)
-        template_data["original_system_message_from_request"] = sys_msg_from_req or ""
-
-        final_system_message: Optional[str] = None
-        logger.debug(f"sys_msg_from_req: {sys_msg_from_req}, active_template: {active_template}, character: {character_card_for_context.get('name') if character_card_for_context else None}")
-        if active_template and active_template.system_message_template:
-            final_system_message = apply_template_to_string(active_template.system_message_template, template_data)
-            # If template produces empty string and we have a character with system prompt, use that instead
-            if not final_system_message and character_card_for_context and character_card_for_context.get('system_prompt'):
-                final_system_message = character_card_for_context.get('system_prompt')
-                # Use repr() to safely log system prompts that might contain curly braces
-                system_prompt_preview = final_system_message[:50] if final_system_message else ""
-                logger.debug(f"Template produced empty, using character system prompt: {repr(system_prompt_preview)}...")
-        elif sys_msg_from_req:
-            final_system_message = sys_msg_from_req
-        elif character_card_for_context and character_card_for_context.get('system_prompt'):
-            # Use character's system prompt if no template and no system message in request
-            final_system_message = character_card_for_context.get('system_prompt')
-            # Use repr() to safely log system prompts that might contain curly braces
-            system_prompt_preview = final_system_message[:50] if final_system_message else ""
-            logger.debug(f"Using character system prompt: {repr(system_prompt_preview)}...")
-        
-        # Use repr() to safely log system message that might contain curly braces
-        logger.debug(f"Final system message: {repr(final_system_message)}")
-
-        templated_llm_payload: List[Dict[str, Any]] = []
-        # FIXME
-        # This logic should be efficient or offloaded if it becomes a bottleneck for large histories/contents.
-        # For now, assume original logic is mostly sound but ensure it handles content lists correctly.
-        if active_template:
-            for msg in llm_payload_messages:
-                templated_msg_content = msg.get("content")
-                role = msg.get("role")
-                content_template_str = None
-                if role == "user" and active_template.user_message_content_template:
-                    content_template_str = active_template.user_message_content_template
-                elif role == "assistant" and active_template.assistant_message_content_template:
-                    content_template_str = active_template.assistant_message_content_template
-
-                if content_template_str:
-                    new_content_parts = []
-                    msg_template_data = template_data.copy()
-                    if isinstance(templated_msg_content, str):
-                        msg_template_data["message_content"] = templated_msg_content
-                        new_text = apply_template_to_string(content_template_str, msg_template_data)
-                        new_content_parts.append({"type": "text", "text": new_text or templated_msg_content})
-                    elif isinstance(templated_msg_content, list):
-                        for part in templated_msg_content:
-                            if part.get("type") == "text":
-                                msg_template_data["message_content"] = part.get("text", "")
-                                new_text_part = apply_template_to_string(content_template_str, msg_template_data)
-                                new_content_parts.append({"type": "text", "text": new_text_part or part.get("text", "")})
-                            else:
-                                new_content_parts.append(part) # Keep image parts
-                    templated_llm_payload.append({**msg, "content": new_content_parts or templated_msg_content}) # type: ignore
-                else:
-                    templated_llm_payload.append(msg)
-        else:
-            templated_llm_payload = llm_payload_messages
+        # --- Prompt Templating (system + content transforms) ---
+        final_system_message, templated_llm_payload = apply_prompt_templating(
+            request_data=request_data,
+            character_card=character_card_for_context or {},
+            llm_payload_messages=llm_payload_messages,
+        )
 
         # --- LLM Call ---
-        call_params = request_data.model_dump(
-            exclude_none=True,
-            exclude={
-                "api_provider",
-                "messages",
-                "character_id",
-                "conversation_id",
-                "prompt_template_name",
-                "stream",
-                "save_to_db",  # internal flag; do not pass to chat_api_call
-            }
+        cleaned_args = build_call_params_from_request(
+            request_data=request_data,
+            target_api_provider=target_api_provider,
+            provider_api_key=provider_api_key,
+            templated_llm_payload=templated_llm_payload,
+            final_system_message=final_system_message,
         )
-
-        # Rename keys to match chat_api_call's signature for generic params
-        if "temperature" in call_params:
-            call_params["temp"] = call_params.pop("temperature")
-
-        if "top_p" in call_params:
-            top_p_value = call_params.pop("top_p")
-            # chat_api_call has 'topp' and 'maxp' which both relate to top_p sampling.
-            # Pass the value to both, let PROVIDER_PARAM_MAP in chat_api_call pick the relevant one.
-            call_params["topp"] = top_p_value
-            call_params["maxp"] = top_p_value
-
-        if "user" in call_params:
-            call_params["user_identifier"] = call_params.pop("user")
-
-        # response_format, tools, tool_choice are already dict/list of dicts/str from model_dump if not None.
-        # They match the expected names in chat_api_call signature.
-
-        # Add other fixed arguments
-        call_params.update({
-            "api_endpoint": target_api_provider,
-            "api_key": provider_api_key,
-            "messages_payload": templated_llm_payload,
-            "system_message": final_system_message,  # This can be None
-            "streaming": request_data.stream,  # This is a boolean
-        })
-
-        # Filter out None values before making the call, as chat_api_call's defaults handle Nones.
-        # The previous `cleaned_args` did this.
-        # Keep system_message even if it's None - let the LLM call handle it
-        cleaned_args = {k: v for k, v in call_params.items() if v is not None}
-        if 'system_message' not in cleaned_args and final_system_message is not None:
-            cleaned_args['system_message'] = final_system_message
 
         # Use provider manager for health checks and failover
         provider_manager = get_provider_manager()
@@ -1049,8 +744,36 @@ async def create_chat_completion(
         # Update the api_endpoint with the selected provider after health check
         cleaned_args['api_endpoint'] = selected_provider
         
-        # TODO: Request Queue Integration (SHIM)
+        # Request Queue Integration (Admission control / backpressure)
         # ------------------------------------------------------------------------
+        try:
+            queue = get_request_queue()
+        except Exception:
+            queue = None
+        if queue is not None and not QUEUED_EXECUTION:
+            try:
+                # Estimate tokens for queue gating (reuse serialized JSON size)
+                est_tokens_for_queue = max(1, len(request_json) // 4)
+                # Use user_id for per-client fairness; HIGH priority for streaming
+                priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
+                # Use request_id generated for this call
+                q_future = await queue.enqueue(
+                    request_id=request_id,
+                    request_data={"endpoint": "/api/v1/chat/completions"},
+                    client_id=str(user_id),
+                    priority=priority,
+                    estimated_tokens=est_tokens_for_queue,
+                )
+                # Await admission; if queue times out internally, it will raise
+                await q_future
+            except ValueError as e:
+                # Queue full or rate limit in queue -> 429
+                logger.warning(f"Queue admission rejected: {e}")
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+            except Exception as e:
+                # Treat unexpected queue errors as service unavailable
+                logger.error(f"Queue admission error: {e}")
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
         # The request queue system has been initialized in main.py but is not yet
         # integrated here. Once the central scheduling/queue module is built, this
         # endpoint should enqueue requests rather than processing them directly.
@@ -1148,583 +871,67 @@ async def create_chat_completion(
             llm_call_func = partial(perform_chat_api_call, **cleaned_args)
 
         if request_data.stream:
-            # Track LLM call
-            llm_start_time = time.time()
-            provider_call_start = time.time()
-            try:
-                raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=True)
-            except HTTPException as he:
-                # Normalize unexpected HTTPExceptions from provider layer to generic 500
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(he).__name__)
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    detail="An unexpected internal server error occurred.")
-            except Exception as e:
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(e).__name__)
-                # Record failure with provider manager
-                if provider_manager:
-                    provider_manager.record_failure(selected_provider, e)
-                    # Try failover provider on certain errors (only if enabled in config)
-                    # Only fallback on upstream/server errors; skip fallback for client/config errors
-                    name_lower_e = type(e).__name__.lower()
-                    client_like_error = ("authentication" in name_lower_e or "ratelimit" in name_lower_e or
-                                         "rate_limit" in name_lower_e or "badrequest" in name_lower_e or
-                                         "bad_request" in name_lower_e or "configuration" in name_lower_e)
-                    if ENABLE_PROVIDER_FALLBACK and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
-                        fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
-                        if fallback_provider:
-                            logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
-                            cleaned_args['api_endpoint'] = fallback_provider
-                            llm_call_func = partial(perform_chat_api_call, **cleaned_args)
-                            try:
-                                raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
-                                provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
-                                metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
-                            except Exception as fallback_error:
-                                provider_manager.record_failure(fallback_provider, fallback_error)
-                                raise fallback_error
-                        else:
-                            raise
-                    else:
-                        raise
-                else:
-                    raise
-            if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
-
-            # Use the improved streaming handler with timeout and heartbeat
-            async def save_callback(full_reply: str):
-                """Callback to save the assistant's reply after streaming completes."""
-                if should_persist and full_reply and final_conversation_id:
-                    # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
-                    asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-                    asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
-                    logger.info(f"Saving assistant reply (len {len(full_reply)}) for conv_id {final_conversation_id}")
-                    # Use transaction for atomic save
-                    await _save_message_turn_to_db(
-                        chat_db, 
-                        final_conversation_id, 
-                        {"role": "assistant", "name": asst_name, "content": full_reply},
-                        use_transaction=True
-                    )
-                else:
-                    logger.info(f"No persistent save (should_persist={should_persist}) or missing data for conv_id {final_conversation_id}.")
-                # After streaming completes, log estimated usage for streaming calls
-                try:
-                    import json as _json
-                    # Estimate prompt tokens from templated payload size
-                    pt_est = 0
-                    try:
-                        pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
-                    except Exception:
-                        pt_est = 0
-                    # Estimate completion tokens from full_reply size
-                    ct_est = max(0, len(full_reply or "") // 4)
-                    user_id = None
-                    api_key_id = None
-                    try:
-                        if request is not None and hasattr(request, 'state'):
-                            user_id = getattr(request.state, 'user_id', None)
-                            api_key_id = getattr(request.state, 'api_key_id', None)
-                    except Exception:
-                        pass
-                    # Latency since provider call started
-                    try:
-                        latency_ms = int((time.time() - llm_start_time) * 1000)
-                    except Exception:
-                        latency_ms = 0
-                    await log_llm_usage(
-                        user_id=user_id,
-                        key_id=api_key_id,
-                        endpoint=f"{request.method}:{request.url.path}",
-                        operation="chat",
-                        provider=provider,
-                        model=model,
-                        status=200,
-                        latency_ms=latency_ms,
-                        prompt_tokens=int(pt_est),
-                        completion_tokens=int(ct_est),
-                        total_tokens=int(pt_est + ct_est),
-                        request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
-                        estimated=True,
-                    )
-                except Exception:
-                    pass
-
-            # Create streaming response with timeout and heartbeat support
-            # Wrap the generator with metrics tracking
-            async def tracked_streaming_generator():
-                async with metrics.track_streaming(final_conversation_id) as stream_tracker:
-                    # Build an optional text transform for output moderation
-                    moderation = get_moderation_service()
-                    req_user_id = None
-                    try:
-                        if request is not None and hasattr(request, 'state'):
-                            req_user_id = getattr(request.state, 'user_id', None)
-                    except Exception:
-                        req_user_id = None
-                    eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
-
-                    from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
-
-                    stream_block_logged = False
-                    stream_redact_logged = False
-
-                    def _out_transform(s: str) -> str:
-                        # Topic monitoring (streaming output): non-blocking, deduped in service
-                        try:
-                            try:
-                                mon = get_topic_monitoring_service()
-                            except Exception:
-                                mon = None
-                            if mon is not None and s:
-                                mon.evaluate_and_alert(
-                                    user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                                    text=s,
-                                    source="chat.output",
-                                    scope_type="user",
-                                    scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                                )
-                        except Exception as _e:
-                            logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
-                        if not eff_policy.enabled or not eff_policy.output_enabled:
-                            return s
-                        # Prefer per-pattern action if service supports it
-                        resolved_action = None
-                        sample = None
-                        redacted_s = None
-                        if hasattr(moderation, 'evaluate_action'):
-                            try:
-                                eval_res = moderation.evaluate_action(s, eff_policy, 'output')
-                                if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                                    resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
-                                    out_category = eval_res[3] if len(eval_res) >= 4 else None
-                                else:
-                                    resolved_action, redacted_s, sample = eval_res  # type: ignore
-                                    out_category = None
-                            except Exception:
-                                resolved_action = None
-                        if not resolved_action:
-                            flagged, sample = moderation.check_text(s, eff_policy)
-                            if not flagged:
-                                return s
-                            resolved_action = eff_policy.output_action
-                            redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == 'redact' else None
-                        if resolved_action == 'block':
-                                # Abort stream gracefully after sending SSE error
-                                try:
-                                    if not stream_block_logged:
-                                        metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                                        stream_block_logged = True
-                                except Exception:
-                                    pass
-                                try:
-                                    if audit_service and context and not stream_block_logged:
-                                        import asyncio as _asyncio
-                                        _asyncio.create_task(
-                                            audit_service.log_event(
-                                                event_type=AuditEventType.SECURITY_VIOLATION,
-                                                context=context,
-                                                action="moderation.output",
-                                                result="failure",
-                                                metadata={
-                                                    "phase": "output",
-                                                    "streaming": True,
-                                                    "action": "block",
-                                                    "pattern": sample,
-                                                }
-                                            )
-                                        )
-                                except Exception:
-                                    pass
-                                raise StopStreamWithError(
-                                    message="Output violates moderation policy",
-                                    error_type="output_moderation_block"
-                                )
-                        if resolved_action == 'redact':
-                            try:
-                                if not stream_redact_logged:
-                                    metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                                    stream_redact_logged = True
-                            except Exception:
-                                pass
-                            try:
-                                if audit_service and context and not stream_redact_logged:
-                                    import asyncio as _asyncio
-                                    _asyncio.create_task(
-                                        audit_service.log_event(
-                                            event_type=AuditEventType.SECURITY_VIOLATION,
-                                            context=context,
-                                            action="moderation.output",
-                                            result="success",
-                                            metadata={
-                                                "phase": "output",
-                                                "streaming": True,
-                                                "action": "redact",
-                                                "pattern": sample,
-                                            }
-                                        )
-                                    )
-                            except Exception:
-                                pass
-                            return redacted_s or moderation.redact_text(s, eff_policy)
-                        # warn → pass-through
-                        return s
-
-                    generator = create_streaming_response_with_timeout(
-                        stream=raw_stream_iter,
-                        conversation_id=final_conversation_id,
-                        model_name=request_data.model,
-                        save_callback=save_callback,
-                        idle_timeout=300,  # 5 minutes
-                        heartbeat_interval=30,  # 30 seconds
-                        text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None
-                    )
-                    async for chunk in generator:
-                        # Track chunks and heartbeats
-                        if "heartbeat" in chunk:
-                            stream_tracker.add_heartbeat()
-                        else:
-                            stream_tracker.add_chunk()
-                        yield chunk
-            
-            streaming_generator = tracked_streaming_generator()
-            
-            return StreamingResponse(
-                streaming_generator, 
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"  # Disable nginx buffering
-                }
+            return await execute_streaming_call(
+                current_loop=current_loop,
+                cleaned_args=cleaned_args,
+                selected_provider=selected_provider,
+                provider=provider,
+                model=model,
+                request_json=request_json,
+                request=request,
+                metrics=metrics,
+                provider_manager=provider_manager,
+                templated_llm_payload=templated_llm_payload,
+                should_persist=should_persist,
+                final_conversation_id=final_conversation_id,
+                character_card_for_context=character_card_for_context,
+                chat_db=chat_db,
+                save_message_fn=_save_message_turn_to_db,
+                audit_service=audit_service,
+                audit_context=context,
+                client_id=user_id,
+                queue_execution_enabled=QUEUED_EXECUTION,
+                enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                llm_call_func=llm_call_func,
+                moderation_getter=get_moderation_service,
             )
 
         else: # Non-streaming
-            # Track LLM call
-            llm_start_time = time.time()
-            llm_response = None  # Initialize to prevent UnboundLocalError
-            try:
-                llm_response = await current_loop.run_in_executor(None, llm_call_func)
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=True)
-                
-                # Record success with provider manager
-                if provider_manager:
-                    provider_manager.record_success(selected_provider, llm_latency)
-                    
-            except HTTPException as he:
-                # Normalize unexpected HTTPExceptions from provider layer to generic 500
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(he).__name__)
-                # Log failed usage record (no tokens)
-                try:
-                    user_id = None
-                    api_key_id = None
-                    try:
-                        if request is not None and hasattr(request, 'state'):
-                            user_id = getattr(request.state, 'user_id', None)
-                            api_key_id = getattr(request.state, 'api_key_id', None)
-                    except Exception:
-                        pass
-                    await log_llm_usage(
-                        user_id=user_id,
-                        key_id=api_key_id,
-                        endpoint=f"{request.method}:{request.url.path}",
-                        operation="chat",
-                        provider=provider,
-                        model=model,
-                        status=500,
-                        latency_ms=int(llm_latency * 1000),
-                        prompt_tokens=0,
-                        completion_tokens=0,
-                        total_tokens=0,
-                        request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
-                        estimated=True,
-                    )
-                except Exception:
-                    pass
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    detail="An unexpected internal server error occurred.")
-            except Exception as e:
-                llm_latency = time.time() - llm_start_time
-                metrics.track_llm_call(provider, model, llm_latency, success=False, error_type=type(e).__name__)
-                
-                # Record failure with provider manager
-                if provider_manager:
-                    provider_manager.record_failure(selected_provider, e)
-                    
-                    # Try failover provider on certain errors (only if enabled in config)
-                    name_lower_e = type(e).__name__.lower()
-                    client_like_error = ("authentication" in name_lower_e or "ratelimit" in name_lower_e or
-                                         "rate_limit" in name_lower_e or "badrequest" in name_lower_e or
-                                         "bad_request" in name_lower_e or "configuration" in name_lower_e)
-                    if ENABLE_PROVIDER_FALLBACK and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
-                        fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
-                        if fallback_provider:
-                            logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
-                            # Fix: chat_api_call expects 'api_endpoint', not 'api_provider'
-                            cleaned_args['api_endpoint'] = fallback_provider
-                            llm_call_func = partial(perform_chat_api_call, **cleaned_args)
-                            
-                            try:
-                                llm_response = await current_loop.run_in_executor(None, llm_call_func)
-                                provider_manager.record_success(fallback_provider, time.time() - llm_start_time)
-                                metrics.track_llm_call(fallback_provider, model, time.time() - llm_start_time, success=True)
-                            except Exception as fallback_error:
-                                provider_manager.record_failure(fallback_provider, fallback_error)
-                                raise fallback_error
-                        else:
-                            raise
-                    # If we get here (no fallback attempted or no success), re-raise original error
-                    raise
-                else:
-                    # No provider manager - re-raise
-                    raise
-            
-            content_to_save: Optional[str] = None
-            if llm_response and isinstance(llm_response, dict): # OpenAI-like
-                choices = llm_response.get("choices")
-                if choices and isinstance(choices, list) and len(choices) > 0:
-                    content_to_save = choices[0].get("message", {}).get("content")
-                else:
-                    logger.warning("LLM response does not contain valid choices array")
-                
-                # Track token usage if available
-                usage = llm_response.get("usage")
-                if usage:
-                    prompt_tokens = usage.get("prompt_tokens", 0)
-                    completion_tokens = usage.get("completion_tokens", 0)
-                    metrics.track_tokens(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        model=model,
-                        provider=provider
-                    )
-                    # Persist usage log (success)
-                    try:
-                        user_id = None
-                        api_key_id = None
-                        try:
-                            if request is not None and hasattr(request, 'state'):
-                                user_id = getattr(request.state, 'user_id', None)
-                                api_key_id = getattr(request.state, 'api_key_id', None)
-                        except Exception:
-                            pass
-                        await log_llm_usage(
-                            user_id=user_id,
-                            key_id=api_key_id,
-                            endpoint=f"{request.method}:{request.url.path}",
-                            operation="chat",
-                            provider=provider,
-                            model=model,
-                            status=200,
-                            latency_ms=int(llm_latency * 1000),
-                            prompt_tokens=int(prompt_tokens or 0),
-                            completion_tokens=int(completion_tokens or 0),
-                            total_tokens=int((usage.get("total_tokens") or 0) or (int(prompt_tokens or 0) + int(completion_tokens or 0))),
-                            request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
-                        )
-                    except Exception:
-                        pass
-                else:
-                    # No usage provided: estimate very roughly from payload sizes
-                    try:
-                        import json as _json
-                        pt_est = 0
-                        try:
-                            pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
-                        except Exception:
-                            pt_est = 0
-                        ct_est = 0
-                        try:
-                            if content_to_save:
-                                ct_est = max(0, len(content_to_save) // 4)
-                        except Exception:
-                            ct_est = 0
-                        user_id = None
-                        api_key_id = None
-                        try:
-                            if request is not None and hasattr(request, 'state'):
-                                user_id = getattr(request.state, 'user_id', None)
-                                api_key_id = getattr(request.state, 'api_key_id', None)
-                        except Exception:
-                            pass
-                        await log_llm_usage(
-                            user_id=user_id,
-                            key_id=api_key_id,
-                            endpoint=f"{request.method}:{request.url.path}",
-                            operation="chat",
-                            provider=provider,
-                            model=model,
-                            status=200,
-                            latency_ms=int(llm_latency * 1000),
-                            prompt_tokens=int(pt_est),
-                            completion_tokens=int(ct_est),
-                            total_tokens=int(pt_est + ct_est),
-                            request_id=(request.headers.get('X-Request-ID') if request else None) or (get_request_id() or None),
-                            estimated=True,
-                        )
-                    except Exception:
-                        pass
-            elif llm_response and isinstance(llm_response, str):
-                content_to_save = llm_response
-            elif llm_response is None:
-                logger.error("LLM response is None - treating as provider unavailable error")
-                # Map to provider error (Bad Gateway) to satisfy resilience tests
-                raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
-
-            # Apply output moderation (non-streaming) before persisting
-            try:
-                moderation = get_moderation_service()
-                req_user_id = None
-                try:
-                    if request is not None and hasattr(request, 'state'):
-                        req_user_id = getattr(request.state, 'user_id', None)
-                except Exception:
-                    req_user_id = None
-                eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
-                if eff_policy.enabled and eff_policy.output_enabled and content_to_save:
-                    resolved_action = None
-                    sample = None
-                    redacted_val = None
-                    if hasattr(moderation, 'evaluate_action'):
-                        try:
-                            eval_res = moderation.evaluate_action(content_to_save, eff_policy, 'output')
-                            if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                                resolved_action, redacted_val, sample = eval_res[0], eval_res[1], eval_res[2]
-                                out_category2 = eval_res[3] if len(eval_res) >= 4 else None
-                            else:
-                                resolved_action, redacted_val, sample = eval_res  # type: ignore
-                                out_category2 = None
-                        except Exception:
-                            resolved_action = None
-                    if not resolved_action:
-                        flagged, sample = moderation.check_text(content_to_save, eff_policy)
-                        if flagged:
-                            resolved_action = eff_policy.output_action
-                            redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == 'redact' else None
-                    # Topic monitoring (non-streaming final output)
-                    try:
-                        try:
-                            mon3 = get_topic_monitoring_service()
-                        except Exception:
-                            mon3 = None
-                        if mon3 is not None and content_to_save:
-                            mon3.evaluate_and_alert(
-                                user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                                text=content_to_save,
-                                source="chat.output",
-                                scope_type="user",
-                                scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                            )
-                    except Exception as _e:
-                        logger.debug(f"Topic monitoring (final output) skipped: {_e}")
-                    if resolved_action == 'block':
-                        logger.info(f"Output moderation block (user={req_user_id or client_id}): pattern={sample}")
-                        try:
-                            metrics.track_moderation_output(str(req_user_id or client_id), "block", streaming=False, category=(out_category2 or "default"))
-                        except Exception:
-                            pass
-                        try:
-                            if audit_service and context:
-                                await audit_service.log_event(
-                                    event_type=AuditEventType.SECURITY_VIOLATION,
-                                    context=context,
-                                    action="moderation.output",
-                                    result="failure",
-                                    metadata={
-                                        "phase": "output",
-                                        "streaming": False,
-                                        "action": "block",
-                                        "pattern": sample,
-                                    }
-                                )
-                        except Exception:
-                            pass
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
-                    if resolved_action == 'redact':
-                        if sample is not None:
-                            try:
-                                metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category=(out_category2 or "default"))
-                            except Exception:
-                                pass
-                            try:
-                                if audit_service and context:
-                                    await audit_service.log_event(
-                                        event_type=AuditEventType.SECURITY_VIOLATION,
-                                        context=context,
-                                        action="moderation.output",
-                                        result="success",
-                                        metadata={
-                                            "phase": "output",
-                                            "streaming": False,
-                                            "action": "redact",
-                                            "pattern": sample,
-                                        }
-                                    )
-                            except Exception:
-                                pass
-                        content_to_save = redacted_val or moderation.redact_text(content_to_save, eff_policy)
-                        # Also update llm_response dict if applicable
-                        try:
-                            if isinstance(llm_response, dict):
-                                if llm_response.get('choices') and isinstance(llm_response['choices'], list) and llm_response['choices']:
-                                    msg = llm_response['choices'][0].get('message') or {}
-                                    if isinstance(msg, dict):
-                                        msg['content'] = content_to_save
-                        except Exception:
-                            pass
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"Moderation output processing error: {e}")
-
-            if should_persist and content_to_save:
-                # Sanitize character name for OpenAI API compatibility (no spaces or special chars)
-                asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-                asst_name = asst_name.replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
-                await _save_message_turn_to_db(chat_db, final_conversation_id, {"role": "assistant", "name": asst_name, "content": content_to_save}, use_transaction=True)
-
-            # Use CPU-bound handler for large JSON encoding
-            if llm_response and isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
-                # Large response - use CPU handler
-                encoded_json = await process_large_json_async(llm_response)
-                encoded_payload = json.loads(encoded_json)
-            else:
-                # Small response - process inline
-                encoded_payload = await current_loop.run_in_executor(None, jsonable_encoder, llm_response)
-            if isinstance(encoded_payload, dict): # Ensure it's a dict to add custom fields
-                encoded_payload["tldw_conversation_id"] = final_conversation_id
-                
-                # Track response size
+            encoded_payload = await execute_non_stream_call(
+                current_loop=current_loop,
+                cleaned_args=cleaned_args,
+                selected_provider=selected_provider,
+                provider=provider,
+                model=model,
+                request_json=request_json,
+                request=request,
+                metrics=metrics,
+                provider_manager=provider_manager,
+                templated_llm_payload=templated_llm_payload,
+                should_persist=should_persist,
+                final_conversation_id=final_conversation_id,
+                character_card_for_context=character_card_for_context,
+                chat_db=chat_db,
+                save_message_fn=_save_message_turn_to_db,
+                audit_service=audit_service,
+                audit_context=context,
+                client_id=user_id,
+                queue_execution_enabled=QUEUED_EXECUTION,
+                enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                llm_call_func=llm_call_func,
+                moderation_getter=get_moderation_service,
+            )
+            # Track response size and return
+            if isinstance(encoded_payload, dict):
                 response_size = len(json.dumps(encoded_payload))
                 metrics.metrics.response_size_bytes.record(
                     response_size,
                     {
                         "provider": provider,
                         "model": model,
-                        "streaming": "false"
-                    }
+                        "streaming": "false",
+                    },
                 )
-            # Log successful response
-            if audit_service and context:
-                await audit_service.log_event(
-                    event_type=AuditEventType.API_RESPONSE,
-                    context=context,
-                    action="chat_completion_success",
-                    result="success",
-                    metadata={
-                        "conversation_id": final_conversation_id,
-                        "provider": selected_provider,
-                        "model": model,
-                        "streaming": False
-                    }
-                )
-            
             return JSONResponse(content=encoded_payload)
 
     # --- Exception Handling --- Improved with structured error handling
@@ -3170,3 +2377,88 @@ async def get_generation_statistics(
 #
 # End of chat.py
 #######################################################################################################################
+@router.get(
+    "/queue/status",
+    summary="Chat request queue status",
+    tags=["chat"]
+)
+async def get_chat_queue_status(request: Request):
+    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
+    try:
+        if not is_single_user_mode():
+            # Extract auth headers and resolve user via existing dependency logic
+            api_key = request.headers.get("X-API-KEY")
+            legacy_token = request.headers.get("Token")
+            auth_header = request.headers.get("Authorization", "")
+            token_val = None
+            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+                token_val = auth_header[len("Bearer "):].strip()
+            # Use get_request_user directly with explicit args (bypasses DI)
+            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
+            if not user_has_permission(user_obj.id, "system.logs"):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
+    except HTTPException:
+        raise
+    except Exception as _e:
+        # Fail closed in multi-user mode if auth context cannot be resolved
+        if not is_single_user_mode():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    """Expose raw chat request queue metrics for diagnostics."""
+    try:
+        queue = get_request_queue()
+    except Exception:
+        queue = None
+    if queue is None:
+        return {"enabled": False, "message": "Queue not initialized in this context"}
+    try:
+        status = queue.get_queue_status()
+        return {"enabled": True, **status}
+    except Exception as e:
+        return {"enabled": True, "error": str(e)}
+
+
+@router.get(
+    "/queue/activity",
+    summary="Recent chat queue activity",
+    tags=["chat"]
+)
+async def get_chat_queue_activity(limit: int = 50, request: Request = None):
+    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
+    try:
+        if not is_single_user_mode():
+            # Extract auth headers and resolve user via existing dependency logic
+            api_key = request.headers.get("X-API-KEY") if request else None
+            legacy_token = request.headers.get("Token") if request else None
+            auth_header = request.headers.get("Authorization", "") if request else ""
+            token_val = None
+            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+                token_val = auth_header[len("Bearer "):].strip()
+            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
+            if not user_has_permission(user_obj.id, "system.logs"):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
+    except HTTPException:
+        raise
+    except Exception:
+        if not is_single_user_mode():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    """Expose a rolling sample of recent queue activity (last N jobs)."""
+    # Guardrail: enforce sane bounds for limit
+    if limit is None:
+        limit = 50
+    try:
+        limit = int(limit)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be an integer")
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be between 1 and 1000")
+    try:
+        queue = get_request_queue()
+    except Exception:
+        queue = None
+    if queue is None:
+        return {"enabled": False, "message": "Queue not initialized in this context"}
+    try:
+        activity = queue.get_recent_activity(limit=limit)
+        return {"enabled": True, "limit": limit, "activity": activity}
+    except Exception as e:
+        return {"enabled": True, "error": str(e)}

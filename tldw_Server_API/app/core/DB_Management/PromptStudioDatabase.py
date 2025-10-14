@@ -5457,7 +5457,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     if status == "processing":
                         updates.append("started_at = CURRENT_TIMESTAMP")
                         # Extend lease window on explicit processing state
-                        updates.append("leased_until = DATETIME('now', '+60 seconds')")
+                        import os as _os_ul
+                        try:
+                            _lease_secs_upd = max(5, min(3600, int(_os_ul.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
+                        except Exception:
+                            _lease_secs_upd = 60
+                        updates.append(f"leased_until = DATETIME('now', '+{_lease_secs_upd} seconds')")
                     elif status in {"completed", "failed", "cancelled"}:
                         updates.append("completed_at = CURRENT_TIMESTAMP")
                         updates.append("leased_until = NULL")
@@ -5521,8 +5526,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         """
                         SELECT id
                         FROM prompt_studio_job_queue
-                        WHERE status = 'queued'
-                          AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)
+                        WHERE (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)))
                         ORDER BY priority DESC, created_at ASC
                         LIMIT 1
                         """,
@@ -5532,20 +5536,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         return None
                     job_id = row[0]
 
-                    cursor.execute(
-                        """
-                        UPDATE prompt_studio_job_queue
-                        SET status = 'processing',
-                            started_at = CURRENT_TIMESTAMP,
-                            leased_until = DATETIME('now', '+60 seconds')
-                        WHERE id = ?
-                          AND (
-                              status = 'queued'
-                              OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP))
-                          )
-                        """,
-                        (job_id,),
+                    # Determine lease window from env
+                    import os as _os_s1
+                    try:
+                        _lease_secs_sqlite = max(5, min(3600, int(_os_s1.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
+                    except Exception:
+                        _lease_secs_sqlite = 60
+                    query = (
+                        "UPDATE prompt_studio_job_queue "
+                        "SET status = 'processing', "
+                        "    started_at = CURRENT_TIMESTAMP, "
+                        f"    leased_until = DATETIME('now', '+{_lease_secs_sqlite} seconds') "
+                        "WHERE id = ? "
+                        "  AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)))"
                     )
+                    cursor.execute(query, (job_id,))
 
                     if cursor.rowcount > 0:
                         conn.commit()

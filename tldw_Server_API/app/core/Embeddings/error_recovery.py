@@ -12,7 +12,7 @@ import pickle
 from pathlib import Path
 
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.audit_logger import audit_log, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
 
 
 class FailureReason(Enum):
@@ -172,6 +172,17 @@ class DeadLetterQueue:
             f"provider={provider}, "
             f"model={model}"
         )
+        try:
+            # Best-effort audit for certain classes of failures
+            if failure_reason in {FailureReason.RATE_LIMIT, FailureReason.QUOTA_EXCEEDED}:
+                log_security_violation(user_id=user_id, action="embeddings_rate_limit_or_quota", metadata={
+                    "job_id": job_id,
+                    "provider": provider,
+                    "model": model,
+                    "failure_reason": failure_reason.value,
+                })
+        except Exception:
+            pass
         
         return job_id
     

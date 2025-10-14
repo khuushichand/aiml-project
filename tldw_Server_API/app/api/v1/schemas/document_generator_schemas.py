@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
+from pydantic import ConfigDict
 
 
 class DocumentType(str, Enum):
@@ -107,8 +108,7 @@ class GeneratedDocument(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListResponse(BaseModel):
@@ -191,8 +191,7 @@ class DocumentTemplateResponse(DocumentTemplateBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     usage_count: int = Field(0, description="Number of times used")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TemplateListResponse(BaseModel):

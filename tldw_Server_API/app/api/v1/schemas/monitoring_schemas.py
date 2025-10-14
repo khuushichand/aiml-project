@@ -17,7 +17,7 @@ class Watchlist(BaseModel):
     name: str
     description: Optional[str] = None
     enabled: bool = True
-    scope_type: str = Field("user", description="user | team | org")
+    scope_type: str = Field("user", description="global | user | team | org")
     scope_id: str = Field(..., description="The corresponding subject id")
     rules: List[WatchlistRule] = Field(default_factory=list)
 
@@ -62,3 +62,36 @@ class MarkReadResponse(BaseModel):
     status: str
     id: int
 
+
+class NotificationSettings(BaseModel):
+    enabled: bool
+    min_severity: str
+    file: str
+    webhook_url: str | None = None
+    email_to: str | None = None
+    # Optional SMTP fields exposed for completeness
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_starttls: bool | None = None
+    smtp_user: str | None = None
+    email_from: str | None = None
+
+
+class NotificationSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    min_severity: str | None = None
+    file: str | None = None
+    webhook_url: str | None = None
+    email_to: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_starttls: bool | None = None
+    smtp_user: str | None = None
+    smtp_password: str | None = None  # write-only
+    email_from: str | None = None
+
+
+class NotificationTestRequest(BaseModel):
+    severity: str = Field("critical")
+    message: str = Field("Test notification from admin panel")
+    user_id: str | None = None

@@ -243,7 +243,10 @@ class SessionManager:
                         expires_at
                     )
                 
-                logger.info(f"Created session {session_id} for user {user_id}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Created session [redacted]")
+                else:
+                    logger.info(f"Created session {session_id} for user {user_id}")
                 log_counter("auth_session_create_success")
                 log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
                 
@@ -333,12 +336,18 @@ class SessionManager:
                 if session_data:
                     # Check if user is still active
                     if not session_data.get('user_active'):
-                        logger.warning(f"Session valid but user {session_data['user_id']} is inactive")
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("Session valid but user is inactive [redacted]")
+                        else:
+                            logger.warning(f"Session valid but user {session_data['user_id']} is inactive")
                         return None
                     
                     # Check if session was revoked
                     if session_data.get('revoked_at'):
-                        logger.warning(f"Session {session_data['id']} was revoked")
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("Session revoked [redacted]")
+                        else:
+                            logger.warning(f"Session {session_data['id']} was revoked")
                         raise SessionRevokedException()
                     
                     # Update last activity
@@ -408,7 +417,10 @@ class SessionManager:
                 if self.redis_client:
                     await self._clear_session_cache(session_id)
                 
-                logger.info(f"Revoked session {session_id}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Revoked session [redacted]")
+                else:
+                    logger.info(f"Revoked session {session_id}")
                 
         except Exception as e:
             logger.error(f"Failed to revoke session: {e}")
@@ -475,7 +487,10 @@ class SessionManager:
                 if self.redis_client:
                     await self._clear_user_sessions_cache(user_id)
                 
-                logger.info(f"Revoked all sessions for user {user_id}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Revoked all sessions [redacted]")
+                else:
+                    logger.info(f"Revoked all sessions for user {user_id}")
                 
         except Exception as e:
             logger.error(f"Failed to revoke user sessions: {e}")
@@ -600,7 +615,10 @@ class SessionManager:
                         expires_at
                     )
                 
-                logger.info(f"Refreshed session {session_data['id']}")
+                if self.settings.PII_REDACT_LOGS:
+                    logger.info("Refreshed session [redacted]")
+                else:
+                    logger.info(f"Refreshed session {session_data['id']}")
                 
                 return {
                     "session_id": session_data['id'],

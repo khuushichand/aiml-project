@@ -7163,6 +7163,20 @@ async def ingest_web_content(
     if not request.urls:
         raise HTTPException(status_code=400, detail="At least one URL is required")
 
+    # Topic monitoring (non-blocking): URLs and provided titles
+    try:
+        from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+        mon = get_topic_monitoring_service()
+        uid = getattr(db, 'client_id', None) if hasattr(db, 'client_id') else None
+        for u in (request.urls or [])[:10]:  # bound to avoid large payloads
+            if u:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(u), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
+        for t in (request.titles or [])[:10]:
+            if t:
+                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(t), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
+    except Exception:
+        pass
+
     # If any array is shorter than # of URLs, pad it so we can zip them easily
     num_urls = len(request.urls)
     titles = request.titles or []

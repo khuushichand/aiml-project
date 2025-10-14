@@ -23,6 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage, TemplateClassifier, TemplateLearner
+from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as _rx_check, compile_flags as _rx_flags, warn_ambiguity as _rx_warn
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -480,34 +481,26 @@ async def validate_template(
                         ))
                         continue
                     pat = str(rule.get('pattern') or '')
-                    if len(pat) > 256:
+                    # Safety check (length + nested quantifier guard + compile test)
+                    err = _rx_check(pat, max_len=256)
+                    if err:
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
-                            message='Pattern too long (max 256)'
+                            message=err
                         ))
                     flags_str = str(rule.get('flags') or '').lower()
-                    if len(flags_str) > 10:
+                    re_flags, ferr = _rx_flags(flags_str)
+                    if ferr:
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
-                            message='Flags too long (max 10)'
+                            message=ferr
                         ))
-                    if any(f not in {'i','m',''} for f in list(flags_str)):
-                        errors.append(TemplateValidationError(
-                            field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
-                            message="Only 'i' and 'm' flags are allowed"
-                        ))
-                    # Compile test (basic catastrophic heuristic: bounded quantifiers only)
-                    try:
-                        re_flags = 0
-                        if 'i' in flags_str:
-                            re_flags |= re.IGNORECASE
-                        if 'm' in flags_str:
-                            re_flags |= re.MULTILINE
-                        re.compile(pat, re_flags)
-                    except Exception as e:
-                        errors.append(TemplateValidationError(
+                    # Ambiguity warning (non-fatal)
+                    w = _rx_warn(pat)
+                    if w:
+                        warnings.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
-                            message=f'Invalid regex: {e}'
+                            message=w
                         ))
 
         # Validate classifier
@@ -529,6 +522,20 @@ async def validate_template(
             pr = classifier.get('priority')
             if pr is not None and not isinstance(pr, int):
                 errors.append(TemplateValidationError(field='classifier.priority', message='priority must be integer'))
+            # Validate classifier regex patterns with light guardrails
+            for key in ('filename_regex', 'title_regex', 'url_regex'):
+                pat = classifier.get(key)
+                if pat is None:
+                    continue
+                if not isinstance(pat, str):
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message='must be a string'))
+                    continue
+                if len(pat) > 128:
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message='Pattern too long (max 128)'))
+                    continue
+                perr = _rx_check(pat, max_len=128)
+                if perr:
+                    errors.append(TemplateValidationError(field=f'classifier.{key}', message=perr))
 
         # Validate preprocessing operations
         if 'preprocessing' in template_config:

@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -78,32 +79,50 @@ async def get_db_transaction():
                 self._conn = _conn
 
             async def execute(self, query: str, *args):
-                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                return await self._conn.execute(query, params)
+                # Postgres (asyncpg) supports variadic args; SQLite expects a sequence
+                if hasattr(self._conn, "fetchrow"):
+                    # asyncpg connection
+                    return await self._conn.execute(query, *args)
+                else:
+                    params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                    return await self._conn.execute(query, params)
 
             async def fetchval(self, query: str, *args):
-                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cur = await self._conn.execute(query, params)
-                row = await cur.fetchone()
-                return row[0] if row else None
+                if hasattr(self._conn, "fetchval"):
+                    # asyncpg connection
+                    return await self._conn.fetchval(query, *args)
+                else:
+                    params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                    cur = await self._conn.execute(query, params)
+                    row = await cur.fetchone()
+                    return row[0] if row else None
 
             async def fetch(self, query: str, *args):
-                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cur = await self._conn.execute(query, params)
-                rows = await cur.fetchall()
-                try:
-                    return [{key: r[key] for key in r.keys()} for r in rows]
-                except Exception:
-                    return rows
+                if hasattr(self._conn, "fetch"):
+                    # asyncpg connection
+                    rows = await self._conn.fetch(query, *args)
+                    return [dict(r) for r in rows]
+                else:
+                    params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                    cur = await self._conn.execute(query, params)
+                    rows = await cur.fetchall()
+                    try:
+                        return [{key: r[key] for key in r.keys()} for r in rows]
+                    except Exception:
+                        return rows
 
             async def fetchrow(self, query: str, *args):
-                params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                cur = await self._conn.execute(query, params)
-                row = await cur.fetchone()
-                try:
-                    return {key: row[key] for key in row.keys()} if row else None
-                except Exception:
-                    return row
+                if hasattr(self._conn, "fetchrow"):
+                    # asyncpg connection
+                    return await self._conn.fetchrow(query, *args)
+                else:
+                    params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
+                    cur = await self._conn.execute(query, params)
+                    row = await cur.fetchone()
+                    try:
+                        return {key: row[key] for key in row.keys()} if row else None
+                    except Exception:
+                        return row
 
         adapter = _ConnAdapter(conn)
         try:
@@ -267,6 +286,8 @@ async def get_current_user(
                 }
                 try:
                     request.state.user_id = settings.SINGLE_USER_FIXED_ID
+                    request.state.team_ids = []
+                    request.state.org_ids = []
                 except Exception:
                     pass
                 return user
@@ -304,6 +325,13 @@ async def get_current_user(
             try:
                 request.state.user_id = user_id
                 request.state.api_key_id = key_info.get("id")
+                # Best-effort team/org membership resolution for downstream features
+                try:
+                    memberships = await list_memberships_for_user(int(user_id))
+                    request.state.team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+                    request.state.org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -396,6 +424,13 @@ async def get_current_user(
         # Attach user_id for downstream rate limiting where used
         try:
             request.state.user_id = int(user_id)
+            # Best-effort team/org membership resolution
+            try:
+                memberships = await list_memberships_for_user(int(user_id))
+                request.state.team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+                request.state.org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+            except Exception:
+                pass
         except Exception:
             pass
 

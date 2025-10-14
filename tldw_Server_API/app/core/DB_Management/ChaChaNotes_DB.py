@@ -2279,6 +2279,94 @@ UPDATE db_schema_version
 
         raise NotImplementedError(f"FTS rebuild not supported for backend {self.backend_type.value}")
 
+    # ----------------------
+    # Message metadata (tool calls)
+    # ----------------------
+    def add_message_metadata(self, message_id: str, tool_calls: Optional[Any] = None, extra: Optional[Any] = None) -> bool:
+        """Upsert per-message metadata such as tool calls.
+
+        Stores JSON-serialized metadata in an auxiliary table `message_metadata`.
+        The table is created on-demand if missing.
+        """
+        try:
+            # Ensure table exists (SQLite)
+            if self.backend_type == BackendType.SQLITE:
+                self.execute_query(
+                    """
+                    CREATE TABLE IF NOT EXISTS message_metadata(
+                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                      tool_calls_json TEXT,
+                      extra_json TEXT,
+                      last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                    script=False,
+                    commit=True,
+                )
+                query = (
+                    "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(message_id) DO UPDATE SET tool_calls_json=excluded.tool_calls_json, "
+                    "extra_json=excluded.extra_json, last_modified=CURRENT_TIMESTAMP"
+                )
+                self.execute_query(query, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
+                                            json.dumps(extra) if extra is not None else None), commit=True)
+                return True
+            # PostgreSQL
+            else:
+                # Create table if not exists (versionless auxiliary)
+                self.backend.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS message_metadata(
+                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                      tool_calls_json TEXT,
+                      extra_json TEXT,
+                      last_modified TIMESTAMP NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                upsert = (
+                    "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
+                    "VALUES (%s, %s, %s, NOW()) "
+                    "ON CONFLICT (message_id) DO UPDATE SET tool_calls_json = EXCLUDED.tool_calls_json, "
+                    "extra_json = EXCLUDED.extra_json, last_modified = NOW()"
+                )
+                self.backend.execute(upsert, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
+                                              json.dumps(extra) if extra is not None else None))
+                return True
+        except Exception as e:
+            logger.warning(f"add_message_metadata failed for message {message_id}: {e}")
+            return False
+
+    def get_message_metadata(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch metadata for a message if present."""
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                cursor = self.execute_query(
+                    "SELECT tool_calls_json, extra_json, last_modified FROM message_metadata WHERE message_id = ?",
+                    (message_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                tc, ex, lm = row
+            else:
+                result = self.backend.execute(
+                    "SELECT tool_calls_json, extra_json, last_modified FROM message_metadata WHERE message_id = %s",
+                    (message_id,)
+                )
+                r = result.fetchone()
+                if not r:
+                    return None
+                tc, ex, lm = r
+            return {
+                "tool_calls": json.loads(tc) if tc else None,
+                "extra": json.loads(ex) if ex else None,
+                "last_modified": lm,
+            }
+        except Exception:
+            return None
+
     def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
         """Convert SQLite schema SQL into individual Postgres-compatible statements."""
 
@@ -2346,6 +2434,136 @@ UPDATE db_schema_version
                     statements.append(transformed)
 
         return statements
+
+    # ----------------------
+    # Message metadata helpers (structured extras + backfill)
+    # ----------------------
+    def set_message_metadata_extra(self, message_id: str, extra: Dict[str, Any], merge: bool = True) -> bool:
+        """Set or merge structured extra metadata for a message.
+
+        Expected shape for `extra`:
+          {
+            "tool_results": { "<tool_call_id>": <any-json-serializable> },
+            ... other namespaced keys ...,
+            "version": 1
+          }
+
+        If merge=True and existing extra exists, perform a shallow merge; nested maps like
+        tool_results are merged key-wise.
+        """
+        try:
+            current = self.get_message_metadata(message_id) or {}
+            current_extra = current.get('extra') or {}
+            if merge and isinstance(current_extra, dict) and isinstance(extra, dict):
+                merged = dict(current_extra)
+                # Merge tool_results specially
+                tr_existing = merged.get('tool_results') if isinstance(merged.get('tool_results'), dict) else {}
+                tr_incoming = extra.get('tool_results') if isinstance(extra.get('tool_results'), dict) else {}
+                if tr_existing or tr_incoming:
+                    merged['tool_results'] = {**tr_existing, **tr_incoming}
+                # Merge top-level keys (favor incoming)
+                for k, v in extra.items():
+                    if k == 'tool_results':
+                        continue
+                    merged[k] = v
+                new_extra = merged
+            else:
+                new_extra = extra
+            return self.add_message_metadata(message_id, tool_calls=current.get('tool_calls'), extra=new_extra)
+        except Exception as e:
+            logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
+            return False
+
+    def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
+        """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
+
+        - Extracts JSON array/object after the last occurrence of "[tool_calls]:" (case-sensitive).
+        - Persists it into `message_metadata.tool_calls_json`.
+        - If `strip_inline=True`, removes the suffix from message content using optimistic locking.
+
+        Returns counts: { scanned, matched, backfilled, stripped }
+        """
+        counts = {"scanned": 0, "matched": 0, "backfilled": 0, "stripped": 0}
+        pattern = re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", re.DOTALL)
+
+        def _extract(content: str) -> Optional[Dict[str, Any]]:
+            if not content:
+                return None
+            m = pattern.search(content)
+            if not m:
+                return None
+            json_str = m.group(1).strip()
+            try:
+                data = json.loads(json_str)
+                # Normalize: ensure list for tool_calls when object provided
+                if isinstance(data, dict) and 'tool_calls' in data:
+                    tool_calls = data.get('tool_calls')
+                else:
+                    tool_calls = data
+                if isinstance(tool_calls, (list, dict)):
+                    return {"tool_calls": tool_calls, "prefix_end": m.start(), "json_end": m.end()}
+                return None
+            except Exception:
+                return None
+
+        try:
+            rows: List[Dict[str, Any]] = []
+            if self.backend_type == BackendType.SQLITE:
+                query = "SELECT id, content, version FROM messages WHERE sender = ? AND deleted = 0"
+                params = ("assistant",)
+                if limit and isinstance(limit, int):
+                    query += " LIMIT ?"
+                    params = ("assistant", limit)
+                cur = self.execute_query(query, params)
+                rows = [dict(r) for r in cur.fetchall()]
+            else:
+                q = "SELECT id, content, version FROM messages WHERE sender = %s AND deleted = false"
+                params = ("assistant",)
+                if limit and isinstance(limit, int):
+                    q += " LIMIT %s"
+                    params = ("assistant", limit)
+                res = self.backend.execute(q, params)
+                fetched = res.fetchall()
+                # Convert to dicts (backend returns sequence rows)
+                for r in fetched:
+                    # Row maybe mapping or tuple; try subscripting by name first
+                    try:
+                        rows.append({"id": r[0], "content": r[1], "version": r[2]})
+                    except Exception:
+                        try:
+                            rows.append({"id": r['id'], "content": r['content'], "version": r['version']})
+                        except Exception:
+                            pass
+
+            for row in rows:
+                counts["scanned"] += 1
+                mid = row.get('id')
+                content = row.get('content') or ""
+                version = row.get('version') or 1
+                extracted = _extract(content)
+                if not extracted:
+                    continue
+                counts["matched"] += 1
+                tool_calls = extracted.get('tool_calls')
+                # Persist tool_calls array/object
+                try:
+                    if self.add_message_metadata(mid, tool_calls=tool_calls):
+                        counts["backfilled"] += 1
+                except Exception:
+                    pass
+                # Optionally strip inline suffix
+                if strip_inline:
+                    try:
+                        # Trim content up to prefix_end
+                        new_content = content[: int(extracted.get('prefix_end') or len(content))].rstrip()
+                        self.update_message(mid, {"content": new_content}, expected_version=version)
+                        counts["stripped"] += 1
+                    except Exception:
+                        # If version changed, skip silently
+                        pass
+        except Exception as e:
+            logger.warning(f"backfill_tool_calls_from_inline encountered an error: {e}")
+        return counts
 
     def _transform_sqlite_schema_statement_for_postgres(self, statement: str) -> Optional[str]:
         """Apply token-level rewrites so the statement can run on Postgres."""
@@ -3485,6 +3703,28 @@ UPDATE db_schema_version
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching conversations for character ID {character_id}: {e}")
+            raise
+
+    def count_conversations_for_user(self, client_id: str) -> int:
+        """
+        Count total non-deleted conversations for a given user (client_id).
+
+        Args:
+            client_id: The user/client identifier as string.
+
+        Returns:
+            Integer count of conversations.
+
+        Raises:
+            CharactersRAGDBError on database failure.
+        """
+        query = "SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND deleted = 0"
+        try:
+            cursor = self.execute_query(query, (client_id,))
+            row = cursor.fetchone()
+            return int(row[0] if row else 0)
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error counting conversations for client_id {client_id}: {e}")
             raise
 
     def update_conversation(self, conversation_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:

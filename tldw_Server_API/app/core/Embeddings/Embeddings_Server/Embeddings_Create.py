@@ -46,7 +46,10 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import get_openai_embeddin
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Embeddings.audit_logger import get_audit_logger, AuditEventType
+from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+    log_model_evicted,
+    log_memory_limit_exceeded,
+)
 
 #
 ########################################################################################################################
@@ -330,14 +333,15 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
             
             if lru_model_id:
                 logging.info(f"Evicting LRU model: {lru_model_id}")
-                # Audit log the eviction
-                audit_logger = get_audit_logger()
-                audit_logger.log_resource_event(
-                    AuditEventType.MODEL_EVICTED,
-                    model_id=lru_model_id,
-                    memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
-                    reason="lru_eviction"
-                )
+                # Unified audit (non-blocking)
+                try:
+                    log_model_evicted(
+                        model_id=lru_model_id,
+                        memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
+                        reason="lru_eviction",
+                    )
+                except Exception:
+                    pass
                 _remove_model(lru_model_id)
             else:
                 break
@@ -997,14 +1001,15 @@ def create_embeddings_batch(
                     
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        audit_logger = get_audit_logger()
-                        audit_logger.log_resource_event(
-                            AuditEventType.MEMORY_LIMIT_EXCEEDED,
-                            model_id=model_id_to_use,
-                            memory_usage_gb=estimated_size,
-                            current_usage_gb=sum(model_memory_usage.values()),
-                            limit_gb=MAX_MODEL_MEMORY_GB
-                        )
+                        try:
+                            log_memory_limit_exceeded(
+                                model_id=model_id_to_use,
+                                memory_usage_gb=estimated_size,
+                                current_usage_gb=sum(model_memory_usage.values()),
+                                limit_gb=MAX_MODEL_MEMORY_GB,
+                            )
+                        except Exception:
+                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
                     # Evict LRU models if at capacity
@@ -1039,14 +1044,15 @@ def create_embeddings_batch(
                     
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        audit_logger = get_audit_logger()
-                        audit_logger.log_resource_event(
-                            AuditEventType.MEMORY_LIMIT_EXCEEDED,
-                            model_id=model_id_to_use,
-                            memory_usage_gb=estimated_size,
-                            current_usage_gb=sum(model_memory_usage.values()),
-                            limit_gb=MAX_MODEL_MEMORY_GB
-                        )
+                        try:
+                            log_memory_limit_exceeded(
+                                model_id=model_id_to_use,
+                                memory_usage_gb=estimated_size,
+                                current_usage_gb=sum(model_memory_usage.values()),
+                                limit_gb=MAX_MODEL_MEMORY_GB,
+                            )
+                        except Exception:
+                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                     
                     # Evict LRU models if at capacity

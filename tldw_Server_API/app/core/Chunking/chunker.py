@@ -229,20 +229,34 @@ class Chunker:
         if not text:
             return spans
 
-        # Compile template boundary patterns if provided
+        # Compile template boundary patterns if provided, with safety limits
         template_patterns: List[Tuple[str, re.Pattern]] = []
         try:
             boundaries = (template or {}).get('boundaries') or []
-            for rule in boundaries:
-                kind = str(rule.get('kind') or 'template')
-                pattern = str(rule.get('pattern') or '')
-                flags_str = str(rule.get('flags') or '').lower()
-                flags = 0
-                if 'i' in flags_str:
-                    flags |= re.IGNORECASE
-                if 'm' in flags_str:
-                    flags |= re.MULTILINE
-                template_patterns.append((kind, re.compile(pattern, flags)))
+            # Safety caps aligned with API validator: at most 20 rules
+            MAX_RULES = 20
+            MAX_PATTERN_LEN = 256
+            from .regex_safety import check_pattern, compile_flags
+            for rule in boundaries[:MAX_RULES]:
+                try:
+                    kind = str(rule.get('kind') or 'template')
+                    pattern = str(rule.get('pattern') or '')
+                    if not pattern:
+                        continue
+                    if len(pattern) > MAX_PATTERN_LEN:
+                        logger.warning(f"Skipping overlong boundary pattern (>{MAX_PATTERN_LEN} chars)")
+                        continue
+                    # Safety check
+                    err = check_pattern(pattern, max_len=MAX_PATTERN_LEN)
+                    if err:
+                        logger.warning(f"Skipping boundary pattern due to safety check: {err}")
+                        continue
+                    flags_val, ferr = compile_flags(str(rule.get('flags') or ''))
+                    flags = flags_val if ferr is None else 0
+                    compiled = re.compile(pattern, flags)
+                    template_patterns.append((kind, compiled))
+                except Exception as e:
+                    logger.warning(f"Ignoring invalid boundary rule: {e}")
         except Exception:
             template_patterns = []
 
@@ -339,32 +353,100 @@ class Chunker:
             if start >= end:
                 return
             segment = text[start:end]
-            # Temporarily call the existing strategy with local sizes
+            # Compute chunks using selected method
             chunks = self.chunk_text(segment, method=method, max_size=max_size, overlap=overlap, language=language)
-            # Normalize to dict chunks with offsets
-            # Estimate offsets by naive string find window (best-effort for now)
             out_chunks: List[Dict[str, Any]] = []
-            cursor = start
-            for ch in chunks:
-                if not isinstance(ch, str):
-                    ch_text = str(ch)
+
+            # Method-aware offset mapping to avoid misplacing spans on repeated content
+            try:
+                if method == 'words':
+                    # Map word tokens back to their character spans within the segment
+                    # Build token list equivalent to the words strategy
+                    from .strategies.words import WordChunkingStrategy  # local import to avoid cycle at module import
+                    ws = WordChunkingStrategy(language=language)
+                    tokens = ws._tokenize_text(segment)  # noqa: SLF001 (internal, but stable in-project)
+                    tok_spans: List[Tuple[int, int]] = []
+                    cur = 0
+                    for tok in tokens:
+                        idx = segment.find(tok, cur)
+                        if idx == -1:
+                            idx = cur
+                        tok_spans.append((idx, idx + len(tok)))
+                        cur = idx + len(tok)
+
+                    # Reconstruct chunk spans based on token counts
+                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
+                    t_i = 0
+                    for ch in chunks:
+                        ch_text = ch if isinstance(ch, str) else str(ch)
+                        # Derive token count in this chunk by splitting the chunk text similarly
+                        if language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
+                            # Unknown separation; approximate by consuming tokens until we match the chunk length
+                            k = 0
+                            acc_len = 0
+                            while t_i + k < len(tokens) and acc_len < len(ch_text):
+                                acc_len += len(tokens[t_i + k])
+                                k += 1
+                            k = max(1, k)
+                        else:
+                            k = max(1, len(ch_text.split()))
+
+                        # Clamp k to remaining tokens
+                        k = min(k, max(1, len(tokens) - t_i))
+                        s0 = tok_spans[t_i][0] if t_i < len(tok_spans) else 0
+                        e0 = tok_spans[t_i + k - 1][1] if (t_i + k - 1) < len(tok_spans) else len(segment)
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text,
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + s0,
+                                'end_offset': start + e0,
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                        # Advance by step (matching words strategy semantics)
+                        t_i = min(len(tokens), t_i + step)
                 else:
-                    ch_text = ch
-                idx = text.find(ch_text, cursor, end)
-                if idx == -1:
-                    idx = cursor
-                out_chunks.append({
-                    'type': 'text',
-                    'text': ch_text,
-                    'metadata': {
-                        'method': method,
-                        'start_offset': idx,
-                        'end_offset': idx + len(ch_text),
-                        'language': language,
-                        'paragraph_kind': kind,
-                    }
-                })
-                cursor = idx + len(ch_text)
+                    # Fallback: bound search within the segment using a rolling cursor
+                    cursor = 0
+                    for ch in chunks:
+                        ch_text = ch if isinstance(ch, str) else str(ch)
+                        idx = segment.find(ch_text, cursor)
+                        if idx == -1:
+                            # If not found, place at cursor to keep monotonicity
+                            idx = cursor
+                        out_chunks.append({
+                            'type': 'text',
+                            'text': ch_text,
+                            'metadata': {
+                                'method': method,
+                                'start_offset': start + idx,
+                                'end_offset': start + idx + len(ch_text),
+                                'language': language,
+                                'paragraph_kind': kind,
+                            }
+                        })
+                        cursor = idx + len(ch_text)
+            except Exception as e:
+                # As a last resort, return chunks with naive offsets bounded to this block
+                logger.warning(f"Offset mapping failed for method={method}: {e}; using naive offsets")
+                cursor = 0
+                for ch in chunks:
+                    ch_text = ch if isinstance(ch, str) else str(ch)
+                    out_chunks.append({
+                        'type': 'text',
+                        'text': ch_text,
+                        'metadata': {
+                            'method': method,
+                            'start_offset': start + cursor,
+                            'end_offset': start + min(len(segment), cursor + len(ch_text)),
+                            'language': language,
+                            'paragraph_kind': kind,
+                        }
+                    })
+                    cursor += len(ch_text)
 
             parent.setdefault('children', []).append({
                 'kind': kind,
@@ -578,7 +660,14 @@ class Chunker:
             
             # Cache result if enabled
             if self._cache is not None and len(chunks) > 0:
-                self._cache.put(cache_key, chunks)
+                try:
+                    if len(text) <= getattr(self.config, 'cache_max_text_length', 2_000_000):
+                        self._cache.put(cache_key, chunks)
+                    else:
+                        logger.debug("Skip caching due to text length over cache_max_text_length")
+                except Exception:
+                    # Defensive: never fail chunking due to cache policy
+                    pass
             
             logger.info(f"Created {len(chunks)} chunks using {method} method")
             return chunks
@@ -741,9 +830,30 @@ class Chunker:
         Returns:
             Cache key string
         """
-        # Use hash of text to avoid storing full text in key
-        text_hash = hash(text)
-        options_str = str(sorted(options.items()))
+        # Use a stable cryptographic hash to avoid large keys and ensure determinism
+        try:
+            text_hash = hashlib.sha256(text.encode('utf-8', 'ignore')).hexdigest()[:16]
+        except Exception:
+            # Fallback to builtin hash within process
+            text_hash = str(hash(text))
+        # Normalize options deterministically (deep sort for nested structures)
+        def _canon(v: Any) -> Any:
+            try:
+                # Preserve simple types
+                if v is None or isinstance(v, (str, int, float, bool)):
+                    return v
+                if isinstance(v, (list, tuple)):
+                    return [_canon(x) for x in v]
+                if isinstance(v, dict):
+                    return {k: _canon(v[k]) for k in sorted(v.keys(), key=lambda x: str(x))}
+                # Fallback to string repr
+                return str(v)
+            except Exception:
+                return str(v)
+        try:
+            options_str = json.dumps(_canon(dict(options or {})), ensure_ascii=False, sort_keys=True)
+        except Exception:
+            options_str = str(sorted((options or {}).items()))
         return f"{text_hash}:{method}:{max_size}:{overlap}:{language}:{options_str}"
     
     def clear_cache(self):

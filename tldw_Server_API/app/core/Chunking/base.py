@@ -239,6 +239,7 @@ class ChunkerConfig:
                  language: str = 'en',
                  enable_cache: bool = True,
                  cache_size: int = 100,
+                 cache_max_text_length: int = 2_000_000,
                  max_text_size: int = 100_000_000,  # 100MB
                  enable_metrics: bool = True):
         """
@@ -271,6 +272,8 @@ class ChunkerConfig:
             raise ValueError(f"cache_size must be a positive integer, got {cache_size}")
         if not isinstance(max_text_size, int) or max_text_size <= 0:
             raise ValueError(f"max_text_size must be a positive integer, got {max_text_size}")
+        if not isinstance(cache_max_text_length, int) or cache_max_text_length <= 0:
+            raise ValueError(f"cache_max_text_length must be a positive integer, got {cache_max_text_length}")
 
         self.default_method = default_method
         self.default_max_size = default_max_size
@@ -278,6 +281,7 @@ class ChunkerConfig:
         self.language = language
         self.enable_cache = enable_cache
         self.cache_size = cache_size
+        self.cache_max_text_length = cache_max_text_length
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
         

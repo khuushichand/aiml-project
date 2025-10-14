@@ -26,7 +26,7 @@ Notes:
 | `character-chat-sessions` | API-related/Character_Chat_Sessions_API.md |
 | `character-messages` | API-related/Character_Messages_API.md |
 | `flashcards` | Coming soon |
-| `mcp-unified` | Coming soon |
+| `mcp-unified` | MCP_Docs/MCP_Unified_Developer_Guide.md |
 | `workflows` | Coming soon |
 
 If you spot a mismatch between tags and docs, please open an issue or PR.

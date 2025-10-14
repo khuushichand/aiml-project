@@ -16,6 +16,7 @@ Features:
 """
 
 import asyncio
+import csv
 import hashlib
 import json
 import re
@@ -252,6 +253,40 @@ class PIIDetector:
         
         return redacted
 
+    def _redact_value(self, value: Any, placeholder_format: str) -> Any:
+        """Redact PII in a single value if it's a string."""
+        if isinstance(value, str):
+            redacted = value
+            for pii_type, pattern in self.PII_PATTERNS.items():
+                placeholder = placeholder_format.format(type=pii_type.upper())
+                redacted = pattern.sub(placeholder, redacted)
+            return redacted
+        return value
+
+    def redact_obj(self, data: Any, placeholder_format: str = "[{type}_REDACTED]") -> Any:
+        """Recursively redact PII from dict/list structures and strings.
+
+        Args:
+            data: Arbitrary JSON-serializable structure (dict, list, str, numbers, bool, None)
+            placeholder_format: Format for placeholders, includes {type}
+
+        Returns:
+            Redacted object of same structure
+        """
+        try:
+            if isinstance(data, dict):
+                return {k: self.redact_obj(v, placeholder_format) for k, v in data.items()}
+            if isinstance(data, list):
+                return [self.redact_obj(v, placeholder_format) for v in data]
+            # Strings handled via value redaction; primitives returned as-is
+            return self._redact_value(data, placeholder_format)
+        except Exception:
+            # Fallback safety: convert to string and redact
+            try:
+                return self._redact_value(str(data), placeholder_format)
+            except Exception:
+                return data
+
 
 # ============================================================================
 # Risk Scoring
@@ -386,6 +421,7 @@ class UnifiedAuditService:
         # Connection pool
         self._db_pool: Optional[aiosqlite.Connection] = None
         self._pool_lock = asyncio.Lock()
+        self._db_lock = asyncio.Lock()
         
         # Statistics
         self.stats = {
@@ -398,11 +434,21 @@ class UnifiedAuditService:
     async def initialize(self):
         """Initialize database and start background tasks"""
         await self._init_database()
+        # Open persistent connection for reuse
+        await self._ensure_db_pool()
         await self.start_background_tasks()
     
     async def _init_database(self):
         """Initialize database schema"""
         async with aiosqlite.connect(self.db_path) as db:
+            # Apply performance/safety PRAGMAs for SQLite
+            try:
+                await db.execute("PRAGMA journal_mode=WAL;")
+                await db.execute("PRAGMA synchronous=NORMAL;")
+                await db.execute("PRAGMA temp_store=MEMORY;")
+                await db.execute("PRAGMA foreign_keys=ON;")
+            except Exception as e:
+                logger.warning(f"Failed to apply SQLite PRAGMAs on audit DB: {e}")
             # Main audit table with all fields
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS audit_events (
@@ -455,6 +501,10 @@ class UnifiedAuditService:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_category ON audit_events(category)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_severity ON audit_events(severity)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_risk_score ON audit_events(risk_score)")
+            # Additional indexes for common resource/action filters
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_type ON audit_events(resource_type)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_id ON audit_events(resource_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_action ON audit_events(action)")
             
             # Daily statistics table
             await db.execute("""
@@ -472,6 +522,21 @@ class UnifiedAuditService:
             """)
             
             await db.commit()
+
+    async def _ensure_db_pool(self) -> aiosqlite.Connection:
+        """Ensure a persistent aiosqlite connection is available."""
+        async with self._pool_lock:
+            if self._db_pool is None:
+                self._db_pool = await aiosqlite.connect(self.db_path)
+                try:
+                    await self._db_pool.execute("PRAGMA journal_mode=WAL;")
+                    await self._db_pool.execute("PRAGMA synchronous=NORMAL;")
+                    await self._db_pool.execute("PRAGMA temp_store=MEMORY;")
+                    await self._db_pool.execute("PRAGMA foreign_keys=ON;")
+                    await self._db_pool.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
+        return self._db_pool  # type: ignore[return-value]
     
     async def start_background_tasks(self):
         """Start background flush and cleanup tasks"""
@@ -503,6 +568,7 @@ class UnifiedAuditService:
         # Close connection pool
         if self._db_pool:
             await self._db_pool.close()
+            self._db_pool = None
     
     async def _flush_loop(self):
         """Background task to periodically flush events"""
@@ -581,14 +647,24 @@ class UnifiedAuditService:
         
         # PII detection
         if self.enable_pii_detection and metadata:
-            metadata_str = json.dumps(metadata)
+            # Detect across JSON string to cover all nested strings
+            try:
+                metadata_str = json.dumps(metadata)
+            except Exception:
+                metadata_str = str(metadata)
             found_pii = self.pii_detector.detect(metadata_str)
             if found_pii:
                 event.pii_detected = True
                 event.compliance_flags.append("pii_detected")
-                # Redact PII from metadata
-                redacted_str = self.pii_detector.redact(metadata_str)
-                event.metadata = json.loads(redacted_str)
+                # Redact PII from metadata preserving structure when possible
+                if isinstance(metadata, (dict, list, str)):
+                    event.metadata = self.pii_detector.redact_obj(metadata)
+                else:
+                    redacted_str = self.pii_detector.redact(metadata_str)
+                    try:
+                        event.metadata = json.loads(redacted_str)
+                    except Exception:
+                        event.metadata = redacted_str
         
         # Risk scoring
         if self.enable_risk_scoring:
@@ -610,6 +686,30 @@ class UnifiedAuditService:
                 asyncio.create_task(self.flush())
         
         return event.event_id
+
+    async def log_login(
+        self,
+        user_id: Union[int, str],
+        username: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        success: bool = True,
+        session_id: Optional[str] = None,
+    ) -> str:
+        """Convenience helper to log login success/failure events."""
+        ctx = AuditContext(
+            user_id=str(user_id) if user_id is not None else None,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            session_id=session_id,
+        )
+        return await self.log_event(
+            event_type=(
+                AuditEventType.AUTH_LOGIN_SUCCESS if success else AuditEventType.AUTH_LOGIN_FAILURE
+            ),
+            context=ctx,
+            metadata={"username": username},
+        )
     
     async def flush(self):
         """Flush buffered events to database"""
@@ -621,7 +721,8 @@ class UnifiedAuditService:
             self.event_buffer.clear()
         
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            db = await self._ensure_db_pool()
+            async with self._db_lock:
                 # Prepare batch data
                 records = [event.to_dict() for event in events]
                 
@@ -648,7 +749,6 @@ class UnifiedAuditService:
                 
                 # Update daily statistics
                 await self._update_daily_stats(db, events)
-                
                 await db.commit()
                 
                 self.stats["events_flushed"] += len(events)
@@ -722,20 +822,19 @@ class UnifiedAuditService:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
         
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            db = await self._ensure_db_pool()
+            async with self._db_lock:
                 # Delete old events
                 cursor = await db.execute(
                     "DELETE FROM audit_events WHERE timestamp < ?",
                     (cutoff.isoformat(),)
                 )
                 deleted = cursor.rowcount
-                
                 # Delete old stats
                 await db.execute(
                     "DELETE FROM audit_daily_stats WHERE date < ?",
                     (cutoff.date(),)
                 )
-                
                 await db.commit()
                 
                 if deleted > 0:
@@ -799,14 +898,123 @@ class UnifiedAuditService:
         params.extend([limit, offset])
         
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                db.row_factory = aiosqlite.Row
-                async with db.execute(query, params) as cursor:
-                    rows = await cursor.fetchall()
-                    return [dict(row) for row in rows]
+            db = await self._ensure_db_pool()
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to query audit events: {e}")
             return []
+
+    async def export_events(
+        self,
+        *,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        event_types: Optional[List[AuditEventType]] = None,
+        categories: Optional[List[AuditEventCategory]] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        min_risk_score: Optional[int] = None,
+        format: str = "json",
+        file_path: Optional[Union[str, Path]] = None,
+        chunk_size: int = 5000,
+    ) -> Union[str, int]:
+        """
+        Export audit events to JSON or CSV for compliance/reporting.
+
+        Args:
+            start_time: Filter start time
+            end_time: Filter end time
+            event_types: List of event types to include
+            categories: List of categories to include
+            user_id: Only events for this user_id
+            request_id: Only events for this request
+            correlation_id: Only events for this correlation
+            min_risk_score: Minimum risk score to include
+            format: 'json' or 'csv'
+            file_path: If provided, write to this path; otherwise return content string
+            chunk_size: Batch size when scanning DB
+
+        Returns:
+            If file_path is None: the exported content as a string
+            If file_path is provided: the number of rows written
+        """
+        fmt = (format or "json").lower()
+        if fmt not in {"json", "csv"}:
+            raise ValueError("format must be 'json' or 'csv'")
+
+        # Gather rows in chunks to avoid excessive memory use
+        all_rows: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            rows = await self.query_events(
+                start_time=start_time,
+                end_time=end_time,
+                event_types=event_types,
+                categories=categories,
+                user_id=user_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                min_risk_score=min_risk_score,
+                limit=chunk_size,
+                offset=offset,
+            )
+            if not rows:
+                break
+            all_rows.extend(rows)
+            if len(rows) < chunk_size:
+                break
+            offset += chunk_size
+
+        if fmt == "json":
+            content = json.dumps(all_rows, ensure_ascii=False)
+            if file_path is None:
+                return content
+            p = Path(file_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return len(all_rows)
+
+        # CSV export
+        # Determine header from union of keys, but keep stable ordering by using keys from first row
+        headers: List[str] = []
+        if all_rows:
+            headers = list(all_rows[0].keys())
+            # Ensure common keys are prioritized if present
+            priority = [
+                "event_id", "timestamp", "category", "event_type", "severity",
+                "context_user_id", "context_request_id", "context_correlation_id",
+                "resource_type", "resource_id", "action", "result", "risk_score",
+            ]
+            seen = set(headers)
+            # Append any missing keys to maintain full coverage
+            union_keys = set().union(*(set(r.keys()) for r in all_rows))
+            for k in priority:
+                if k in union_keys and k not in headers:
+                    headers.insert(0, k)
+            for k in sorted(union_keys):
+                if k not in headers:
+                    headers.append(k)
+
+        def _rows_to_csv(rows: List[Dict[str, Any]]) -> str:
+            from io import StringIO
+            buf = StringIO()
+            writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+            writer.writeheader()
+            for r in rows:
+                writer.writerow(r)
+            return buf.getvalue()
+
+        if file_path is None:
+            return _rows_to_csv(all_rows)
+
+        p = Path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_rows_to_csv(all_rows), encoding="utf-8")
+        return len(all_rows)
     
     def _determine_category(self, event_type: AuditEventType) -> AuditEventCategory:
         """Auto-determine category from event type"""
@@ -876,6 +1084,38 @@ class UnifiedAuditService:
             "retention_days": self.retention_days,
             "pii_detection_enabled": self.enable_pii_detection,
             "risk_scoring_enabled": self.enable_risk_scoring
+        }
+
+    async def get_security_summary(self, hours: int = 24) -> Dict[str, Any]:
+        """Aggregate recent security-related audit stats for health checks.
+
+        Args:
+            hours: Lookback window in hours
+
+        Returns:
+            Dictionary with summary stats: high_risk_events, failure_events,
+            unique_security_users, top_failing_ips
+        """
+        from collections import Counter
+
+        start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        events = await self.query_events(
+            start_time=start_time,
+            categories=[AuditEventCategory.SECURITY],
+            limit=5000,
+        )
+        high_risk = sum(1 for e in events if (e.get("risk_score") or 0) >= 70)
+        failures = sum(1 for e in events if (e.get("result") or "success") != "success")
+        unique_users = len({e.get("context_user_id") for e in events if e.get("context_user_id")})
+        ip_counts = Counter([e.get("context_ip_address") for e in events if e.get("context_ip_address")])
+        top_ips = [ip for ip, _ in ip_counts.most_common(5)]
+
+        return {
+            "high_risk_events": high_risk,
+            "failure_events": failures,
+            "unique_security_users": unique_users,
+            "top_failing_ips": top_ips,
+            "total_events": len(events),
         }
 
 

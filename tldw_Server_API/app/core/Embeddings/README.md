@@ -80,3 +80,13 @@ These pieces are present for future horizontal scaling but are not hooked up to 
 - Real-time streaming of results
 - Edge processing capabilities
 - A/B testing framework for models
+
+## Environment Variables
+- `EMBEDDINGS_RATE_LIMIT`: `on` to enable per-endpoint rate limiting (default `off`).
+- `EMBEDDINGS_DIMENSION_POLICY`: `reduce` | `pad` | `ignore` (default `reduce`) for post-hoc dimension adjustment.
+- `EMBEDDINGS_ENFORCE_POLICY`: `true|false` to enforce provider/model allowlists (defaults to `true` in tests, `false` otherwise); `EMBEDDINGS_ENFORCE_POLICY_STRICT` disables admin bypass when `true`.
+- `PRELOAD_EMBEDDING_MODELS`: Comma-separated list of models to warm up on startup (CI-only by default).
+- `AUTO_DOWNLOAD_MODELS`: `true|false` to auto-download models during CI warmup (default `true`).
+- `TRUSTED_HF_REMOTE_CODE_MODELS`: List of patterns to enable `trust_remote_code` for HuggingFace models.
+- `CHROMADB_FORCE_STUB`: `true|false` to force in-memory Chroma stub for tests.
+- `TESTING` / `USE_REAL_OPENAI_IN_TESTS`: When `TESTING=true` and `USE_REAL_OPENAI_IN_TESTS!=true`, OpenAI embeddings are deterministically synthesized.

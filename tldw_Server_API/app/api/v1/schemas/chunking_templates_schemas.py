@@ -6,6 +6,7 @@ Pydantic schemas for chunking template API endpoints.
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, validator
+from pydantic import ConfigDict
 import json
 
 
@@ -95,11 +96,12 @@ class ChunkingTemplateResponse(ChunkingTemplateBase):
     version: int = Field(1, description="Template version number")
     user_id: Optional[str] = Field(None, description="User ID of template owner")
     
-    class Config:
-        orm_mode = True
-        json_encoders = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={
             datetime: lambda v: v.isoformat()
         }
+    )
     
     @validator('template_json', pre=False)
     def ensure_json_string(cls, v):
@@ -117,8 +119,7 @@ class ChunkingTemplateListResponse(BaseModel):
     )
     total: int = Field(..., description="Total number of templates")
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChunkingTemplateFilter(BaseModel):

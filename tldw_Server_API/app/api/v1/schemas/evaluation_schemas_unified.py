@@ -7,6 +7,7 @@ This module provides all request/response models for the unified evaluation API.
 
 from typing import Dict, List, Optional, Any, Literal, Union
 from pydantic import BaseModel, Field, field_validator, model_validator, HttpUrl
+from pydantic import ConfigDict
 from datetime import datetime
 from enum import Enum
 import re
@@ -276,8 +277,7 @@ class EvaluationResponse(BaseModel):
     updated_at: Optional[int] = Field(None, description="Update timestamp (tldw-compatible)")
     metadata: Optional[Dict[str, Any]] = None
     
-    class Config:
-        allow_population_by_field_name = True  # Allow both created and created_at
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CreateRunRequest(BaseModel):
@@ -313,8 +313,7 @@ class RunResponse(BaseModel):
     results: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
     
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class RunResultsResponse(BaseModel):
@@ -350,8 +349,7 @@ class DatasetResponse(BaseModel):
     created_by: str
     metadata: Optional[Dict[str, Any]] = None
     
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ============= OCR Evaluation Schemas =============

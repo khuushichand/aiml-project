@@ -57,6 +57,32 @@ class Settings(BaseSettings):
         default="HS256",
         description="JWT signing algorithm"
     )
+    JWT_PRIVATE_KEY: Optional[str] = Field(
+        default=None,
+        description="PEM-encoded private key for asymmetric JWT signing (RS256/ES256)"
+    )
+    JWT_PUBLIC_KEY: Optional[str] = Field(
+        default=None,
+        description="PEM-encoded public key for asymmetric JWT verification (RS256/ES256)"
+    )
+    JWT_SECONDARY_SECRET: Optional[str] = Field(
+        default=None,
+        description="Optional secondary HS secret for dual-validation during rotations"
+    )
+    JWT_SECONDARY_PUBLIC_KEY: Optional[str] = Field(
+        default=None,
+        description="Optional secondary public key (RS/ES) for dual-validation during rotations"
+    )
+    
+    # Optional JWT claims enforcement (recommended in production)
+    JWT_ISSUER: Optional[str] = Field(
+        default=None,
+        description="Expected JWT issuer (iss). If set, tokens must include matching iss"
+    )
+    JWT_AUDIENCE: Optional[str] = Field(
+        default=None,
+        description="Expected JWT audience (aud). If set, tokens must include matching aud"
+    )
     
     # ===== Password Settings =====
     PASSWORD_MIN_LENGTH: int = Field(
@@ -234,6 +260,24 @@ class Settings(BaseSettings):
     API_KEY_AUDIT_LOG_USAGE: bool = Field(
         default=False,
         description="If true, log a 'used' event in API key audit log on successful validation"
+    )
+
+    # ===== Token Rotation =====
+    ROTATE_REFRESH_TOKENS: bool = Field(
+        default=True,
+        description="Rotate refresh tokens on use (recommended). Returns new refresh token in /auth/refresh"
+    )
+
+    # ===== Logging / PII =====
+    PII_REDACT_LOGS: bool = Field(
+        default=False,
+        description="Redact usernames/IPs in auth logs (recommended in production)"
+    )
+
+    # ===== CSRF Binding (Optional) =====
+    CSRF_BIND_TO_USER: bool = Field(
+        default=False,
+        description="Bind CSRF token to user context via HMAC when user_id available"
     )
 
     # ===== RBAC / Usage Logging =====

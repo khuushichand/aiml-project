@@ -60,19 +60,20 @@ curl -X POST "http://localhost:8000/api/v1/chat/completions" \
 
 ## Core Components
 
-### 1. Authentication Utils (`auth_utils.py`)
-**Purpose**: Secure token validation and authentication checks
+### 1. Authentication (AuthNZ)
+**Purpose**: Unified authentication/authorization for single-user and multi-user modes
 
-**Key Functions**:
-- `constant_time_compare()`: Timing-attack resistant string comparison
-- `extract_bearer_token()`: Extract and validate bearer tokens
-- `validate_api_token()`: Validate API tokens securely
-- `is_authentication_required()`: Check if auth is needed
+**Key Components**:
+- `get_request_user`: FastAPI dependency that authenticates requests and returns a `User`
+  - Single-user: validates `X-API-KEY`
+  - Multi-user: validates Bearer JWT or `X-API-KEY` (API key manager)
+- `jwt_service.decode_access_token`: Verifies and decodes JWT access tokens
+- `AuthNZ.settings.get_settings()`: Centralized configuration (mode, keys, algorithms)
 
 **Integration Points**:
-- Used by all protected endpoints
-- Integrates with future OAuth/SSO modules
-- Works with rate limiting middleware
+- Endpoints should use `Depends(get_request_user)` instead of legacy helpers
+- For direct token verification in services, use `jwt_service.decode_access_token`
+- Legacy `auth_utils.py` has been removed; use AuthNZ equivalents
 
 ### 2. Image Validation (`image_validation.py`)
 **Purpose**: Secure image upload validation and processing
@@ -193,7 +194,7 @@ if not allowed:
 
 ### Unit Testing
 Representative tests can be added following the project’s pytest patterns. Current repository test coverage is evolving; use the suggested paths below as guidance when creating tests for new or refactored modules:
-- `tests/Auth/` for AuthNZ helpers
+- `tests/AuthNZ/` for AuthNZ helpers
 - `tests/Utils/` for utility modules (e.g., image validation)
 - `tests/DB_Management/` for transactional helpers
 - `tests/Chat/` for chat streaming and handlers
@@ -223,7 +224,8 @@ async def test_chat_completion_with_all_features(app):
 ```bash
 # Authentication (env)
 AUTH_MODE=multi_user  # or single_user
-API_BEARER=your-secret-token
+SINGLE_USER_API_KEY=your-secret-key  # single_user mode
+# For multi_user JWTs, configure JWT_* in AuthNZ settings (e.g., JWT_SECRET_KEY or RSA keys)
 
 # Chat module settings come from tldw_Server_API/Config_Files/config.txt
 # under the [Chat-Module] section (not env):
@@ -257,8 +259,9 @@ FEATURES = {
 # Old
 from app.core.Chat.old_functions import validate_token
 
-# New
-from app.core.Auth.auth_utils import validate_api_token
+# New (AuthNZ)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from fastapi import Depends
 ```
 
 2. **Update database operations** to use transactions:
