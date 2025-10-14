@@ -343,6 +343,24 @@ class EmbeddingJobManager:
             stats[queue_name] = length
         
         return stats
+
+    async def get_queue_stats_with_dlq(self) -> Dict[str, int]:
+        """Get current queue statistics including DLQ depths"""
+        stats = await self.get_queue_stats()
+        try:
+            dlq_names = [
+                f"{self.config.chunking_queue}:dlq",
+                f"{self.config.embedding_queue}:dlq",
+                f"{self.config.storage_queue}:dlq",
+            ]
+            for q in dlq_names:
+                try:
+                    stats[q] = await self.redis_client.xlen(q)
+                except Exception:
+                    stats[q] = 0
+        except Exception:
+            pass
+        return stats
     
     async def _ensure_consumer_groups(self):
         """Ensure consumer groups exist for all queues"""

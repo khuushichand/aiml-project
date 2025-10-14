@@ -146,6 +146,35 @@ class SystemStatsResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Security Alert Schemas
+
+class SecurityAlertSinkStatus(BaseModel):
+    """Represents the status of an individual security alert sink."""
+    sink: str
+    configured: bool
+    min_severity: Optional[str] = None
+    last_status: Optional[bool] = None
+    last_error: Optional[str] = None
+
+
+class SecurityAlertStatusResponse(BaseModel):
+    """Aggregated security alert configuration and health."""
+    enabled: bool
+    min_severity: str
+    last_dispatch_time: Optional[datetime]
+    last_dispatch_success: Optional[bool]
+    last_dispatch_error: Optional[str] = None
+    dispatch_count: int
+    last_validation_time: Optional[datetime]
+    validation_errors: Optional[List[str]] = None
+    sinks: List[SecurityAlertSinkStatus]
+    health: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # Audit Log Schemas
 
 class AuditLogEntry(BaseModel):

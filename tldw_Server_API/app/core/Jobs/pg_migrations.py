@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
-  idempotency_key TEXT UNIQUE,
+  idempotency_key TEXT,
   payload JSONB,
   result JSONB,
   status TEXT NOT NULL CHECK (status IN ('queued','processing','completed','failed','cancelled')),
@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   worker_id TEXT,
   acquired_at TIMESTAMPTZ,
   error_message TEXT,
+  error_code TEXT,
+  error_class TEXT,
+  error_stack JSONB,
   last_error TEXT,
   cancel_requested_at TIMESTAMPTZ,
   cancelled_at TIMESTAMPTZ,
@@ -98,6 +101,9 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
 -- Status-focused partial indexes to speed common counts and lookups
 CREATE INDEX IF NOT EXISTS idx_jobs_status_queued ON jobs(domain, queue, job_type, priority, available_at, created_at) WHERE status='queued';
 CREATE INDEX IF NOT EXISTS idx_jobs_status_processing ON jobs(domain, queue, job_type, leased_until) WHERE status='processing';
+
+-- Composite uniqueness for idempotency scoped by domain/queue/job_type (NULL key allowed)
+-- A unique index is created outside the DDL block using autocommit.
 """
 
 def ensure_jobs_tables_pg(db_url: str) -> str:
@@ -115,6 +121,17 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             with conn.cursor() as cur:
                 cur.execute(JOBS_POSTGRES_DDL)
             conn.commit()
+        # Create hot-path indexes concurrently (outside transaction) when possible
+        try:
+            with psycopg.connect(db_url, autocommit=True) as c2:
+                with c2.cursor() as k:
+                    # Ready vs scheduled scans
+                    k.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_status_available_at ON jobs(status, available_at)")
+                    # Composite unique for idempotency (NULLs are allowed and do not conflict)
+                    k.execute("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_idempotent_unique ON jobs(domain, queue, job_type, idempotency_key)")
+        except Exception:
+            # Best-effort; not fatal
+            pass
     except Exception as e:
         # Attempt to create database if it doesn't exist, then retry
         msg = str(e)

@@ -20,6 +20,8 @@ class StepTypeRegistry:
             "rag_search": StepType("rag_search", "Run a unified RAG search and return documents"),
             "mcp_tool": StepType("mcp_tool", "Invoke an MCP tool with arguments"),
             "webhook": StepType("webhook", "POST payload to a webhook with HMAC signing and SSRF protections"),
+            "delay": StepType("delay", "Pause the workflow for a fixed time (ms)"),
+            "log": StepType("log", "Log a templated message at a chosen level"),
             "wait_for_human": StepType("wait_for_human", "Pause for human approval or edits"),
         }
 
@@ -28,4 +30,3 @@ class StepTypeRegistry:
 
     def has(self, name: str) -> bool:
         return name in self._steps
-

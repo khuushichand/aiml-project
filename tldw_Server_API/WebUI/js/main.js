@@ -36,6 +36,9 @@ class WebUI {
         // Initialize search functionality
         this.initSearch();
 
+        // Start DLQ badge updates
+        this.startDlqBadgeUpdates();
+
         // If opened via file://, show guidance banner
         if (window.location.protocol === 'file:') {
             try {
@@ -280,6 +283,31 @@ class WebUI {
                 }
             }, 100);
         }
+    }
+
+    // --------------------------
+    // DLQ Badge
+    // --------------------------
+    startDlqBadgeUpdates() {
+        const update = async () => {
+            try {
+                const badge = document.getElementById('dlq-badge');
+                if (!badge) return;
+                const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+                const total = (res && typeof res.total_dlq === 'number') ? res.total_dlq : 0;
+                badge.textContent = `DLQ: ${total}`;
+                badge.classList.remove('badge-warn', 'badge-crit');
+                if (total >= 100) {
+                    badge.classList.add('badge-crit');
+                } else if (total >= 10) {
+                    badge.classList.add('badge-warn');
+                }
+            } catch (e) {
+                // ignore
+            }
+        };
+        update();
+        setInterval(update, 30000);
     }
 
     showContent(contentId) {

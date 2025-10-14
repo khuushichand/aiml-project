@@ -21,6 +21,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RegistrationCodeResponse,
     RegistrationCodeListResponse,
     SystemStatsResponse,
+    SecurityAlertStatusResponse,
+    SecurityAlertSinkStatus,
     AuditLogResponse,
     UserQuotaUpdateRequest,
     UsageDailyResponse,
@@ -83,6 +85,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
 from tldw_Server_API.app.services.llm_usage_aggregator import aggregate_llm_usage_daily
+from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     create_organization,
     list_organizations,
@@ -2208,6 +2211,55 @@ async def delete_registration_code(
 #######################################################################################################################
 #
 # System Statistics and Monitoring
+
+@router.get("/security/alert-status", response_model=SecurityAlertStatusResponse)
+async def get_security_alert_status() -> SecurityAlertStatusResponse:
+    """Return configuration and last-known status for AuthNZ security alerts."""
+    dispatcher = get_security_alert_dispatcher()
+    status = dispatcher.get_status()
+
+    sink_status_map: Dict[str, Optional[bool]] = status.get("last_sink_status", {})
+    sink_error_map: Dict[str, Optional[str]] = status.get("last_sink_errors", {})
+    sink_threshold_map: Dict[str, Optional[str]] = status.get("sink_thresholds", {})
+
+    sink_rows = []
+    for sink_name, configured in (
+        ("file", status.get("file_sink_configured", False)),
+        ("webhook", status.get("webhook_configured", False)),
+        ("email", status.get("email_configured", False)),
+    ):
+        sink_rows.append(
+            SecurityAlertSinkStatus(
+                sink=sink_name,
+                configured=bool(configured),
+                min_severity=sink_threshold_map.get(sink_name),
+                last_status=sink_status_map.get(sink_name),
+                last_error=sink_error_map.get(sink_name),
+            )
+        )
+
+    overall_health = "ok"
+    if status.get("enabled", False):
+        if status.get("last_validation_errors"):
+            overall_health = "errors"
+        elif status.get("last_dispatch_success") is False:
+            overall_health = "degraded"
+        elif all(row.last_status is False for row in sink_rows if row.configured):
+            overall_health = "degraded"
+
+    return SecurityAlertStatusResponse(
+        enabled=status.get("enabled", False),
+        min_severity=status.get("min_severity", "high"),
+        last_dispatch_time=status.get("last_dispatch_time"),
+        last_dispatch_success=status.get("last_dispatch_success"),
+        last_dispatch_error=status.get("last_dispatch_error"),
+        dispatch_count=status.get("dispatch_count", 0),
+        last_validation_time=status.get("last_validation_time"),
+        validation_errors=status.get("last_validation_errors"),
+        sinks=sink_rows,
+        health=overall_health,
+    )
+
 
 @router.get("/stats", response_model=SystemStatsResponse)
 async def get_system_stats(

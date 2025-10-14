@@ -11,6 +11,7 @@ This module provides sophisticated reranking capabilities including:
 
 import asyncio
 import time
+import os
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1121,8 +1122,45 @@ class LLMReranker(BaseReranker):
             "Rerank by how well the passage answers the query. Output a number between 0 and 1."
         )
 
+        # Guardrails: cap docs, set per-call timeout and total budget
+        def _inc_counter(name: str, value: int = 1) -> None:
+            try:
+                from .metrics_collector import get_metrics_collector  # lazy import to avoid heavy deps when unused
+                get_metrics_collector().increment(name, value)
+            except Exception:
+                pass
+            # Also export to central metrics registry (Prometheus/OTel) when available
+            try:
+                from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                mapping = {
+                    "reranker.llm.timeouts": "rag_reranker_llm_timeouts_total",
+                    "reranker.llm.exceptions": "rag_reranker_llm_exceptions_total",
+                    "reranker.llm.budget_exhausted": "rag_reranker_llm_budget_exhausted_total",
+                    "reranker.llm.docs_scored": "rag_reranker_llm_docs_scored_total",
+                }
+                metric_name = mapping.get(name)
+                if metric_name:
+                    increment_counter(metric_name, value, labels={"strategy": "llm_scoring"})
+            except Exception:
+                pass
+        try:
+            per_call_timeout = float(os.getenv("RAG_LLM_RERANK_TIMEOUT_SEC", "10"))
+        except Exception:
+            per_call_timeout = 10.0
+        try:
+            total_budget = float(os.getenv("RAG_LLM_RERANK_TOTAL_BUDGET_SEC", "20"))
+        except Exception:
+            total_budget = 20.0
+        try:
+            max_docs_env = int(os.getenv("RAG_LLM_RERANK_MAX_DOCS", "20"))
+        except Exception:
+            max_docs_env = 20
+        # Also respect config.top_k to avoid excessive LLM calls
+        safe_limit = max(1, min(len(documents), self.config.top_k or len(documents), max_docs_env))
+
         scores: List[float] = []
-        for doc in documents:
+        start_ts = time.time()
+        for doc in documents[:safe_limit]:
             passage = getattr(doc, 'content', '') or ''
             # Build a compact prompt for scoring
             prompt = (
@@ -1133,18 +1171,47 @@ class LLMReranker(BaseReranker):
             score_val: float = 0.5
             if self.llm_client and hasattr(self.llm_client, 'analyze'):
                 try:
-                    out = self.llm_client.analyze(prompt)
+                    out = await asyncio.wait_for(asyncio.to_thread(self.llm_client.analyze, prompt), timeout=per_call_timeout)
                     score_val = _parse_float_score(out, default=0.5)
+                except asyncio.TimeoutError:
+                    _inc_counter("reranker.llm.timeouts")
+                    score_val = 0.5
                 except Exception:
+                    _inc_counter("reranker.llm.exceptions")
                     score_val = 0.5
             elif sgl is not None:
                 try:
                     # Use default provider from env/config inside analyze
-                    out = sgl.analyze(api_name='openai', input_data=passage, prompt=prompt, context=None, user_embedding_config=None)
+                    out = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            sgl.analyze,
+                            api_name='openai',
+                            input_data=passage,
+                            prompt=prompt,
+                            context=None,
+                            user_embedding_config=None
+                        ),
+                        timeout=per_call_timeout
+                    )
                     score_val = _parse_float_score(out, default=0.5)
+                except asyncio.TimeoutError:
+                    _inc_counter("reranker.llm.timeouts")
+                    score_val = 0.5
                 except Exception:
+                    _inc_counter("reranker.llm.exceptions")
                     score_val = 0.5
             scores.append(score_val)
+
+            # Check total budget
+            if (time.time() - start_ts) >= total_budget:
+                _inc_counter("reranker.llm.budget_exhausted")
+                break
+
+        # Number of documents scored (for visibility)
+        try:
+            _inc_counter("reranker.llm.docs_scored", len(scores))
+        except Exception:
+            pass
 
         # Normalize to [0,1]
         try:

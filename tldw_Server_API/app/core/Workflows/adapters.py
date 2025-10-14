@@ -586,6 +586,53 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
     return out
 
 
+async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Simple delay step; waits for the specified milliseconds.
+
+    Config:
+      - milliseconds: int (default 1000)
+    Output: { "delayed_ms": n }
+    """
+    try:
+        ms = int(config.get("milliseconds", 1000))
+    except Exception:
+        ms = 1000
+    remaining = max(0, ms) / 1000.0
+    while remaining > 0:
+        if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+            return {"__status__": "cancelled"}
+        sl = min(0.05, remaining)
+        await asyncio.sleep(sl)
+        remaining -= sl
+    return {"delayed_ms": ms}
+
+
+async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Log a templated message; useful for debugging pipelines.
+
+    Config:
+      - message: str (templated)
+      - level: str (debug|info|warning|error) default info
+    Output: { "logged": true, "message": ... }
+    """
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    msg_t = str(config.get("message", ""))
+    level = str(config.get("level", "info")).lower()
+    message = _tmpl(msg_t, context) or msg_t
+    try:
+        if level == "debug":
+            logger.debug(message)
+        elif level == "warning":
+            logger.warning(message)
+        elif level == "error":
+            logger.error(message)
+        else:
+            logger.info(message)
+    except Exception:
+        pass
+    return {"logged": True, "message": message, "level": level}
+
+
 async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool via the unified server registry.
 

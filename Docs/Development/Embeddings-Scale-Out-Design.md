@@ -152,7 +152,7 @@ Processing semantics
 
 Retries and DLQ
 - Exponential backoff per message; `max_retries` default 3. After exhaustion, job marked `failed`.
-- Recommendation: add DLQ streams (`embeddings:*:dlq`) for postmortem/rehydration in a later phase.
+- DLQ implemented: workers publish failures to `embeddings:chunking:dlq`, `embeddings:embedding:dlq`, or `embeddings:storage:dlq` with original payload and error context for operator action.
 
 Idempotency
 - Storage should be idempotent per `(job_id, chunk_id)` to tolerate replays. Recommend unique constraints or dedupe keys in vector store metadata.
@@ -162,6 +162,34 @@ Progress & TTL
 
 Poison-pill handling
 - Repeated serializer/schema errors should short-circuit to DLQ; worker should guard against infinite retry loops.
+
+## Idempotent Upsert Spec (Storage Worker)
+
+Goals
+- Guarantee safe replays and prevent duplicate vectors for the same logical chunk.
+
+Keys and identity
+- Primary key: `chunk_id` (string) must be globally unique within a collection for a media item.
+- Job independence: The same `chunk_id` must be reused on retries or replays; avoid embedding job-specific suffixes.
+
+Operation
+- Use vector-store upsert when available (Chroma: `collection.upsert`).
+- Fallback path order: `upsert → add → update` (handling older adapters). On duplicate-ID errors, retry with `update`.
+
+Metadata requirements
+- Minimal metadata persisted with each item:
+  - `media_id` (string)
+  - `model_used` (string)
+  - `dimensions` (string or int)
+  - Optional: `chunk_index`, `total_chunks`, `file_name`, `contextualized`, `context_header`, `contextual_summary_ref`
+- Recommend adding `embedding_version` when re-embedding logic changes.
+
+Dimension changes
+- If new embedding dimension != collection’s dimension, recreate or route to a new collection (as implemented in `ChromaDB_Library.store_in_chroma`).
+
+Idempotency invariants
+- Replaying the same `(collection_name, chunk_id)` must overwrite the vector and metadata but must not create duplicates.
+- Storage must be safe under at-least-once delivery and partial batch failures.
 
 ## Security & Multi‑Tenancy
 
@@ -176,9 +204,31 @@ Metrics
 - Orchestrator exposes Prometheus gauges/counters: worker counts, queue depths, total jobs by status.
 - Workers publish heartbeats and metrics in Redis (`worker:heartbeat:*`, `worker:metrics:*`).
 - API exposes endpoint-level metrics and circuit breaker status for provider calls.
+ - DLQ metrics (orchestrator): `embedding_dlq_queue_depth{queue}` and `embedding_dlq_ingest_rate{queue}` (approximate rate via depth derivative).
 
 Alerts (suggested)
 - Queue depth > threshold per stage; worker heartbeat missing; error rate spikes; GPU memory > 90%; P95/P99 latency breaches.
+
+## Operator Runbook
+
+Common alerts → actions
+- High queue depth (sustained):
+  - Action: Increase workers in the orchestrator, enable autoscaling, or reduce producer rate. Check provider throughput and GPU utilization.
+- Worker heartbeat missing:
+  - Action: Restart affected worker pool; inspect logs for exceptions; verify Redis connectivity.
+- Provider error rate spike (OpenAI/HF):
+  - Action: Inspect circuit breaker status; throttle or failover to fallback models; verify API keys/quotas.
+- GPU memory > 90% or OOM during embedding:
+  - Action: Reduce batch size; switch to smaller model; redistribute GPU allocation.
+- Storage errors or dimension mismatches:
+  - Action: Verify `embedding_dimension` metadata; if mismatch, allow the library to recreate collection or route to a new collection.
+- DLQ growth rate rising:
+  - Action: Inspect `embeddings:*:dlq`; fix root cause; bulk requeue selected messages; trim DLQ.
+
+Operational commands (examples)
+- Inspect queue depth: `redis-cli XLEN embeddings:embedding`
+- List DLQ tail: `redis-cli XREVRANGE embeddings:embedding:dlq + - COUNT 10`
+- Requeue DLQ item: `redis-cli XADD embeddings:embedding '*' job_id <JOB_ID> payload '<JSON>'`
 
 ## Configuration & Ops
 

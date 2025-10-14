@@ -31,14 +31,31 @@ from typing import Optional, Union, List, Dict, Any
 # DEBUG Imports
 #from memory_profiler import profile
 # Third-Party Imports
-import pyaudio
+# Optional desktop audio deps (guarded to avoid server import failures)
+try:
+    import pyaudio  # type: ignore
+    HAS_PYAUDIO = True
+except Exception:
+    pyaudio = None  # type: ignore
+    HAS_PYAUDIO = False
+
 from faster_whisper import WhisperModel as OriginalWhisperModel
 import numpy as np
 import torch
 from scipy.io import wavfile
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-import sounddevice as sd
-import wave
+try:
+    import sounddevice as sd  # type: ignore
+    HAS_SOUNDDEVICE = True
+except Exception:
+    sd = None  # type: ignore
+    HAS_SOUNDDEVICE = False
+try:
+    import wave  # type: ignore
+    HAS_WAVE = True
+except Exception:
+    wave = None  # type: ignore
+    HAS_WAVE = False
 
 # Import diarization module (optional dependency)
 try:

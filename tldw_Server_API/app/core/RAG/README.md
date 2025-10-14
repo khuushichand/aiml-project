@@ -124,6 +124,43 @@ mgr.process_and_store_content(
 )
 ```
 
+## Adaptive Post-Verification (Optional)
+
+After answer generation, you can enable a post-generation verifier that checks the draft answer against the retrieved evidence and optionally performs a bounded repair pass.
+
+- Triggers when unsupported_ratio = (refuted + NEI) / total_claims exceeds a threshold.
+- Runs a second‑chance retrieval + regeneration within time/attempt budgets.
+- Exposes metrics for retries, unsupported counts, and duration.
+
+Usage in unified pipeline:
+
+```python
+result = await unified_rag_pipeline(
+    query="What is CRISPR?",
+    enable_generation=True,
+    # Enable post-verification and guardrails
+    enable_post_verification=True,
+    adaptive_max_retries=1,
+    adaptive_unsupported_threshold=0.15,
+    adaptive_max_claims=20,
+    adaptive_time_budget_sec=10.0,
+    low_confidence_behavior="ask",  # continue | ask | decline
+)
+
+print(result.metadata.get("post_verification"))
+# { unsupported_ratio, total_claims, unsupported_count, fixed, reason }
+```
+
+Environment defaults (optional):
+- RAG_ADAPTIVE_TIME_BUDGET_SEC: hard cap in seconds for post-check work
+
+Metrics exported:
+- rag_unsupported_claims_total (counter)
+- rag_adaptive_retries_total (counter)
+- rag_adaptive_fix_success_total (counter)
+- rag_postcheck_duration_seconds (histogram, labels: outcome=[ok|fixed|unfixed|skipped])
+
+
 Each flattened chunk contains:
 - `metadata.ancestry_titles`: titles of enclosing sections
 - `metadata.section_path`: joined titles (e.g., "Title > Subsection")
@@ -198,6 +235,37 @@ The verifier prefers a local MNLI model and falls back to an LLM judge if unavai
 - Set environment variable `RAG_NLI_MODEL` or `RAG_NLI_MODEL_PATH` to a local model id or path (e.g., `roberta-large-mnli` or `/models/mnli`).
 - Or pass `nli_model` to `unified_rag_pipeline` for per-request override.
 ```
+
+## Production Guards
+
+When running with `tldw_production=true`, the RAG retrievers disable all raw SQL fallbacks and require database adapters.
+
+- Endpoints already pass adapters (MediaDatabase, ChaChaNotesDB) to the unified pipeline.
+- If calling the pipeline directly in your own code, provide adapters explicitly:
+
+```python
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+
+result = await unified_rag_pipeline(
+    query="...",
+    media_db_path="Databases/Media_DB_v2.db",
+    character_db_path="Databases/user_databases/<uid>/ChaChaNotes.db",
+    media_db=media_db_instance,       # required in production
+    chacha_db=chacha_db_instance,     # required in production
+)
+```
+
+If no adapter is supplied in production, retrievers raise `RuntimeError` instead of using raw sqlite.
+
+## LLM Reranker Safety Defaults
+
+LLM-based reranking (strategy `llm_scoring`) is powerful but expensive. Safety limits are enabled by default:
+
+- Per-call timeout: `RAG_LLM_RERANK_TIMEOUT_SEC` (default `10`)
+- Total time budget per query: `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
+- Max documents to score: `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
+
+The reranker also respects the configured `top_k` and stops early if the total budget is reached. These controls prevent runaway costs and long-tail latencies in production.
 
 ## Comprehensive Unified RAG cURL Example
 

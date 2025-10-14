@@ -243,6 +243,73 @@ class MetricsRegistry:
                 labels=["cache_type"]
             )
         )
+
+        # RAG reranker (LLM scoring) guardrails and activity
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_timeouts_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker timeouts",
+                labels=["strategy"]  # e.g., llm_scoring
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_exceptions_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker exceptions",
+                labels=["strategy"]
+            )
+        )
+        
+        # Post-generation verification (adaptive check) metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_retries_total",
+                type=MetricType.COUNTER,
+                description="Total adaptive post-check repair retries",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_unsupported_claims_total",
+                type=MetricType.COUNTER,
+                description="Total unsupported claims (refuted + NEI) observed in post-check",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_fix_success_total",
+                type=MetricType.COUNTER,
+                description="Total adaptive post-check repairs that succeeded",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_postcheck_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of post-generation verification and repair",
+                unit="s",
+                labels=["outcome"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Total LLM reranker budget exhaustions",
+                labels=["strategy"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranker_llm_docs_scored_total",
+                type=MetricType.COUNTER,
+                description="Total documents scored by LLM reranker",
+                labels=["strategy"]
+            )
+        )
         
         # Embedding metrics
         self.register_metric(

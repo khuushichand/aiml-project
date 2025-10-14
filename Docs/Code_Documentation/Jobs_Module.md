@@ -23,6 +23,13 @@ Use these names across domains to keep operations consistent.
 - `JOBS_JSON_TRUNCATE` (default false): If true, truncate oversize `payload`/`result` to a small marker instead of rejecting.
 - `JOBS_ARCHIVE_BEFORE_DELETE` (default false): When true, `prune_jobs` copies rows to `jobs_archive` before deletion.
 - `JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE` (default false): Use an optional single‑UPDATE acquisition path on SQLite under contention.
+- `JOBS_ALLOWED_JOB_TYPES` / `JOBS_ALLOWED_JOB_TYPES_<DOMAIN>`: Comma‑separated allowlists of job types. If set, `create_job` enforces membership.
+- Metrics/Tracing buckets:
+  - `JOBS_DURATION_BUCKETS`: CSV of float seconds for `duration_seconds` histogram buckets.
+  - `JOBS_QUEUE_LATENCY_BUCKETS`: CSV of float seconds for `queue_latency_seconds` histogram buckets.
+- Tracing & Events (optional):
+  - `JOBS_TRACING` (default false): Log spans for job lifecycle events (create/acquire/complete/fail) with correlation metadata.
+  - `JOBS_EVENTS_ENABLED` (default false): Emit no‑op event hooks (logs) for job state changes; future SSE/Webhook integration can build on this.
 - TTL (optional):
   - `JOBS_TTL_ENFORCE` (default false): Enable periodic TTL sweeps in the metrics loop.
   - `JOBS_TTL_AGE_SECONDS`: Max age for queued jobs (by `created_at`).
@@ -66,6 +73,21 @@ jm.complete_job(job["id"], result={"path": "/path/to/file"}, worker_id=worker_id
 
 # Fail (retryable or terminal)
 jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_id=lease_id)
+
+## Idempotency Scoping
+
+- Idempotency is enforced per (domain, queue, job_type, idempotency_key).
+  - Submitting a duplicate job with the same idempotency key and the same group returns the original row.
+  - Reusing the same key in a different queue, job type, or domain creates a distinct job.
+  - Postgres uses a composite unique index; SQLite mirrors this with a partial unique index (idempotency_key IS NOT NULL).
+
+## Status Guardrails
+
+- Legal transitions are enforced at the DB boundary:
+  - `queued → processing → {completed, failed, cancelled}`
+  - `processing → queued` only on retry (fail_job with retryable=True)
+- `complete_job` and terminal `fail_job` affect rows only when `status='processing'`.
+  - Completing/failing a non‑processing job is a no‑op (returns False, no change).
 ```
 
 ## Operational Guidance
@@ -113,8 +135,8 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 
 - Metrics:
   - Gauges: `prompt_studio.jobs.queued{...}` (ready only), `prompt_studio.jobs.scheduled{...}`, `prompt_studio.jobs.processing{...}`, `prompt_studio.jobs.backlog{...}` (ready + scheduled).
-  - Histograms: `prompt_studio.jobs.duration_seconds{...}`, `prompt_studio.jobs.queue_latency_seconds{...}`.
-  - Counters: `prompt_studio.jobs.created_total{...}`, `prompt_studio.jobs.completed_total{...}`, `prompt_studio.jobs.cancelled_total{...}`, `prompt_studio.jobs.retries_total{...}`, `prompt_studio.jobs.failures_total{...,reason}`.
+  - Histograms: `prompt_studio.jobs.duration_seconds{...}`, `prompt_studio.jobs.queue_latency_seconds{...}`, `prompt_studio.jobs.retry_after_seconds{...}`.
+  - Counters: `prompt_studio.jobs.created_total{...}`, `prompt_studio.jobs.completed_total{...}`, `prompt_studio.jobs.cancelled_total{...}`, `prompt_studio.jobs.retries_total{...}`, `prompt_studio.jobs.failures_total{...,reason}`, `prompt_studio.jobs.failures_by_code_total{...,error_code}`.
   - Lease tuning: `prompt_studio.jobs.time_to_expiry_seconds{...}` histogram reflects remaining time on active leases.
 
 ### Docker Compose (Postgres)
@@ -156,6 +178,16 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - Filterable by `domain`, `queue`, `job_type`
 
 - `GET /api/v1/jobs/list` (admin-only): paged job listing with `domain`, `queue`, `status`, `owner_user_id`, `job_type`, `limit`
+  - Sorting: `sort_by` in {`created_at`, `priority`, `status`} and `sort_order` in {`asc`, `desc`}.
+  - Example: `GET /api/v1/jobs/list?domain=chatbooks&sort_by=priority&sort_order=asc`
+
+## Admin Endpoint Safety
+
+- Destructive admin endpoints require an explicit confirmation header to avoid accidental deletion:
+  - `POST /api/v1/jobs/prune`: Set `X-Confirm: true` unless `dry_run: true`.
+  - `POST /api/v1/jobs/ttl/sweep`: Set `X-Confirm: true`.
+  - `POST /api/v1/jobs/batch/cancel` and `/jobs/batch/reschedule`: Set `X-Confirm: true` unless `dry_run: true`.
+  - Without the header these endpoints return HTTP 400.
 
 ## Schema Notes
 

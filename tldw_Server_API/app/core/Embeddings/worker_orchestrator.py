@@ -2,6 +2,7 @@
 # Orchestrates and manages worker pools for the embedding pipeline
 
 import asyncio
+import json
 import signal
 import sys
 from datetime import datetime
@@ -31,6 +32,10 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 # Prometheus metrics
 WORKER_COUNT = Gauge("embedding_worker_count", "Number of active workers", ["worker_type"])
 QUEUE_DEPTH = Gauge("embedding_queue_depth", "Current queue depth", ["queue_name"])
+DLQ_QUEUE_DEPTH = Gauge("embedding_dlq_queue_depth", "Current DLQ queue depth", ["queue_name"])
+DLQ_INGEST_RATE = Gauge("embedding_dlq_ingest_rate", "Estimated DLQ ingest rate per second", ["queue_name"])
+STAGE_JOBS_PROCESSED = Counter("embedding_stage_jobs_processed_total", "Total jobs processed per stage", ["stage"])
+STAGE_JOBS_FAILED = Counter("embedding_stage_jobs_failed_total", "Total jobs failed per stage", ["stage"])
 JOBS_TOTAL = Counter("embedding_jobs_total", "Total jobs processed", ["status"])
 
 
@@ -156,6 +161,8 @@ class WorkerOrchestrator:
         self.running = False
         self._tasks: List[asyncio.Task] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._dlq_prev: Dict[str, tuple] = {}
+        self._stage_prev: Dict[str, Dict[str, float]] = {}
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -262,10 +269,61 @@ class WorkerOrchestrator:
         while self.running:
             try:
                 if self.job_manager:
-                    stats = await self.job_manager.get_queue_stats()
-                    
+                    # Queue depths + DLQ rates
+                    stats = await self.job_manager.get_queue_stats_with_dlq()
+                    now = datetime.utcnow().timestamp()
                     for queue_name, depth in stats.items():
-                        QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+                        if queue_name.endswith(":dlq"):
+                            DLQ_QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+                            prev = self._dlq_prev.get(queue_name)
+                            if prev is not None:
+                                prev_ts, prev_depth = prev
+                                dt = max(1e-3, now - prev_ts)
+                                delta = depth - prev_depth
+                                rate = max(0.0, delta / dt)
+                                DLQ_INGEST_RATE.labels(queue_name=queue_name).set(rate)
+                            self._dlq_prev[queue_name] = (now, depth)
+                        else:
+                            QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+
+                    # Aggregate worker metrics from Redis to update per-stage counters
+                    try:
+                        client = self.job_manager.redis_client
+                        if client:
+                            cursor = 0
+                            totals: Dict[str, Dict[str, float]] = {}
+                            # We compute cumulative totals by stage from worker snapshots
+                            while True:
+                                cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+                                for k in keys:
+                                    data = await client.get(k)
+                                    if not data:
+                                        continue
+                                    try:
+                                        m = json.loads(data)
+                                        stage = str(m.get("worker_type", "unknown"))
+                                        processed = float(m.get("jobs_processed", 0) or 0)
+                                        failed = float(m.get("jobs_failed", 0) or 0)
+                                        agg = totals.setdefault(stage, {"processed": 0.0, "failed": 0.0})
+                                        agg["processed"] += processed
+                                        agg["failed"] += failed
+                                    except Exception:
+                                        continue
+                                if cursor == 0:
+                                    break
+                            # Emit deltas as counter increments
+                            prev = self._stage_prev
+                            for stage, vals in totals.items():
+                                prev_vals = prev.get(stage, {"processed": 0.0, "failed": 0.0})
+                                d_proc = max(0.0, vals["processed"] - prev_vals.get("processed", 0.0))
+                                d_fail = max(0.0, vals["failed"] - prev_vals.get("failed", 0.0))
+                                if d_proc > 0:
+                                    STAGE_JOBS_PROCESSED.labels(stage=stage).inc(d_proc)
+                                if d_fail > 0:
+                                    STAGE_JOBS_FAILED.labels(stage=stage).inc(d_fail)
+                            self._stage_prev = totals
+                    except Exception as agg_err:
+                        logger.debug(f"Worker metrics aggregation error: {agg_err}")
                 
                 await asyncio.sleep(30)  # Update every 30 seconds
                 

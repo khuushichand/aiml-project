@@ -20,6 +20,7 @@ Notes:
 | `providers` (`llm`) | API-related/Providers_API_Documentation.md |
 | `chunking-templates` | API-related/Chunking_Templates_API_Documentation.md |
 | `audio` | API-related/Audio_Transcription_API.md |
+| `audio-jobs` | API-related/Audio_Jobs_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
 | `benchmarks` | Coming soon |
 | `characters` | CHARACTER_CHAT_API_DOCUMENTATION.md |

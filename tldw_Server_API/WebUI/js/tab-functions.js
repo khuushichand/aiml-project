@@ -227,6 +227,210 @@ function segParseEntries() {
     return raw.split('\n').map(line => ({ composite: line.trim() })).filter(e => e.composite);
 }
 
+// ----------------------------------------------------------------------------
+// Embeddings DLQ Admin Functions
+// ----------------------------------------------------------------------------
+
+let embeddingsDLQTimer = null;
+
+async function embeddingsListDLQ() {
+    const stageEl = document.getElementById('embeddingsDLQ_stage');
+    const countEl = document.getElementById('embeddingsDLQ_count');
+    const out = document.getElementById('embeddingsDLQ_results');
+    if (!out) return;
+    out.textContent = 'Loading...';
+    try {
+        const stage = stageEl.value;
+        const count = parseInt(countEl.value || '50', 10);
+        const res = await apiClient.get(`/api/v1/embeddings/dlq?stage=${encodeURIComponent(stage)}&count=${count}`);
+        // Render a minimal table with requeue buttons
+        const items = (res && res.items) ? res.items : [];
+        const rows = items.map(item => {
+            const eid = item.entry_id;
+            const job = item.job_id || '';
+            const err = (item.error || '').toString().slice(0, 120);
+            return `<tr>
+                <td><code>${eid}</code></td>
+                <td>${job}</td>
+                <td class="text-muted">${Utils.escapeHtml(err)}</td>
+                <td><button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button></td>
+            </tr>`;
+        }).join('');
+        out.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Action</th></tr>
+                </thead>
+                <tbody>${rows || '<tr><td colspan="4">No DLQ items</td></tr>'}</tbody>
+            </table>
+            <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
+        `;
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to list DLQ');
+    }
+}
+
+async function embeddingsRequeueDLQ(entryId) {
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    const out = document.getElementById('embeddingsDLQ_results');
+    try {
+        await apiClient.post('/api/v1/embeddings/dlq/requeue', {
+            stage,
+            entry_id: entryId,
+            delete_from_dlq: true
+        });
+        Toast.success('Requeued DLQ item');
+        // Refresh list
+        embeddingsListDLQ();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to requeue DLQ item');
+    }
+}
+
+// Enhanced DLQ list with job_id filter, selection, and stage badges
+async function embeddingsListDLQ2() {
+    const stageEl = document.getElementById('embeddingsDLQ_stage');
+    const countEl = document.getElementById('embeddingsDLQ_count');
+    const jobIdEl = document.getElementById('embeddingsDLQ_job_id');
+    const out = document.getElementById('embeddingsDLQ_results');
+    if (!out) return;
+    out.textContent = 'Loading...';
+    try {
+        const stage = stageEl.value;
+        const count = parseInt(countEl.value || '50', 10);
+        const jobId = (jobIdEl && jobIdEl.value || '').trim();
+        const q = new URLSearchParams({ stage, count: String(count) });
+        if (jobId) q.set('job_id', jobId);
+        const res = await apiClient.get(`/api/v1/embeddings/dlq?${q.toString()}`);
+        try { await embeddingsRefreshDLQBadges(); } catch (e) { /* ignore */ }
+        const items = (res && res.items) ? res.items : [];
+        const rows = items.map(item => {
+            const eid = item.entry_id;
+            const job = item.job_id || '';
+            const err = (item.error || '').toString().slice(0, 120);
+            return `<tr>
+                <td><input type="checkbox" class="dlq-select" data-entry-id="${eid}" /></td>
+                <td><code>${eid}</code></td>
+                <td>${job}</td>
+                <td class="text-muted">${Utils.escapeHtml(err)}</td>
+                <td><button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button></td>
+            </tr>`;
+        }).join('');
+        out.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Action</th></tr>
+                </thead>
+                <tbody>${rows || '<tr><td colspan="5">No DLQ items</td></tr>'}</tbody>
+            </table>
+            <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
+        `;
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to list DLQ');
+    }
+}
+
+function embeddingsDLQToggleSelectAll(cb) {
+    try {
+        const out = document.getElementById('embeddingsDLQ_results');
+        if (!out) return;
+        const boxes = out.querySelectorAll('input.dlq-select');
+        boxes.forEach(b => b.checked = !!cb.checked);
+    } catch (e) { /* ignore */ }
+}
+
+async function embeddingsRequeueDLQSelected() {
+    const out = document.getElementById('embeddingsDLQ_results');
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    if (!out) return;
+    try {
+        const selected = Array.from(out.querySelectorAll('input.dlq-select:checked')).map(b => b.getAttribute('data-entry-id')).filter(Boolean);
+        if (selected.length === 0) {
+            Toast.error('No DLQ entries selected');
+            return;
+        }
+        await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+            stage,
+            entry_ids: selected,
+            delete_from_dlq: true
+        });
+        Toast.success(`Requeued ${selected.length} DLQ item(s)`);
+        embeddingsListDLQ2();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to bulk requeue');
+    }
+}
+
+async function embeddingsRequeueDLQAllFiltered() {
+    const out = document.getElementById('embeddingsDLQ_results');
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    if (!out) return;
+    try {
+        const all = Array.from(out.querySelectorAll('input.dlq-select')).map(b => b.getAttribute('data-entry-id')).filter(Boolean);
+        if (all.length === 0) {
+            Toast.error('No DLQ entries listed');
+            return;
+        }
+        await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+            stage,
+            entry_ids: all,
+            delete_from_dlq: true
+        });
+        Toast.success(`Requeued ${all.length} DLQ item(s)`);
+        embeddingsListDLQ2();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to bulk requeue (all filtered)');
+    }
+}
+
+async function embeddingsRefreshDLQBadges() {
+    try {
+        const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+        const dlq = (res && res.dlq) || {};
+        const map = {
+            embedding: dlq['embeddings:embedding:dlq'] || 0,
+            chunking: dlq['embeddings:chunking:dlq'] || 0,
+            storage: dlq['embeddings:storage:dlq'] || 0,
+        };
+        const badgeE = document.getElementById('dlq-badge-embedding');
+        const badgeC = document.getElementById('dlq-badge-chunking');
+        const badgeS = document.getElementById('dlq-badge-storage');
+        const badgeE2 = document.getElementById('dlq-badge-embedding2');
+        const badgeC2 = document.getElementById('dlq-badge-chunking2');
+        const badgeS2 = document.getElementById('dlq-badge-storage2');
+        const apply = (el, label, v) => {
+            if (!el) return;
+            el.textContent = `${label}: ${v}`;
+            el.classList.remove('badge-warn', 'badge-crit');
+            if (v >= 100) el.classList.add('badge-crit'); else if (v >= 10) el.classList.add('badge-warn');
+        };
+        apply(badgeE, 'embedding', map.embedding);
+        apply(badgeC, 'chunking', map.chunking);
+        apply(badgeS, 'storage', map.storage);
+        apply(badgeE2, 'embedding', map.embedding);
+        apply(badgeC2, 'chunking', map.chunking);
+        apply(badgeS2, 'storage', map.storage);
+    } catch (e) { /* ignore */ }
+}
+
+function embeddingsStartDLQAutoRefresh() {
+    try { embeddingsStopDLQAutoRefresh(); } catch (e) { /* ignore */ }
+    embeddingsRefreshDLQBadges();
+    embeddingsDLQTimer = setInterval(embeddingsRefreshDLQBadges, 10000);
+}
+
+function embeddingsStopDLQAutoRefresh() {
+    if (embeddingsDLQTimer) {
+        clearInterval(embeddingsDLQTimer);
+        embeddingsDLQTimer = null;
+    }
+}
+
 async function segmentTranscriptRun() {
     const entries = segParseEntries();
     if (!entries.length) {

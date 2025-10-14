@@ -20,7 +20,7 @@ import base64
 import json
 import time
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Awaitable
 from dataclasses import dataclass, field
 import numpy as np
 import tempfile
@@ -591,7 +591,8 @@ class UnifiedStreamingTranscriber:
 
 async def handle_unified_websocket(
     websocket,
-    config: Optional[UnifiedStreamingConfig] = None
+    config: Optional[UnifiedStreamingConfig] = None,
+    on_audio_seconds: Optional[Callable[[float, int], Awaitable[None]]] = None,
 ):
     """
     Handle WebSocket connection for unified real-time transcription.
@@ -803,6 +804,11 @@ async def handle_unified_websocket(
                     # Decode audio data
                     audio_base64 = data.get("data", "")
                     audio_bytes = base64.b64decode(audio_base64)
+                    # Optional callback to account for usage seconds before processing
+                    if on_audio_seconds is not None:
+                        # Compute seconds from byte length and configured sample rate
+                        seconds = float(len(audio_bytes)) / float(4 * max(1, config.sample_rate))
+                        await on_audio_seconds(seconds, config.sample_rate)
                     
                     # Process audio chunk
                     result = await transcriber.process_audio_chunk(audio_bytes)

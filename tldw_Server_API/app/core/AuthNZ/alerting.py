@@ -13,12 +13,14 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 import smtplib
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.monitoring import update_security_alert_metrics
 
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -61,6 +63,34 @@ class SecurityAlertDispatcher:
             self.settings, "SECURITY_ALERT_SMTP_TIMEOUT", 10
         )
         self._file_lock = asyncio.Lock()
+        self._last_dispatch_time: Optional[datetime] = None
+        self._last_dispatch_success: Optional[bool] = None
+        self._last_dispatch_error: Optional[str] = None
+        self._last_sink_status: Dict[str, Optional[bool]] = {
+            "file": None,
+            "webhook": None,
+            "email": None,
+        }
+        self._last_sink_errors: Dict[str, Optional[str]] = {
+            "file": None,
+            "webhook": None,
+            "email": None,
+        }
+        self._dispatch_count = 0
+        self._last_validation_time: Optional[datetime] = None
+        self._last_validation_errors: Optional[list[str]] = None
+        try:
+            self.file_min_severity = self._normalize_threshold(
+                getattr(self.settings, "SECURITY_ALERT_FILE_MIN_SEVERITY", None)
+            )
+            self.webhook_min_severity = self._normalize_threshold(
+                getattr(self.settings, "SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", None)
+            )
+            self.email_min_severity = self._normalize_threshold(
+                getattr(self.settings, "SECURITY_ALERT_EMAIL_MIN_SEVERITY", None)
+            )
+        except ValueError as threshold_error:
+            raise ValueError(f"Security alert severity configuration error: {threshold_error}") from threshold_error
 
         if self.file_path:
             try:
@@ -89,6 +119,76 @@ class SecurityAlertDispatcher:
             self.min_severity, _SEVERITY_ORDER["high"]
         )
         return sev_value >= threshold_value
+
+    def _normalize_threshold(self, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in _SEVERITY_ORDER:
+            raise ValueError(f"Invalid severity threshold '{value}'")
+        return normalized
+
+    def _severity_passes(self, severity: str, threshold: Optional[str]) -> bool:
+        if not threshold:
+            return True
+        return _SEVERITY_ORDER.get(severity, 0) >= _SEVERITY_ORDER[threshold]
+
+    def validate_configuration(self) -> None:
+        """
+        Validate alert configuration during startup.
+        Raises ValueError if security alerting is enabled but misconfigured.
+        """
+        self._last_validation_time = datetime.now(timezone.utc)
+        issues: list[str] = []
+
+        if not self.enabled:
+            self._last_validation_errors = None
+            update_security_alert_metrics(self._last_sink_status, None)
+            return
+
+        sink_configured = False
+
+        if self.file_path:
+            sink_configured = True
+            try:
+                path = Path(self.file_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8"):
+                    pass
+            except Exception as exc:
+                issues.append(f"File sink not writable: {exc}")
+
+        if self.webhook_url:
+            sink_configured = True
+            parsed = urlparse(self.webhook_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                issues.append("Webhook URL must be a valid http/https endpoint")
+
+        if self._can_send_email():
+            sink_configured = True
+        else:
+            email_fields = [
+                bool(self.email_recipients),
+                bool(self.email_from),
+                bool(self.smtp_host),
+                bool(self.smtp_user),
+                bool(self.smtp_password),
+            ]
+            if any(email_fields):
+                issues.append(
+                    "Email alerting requires recipients, from address, SMTP host, "
+                    "and credentials when authentication is needed"
+                )
+
+        if not sink_configured:
+            issues.append("Security alerts enabled but no delivery sink configured")
+
+        self._last_validation_errors = issues or None
+        if issues:
+            update_security_alert_metrics(self._last_sink_status, False)
+            raise ValueError("; ".join(issues))
+
+        update_security_alert_metrics(self._last_sink_status, None)
 
     async def dispatch(
         self,
@@ -121,22 +221,68 @@ class SecurityAlertDispatcher:
         if not self._meets_threshold(severity):
             return False
 
-        tasks = []
+        sink_status: Dict[str, Optional[bool]] = {
+            "file": None,
+            "webhook": None,
+            "email": None,
+        }
+        sink_errors: Dict[str, Optional[str]] = {
+            "file": None,
+            "webhook": None,
+            "email": None,
+        }
+        errors: list[tuple[str, Exception]] = []
+
         if self.file_path:
-            tasks.append(self._write_file(record))
+            if self._severity_passes(severity, self.file_min_severity):
+                try:
+                    await self._write_file(record)
+                    sink_status["file"] = True
+                except Exception as exc:
+                    sink_status["file"] = False
+                    sink_errors["file"] = str(exc)
+                    errors.append(("file", exc))
+            else:
+                sink_status["file"] = None
+
         if self.webhook_url:
-            tasks.append(self._send_webhook(record))
+            if self._severity_passes(severity, self.webhook_min_severity):
+                try:
+                    await self._send_webhook(record)
+                    sink_status["webhook"] = True
+                except Exception as exc:
+                    sink_status["webhook"] = False
+                    sink_errors["webhook"] = str(exc)
+                    errors.append(("webhook", exc))
+            else:
+                sink_status["webhook"] = None
+
         if self._can_send_email():
-            tasks.append(self._send_email(record))
+            if self._severity_passes(severity, self.email_min_severity):
+                try:
+                    await self._send_email(record)
+                    sink_status["email"] = True
+                except Exception as exc:
+                    sink_status["email"] = False
+                    sink_errors["email"] = str(exc)
+                    errors.append(("email", exc))
+            else:
+                sink_status["email"] = None
 
-        if not tasks:
-            return True
+        self._last_dispatch_time = datetime.now(timezone.utc)
+        self._dispatch_count += 1
+        self._last_sink_status = sink_status
+        self._last_sink_errors = sink_errors
+        success = not errors
+        self._last_dispatch_success = success
+        self._last_dispatch_error = str(errors[0][1]) if errors else None
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning(f"Security alert sink failed: {result}")
-        return True
+        update_security_alert_metrics(sink_status, success)
+
+        for sink_name, exc in errors:
+            logger.warning(f"Security alert sink '{sink_name}' failed: {exc}")
+
+        return success
 
     def _can_send_email(self) -> bool:
         return (
@@ -203,6 +349,29 @@ class SecurityAlertDispatcher:
             if self.smtp_user:
                 smtp.login(self.smtp_user, self.smtp_password or "")
             smtp.send_message(message)
+
+    def get_status(self) -> Dict[str, Any]:
+        """Return current dispatcher configuration and dispatch metadata."""
+        return {
+            "enabled": self.enabled,
+            "min_severity": self.min_severity,
+            "file_sink_configured": bool(self.file_path),
+            "webhook_configured": bool(self.webhook_url),
+            "email_configured": self._can_send_email(),
+            "last_dispatch_time": self._last_dispatch_time,
+            "last_dispatch_success": self._last_dispatch_success,
+            "last_dispatch_error": self._last_dispatch_error,
+            "dispatch_count": self._dispatch_count,
+            "last_sink_status": self._last_sink_status,
+            "last_sink_errors": self._last_sink_errors,
+            "sink_thresholds": {
+                "file": self.file_min_severity,
+                "webhook": self.webhook_min_severity,
+                "email": self.email_min_severity,
+            },
+            "last_validation_time": self._last_validation_time,
+            "last_validation_errors": self._last_validation_errors,
+        }
 
 
 _dispatcher: Optional[SecurityAlertDispatcher] = None

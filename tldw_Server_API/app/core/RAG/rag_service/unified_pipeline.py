@@ -131,6 +131,11 @@ except ImportError:
     AnswerGenerator = None
 
 try:
+    from .post_generation_verifier import PostGenerationVerifier
+except ImportError:
+    PostGenerationVerifier = None
+
+try:
     from .analytics_system import UnifiedFeedbackSystem
 except ImportError:
     UnifiedFeedbackSystem = None
@@ -257,6 +262,14 @@ async def unified_rag_pipeline(
     generation_model: Optional[str] = None,
     generation_prompt: Optional[str] = None,
     max_generation_tokens: int = 500,
+
+    # ========== POST-VERIFICATION (ADAPTIVE) ==========
+    enable_post_verification: bool = False,
+    adaptive_max_retries: int = 1,
+    adaptive_unsupported_threshold: float = 0.15,
+    adaptive_max_claims: int = 20,
+    adaptive_time_budget_sec: Optional[float] = None,
+    low_confidence_behavior: Literal["continue", "ask", "decline"] = "continue",
     
     # ========== FEEDBACK ==========
     collect_feedback: bool = False,
@@ -1266,7 +1279,7 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Answer generation failed: {str(e)}")
                 logger.error(f"Generation error: {e}")
-
+        
         # ========== CLAIMS & FACTUALITY ==========
         if enable_claims and result.generated_answer:
             try:
@@ -1461,6 +1474,63 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Claims analysis failed: {str(e)}")
                 logger.error(f"Claims analysis error: {e}")
+
+        # ========== POST-GENERATION VERIFICATION (ADAPTIVE) ==========
+        # May run even if enable_claims was False; uses existing results if available.
+        try:
+            # Allow env defaults if parameters not explicitly set
+            if adaptive_time_budget_sec is None:
+                try:
+                    import os
+                    adaptive_time_budget_sec = float(os.getenv("RAG_ADAPTIVE_TIME_BUDGET_SEC", "0")) or None
+                except Exception:
+                    adaptive_time_budget_sec = None
+            if enable_post_verification and result.generated_answer and PostGenerationVerifier:
+                verifier = PostGenerationVerifier(
+                    max_retries=adaptive_max_retries,
+                    unsupported_threshold=adaptive_unsupported_threshold,
+                    max_claims=adaptive_max_claims,
+                    time_budget_sec=adaptive_time_budget_sec,
+                )
+                vres = await verifier.verify_and_maybe_fix(
+                    query=query,
+                    answer=result.generated_answer,
+                    base_documents=result.documents or [],
+                    media_db_path=media_db_path,
+                    notes_db_path=notes_db_path,
+                    character_db_path=character_db_path,
+                    user_id=user_id,
+                    generation_model=generation_model,
+                    existing_claims=claims_payload,
+                    existing_summary=factuality_payload,
+                    search_mode=search_mode,
+                    hybrid_alpha=hybrid_alpha,
+                    top_k=top_k,
+                )
+                # Attach verification metadata
+                result.metadata.setdefault("post_verification", {})
+                result.metadata["post_verification"].update({
+                    "unsupported_ratio": vres.unsupported_ratio,
+                    "total_claims": vres.total_claims,
+                    "unsupported_count": vres.unsupported_count,
+                    "fixed": vres.fixed,
+                    "reason": vres.reason,
+                })
+                # Optionally override final answer on successful repair
+                if vres.fixed and vres.new_answer:
+                    result.generated_answer = vres.new_answer
+                # Behavior toggles on low confidence and not fixed
+                if (vres.unsupported_ratio > adaptive_unsupported_threshold) and (not vres.fixed):
+                    if low_confidence_behavior == "ask":
+                        # Append clarifying note
+                        note = "\n\n[Note] Evidence is insufficient; please clarify or provide more context."
+                        result.generated_answer = (result.generated_answer or "") + note
+                    elif low_confidence_behavior == "decline":
+                        result.generated_answer = "Insufficient evidence found to answer confidently."
+        except Exception as e:
+            # Non-fatal: log and continue
+            result.errors.append(f"Post-verification failed: {str(e)}")
+            logger.warning(f"Post-verification error: {e}")
 
         # ========== USER FEEDBACK ==========
         if collect_feedback:

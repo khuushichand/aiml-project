@@ -11,6 +11,7 @@ Key enhancements over v5:
 """
 
 import asyncio
+import json
 import base64
 import hashlib
 import time
@@ -69,6 +70,7 @@ from slowapi.util import get_remote_address
 
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
+import redis.asyncio as aioredis
 from fnmatch import fnmatch
 
 # ============================================================================
@@ -226,6 +228,18 @@ embedding_token_inputs_total = get_or_create_counter(
     ['mode']  # single or batch
 )
 
+# DLQ/admin metrics
+dlq_requeued_total = get_or_create_counter(
+    'embedding_dlq_requeued_total',
+    'Number of DLQ items requeued via admin API',
+    ['queue_name', 'status']
+)
+dlq_requeue_errors_total = get_or_create_counter(
+    'embedding_dlq_requeue_errors_total',
+    'Errors during DLQ requeue operations',
+    ['queue_name', 'error_type']
+)
+
 # ============================================================================
 # Configuration and Constants
 # ============================================================================
@@ -265,6 +279,27 @@ def _cfg_int(name: str, default_val: int) -> int:
     except Exception:
         pass
     return default_val
+
+
+# ============================================================================
+# Redis helpers for DLQ admin endpoints
+# ============================================================================
+
+async def _get_redis_client() -> aioredis.Redis:
+    url = settings.get('REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379'))
+    return await aioredis.from_url(url, decode_responses=True)
+
+def _dlq_stream_name(stage: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    return f"embeddings:{stage}:dlq"
+
+def _live_stream_name(stage: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    return f"embeddings:{stage}"
 
 MAX_BATCH_SIZE = _cfg_int("EMBEDDINGS_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE)
 MAX_CACHE_SIZE = _cfg_int("EMBEDDINGS_CACHE_MAX_SIZE", DEFAULT_MAX_CACHE_SIZE)
@@ -643,18 +678,24 @@ IMPLEMENTED_PROVIDERS = {"openai", "huggingface", "onnx", "local_api", "cohere",
 # Register cleanup on process exit
 def cleanup_on_exit():
     """Synchronous cleanup for process exit"""
+    # Avoid logging in atexit, as sinks may already be closed
     try:
         loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            # Stop TTL cache cleanup task if running
+    except Exception:
+        return
+    try:
+        if loop and not loop.is_closed():
             try:
                 loop.run_until_complete(embedding_cache.stop_cleanup_task())
             except Exception:
                 pass
-            # Close provider connection pools
-            loop.run_until_complete(connection_manager.close_all())
-    except Exception as e:
-        logger.error(f"Error during exit cleanup: {e}")
+            try:
+                loop.run_until_complete(connection_manager.close_all())
+            except Exception:
+                pass
+    except Exception:
+        # Swallow any errors during interpreter teardown
+        pass
 
 atexit.register(cleanup_on_exit)
 
@@ -2176,3 +2217,224 @@ async def get_metrics(
         }
     }
     return payload
+
+
+# ============================================================================
+# DLQ Admin Endpoints
+# ============================================================================
+
+class DLQItem(BaseModel):
+    entry_id: str = Field(..., description="Redis stream entry ID")
+    queue: str = Field(..., description="DLQ stream name")
+    job_id: Optional[str] = None
+    error: Optional[str] = None
+    failed_at: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+    fields: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get(
+    "/embeddings/dlq",
+    summary="List DLQ items for a stage (admin only)"
+)
+async def list_dlq_items(
+    stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
+    count: int = Query(50, ge=1, le=500, description="Max items to return"),
+    job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    stream = _dlq_stream_name(stage)
+    try:
+        client = await _get_redis_client()
+        # Reverse range: most recent first
+        entries = await client.xrevrange(stream, "+", "-", count=count)
+        items: List[DLQItem] = []
+        for entry_id, fields in entries:
+            # fields is a dict[str,str]
+            payload = None
+            try:
+                raw_payload = fields.get("payload")
+                if raw_payload:
+                    payload = json.loads(raw_payload)
+            except Exception:
+                payload = None
+            ji = fields.get("job_id")
+            if job_id and ji != job_id:
+                continue
+            items.append(DLQItem(
+                entry_id=entry_id,
+                queue=stream,
+                job_id=ji,
+                error=fields.get("error"),
+                failed_at=fields.get("failed_at"),
+                payload=payload,
+                fields=fields,
+            ))
+        await client.close()
+        return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+
+
+class DLQRequeueRequest(BaseModel):
+    stage: str = Field(..., description="Stage: chunking|embedding|storage")
+    entry_id: str = Field(..., description="Redis stream entry ID")
+    delete_from_dlq: bool = Field(default=True)
+    override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
+
+
+@router.post(
+    "/embeddings/dlq/requeue",
+    summary="Requeue a DLQ item to its live stream (admin only)"
+)
+async def requeue_dlq_item(
+    req: DLQRequeueRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    dlq_stream = _dlq_stream_name(req.stage)
+    live_stream = _live_stream_name(req.stage)
+    client = await _get_redis_client()
+    try:
+        # Fetch the specific entry
+        # XCLAIM not suitable; use XRANGE and filter by ID
+        entries = await client.xrange(dlq_stream, min=req.entry_id, max=req.entry_id, count=1)
+        if not entries:
+            raise HTTPException(status_code=404, detail="DLQ entry not found")
+        entry_id, fields = entries[0]
+        # Prepare requeue payload
+        requeue_fields = dict(fields)
+        # Remove DLQ-specific fields
+        for k in ["consumer_group", "worker_id", "failed_at", "error"]:
+            requeue_fields.pop(k, None)
+        if req.override_fields:
+            requeue_fields.update(req.override_fields)
+        # Requeue to live stream
+        await client.xadd(live_stream, requeue_fields)
+        # Optionally delete from DLQ
+        if req.delete_from_dlq:
+            try:
+                await client.xdel(dlq_stream, entry_id)
+            except Exception:
+                pass
+        dlq_requeued_total.labels(queue_name=dlq_stream, status="success").inc()
+        return {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
+    except HTTPException:
+        dlq_requeued_total.labels(queue_name=dlq_stream, status="not_found").inc()
+        raise
+    except Exception as e:
+        dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
+        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}")
+    finally:
+        await client.close()
+
+
+class DLQRequeueBulkRequest(BaseModel):
+    stage: str
+    entry_ids: List[str]
+    delete_from_dlq: bool = True
+    override_fields: Optional[Dict[str, Any]] = None
+
+
+@router.post(
+    "/embeddings/dlq/requeue/bulk",
+    summary="Bulk requeue DLQ items to live stream (admin only)"
+)
+async def requeue_dlq_bulk(
+    req: DLQRequeueBulkRequest,
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    dlq_stream = _dlq_stream_name(req.stage)
+    live_stream = _live_stream_name(req.stage)
+    client = await _get_redis_client()
+    results: List[Dict[str, Any]] = []
+    try:
+        for eid in req.entry_ids:
+            status = "success"
+            try:
+                entries = await client.xrange(dlq_stream, min=eid, max=eid, count=1)
+                if not entries:
+                    status = "not_found"
+                else:
+                    _, fields = entries[0]
+                    requeue_fields = dict(fields)
+                    for k in ["consumer_group", "worker_id", "failed_at", "error"]:
+                        requeue_fields.pop(k, None)
+                    if req.override_fields:
+                        requeue_fields.update(req.override_fields)
+                    await client.xadd(live_stream, requeue_fields)
+                    if req.delete_from_dlq:
+                        try:
+                            await client.xdel(dlq_stream, eid)
+                        except Exception:
+                            pass
+            except Exception as e:
+                status = f"error:{type(e).__name__}"
+                dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
+            else:
+                dlq_requeued_total.labels(queue_name=dlq_stream, status=status).inc()
+            results.append({"entry_id": eid, "status": status})
+        return {"from": dlq_stream, "to": live_stream, "results": results}
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/embeddings/dlq/stats",
+    summary="DLQ and queue depths (admin only)"
+)
+async def get_dlq_stats(
+    current_user: User = Depends(get_request_user)
+):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+        depths = {}
+        dlq_depths = {}
+        for q in queues:
+            try:
+                depths[q] = await client.xlen(q)
+            except Exception:
+                depths[q] = 0
+            dq = f"{q}:dlq"
+            try:
+                dlq_depths[dq] = await client.xlen(dq)
+            except Exception:
+                dlq_depths[dq] = 0
+        total_dlq = sum(dlq_depths.values())
+
+        # Aggregate worker metrics to summarize stage processed/failed
+        stages = {"chunking": {"processed": 0, "failed": 0},
+                  "embedding": {"processed": 0, "failed": 0},
+                  "storage": {"processed": 0, "failed": 0}}
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+                for k in keys:
+                    data = await client.get(k)
+                    if not data:
+                        continue
+                    try:
+                        m = json.loads(data)
+                        stage = str(m.get("worker_type", "")).lower()
+                        proc = int(m.get("jobs_processed", 0) or 0)
+                        fail = int(m.get("jobs_failed", 0) or 0)
+                        if stage in stages:
+                            stages[stage]["processed"] += proc
+                            stages[stage]["failed"] += fail
+                    except Exception:
+                        continue
+                if cursor == 0:
+                    break
+        except Exception:
+            pass
+
+        return {"queues": depths, "dlq": dlq_depths, "total_dlq": total_dlq, "stages": stages}
+    finally:
+        await client.close()

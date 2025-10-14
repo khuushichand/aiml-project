@@ -137,30 +137,18 @@ async def list_definitions(
     ]
 
 
-@router.get("/{workflow_id}")
-async def get_definition(
-    workflow_id: int,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-):
-    d = db.get_definition(workflow_id)
-    if not d:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-    # Tenant isolation
-    tenant_id = str(getattr(current_user, "tenant_id", "default"))
-    if d.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-    try:
-        definition = json.loads(d.definition_json)
-    except Exception:
-        definition = {"error": "invalid_definition_json"}
-    return {
-        "id": d.id,
-        "name": d.name,
-        "version": d.version,
-        "is_active": bool(d.is_active),
-        "definition": definition,
-    }
+@router.get("/step-types")
+async def get_step_types():
+    """List available workflow step types for UI discovery.
+
+    Note: Declared before `/{workflow_id}` to avoid path parameter shadowing.
+    """
+    reg = StepTypeRegistry()
+    steps = reg.list()
+    return [{"name": s.name, "description": s.description} for s in steps]
+
+
+## get_definition moved below '/runs*' routes to avoid path shadowing
 
 
 @router.post("/{workflow_id}/versions", response_model=WorkflowDefinitionResponse, status_code=201)
@@ -222,6 +210,7 @@ async def run_saved(
             return WorkflowRunResponse(
                 run_id=existing.run_id,
                 workflow_id=existing.workflow_id,
+                user_id=str(existing.user_id) if getattr(existing, 'user_id', None) is not None else None,
                 status=existing.status,
                 status_reason=existing.status_reason,
                 inputs=json.loads(existing.inputs_json or "{}"),
@@ -272,6 +261,7 @@ async def run_saved(
                     return WorkflowRunResponse(
                         run_id=run.run_id,
                         workflow_id=run.workflow_id,
+                        user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
                         status=run.status,
                         status_reason=run.status_reason,
                         inputs=json.loads(run.inputs_json or "{}"),
@@ -312,6 +302,7 @@ async def run_saved(
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
+        user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
         status=run.status,
         status_reason=run.status_reason,
         inputs=json.loads(run.inputs_json or "{}"),
@@ -373,6 +364,7 @@ async def list_runs(
             WorkflowRunListItem(
                 run_id=r.run_id,
                 workflow_id=r.workflow_id,
+                user_id=str(r.user_id) if getattr(r, 'user_id', None) is not None else None,
                 status=r.status,
                 status_reason=r.status_reason,
                 definition_version=r.definition_version,
@@ -407,6 +399,7 @@ async def run_adhoc(
             return WorkflowRunResponse(
                 run_id=existing.run_id,
                 workflow_id=existing.workflow_id,
+                user_id=str(existing.user_id) if getattr(existing, 'user_id', None) is not None else None,
                 status=existing.status,
                 status_reason=existing.status_reason,
                 inputs=json.loads(existing.inputs_json or "{}"),
@@ -459,6 +452,7 @@ async def run_adhoc(
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
+        user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
         status=run.status,
         status_reason=run.status_reason,
         inputs=json.loads(run.inputs_json or "{}"),
@@ -488,6 +482,7 @@ async def get_run(
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
+        user_id=str(run.user_id) if getattr(run, 'user_id', None) is not None else None,
         status=run.status,
         status_reason=run.status_reason,
         inputs=json.loads(run.inputs_json or "{}"),
@@ -743,12 +738,7 @@ async def get_chunker_options():
     }
 
 
-@router.get("/step-types")
-async def get_step_types():
-    """List available workflow step types for UI discovery."""
-    reg = StepTypeRegistry()
-    steps = reg.list()
-    return [{"name": s.name, "description": s.description} for s in steps]
+
 
 
 @router.post("/runs/{run_id}/{action}")
@@ -802,6 +792,36 @@ async def retry_run(
     else:
         engine.submit(run_id, RunMode.ASYNC)
     return {"ok": True}
+
+
+@router.get("/{workflow_id}")
+async def get_definition(
+    workflow_id: int,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    """Fetch a workflow definition by id.
+
+    Declared after '/runs*' routes to prevent path parameter shadowing.
+    """
+    d = db.get_definition(workflow_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    # Tenant isolation
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if d.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    try:
+        definition = json.loads(d.definition_json)
+    except Exception:
+        definition = {"error": "invalid_definition_json"}
+    return {
+        "id": d.id,
+        "name": d.name,
+        "version": d.version,
+        "is_active": bool(d.is_active),
+        "definition": definition,
+    }
 
 
 # -------------------- Human-in-the-loop approvals --------------------

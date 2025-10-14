@@ -421,6 +421,45 @@ class UnifiedRAGRequest(BaseModel):
         example=500
     )
     
+    # ========== POST-VERIFICATION (ADAPTIVE) ==========
+    enable_post_verification: bool = Field(
+        default=False,
+        description="Verify generated answer against evidence; optionally attempt a bounded repair",
+        example=False,
+    )
+    adaptive_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Maximum adaptive repair attempts when evidence is insufficient",
+        example=1,
+    )
+    adaptive_unsupported_threshold: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="If (refuted + NEI)/total_claims exceeds this, trigger repair",
+        example=0.15,
+    )
+    adaptive_max_claims: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum claims to analyze during post-verification",
+        example=20,
+    )
+    adaptive_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional hard cap on post-verification wall time",
+        example=10.0,
+    )
+    low_confidence_behavior: Literal["continue", "ask", "decline"] = Field(
+        default="continue",
+        description="Behavior when evidence remains insufficient after retries",
+        example="ask",
+    )
+    
     # ========== FEEDBACK ==========
     collect_feedback: bool = Field(
         default=False,
@@ -818,6 +857,14 @@ class UnifiedBatchRequest(BaseModel):
     generation_model: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)
+    
+    # Post-Verification (Adaptive)
+    enable_post_verification: bool = Field(default=False)
+    adaptive_max_retries: int = Field(default=1, ge=0, le=3)
+    adaptive_unsupported_threshold: float = Field(default=0.15, ge=0.0, le=1.0)
+    adaptive_max_claims: int = Field(default=20, ge=1, le=100)
+    adaptive_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    low_confidence_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
     
     # Feedback
     collect_feedback: bool = Field(default=False)

@@ -104,6 +104,34 @@ if PROMETHEUS_AVAILABLE:
         'authnz_failed_auth_rate_5min',
         'Failed authentication rate over 5 minutes'
     )
+    
+    security_alert_channel_status = Gauge(
+        'authnz_security_alert_channel_status',
+        'Last dispatch status per security alert sink (1=success, 0=disabled, -1=failure)',
+        ['sink']
+    )
+    
+    security_alert_last_success = Gauge(
+        'authnz_security_alert_last_success',
+        'Overall result of the last security alert dispatch (1=success, 0=failure)'
+    )
+
+    def update_security_alert_metrics(
+        statuses: Dict[str, Optional[bool]],
+        last_success: Optional[bool]
+    ) -> None:
+        """Update Prometheus gauges for security alert delivery channels."""
+        for sink, status in statuses.items():
+            value = 0 if status is None else (1 if status else -1)
+            security_alert_channel_status.labels(sink=sink).set(value)
+        if last_success is not None:
+            security_alert_last_success.set(1 if last_success else 0)
+else:
+    def update_security_alert_metrics(
+        statuses: Dict[str, Optional[bool]],
+        last_success: Optional[bool]
+    ) -> None:  # pragma: no cover - metrics disabled without prometheus_client
+        return
 
 #######################################################################################################################
 #

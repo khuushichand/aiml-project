@@ -51,6 +51,12 @@
 <!-- Admin Tools Tab -->
 <div id="tabEmbeddingsAdmin" class="tab-content">
     <div class="endpoint-section" id="embeddingsHealth">
+        <div style="margin: 6px 0;">
+            <span class="badge" id="dlq-badge-embedding2" title="Embedding DLQ depth">embedding: 0</span>
+            <span class="badge" id="dlq-badge-chunking2" title="Chunking DLQ depth" style="margin-left:6px;">chunking: 0</span>
+            <span class="badge" id="dlq-badge-storage2" title="Storage DLQ depth" style="margin-left:6px;">storage: 0</span>
+            <button class="api-button" style="margin-left:8px;" onclick="embeddingsRefreshDLQBadges()">Refresh DLQ</button>
+        </div>
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/embeddings/health - Health Check</span>
@@ -178,5 +184,61 @@
         
         <h3>Response:</h3>
         <pre id="embeddingsModelsDownload_response">---</pre>
+    </div>
+</div>
+
+<!-- DLQ Admin Tab -->
+<div id="tabEmbeddingsDLQ" class="tab-content">
+    <div class="endpoint-section" id="embeddingsDLQ">
+        <h2>
+            <span class="endpoint-method get">GET/POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/dlq - DLQ Admin</span>
+        </h2>
+        <p>Inspect and requeue Dead-Letter Queue (DLQ) entries for embeddings stages (admin only).</p>
+
+        <div style="margin: 6px 0;">
+            <span class="badge" id="dlq-badge-embedding" title="Embedding DLQ depth">embedding: 0</span>
+            <span class="badge" id="dlq-badge-chunking" title="Chunking DLQ depth" style="margin-left:6px;">chunking: 0</span>
+            <span class="badge" id="dlq-badge-storage" title="Storage DLQ depth" style="margin-left:6px;">storage: 0</span>
+            <button class="api-button" style="margin-left:8px;" onclick="embeddingsStartDLQAutoRefresh()">Auto-Refresh (10s)</button>
+            <button class="api-button" onclick="embeddingsStopDLQAutoRefresh()">Stop</button>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_stage">Stage:</label>
+                    <select id="embeddingsDLQ_stage">
+                        <option value="embedding" selected>embedding</option>
+                        <option value="chunking">chunking</option>
+                        <option value="storage">storage</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_count">Count:</label>
+                    <input type="number" id="embeddingsDLQ_count" value="50" min="1" max="500" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsDLQ_job_id">Job ID Filter (optional):</label>
+                    <input type="text" id="embeddingsDLQ_job_id" placeholder="job-123" />
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" onclick="embeddingsListDLQ2()">List DLQ</button>
+            <label style="margin-left:10px;">
+                <input type="checkbox" id="embeddingsDLQ_selectAll" onchange="embeddingsDLQToggleSelectAll(this)" /> Select All
+            </label>
+            <button class="api-button" onclick="embeddingsRequeueDLQSelected()">Requeue Selected</button>
+            <button class="api-button btn-warning" onclick="embeddingsRequeueDLQAllFiltered()">Requeue All Filtered</button>
+        </div>
+
+        <h3>Entries</h3>
+        <div id="embeddingsDLQ_results" class="json-viewer">---</div>
     </div>
 </div>

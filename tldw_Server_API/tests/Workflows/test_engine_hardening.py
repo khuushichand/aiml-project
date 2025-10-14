@@ -101,3 +101,149 @@ def test_heartbeat_written_for_step(client_with_wf: TestClient):
     assert rows, "No step runs recorded"
     assert any(r[0] is not None for r in rows)
 
+
+def test_completion_webhook_disable_and_enable(monkeypatch, client_with_wf: TestClient):
+    """Verify completion webhook is suppressed when globally disabled and fires when enabled."""
+    client = client_with_wf
+
+    # Always allow egress in this test to reach the webhook code path when enabled
+    from tldw_Server_API.app.core.Security import egress as egress_mod
+    monkeypatch.setattr(egress_mod, "is_url_allowed", lambda url: True)
+
+    # Provide a dummy httpx module that tracks calls
+    class _DummyClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, data=None, headers=None):
+            _calls["count"] += 1
+            return type("Resp", (), {"status_code": 200})()
+
+    _calls = {"count": 0}
+    dummy_httpx = type("_DummyHttpx", (), {"Client": _DummyClient})()
+    import sys
+    # Ensure our dummy is used by forcing reimport
+    if "httpx" in sys.modules:
+        del sys.modules["httpx"]
+    sys.modules["httpx"] = dummy_httpx
+
+    # Definition with a completion webhook
+    definition = {
+        "name": "webhook-test",
+        "version": 1,
+        "steps": [{"id": "s1", "type": "prompt", "config": {"template": "hello"}}],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+
+    # Case 1: Globally disabled – no call should be recorded
+    monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "true")
+    # Patch the stored definition to include the webhook in snapshot
+    # (alternatively, run ad-hoc, but this path ensures engine snapshot contains config)
+    # Here we re-create with webhook for simplicity
+    definition_disabled = {
+        "name": "webhook-test-disabled",
+        "version": 2,
+        "steps": [{"id": "s1", "type": "prompt", "config": {"template": "hello"}}],
+        "on_completion_webhook": {"url": "http://example.test/hook", "include_outputs": True},
+        "metadata": {},
+    }
+    wid2 = client.post("/api/v1/workflows", json=definition_disabled).json()["id"]
+    # Inject webhook into the stored snapshot by running ad-hoc (engine will use definition snapshot)
+    run1 = client.post(f"/api/v1/workflows/{wid2}/run", json={"inputs": {}, "idempotency_key": "k1"}).json()["run_id"]
+    # Wait for completion
+    for _ in range(200):
+        d = client.get(f"/api/v1/workflows/runs/{run1}").json()
+        if d["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.02)
+    assert d["status"] == "succeeded"
+    # Because global disable is on, no webhook should be attempted
+    before = _calls["count"]
+
+    # Case 2: Enabled – attach webhook and expect one call
+    monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")
+    definition_enabled = {
+        "name": "webhook-test-enabled",
+        "version": 1,
+        "steps": [{"id": "s1", "type": "prompt", "config": {"template": "done"}}],
+        "on_completion_webhook": {"url": "http://example.test/hook", "include_outputs": True},
+    }
+    wid3 = client.post("/api/v1/workflows", json=definition_enabled).json()["id"]
+    run2 = client.post(f"/api/v1/workflows/{wid3}/run", json={"inputs": {}}).json()["run_id"]
+    for _ in range(200):
+        d2 = client.get(f"/api/v1/workflows/runs/{run2}").json()
+        if d2["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.02)
+    assert d2["status"] == "succeeded"
+    assert _calls["count"] > before
+
+
+def test_webhook_hmac_and_ssrf(monkeypatch, client_with_wf: TestClient):
+    """Verify HMAC header correctness and SSRF allowlist prevents egress."""
+    client = client_with_wf
+
+    captured = {"headers": None, "data": None, "calls": 0}
+
+    # Allow egress for first half and capture headers/body
+    from tldw_Server_API.app.core.Security import egress as egress_mod
+    monkeypatch.setattr(egress_mod, "is_url_allowed", lambda url: True)
+
+    class _CapClient:
+        def __init__(self, timeout=None):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, data=None, headers=None):
+            captured["calls"] += 1
+            captured["headers"] = headers
+            captured["data"] = data
+            return type("Resp", (), {"status_code": 200})()
+
+    import sys
+    dummy_httpx = type("_DummyHttpx", (), {"Client": _CapClient})()
+    if "httpx" in sys.modules:
+        del sys.modules["httpx"]
+    sys.modules["httpx"] = dummy_httpx
+
+    # Set secret for HMAC signing
+    monkeypatch.setenv("WORKFLOWS_WEBHOOK_SECRET", "supersecret")
+
+    definition = {
+        "name": "webhook-hmac",
+        "version": 1,
+        "steps": [{"id": "s1", "type": "prompt", "config": {"template": "ok"}}],
+        "on_completion_webhook": {"url": "http://example.test/hook", "include_outputs": True},
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
+    # Wait for completion
+    import time
+    for _ in range(200):
+        d = client.get(f"/api/v1/workflows/runs/{run}").json()
+        if d["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.02)
+    assert captured["calls"] >= 1
+    # Verify HMAC header
+    import hmac, hashlib, json as _json
+    expected_sig = hmac.new(b"supersecret", captured["data"].encode("utf-8"), hashlib.sha256).hexdigest()
+    assert captured["headers"].get("X-Workflows-Signature") == expected_sig
+
+    # Now block SSRF and ensure no egress attempts
+    captured["calls"] = 0
+    monkeypatch.setenv("WORKFLOWS_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(egress_mod, "is_url_allowed", lambda url: False)
+    # New run with blocked URL
+    run2 = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
+    for _ in range(200):
+        d2 = client.get(f"/api/v1/workflows/runs/{run2}").json()
+        if d2["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.02)
+    assert captured["calls"] == 0

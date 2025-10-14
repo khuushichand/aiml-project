@@ -218,6 +218,15 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
 
 Process multiple queries concurrently.
 
+## Operational Notes
+
+- Production mode: When `tldw_production=true`, retrievers do not use raw SQL fallbacks; they require database adapters. The unified RAG endpoints pass adapters automatically. If you call the unified pipeline directly, pass `media_db` and `chacha_db`.
+
+- LLM reranking guardrails: For `reranking_strategy="llm_scoring"`, per-call timeout, total budget, and max-doc caps apply by default. Tune via environment:
+  - `RAG_LLM_RERANK_TIMEOUT_SEC` (default `10`)
+  - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
+  - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
+
 #### Request Schema
 
 ```json

@@ -73,6 +73,35 @@
                 </ul>
             </div>
         </div>
+        
+        <div class="endpoint-section" style="margin-top:16px;">
+            <h3>Embeddings Orchestrator</h3>
+            <div class="metrics-controls">
+                <button class="btn btn-primary" onclick="fetchOrchestratorSummary()">Refresh</button>
+                <button class="btn btn-secondary" onclick="startOrchestratorAutoRefresh()">Auto-Refresh (10s)</button>
+                <button class="btn btn-secondary" onclick="stopOrchestratorAutoRefresh()">Stop</button>
+            </div>
+            <div class="table-responsive mt-2">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Stage</th>
+                            <th>Queue Depth</th>
+                            <th>DLQ Depth</th>
+                            <th>DLQ Sparkline</th>
+                            <th>DLQ Rate (est/s)</th>
+                            <th>Processed (sum)</th>
+                            <th>Processed/s</th>
+                            <th>Failed (sum)</th>
+                            <th>Failed/s</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orchestrator_tableBody">
+                        <tr><td colspan="8" class="text-muted">No data</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -231,6 +260,111 @@
 
         <script>
             let jobsStatsTimer = null;
+            let orchestratorTimer = null;
+            let orchestratorPrev = null; // { ts, stages: {chunking:{dlq,q,proc,fail}, ...} }
+            async function fetchOrchestratorSummary() {
+                try {
+                    const res = await apiClient.get('/api/v1/embeddings/dlq/stats');
+                    const q = (res && res.queues) || {};
+                    const d = (res && res.dlq) || {};
+                    const s = (res && res.stages) || {};
+                    const stages = ['chunking','embedding','storage'];
+                    const now = Date.now() / 1000.0;
+                    const prev = orchestratorPrev;
+                    orchestratorHistory = orchestratorHistory || { chunking: [], embedding: [], storage: [] };
+                    const rows = stages.map(st => {
+                        const qn = `embeddings:${st}`;
+                        const dq = `embeddings:${st}:dlq`;
+                        const qdepth = q[qn] || 0;
+                        const ddepth = d[dq] || 0;
+                        const ss = s[st] || { processed: 0, failed: 0 };
+                        // Compute rates if previous sample exists
+                        let dlqRate = 0.0, procRate = 0.0, failRate = 0.0;
+                        if (prev && prev.stages && prev.stages[st] && prev.ts) {
+                            const dt = Math.max(0.001, now - prev.ts);
+                            const p = prev.stages[st];
+                            dlqRate = Math.max(0, (ddepth - p.dlq) / dt);
+                            procRate = Math.max(0, (ss.processed - p.processed) / dt);
+                            failRate = Math.max(0, (ss.failed - p.failed) / dt);
+                        }
+                        // Update sparkline data (keep last 30)
+                        const hist = orchestratorHistory[st] || [];
+                        hist.push(ddepth);
+                        while (hist.length > 30) hist.shift();
+                        orchestratorHistory[st] = hist;
+
+                        return `<tr>
+                            <td>${st}</td>
+                            <td>${qdepth}</td>
+                            <td>${ddepth}</td>
+                            <td><svg id="spark-${st}" width="120" height="24" viewBox="0 0 120 24"></svg></td>
+                            <td>${dlqRate.toFixed(2)}</td>
+                            <td>${ss.processed}</td>
+                            <td>${procRate.toFixed(2)}</td>
+                            <td>${ss.failed}</td>
+                            <td>${failRate.toFixed(2)}</td>
+                        </tr>`;
+                    }).join('');
+                    const tb = document.getElementById('orchestrator_tableBody');
+                    tb.innerHTML = rows || '<tr><td colspan="8" class="text-muted">No data</td></tr>';
+                    // Render sparklines
+                    try {
+                        const render = (elId, data) => {
+                            const svg = document.getElementById(elId);
+                            if (!svg || !data || data.length < 2) return;
+                            const w = 120, h = 24, pad = 1;
+                            const min = Math.min.apply(null, data);
+                            const max = Math.max.apply(null, data);
+                            const range = Math.max(1, max - min);
+                            const step = (w - pad * 2) / (data.length - 1);
+                            let dpath = '';
+                            data.forEach((v, i) => {
+                                const x = pad + i * step;
+                                const y = h - pad - ((v - min) / range) * (h - pad * 2);
+                                dpath += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
+                            });
+                            svg.innerHTML = `<path d="${dpath}" fill="none" stroke="currentColor" stroke-width="1" />`;
+                        };
+                        render('spark-chunking', orchestratorHistory.chunking);
+                        render('spark-embedding', orchestratorHistory.embedding);
+                        render('spark-storage', orchestratorHistory.storage);
+                    } catch (e) { /* ignore */ }
+
+                    // Save snapshot for next rate computation
+                    orchestratorPrev = {
+                        ts: now,
+                        stages: {
+                            chunking: { dlq: d['embeddings:chunking:dlq'] || 0, processed: (s['chunking']||{}).processed||0, failed: (s['chunking']||{}).failed||0 },
+                            embedding: { dlq: d['embeddings:embedding:dlq'] || 0, processed: (s['embedding']||{}).processed||0, failed: (s['embedding']||{}).failed||0 },
+                            storage: { dlq: d['embeddings:storage:dlq'] || 0, processed: (s['storage']||{}).processed||0, failed: (s['storage']||{}).failed||0 }
+                        }
+                    };
+                } catch (e) {
+                    const tb = document.getElementById('orchestrator_tableBody');
+                    tb.innerHTML = `<tr><td colspan="8">${Utils.escapeHtml(JSON.stringify(e.response || e))}</td></tr>`;
+                }
+            }
+            function startOrchestratorAutoRefresh() {
+                stopOrchestratorAutoRefresh();
+                fetchOrchestratorSummary();
+                orchestratorTimer = setInterval(fetchOrchestratorSummary, 10000);
+                try { Utils.saveToStorage('orchestrator-auto-refresh', true); } catch (e) { /* ignore */ }
+            }
+            function stopOrchestratorAutoRefresh() {
+                if (orchestratorTimer) {
+                    clearInterval(orchestratorTimer);
+                    orchestratorTimer = null;
+                }
+                try { Utils.saveToStorage('orchestrator-auto-refresh', false); } catch (e) { /* ignore */ }
+            }
+
+            // Initialize auto-refresh from saved preference
+            try {
+                const saved = Utils.getFromStorage('orchestrator-auto-refresh');
+                if (saved === true) {
+                    startOrchestratorAutoRefresh();
+                }
+            } catch (e) { /* ignore */ }
             async function fetchJobsStats() {
                 const domain = document.getElementById('jobsStats_domain').value.trim();
                 const queue = document.getElementById('jobsStats_queue').value.trim();

@@ -5,6 +5,7 @@ Welcome to the tldw_Server documentation site. This site publishes a curated set
 Use the left sidebar to browse sections, or jump directly:
 
 - [API Related](API-related/index.md)
+  - Audio Jobs: See API-related/Audio_Jobs_API.md for background audio processing via Jobs
 - [Code Documentation](Code_Documentation/index.md)
 - [Deployment](Deployment/index.md)
 - [Evaluations](Evaluations/index.md)

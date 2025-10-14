@@ -217,6 +217,18 @@
             border-radius: var(--radius-md);
             overflow-x: auto;
         }
+
+        /* Simple badge */
+        .badge {
+            background: var(--color-surface-alt);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-pill);
+            padding: 2px 8px;
+            font-size: 0.8rem;
+            margin-left: 8px;
+        }
+        .badge.badge-warn { background: #fff7e6; border-color: #ffe0a3; }
+        .badge.badge-crit { background: #ffe6e6; border-color: #ffb3b3; }
         
         .json-toggle {
             cursor: pointer;
@@ -298,6 +310,7 @@
                     <span class="status-dot" aria-hidden="true"></span>
                     <span class="api-status-text">Checking...</span>
                 </div>
+                <span id="dlq-badge" class="badge" title="Total DLQ depth">DLQ: 0</span>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
                     🌙
                 </button>
@@ -578,6 +591,9 @@
                 </button>
                 <button class="sub-tab-button" data-content-id="tabEmbeddingsAdmin" data-load-group="embeddings" role="tab">
                     Admin Tools
+                </button>
+                <button class="sub-tab-button" data-content-id="tabEmbeddingsDLQ" data-load-group="embeddings" role="tab">
+                    DLQ
                 </button>
                 <button class="sub-tab-button" data-content-id="tabVectorStores" data-load-group="vector_stores" role="tab">
                     Vector Stores

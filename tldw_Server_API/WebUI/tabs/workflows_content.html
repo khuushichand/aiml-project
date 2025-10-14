@@ -69,6 +69,25 @@
 <div id="tabWorkflowsRuns" class="tab-content">
   <h2>Workflows: Runs</h2>
   <div class="form-group">
+    <label>Quick</label>
+    <select id="wfList_quick" onchange="wfQuickHours()">
+      <option value="">(none)</option>
+      <option value="1">last 1h</option>
+      <option value="24">last 24h</option>
+      <option value="168">last 7d</option>
+      <option value="720">last 30d</option>
+    </select>
+    <div id="wfList_status_chips" style="margin-bottom:8px">
+      <span class="chip" data-status="queued" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
+      <span class="chip" data-status="running" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
+      <span class="chip" data-status="paused" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
+      <span class="chip" data-status="waiting_human" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
+      <span class="chip" data-status="succeeded" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
+      <span class="chip" data-status="failed" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
+      <span class="chip" data-status="cancelled" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
+    </div>
+    <label>Last N Hours</label>
+    <input type="number" id="wfList_last_hours" min="1" style="width:80px" placeholder="e.g., 24">
     <label>Status (comma)</label>
     <input type="text" id="wfList_status" placeholder="succeeded,failed">
     <label>Workflow ID</label>
@@ -99,6 +118,9 @@
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
     <button class="api-button" onclick="wfGetRun()">Get Status</button>
     <button class="api-button" onclick="wfGetEvents()">Get Events</button>
+    <label>Events Limit</label>
+    <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
+    <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
     <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
     <button class="api-button" onclick="wfDownloadAllServer()">Download All (server)</button>
     <button class="api-button" onclick="wfDownloadAllClient()">Download All (client)</button>
@@ -110,16 +132,39 @@
     <button class="api-button" onclick="wfRetry()">Retry</button>
   </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
+  <div id="wfRun_list" class="json-viewer" style="margin-top:8px"></div>
+  <div class="form-group">
+    <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
+    <button class="api-button" id="wfList_next" onclick="wfNextPage()" disabled>Next</button>
+    <span id="wfList_page_info" style="margin-left:8px;color:var(--color-base-0)"></span>
+  </div>
   <div id="wfRun_artifacts" class="json-viewer"></div>
   <script>
+  function wfQuickHours(){
+    const v = document.getElementById('wfList_quick').value;
+    document.getElementById('wfList_last_hours').value = v || '';
+  }
+  function wfToggleChip(el){
+    const selected = el.getAttribute('data-selected') === '1';
+    if (selected){ el.setAttribute('data-selected','0'); el.style.background=''; }
+    else { el.setAttribute('data-selected','1'); el.style.background='var(--color-base-80)'; }
+  }
+  function wfSelectedStatuses(){
+    const chips = document.querySelectorAll('#wfList_status_chips .chip[data-selected="1"]');
+    return Array.from(chips).map(c=>c.getAttribute('data-status'));
+  }
+  let wfLastList = { limit: 0, offset: 0, next_offset: null };
   async function wfListRuns(){
     try{
       const params = new URLSearchParams();
+      const picked = wfSelectedStatuses();
       const statusText = (document.getElementById('wfList_status').value||'').trim();
+      if (picked.length){ picked.forEach(s=>params.append('status', s)); }
       if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
       const wf = document.getElementById('wfList_workflow_id').value.trim(); if (wf){ params.set('workflow_id', wf); }
       const ca = document.getElementById('wfList_created_after').value.trim(); if (ca){ params.set('created_after', ca); }
       const cb = document.getElementById('wfList_created_before').value.trim(); if (cb){ params.set('created_before', cb); }
+      const lh = document.getElementById('wfList_last_hours').value.trim(); if (lh){ params.set('last_n_hours', lh); }
       params.set('order_by', document.getElementById('wfList_order_by').value);
       params.set('order', document.getElementById('wfList_order').value);
       params.set('limit', document.getElementById('wfList_limit').value);
@@ -127,10 +172,44 @@
       const url = '/api/v1/workflows/runs?' + params.toString();
       const resp = await apiClient.makeRequest('GET', url);
       set('wfRun_result', resp);
+      renderRunTable(resp);
+      // Update pager state
+      const limit = parseInt(document.getElementById('wfList_limit').value || '25');
+      const offset = parseInt(document.getElementById('wfList_offset').value || '0');
+      wfLastList = { limit, offset, next_offset: resp?.next_offset ?? null };
+      document.getElementById('wfList_prev').disabled = offset <= 0;
+      document.getElementById('wfList_next').disabled = (resp?.next_offset == null);
+      const count = Array.isArray(resp?.runs) ? resp.runs.length : 0;
+      document.getElementById('wfList_page_info').textContent = `showing ${count} (limit ${limit}) offset ${offset}`;
     }catch(e){ Toast.error('List runs failed: '+(e?.message||e)); }
   }
+  function wfPrevPage(){ try{ const off = Math.max(0, (wfLastList.offset||0) - (wfLastList.limit||25)); document.getElementById('wfList_offset').value = off; wfListRuns(); }catch(e){} }
+  function wfNextPage(){ try{ if (wfLastList.next_offset != null){ document.getElementById('wfList_offset').value = wfLastList.next_offset; wfListRuns(); } }catch(e){} }
   async function wfGetRun(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
-  async function wfGetEvents(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
+  let wfEventsState = { runId: null, lastSeq: null };
+  async function wfGetEvents(){
+    try{
+      const id=val('wfRun_run_id');
+      const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
+      const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events?limit=${limit}`);
+      set('wfRun_result',r);
+      wfEventsState.runId = id;
+      wfEventsState.lastSeq = Array.isArray(r)&&r.length? r[r.length-1].event_seq : null;
+    }catch(e){Toast.error(e?.message||e);} }
+  async function wfGetNextEvents(){
+    try{
+      const id = val('wfRun_run_id');
+      const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
+      let url = `/api/v1/workflows/runs/${id}/events?limit=${limit}`;
+      if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ url += `&since=${wfEventsState.lastSeq}`; }
+      const r = await apiClient.makeRequest('GET', url);
+      // Append to existing result view
+      const cur = (()=>{ try{ return JSON.parse(document.getElementById('wfRun_result').textContent||'[]'); }catch(e){ return []; } })();
+      const merged = Array.isArray(cur)? cur.concat(r) : r;
+      set('wfRun_result', merged);
+      if (Array.isArray(r)&&r.length){ wfEventsState.lastSeq = r[r.length-1].event_seq; wfEventsState.runId = id; }
+    }catch(e){ Toast.error(e?.message||e); }
+  }
   async function wfListArtifacts(){
     try{
       const id=val('wfRun_run_id');
@@ -303,3 +382,44 @@
   }
   </script>
 </div>
+<script>
+  function renderRunTable(resp){
+    try{
+      const runs = Array.isArray(resp?.runs) ? resp.runs : [];
+      if (!runs.length){ document.getElementById('wfRun_list').innerHTML = '<em>No runs</em>'; return; }
+      const chip = (st)=>{
+        const colors = { queued:'#888', running:'#0a84ff', paused:'#f0ad4e', waiting_human:'#6f42c1', succeeded:'#2e7d32', failed:'#c62828', cancelled:'#616161' };
+        const color = colors[st] || '#555';
+        return `<span style="display:inline-block;padding:2px 6px;border-radius:10px;background:${color};color:#fff;font-size:12px">${st}</span>`;
+      };
+      let html = '<table style="width:100%; border-collapse:collapse">';
+      html += '<thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Run ID</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Workflow</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Owner</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Status</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Created</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Ended</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Actions</th></tr></thead>';
+      html += '<tbody>';
+      runs.forEach(r => {
+        const rid = r.run_id||'';
+        const wf = r.workflow_id!=null ? r.workflow_id : '';
+        const owner = r.user_id!=null ? r.user_id : '';
+        const st = (r.status||'').toLowerCase();
+        const cr = r.created_at || '';
+        const en = r.ended_at || '';
+        html += `<tr>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><a href="#" onclick="document.getElementById('wfRun_run_id').value='${rid}'; wfGetRun(); return false;">${rid}</a></td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${wf}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${owner}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${chip(st)}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${cr}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)">${en}</td>
+          <td style="padding:4px;border-bottom:1px solid var(--color-base-30)"><button class=\"api-button\" onclick=\"wfGetEventsFor('${rid}')\">Events</button></td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('wfRun_list').innerHTML = html;
+    }catch(e){ document.getElementById('wfRun_list').innerHTML = '<em>Error rendering</em>'; }
+  }
+  async function wfGetEventsFor(runId){
+    try{
+      const r = await apiClient.makeRequest('GET', `/api/v1/workflows/runs/${runId}/events`);
+      set('wfRun_result', r);
+    }catch(e){ Toast.error('Events failed: '+(e?.message||e)); }
+  }
+</script>

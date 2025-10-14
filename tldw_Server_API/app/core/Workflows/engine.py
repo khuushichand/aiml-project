@@ -624,6 +624,12 @@ class WorkflowEngine:
             return await run_mcp_tool_adapter(step_cfg, ctx)
         if step_type == "webhook":
             return await run_webhook_adapter(step_cfg, ctx)
+        if step_type == "delay":
+            from tldw_Server_API.app.core.Workflows.adapters import run_delay_adapter
+            return await run_delay_adapter(step_cfg, ctx)
+        if step_type == "log":
+            from tldw_Server_API.app.core.Workflows.adapters import run_log_adapter
+            return await run_log_adapter(step_cfg, ctx)
         if step_type == "wait_for_human":
             # Mark run waiting, signal caller via special status
             self.db.update_run_status(run_id, status="waiting_human", status_reason="awaiting_review")

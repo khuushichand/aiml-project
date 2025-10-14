@@ -323,11 +323,23 @@ Operator tasks
 # Show the most recent 10 entries from the embedding DLQ
 redis-cli XREVRANGE embeddings:embedding:dlq + - COUNT 10
 ```
+- Or via admin API (requires admin):
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8000/api/v1/embeddings/dlq?stage=embedding&count=10"
+```
 - Re-enqueue a DLQ entry back to the active stream after correcting the cause:
 ```bash
 # Example: requeue a DLQ item back to the embedding stream
 # (Adjust fields to your payload; prefer re-using the original payload JSON)
 redis-cli XADD embeddings:embedding '*' job_id <JOB_ID> user_id <USER_ID> payload '<JSON>'
+```
+- Or via admin API:
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"stage":"embedding","entry_id":"1-0","delete_from_dlq":true}' \
+  http://localhost:8000/api/v1/embeddings/dlq/requeue
 ```
 - Trim DLQs to control growth (approximate):
 ```bash
@@ -340,6 +352,46 @@ Recommendations
 - Alert on DLQ growth rate; sustained growth indicates systemic issues.
 - Build a small admin tool to list, filter by `job_id`, and requeue DLQ items safely.
 - Keep DLQ retention sized to your operating posture (e.g., 7–14 days worth of failures).
+
+### Prometheus Alerts (examples)
+
+Add alerting rules to detect DLQ issues and pipeline stalls.
+
+```yaml
+groups:
+  - name: tldw-embeddings
+    rules:
+      # DLQ depth too high for too long
+      - alert: EmbeddingsDLQDepthHigh
+        expr: sum(embedding_dlq_queue_depth) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings DLQ depth high"
+          description: "DLQ depth is {{ $value }} across queues for >5m"
+
+      # DLQ ingest rate sustained
+      - alert: EmbeddingsDLQIngestRateHigh
+        expr: sum(embedding_dlq_ingest_rate) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings DLQ ingest rate high"
+          description: "DLQ ingest > 0.5 msg/s for >10m"
+
+      # Pipeline stagnation: high queue depth but near-zero processing
+      - alert: EmbeddingsStageStagnation
+        expr: (sum(embedding_queue_depth) > 100)
+              and (sum(rate(embedding_stage_jobs_processed_total[5m])) < 0.1)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embeddings processing stalled"
+          description: "High queue depth with low processing rate for >10m"
+```
 
 ---
 

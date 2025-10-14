@@ -82,6 +82,8 @@ Registered under `StepTypeRegistry`:
 - `mcp_tool`: Execute MCP tools through the unified server registry. Test‑friendly fallback for `tool_name=echo`.
 - `webhook`: Send events to a URL (HMAC signing and SSRF/egress controls) or dispatch to registered webhooks.
 - `wait_for_human`: Pause run with status `waiting_human` until `approve`/`reject`.
+- `delay`: Pause the workflow for a fixed time (milliseconds). Useful for demos, backoffs or pacing.
+- `log`: Log a templated message at the chosen level (`debug|info|warning|error`). Helps with debugging and audit trails.
 
 See `adapters.py` for configuration keys and behavior of each step.
 
@@ -124,10 +126,13 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
 - Ad‑hoc runs: `WORKFLOWS_DISABLE_ADHOC=true` to disable
 - Artifacts: `WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES`, `WORKFLOWS_ARTIFACT_ALLOWED_MIME`, `WORKFLOWS_ARTIFACT_BULK_MAX_BYTES`
 - Webhooks: `WORKFLOWS_WEBHOOK_SECRET`, `WORKFLOWS_WEBHOOK_TIMEOUT`
+- Completion hooks: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` globally disables completion webhooks.
 - DB URI (SQLite): `DATABASE_URL_WORKFLOWS=sqlite:///path/to/workflows.db`
 - Webhook global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` disables completion hooks globally
 - Artifact scope validation: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default true). When false, validation failures log a warning but do not block download.
 - SQLite connection pool: `WORKFLOWS_SQLITE_POOL_SIZE` (default 0 disables) enables a lightweight pool for hot paths (events).
+ 
+In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
 
 ## WebUI
 

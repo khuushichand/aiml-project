@@ -4,6 +4,22 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from loguru import logger
+import os
+
+def _parse_buckets(env_key: str, default: list[float]) -> list[float]:
+    try:
+        raw = os.getenv(env_key, "")
+        if not raw:
+            return default
+        vals = []
+        for part in raw.split(","):
+            s = part.strip()
+            if not s:
+                continue
+            vals.append(float(s))
+        return vals or default
+    except Exception:
+        return default
 
 try:
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
@@ -30,6 +46,14 @@ def ensure_jobs_metrics_registered() -> None:
         JOBS_METRICS_REGISTERED = True
         return
     reg = get_metrics_registry()
+    # Configurable buckets
+    duration_buckets = _parse_buckets(
+        "JOBS_DURATION_BUCKETS", [0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 900]
+    )
+    queue_buckets = _parse_buckets(
+        "JOBS_QUEUE_LATENCY_BUCKETS", [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300]
+    )
+
     defn = [
         MetricDefinition(
             name="prompt_studio.jobs.queued",
@@ -61,7 +85,7 @@ def ensure_jobs_metrics_registered() -> None:
             description="Job processing duration in seconds",
             unit="s",
             labels=["domain", "queue", "job_type"],
-            buckets=[0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 900],
+            buckets=duration_buckets,
         ),
         MetricDefinition(
             name="prompt_studio.jobs.queue_latency_seconds",
@@ -69,7 +93,7 @@ def ensure_jobs_metrics_registered() -> None:
             description="Latency from enqueue to acquisition",
             unit="s",
             labels=["domain", "queue", "job_type"],
-            buckets=[0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
+            buckets=queue_buckets,
         ),
         MetricDefinition(
             name="prompt_studio.jobs.retries_total",
@@ -82,6 +106,12 @@ def ensure_jobs_metrics_registered() -> None:
             type=MetricType.COUNTER,
             description="Total job failures",
             labels=["domain", "queue", "job_type", "reason"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.failures_by_code_total",
+            type=MetricType.COUNTER,
+            description="Total job failures by error_code",
+            labels=["domain", "queue", "job_type", "error_code"],
         ),
         MetricDefinition(
             name="prompt_studio.jobs.created_total",
@@ -114,6 +144,14 @@ def ensure_jobs_metrics_registered() -> None:
             unit="s",
             labels=["domain", "queue", "job_type"],
             buckets=[0.0, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.retry_after_seconds",
+            type=MetricType.HISTOGRAM,
+            description="Retry backoff seconds applied when rescheduling failures",
+            unit="s",
+            labels=["domain", "queue", "job_type"],
+            buckets=[0.0, 1, 2, 5, 10, 30, 60, 120, 300, 600],
         ),
     ]
     for d in defn:
@@ -173,6 +211,23 @@ def increment_failures(job: Dict, reason: str = "unknown") -> None:
     labels = dict(labels)
     labels["reason"] = reason
     get_metrics_registry().increment("prompt_studio.jobs.failures_total", 1, labels)
+
+
+def increment_failures_by_code(job: Dict, error_code: str) -> None:
+    ensure_jobs_metrics_registered()
+    if not get_metrics_registry:
+        return
+    labels = _labels(job)
+    labels = dict(labels)
+    labels["error_code"] = str(error_code)
+    get_metrics_registry().increment("prompt_studio.jobs.failures_by_code_total", 1, labels)
+
+
+def observe_retry_after(job: Dict, seconds: float) -> None:
+    ensure_jobs_metrics_registered()
+    if not get_metrics_registry:
+        return
+    get_metrics_registry().observe("prompt_studio.jobs.retry_after_seconds", float(seconds), _labels(job))
 
 
 def set_queue_gauges(domain: str, queue: str, job_type: Optional[str], queued: int, processing: int, backlog: Optional[int] = None, scheduled: Optional[int] = None) -> None:

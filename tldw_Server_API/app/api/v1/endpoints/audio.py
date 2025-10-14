@@ -40,6 +40,13 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
     handle_unified_websocket,
     UnifiedStreamingConfig
 )
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_stream,
+    finish_stream,
+    check_daily_minutes_allow,
+    add_daily_minutes,
+    bytes_to_seconds,
+)
 
 # For logging (if you use the same logger as in your PDF endpoint)
 from loguru import logger
@@ -344,20 +351,45 @@ async def create_transcription(
     
     # Authentication is enforced by dependency injection via get_request_user
     
-    # Validate file
+    # Validate file presence
     if not file:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No audio file provided"
         )
+    # Content-Type whitelist
+    allowed_types = {
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/flac",
+        "audio/ogg",
+        "audio/opus",
+        "audio/webm",
+    }
+    ctype = (file.content_type or "").lower()
+    if ctype and ctype not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported media type: {file.content_type}"
+        )
     
-    # Check file size (max 25MB for OpenAI compatibility)
-    max_file_size = 25 * 1024 * 1024  # 25MB
+    # Resolve per-tier file size limit
+    try:
+        from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user, increment_jobs_started, can_start_job, finish_job
+        limits = await get_limits_for_user(current_user.id)
+        max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
+    except Exception:
+        max_file_size = 25 * 1024 * 1024
     contents = await file.read()
     if len(contents) > max_file_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File size exceeds maximum of 25MB"
+            detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
         )
     
     # Save uploaded file to temporary location
@@ -369,8 +401,20 @@ async def create_transcription(
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
         
-        # Load audio data
-        audio_data, sample_rate = sf.read(temp_audio_path)
+        # Convert to canonical 16k mono WAV for consistent processing
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
+            canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
+        except Exception:
+            canonical_path = temp_audio_path
+
+        # Load canonical audio
+        audio_data, sample_rate = sf.read(canonical_path)
+        # Compute duration (seconds)
+        try:
+            duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
+        except Exception:
+            duration_seconds = 0.0
         
         # Parse timestamp granularities (flexible: CSV or JSON array)
         granularity_tokens = set()
@@ -413,57 +457,92 @@ async def create_transcription(
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
         
-        # Prepare transcription
-        detected_language: Optional[str] = None
-        if provider == "faster-whisper":
-            # For Whisper, support word-level timestamps and language detection
-            try:
-                # Use best model by default (consistent with prior behavior)
-                whisper_model_name = "large-v3"
-                result = fw_speech_to_text(
-                    temp_audio_path,
-                    whisper_model=whisper_model_name,
-                    selected_source_lang=language if language else None,
-                    vad_filter=False,
-                    diarize=False,
-                    word_timestamps=("word" in granularity_tokens),
-                    return_language=True,
-                )
-                if isinstance(result, tuple) and len(result) == 2:
-                    segments_list, detected_language = result
-                else:
-                    # Fallback: handle as plain segments list
-                    segments_list, detected_language = result, None
+        # Prepare quotas and transcription
+        # Enforce concurrent jobs cap per user (MVP in-process)
+        ok_job, msg_job = await can_start_job(current_user.id)
+        if not ok_job:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
+        # Record job start
+        try:
+            await increment_jobs_started(current_user.id)
+        except Exception:
+            pass
 
-                # Merge text
-                transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
-            except Exception as e:
-                logger.error(f"Whisper transcription failed: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Whisper transcription failed"
+        # Enforce daily minutes cap by estimated duration
+        minutes_est = duration_seconds / 60.0
+        try:
+            allow, remaining_after = await check_daily_minutes_allow(current_user.id, minutes_est)
+        except Exception:
+            allow = True
+            remaining_after = None
+        if not allow:
+            # Release job slot before returning
+            try:
+                await finish_job(current_user.id)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Transcription quota exceeded (daily minutes)"
+            )
+        detected_language: Optional[str] = None
+        # Wrap the heavy work to ensure we always release the job slot
+        try:
+            if provider == "faster-whisper":
+                # For Whisper, support word-level timestamps and language detection
+                try:
+                    # Use best model by default (consistent with prior behavior)
+                    whisper_model_name = "large-v3"
+                    result = fw_speech_to_text(
+                        canonical_path,
+                        whisper_model=whisper_model_name,
+                        selected_source_lang=language if language else None,
+                        vad_filter=False,
+                        diarize=False,
+                        word_timestamps=("word" in granularity_tokens),
+                        return_language=True,
+                    )
+                    if isinstance(result, tuple) and len(result) == 2:
+                        segments_list, detected_language = result
+                    else:
+                        # Fallback: handle as plain segments list
+                        segments_list, detected_language = result, None
+
+                    # Merge text
+                    transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
+                except Exception as e:
+                    logger.error(f"Whisper transcription failed: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Whisper transcription failed"
+                    )
+            elif provider == "parakeet" and config:
+                variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
+                # For Parakeet, we need to use the Nemo module directly
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+                    transcribe_with_parakeet
                 )
-        elif provider == "parakeet" and config:
-            variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
-            # For Parakeet, we need to use the Nemo module directly
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_parakeet
-            )
-            transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
-        elif provider == "canary":
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_canary
-            )
-            transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
-        else:
-            # Use the general transcribe_audio function
-            transcribe_params = {
-                "audio_data": audio_data,
-                "sample_rate": sample_rate,
-                "transcription_provider": provider,
-                "speaker_lang": language,
-            }
-            transcribed_text = transcribe_audio(**transcribe_params)
+                transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
+            elif provider == "canary":
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+                    transcribe_with_canary
+                )
+                transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
+            else:
+                # Use the general transcribe_audio function
+                transcribe_params = {
+                    "audio_data": audio_data,
+                    "sample_rate": sample_rate,
+                    "transcription_provider": provider,
+                    "speaker_lang": language,
+                }
+                transcribed_text = transcribe_audio(**transcribe_params)
+        finally:
+            # Make sure we always release job slot on any path after heavy processing began
+            try:
+                await finish_job(current_user.id)
+            except Exception:
+                pass
         
         # Check for errors in transcription
         if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
@@ -473,6 +552,12 @@ async def create_transcription(
                 detail="Transcription failed. Please try again or use a different model."
             )
         
+        # On success, record minutes used
+        try:
+            await add_daily_minutes(current_user.id, minutes_est)
+        except Exception:
+            pass
+
         # Format response based on requested format
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
@@ -497,7 +582,7 @@ async def create_transcription(
                 response_data["language"] = detected_language
 
             # Duration
-            duration = len(audio_data) / sample_rate
+            duration = duration_seconds
             response_data["duration"] = duration
 
             # Segments (prefer real segments when Whisper used)
@@ -993,8 +1078,64 @@ async def websocket_transcribe(
         
         logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
         
-        # Handle the WebSocket connection with unified handler
-        await handle_unified_websocket(websocket, config)
+        # Enforce per-user streaming quotas and daily minutes during streaming
+        # Resolve user id from single-user mode (since WS uses API key)
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        _s = _get_settings()
+        user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
+
+        ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+        if not ok_stream:
+            await websocket.send_json({"type": "error", "message": msg_stream})
+            await websocket.close()
+            return
+
+        # Track and enforce minutes chunk-by-chunk
+        used_minutes = 0.0
+
+        def _on_audio(seconds: float, sr: int) -> None:
+            nonlocal used_minutes
+            # Check allowance before processing
+            minutes_chunk = float(seconds) / 60.0
+            # Note: async check in sync callback not ideal; fast path uses last known remaining
+            # For MVP, perform a quick synchronous budget check using a cached remaining
+            used_minutes += minutes_chunk
+
+        try:
+            class _QuotaExceeded(Exception):
+                def __init__(self, quota: str):
+                    super().__init__(quota)
+                    self.quota = quota
+
+            async def _on_audio_quota(seconds: float, sr: int) -> None:
+                nonlocal used_minutes
+                minutes_chunk = float(seconds) / 60.0
+                allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                if not allow:
+                    # Raise structured signal to outer scope
+                    raise _QuotaExceeded("daily_minutes")
+                used_minutes += minutes_chunk
+                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+
+            try:
+                await handle_unified_websocket(websocket, config, on_audio_seconds=_on_audio_quota)
+            except _QuotaExceeded as qe:
+                # Send structured error and close with application-defined code
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": qe.quota,
+                        "message": "Streaming transcription quota exceeded (daily minutes)"
+                    })
+                except Exception:
+                    pass
+                try:
+                    await websocket.close(code=4003, reason="quota_exceeded")
+                except Exception:
+                    pass
+        finally:
+            await finish_stream(user_id_for_usage)
         
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")

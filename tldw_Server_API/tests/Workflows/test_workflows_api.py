@@ -172,6 +172,8 @@ def test_step_types_and_runs_listing(client_with_workflows_db: TestClient):
     # List succeeded
     lst_ok = client.get("/api/v1/workflows/runs", params={"status": ["succeeded"], "limit": 10, "offset": 0}).json()
     assert any(r["run_id"] == ok_run for r in lst_ok.get("runs", []))
+    # owner exposed for admin review (present even for single-user)
+    assert "user_id" in lst_ok.get("runs", [])[0]
     # List failed
     lst_fail = client.get("/api/v1/workflows/runs", params=[("status", "failed")]).json()
     assert any(r["run_id"] == fail_run for r in lst_fail.get("runs", []))
@@ -219,3 +221,84 @@ def test_runs_list_created_after_before(client_with_workflows_db: TestClient):
     lst_before = client.get("/api/v1/workflows/runs", params={"created_before": cb}).json()
     before_ids = [r["run_id"] for r in lst_before.get("runs", [])]
     assert r1 in before_ids
+
+
+def test_artifact_download_scope_non_strict(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    # Relax validation to non-strict
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "false")
+
+    # Create definition and run to own the artifact
+    d = {"name": "artifacts", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "ok"}}]}
+    wid = client.post("/api/v1/workflows", json=d).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
+
+    # Prepare a temp file outside of the recorded workdir
+    import os, tempfile, pathlib
+    fd, path = tempfile.mkstemp(prefix="wf_non_strict_")
+    os.write(fd, b"hello")
+    os.close(fd)
+    uri = f"file://{path}"
+
+    # Add artifact with a different workdir in metadata to trigger scope mismatch
+    from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
+    db = client.app.dependency_overrides[wf_mod._get_db]()
+    art_id = "a_non_strict"
+    db.add_artifact(
+        artifact_id=art_id,
+        tenant_id="default",
+        run_id=run_id,
+        step_run_id=None,
+        type="file",
+        uri=uri,
+        size_bytes=5,
+        mime_type="text/plain",
+        metadata={"workdir": str(pathlib.Path(path).parent / "other_dir")},
+    )
+    # Download should succeed due to non-strict
+    r = client.get(f"/api/v1/workflows/artifacts/{art_id}/download")
+    assert r.status_code == 200
+    # Now strict mode should block
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")
+    r2 = client.get(f"/api/v1/workflows/artifacts/{art_id}/download")
+    assert r2.status_code == 400
+
+
+def test_runs_admin_owner_filter(client_with_workflows_db: TestClient):
+    """Admins can filter by owner; non-admins cannot override owner param."""
+    client = client_with_workflows_db
+
+    # Create one run as admin (user id=1)
+    def_admin = {"name": "admin-def", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "hi"}}]}
+    wid_admin = client.post("/api/v1/workflows", json=def_admin).json()["id"]
+    r_admin = client.post(f"/api/v1/workflows/{wid_admin}/run", json={"inputs": {}}).json()["run_id"]
+
+    # Swap dependency to simulate a different, non-admin owner (user id=2)
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User, get_request_user as _gru
+    from tldw_Server_API.app.api.v1.endpoints import workflows as _wf_mod
+    prev_dep = client.app.dependency_overrides[_gru]
+
+    async def override_user2():
+        return _User(id=2, username="owner2", email="o2@x", is_active=True, is_admin=False)
+
+    client.app.dependency_overrides[_gru] = override_user2
+    def_u2 = {"name": "u2-def", "version": 1, "steps": [{"id": "s1", "type": "prompt", "config": {"template": "yo"}}]}
+    wid_u2 = client.post("/api/v1/workflows", json=def_u2).json()["id"]
+    r_u2 = client.post(f"/api/v1/workflows/{wid_u2}/run", json={"inputs": {}}).json()["run_id"]
+
+    # Restore admin for listing operations
+    client.app.dependency_overrides[_gru] = prev_dep
+
+    # Admin can filter by specific owner (user 2) and should see that run
+    lst_owner2 = client.get("/api/v1/workflows/runs", params={"owner": "2", "limit": 50}).json()
+    ids2 = [r.get("run_id") for r in lst_owner2.get("runs", [])]
+    assert r_u2 in ids2
+
+    # Non-admin cannot override owner: they should only see their own runs (user id=2)
+    client.app.dependency_overrides[_gru] = override_user2
+    lst_nonadmin = client.get("/api/v1/workflows/runs", params={"owner": "1", "limit": 50}).json()
+    runs = lst_nonadmin.get("runs", [])
+    assert runs, "expected some runs for non-admin user"
+    assert all(str(r.get("user_id")) == "2" for r in runs)
+    # Restore admin override after test
+    client.app.dependency_overrides[_gru] = prev_dep

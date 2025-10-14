@@ -115,6 +115,12 @@ async def prune_jobs_endpoint(
         _enforce_domain_scope(user, (raw_body or {}).get("domain"))
         # Now validate the request body
         req = PruneRequest(**(raw_body or {}))
+        # Confirm header for destructive action (skip when dry_run)
+        if not bool((raw_body or {}).get("dry_run")):
+            hdr = str(request.headers.get("x-confirm", "")).lower()
+            if hdr not in {"1", "true", "yes", "y", "on"}:
+                raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
@@ -197,10 +203,15 @@ class TTLSweepResponse(BaseModel):
 @router.post("/jobs/ttl/sweep", response_model=TTLSweepResponse)
 async def ttl_sweep_endpoint(
     req: TTLSweepRequest,
+    request: Request,
     user=Depends(require_admin),
 ) -> TTLSweepResponse:
     try:
         _enforce_domain_scope(user, req.domain)
+        # Confirm header for destructive action
+        hdr = str(request.headers.get("x-confirm", "")).lower()
+        if hdr not in {"1", "true", "yes", "y", "on"}:
+            raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
@@ -287,6 +298,8 @@ async def list_jobs_endpoint(
     owner_user_id: Optional[str] = None,
     job_type: Optional[str] = None,
     limit: int = 100,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
     user=Depends(require_admin),
 ):
     try:
@@ -294,7 +307,16 @@ async def list_jobs_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
-        rows = jm.list_jobs(domain=domain, queue=queue, status=status, owner_user_id=owner_user_id, job_type=job_type, limit=limit)
+        rows = jm.list_jobs(
+            domain=domain,
+            queue=queue,
+            status=status,
+            owner_user_id=owner_user_id,
+            job_type=job_type,
+            limit=limit,
+            sort_by=(sort_by or "created_at"),
+            sort_order=(sort_order or "desc"),
+        )
         items: list[JobItem] = []
         for r in rows:
             # Keep minimal fields for listing
@@ -379,3 +401,168 @@ async def stale_processing_endpoint(
         return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
+
+
+class BatchCancelRequest(BaseModel):
+    domain: str
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    dry_run: bool = False
+
+
+class BatchCancelResponse(BaseModel):
+    affected: int
+
+
+@router.post("/jobs/batch/cancel", response_model=BatchCancelResponse)
+async def batch_cancel_endpoint(
+    req: BatchCancelRequest,
+    request: Request,
+    user=Depends(require_admin),
+):
+    try:
+        _enforce_domain_scope(user, req.domain)
+        # Require confirm header unless dry_run
+        if not req.dry_run:
+            hdr = str(request.headers.get("x-confirm", "")).lower()
+            if hdr not in {"1", "true", "yes", "y", "on"}:
+                raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        conn = jm._connect()
+        try:
+            where = ["domain = %s"] if jm.backend == "postgres" else ["domain = ?"]
+            params: list = [req.domain]
+            if req.queue:
+                where.append("queue = %s" if jm.backend == "postgres" else "queue = ?")
+                params.append(req.queue)
+            if req.job_type:
+                where.append("job_type = %s" if jm.backend == "postgres" else "job_type = ?")
+                params.append(req.job_type)
+            # Allow cancelling queued or processing (processing will be terminally cancelled)
+            if jm.backend == "postgres":
+                with jm._pg_cursor(conn) as cur:
+                    if req.dry_run:
+                        cur.execute(
+                            f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",
+                            tuple(params),
+                        )
+                        c = cur.fetchone()
+                        return BatchCancelResponse(affected=int(c[0] if c else 0))
+                    # queued immediate cancel
+                    cur.execute(
+                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
+                        tuple(params),
+                    )
+                    affected = cur.rowcount or 0
+                    # processing terminal cancel
+                    cur.execute(
+                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",
+                        tuple(params),
+                    )
+                    affected += cur.rowcount or 0
+                    return BatchCancelResponse(affected=int(affected))
+            else:
+                if req.dry_run:
+                    cur = conn.execute(
+                        f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",
+                        tuple(params),
+                    )
+                    r = cur.fetchone()
+                    return BatchCancelResponse(affected=int(r[0] if r else 0))
+                conn.execute(
+                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
+                    tuple(params),
+                )
+                affected = conn.total_changes or 0
+                conn.execute(
+                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",
+                    tuple(params),
+                )
+                affected += conn.total_changes or 0
+                return BatchCancelResponse(affected=int(affected))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}")
+
+
+class BatchRescheduleRequest(BaseModel):
+    domain: str
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    delay_seconds: int = Field(ge=0, default=0)
+    dry_run: bool = False
+
+
+class BatchRescheduleResponse(BaseModel):
+    affected: int
+
+
+@router.post("/jobs/batch/reschedule", response_model=BatchRescheduleResponse)
+async def batch_reschedule_endpoint(
+    req: BatchRescheduleRequest,
+    request: Request,
+    user=Depends(require_admin),
+):
+    try:
+        _enforce_domain_scope(user, req.domain)
+        if not req.dry_run:
+            hdr = str(request.headers.get("x-confirm", "")).lower()
+            if hdr not in {"1", "true", "yes", "y", "on"}:
+                raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        conn = jm._connect()
+        try:
+            where = ["domain = %s", "status = 'queued'"] if jm.backend == "postgres" else ["domain = ?", "status = 'queued'"]
+            params: list = [req.domain]
+            if req.queue:
+                where.append("queue = %s" if jm.backend == "postgres" else "queue = ?")
+                params.append(req.queue)
+            if req.job_type:
+                where.append("job_type = %s" if jm.backend == "postgres" else "job_type = ?")
+                params.append(req.job_type)
+            if jm.backend == "postgres":
+                with jm._pg_cursor(conn) as cur:
+                    if req.dry_run:
+                        cur.execute(
+                            f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",
+                            tuple(params),
+                        )
+                        r = cur.fetchone()
+                        return BatchRescheduleResponse(affected=int(r[0] if r else 0))
+                    cur.execute(
+                        f"UPDATE jobs SET available_at = NOW() + (%s || ' seconds')::interval WHERE {' AND '.join(where)}",
+                        tuple([int(req.delay_seconds)] + params),
+                    )
+                    return BatchRescheduleResponse(affected=int(cur.rowcount or 0))
+            else:
+                if req.dry_run:
+                    cur = conn.execute(
+                        f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",
+                        tuple(params),
+                    )
+                    r = cur.fetchone()
+                    return BatchRescheduleResponse(affected=int(r[0] if r else 0))
+                conn.execute(
+                    f"UPDATE jobs SET available_at = DATETIME('now', ?) WHERE {' AND '.join(where)}",
+                    tuple([f"+{int(req.delay_seconds)} seconds"] + params),
+                )
+                return BatchRescheduleResponse(affected=int(conn.total_changes or 0))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}")

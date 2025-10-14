@@ -153,6 +153,13 @@ PST/OST note
 - **Flexible Configuration** [Stable]: Tune FTS/vector weights, thresholds, and reranking
 - **RAG Docs**: `tldw_Server_API/app/core/RAG/README.md`, `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md`, `tldw_Server_API/app/core/RAG/UNIFIED_PIPELINE_EXAMPLES.md`, `tldw_Server_API/app/core/RAG/CAPABILITIES.md`
 
+#### RAG Operational Notes
+- Production guard: when `tldw_production=true`, retrievers disable raw SQL fallbacks and require database adapters (MediaDatabase / ChaChaNotesDB). Unified endpoints already pass adapters; direct pipeline usage must supply them.
+- LLM reranker guardrails (for `llm_scoring` strategy): defaults enforce per-call timeout, total time budget, and max documents scored. Tune via env:
+  - `RAG_LLM_RERANK_TIMEOUT_SEC` (default `10`)
+  - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
+  - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
+
 ### Reranking (llama.cpp, GGUF: Qwen3, BGE, Jina-AI)
 - **HTTP Reranker Endpoints** [Stable]:
   - `POST /v1/reranking` and `POST /v1/rerank` (versioned public aliases; auth required)

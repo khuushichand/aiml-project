@@ -61,6 +61,18 @@ class BaseRetriever(ABC):
         self.config = config or RetrievalConfig()
         self._db_adapter = db_adapter
         self.db_path = self._validate_path(db_path) if db_path else None
+        # Determine production mode from env var used across the project
+        try:
+            prod_val = str(os.getenv("tldw_production", "false")).strip().lower()
+            self._production_mode = prod_val in {"true", "1", "yes", "on", "y"}
+        except Exception:
+            self._production_mode = False
+        # In production, prefer adapters over any raw SQL fallbacks
+        if self._production_mode and self._db_adapter is None:
+            logger.warning(
+                f"Production mode active: no DB adapter provided for {self.__class__.__name__}. "
+                "Raw SQL fallback is disabled and calls will fail without an adapter."
+            )
         if self._db_adapter is None and self.db_path is None:
             raise ValueError("db_path is required when no database adapter is provided.")
 
@@ -129,6 +141,12 @@ class BaseRetriever(ABC):
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"Backend query error: {exc}")
                 return []
+        # Disallow raw SQL fallback in production to honor project DB abstraction policy
+        if getattr(self, "_production_mode", False):
+            raise RuntimeError(
+                f"Raw SQL fallback is disabled in production for {self.__class__.__name__}. "
+                "Provide a database adapter (e.g., MediaDatabase or CharactersRAGDB)."
+            )
         if not self.db_path:
             logger.error("No database path available for direct query execution.")
             return []

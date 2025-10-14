@@ -7,9 +7,9 @@ While the fan-out design provides good horizontal scaling, a multi-user transcri
 ## Implementation Status (WIP)
 
 - HTTP audio endpoints are AuthNZ-aware and enforce single-user API key or JWT depending on mode.
-- WebSocket real-time STT endpoint currently authenticates with single-user API key (query or first message). JWT over WebSocket is not implemented yet.
-- Per-user rate limiting for HTTP audio endpoints has been enabled (moved limiter key to prefer `request.state.user_id`; falls back to IP). Quotas and burst policies remain TODO.
-- No per-user resource quotas/concurrency guards for audio exist yet; proposed below.
+- WebSocket real-time STT endpoint authenticates with single-user API key (query or first message). JWT over WebSocket is still TODO.
+- Per-user quotas are implemented for audio: daily minutes, concurrent streams, concurrent jobs, and per-tier file size limits. Usage is persisted in `audio_usage_daily`; enforcement occurs in both HTTP and WS paths.
+- Rate limiter prefers per-user keys for fairness. Burst policies remain a future enhancement.
 
 ## Prioritized Backlog
 

@@ -31,6 +31,15 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `ALLOW_NLTK_DOWNLOADS`: Force-enable NLTK downloads even when running tests (`1|true|yes`).
   - Overrides `TEST_MODE`/`DISABLE_NLTK_DOWNLOADS`/pytest auto-detection to allow downloads for development scenarios that require full NLTK resources.
 
+## RAG Module
+- `tldw_production`: When `true`, RAG retrievers disable raw SQL fallbacks and require adapters (MediaDatabase/ChaChaNotesDB). Unified endpoints already pass adapters; direct pipeline usage must supply them.
+- `RAG_LLM_RERANK_TIMEOUT_SEC`: Per-document LLM rerank timeout (seconds). Default `10`.
+- `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
+- `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
+
+### RAG Adaptive Post-Verification
+- `RAG_ADAPTIVE_TIME_BUDGET_SEC`: Optional hard cap (seconds) for post-generation verification and repair. When unset or `0`, no cap is applied. Other knobs are request-level (`enable_post_verification`, `adaptive_max_retries`, `adaptive_unsupported_threshold`, `adaptive_max_claims`).
+
 ### Chunking (regex safety and templates)
 - `CHUNKING_REGEX_TIMEOUT`: Float seconds to cap regex execution for chapter/section detection and template boundaries. Default: `2`. Values <= 0 disable. On timeout, strategies fall back to safe paths.
 - `CHUNKING_DISABLE_MP`: Disable process-based isolation for regex (default: disabled, i.e., no MP). Set `0|false|no` to enable optional MP fallback; note platform constraints.
@@ -73,11 +82,28 @@ Pytest markers
 - `RATE_LIMIT_ENABLED`: Auth endpoints rate limit toggle (`true|false`).
 - `RATE_LIMIT_PER_MINUTE`: Requests per minute (default 60).
 - `RATE_LIMIT_BURST`: Burst size (default 10).
+- `SECURITY_ALERTS_ENABLED`: Enable AuthNZ security alert dispatching (`true|false`, default `false`).
+- `SECURITY_ALERT_MIN_SEVERITY`: Minimum severity to deliver (`low|medium|high|critical`, default `high`).
+- `SECURITY_ALERT_FILE_PATH`: JSONL file sink for security alerts (default `Databases/security_alerts.log`).
+- `SECURITY_ALERT_WEBHOOK_URL`: Optional webhook endpoint for security alerts (e.g., Slack/PagerDuty).
+- `SECURITY_ALERT_WEBHOOK_HEADERS`: JSON object of extra headers for webhook calls (e.g., auth tokens).
+- `SECURITY_ALERT_EMAIL_TO`: Comma-separated recipient list for email alerts.
+- `SECURITY_ALERT_EMAIL_FROM`: From address for email alerts (required when using SMTP).
+- `SECURITY_ALERT_EMAIL_SUBJECT_PREFIX`: Subject prefix for alert emails (default `[AuthNZ]`).
+- `SECURITY_ALERT_SMTP_HOST`: SMTP host for email delivery.
+- `SECURITY_ALERT_SMTP_PORT`: SMTP port (default `587`).
+- `SECURITY_ALERT_SMTP_STARTTLS`: Enable STARTTLS negotiation (`true|false`, default `true`).
+- `SECURITY_ALERT_SMTP_USERNAME`: SMTP username (if authentication required).
+- `SECURITY_ALERT_SMTP_PASSWORD`: SMTP password/secret.
+- `SECURITY_ALERT_SMTP_TIMEOUT`: SMTP connection timeout in seconds (default `10`).
+- `SECURITY_ALERT_FILE_MIN_SEVERITY`: Override the global severity threshold for the file sink; choose from `low|medium|high|critical`.
+- `SECURITY_ALERT_WEBHOOK_MIN_SEVERITY`: Override the global severity threshold for the webhook sink.
+- `SECURITY_ALERT_EMAIL_MIN_SEVERITY`: Override the global severity threshold for email delivery.
 - `SHOW_API_KEY_ON_STARTUP`: In single-user mode, show API key once at startup (`true|false`). Avoid in production.
 - `REDIS_ENABLED`: Boolean hint used in logs/metrics reporting.
 
 Config file support (optional):
-- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`.
+- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
 
 ## Chat / WebUI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).

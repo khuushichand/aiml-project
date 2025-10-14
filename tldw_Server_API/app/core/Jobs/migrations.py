@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
-  idempotency_key TEXT UNIQUE,
+  idempotency_key TEXT,
   payload TEXT,
   result TEXT,
   status TEXT NOT NULL CHECK (status IN ('queued','processing','completed','failed','cancelled')),
@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   worker_id TEXT,
   acquired_at TEXT,
   error_message TEXT,
+  error_code TEXT,
+  error_class TEXT,
+  error_stack TEXT,
   last_error TEXT,
   cancel_requested_at TEXT,
   cancelled_at TEXT,
@@ -51,6 +54,13 @@ CREATE INDEX IF NOT EXISTS idx_jobs_lookup ON jobs(domain, queue, status, availa
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(leased_until);
 CREATE INDEX IF NOT EXISTS idx_jobs_owner_status ON jobs(owner_user_id, status, created_at);
+-- Cover ready vs scheduled scans
+CREATE INDEX IF NOT EXISTS idx_jobs_status_available_at ON jobs(status, available_at);
+
+-- Emulate Postgres partial unique index: scope idempotency to (domain,queue,job_type) when key is not NULL
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotent
+  ON jobs(domain, queue, job_type, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 -- Keep updated_at current
 CREATE TRIGGER IF NOT EXISTS trg_jobs_updated_at
@@ -114,6 +124,13 @@ def ensure_jobs_tables(db_path: Optional[Path] = None) -> Path:
         pass
     try:
         with sqlite3.connect(db_path) as conn:
+            # SQLite tuning for better concurrency
+            try:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.execute("PRAGMA busy_timeout=5000;")
+            except Exception:
+                pass
             conn.executescript(JOBS_SQLITE_DDL)
             conn.commit()
         try:

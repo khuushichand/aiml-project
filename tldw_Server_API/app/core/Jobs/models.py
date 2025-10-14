@@ -26,6 +26,9 @@ class JobRecord:
     worker_id: Optional[str]
     acquired_at: Optional[datetime]
     error_message: Optional[str]
+    error_code: Optional[str]
+    error_class: Optional[str]
+    error_stack: Optional[Dict[str, Any]]
     last_error: Optional[str]
     cancel_requested_at: Optional[datetime]
     cancelled_at: Optional[datetime]
@@ -33,4 +36,3 @@ class JobRecord:
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
     completed_at: Optional[datetime]
-

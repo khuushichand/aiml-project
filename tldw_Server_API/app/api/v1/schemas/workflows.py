@@ -56,6 +56,7 @@ class AdhocRunRequest(BaseModel):
 class WorkflowRunResponse(BaseModel):
     run_id: str
     workflow_id: Optional[int] = None
+    user_id: Optional[str] = None
     status: str
     status_reason: Optional[str] = None
     inputs: Dict[str, Any] = Field(default_factory=dict)
@@ -75,6 +76,7 @@ class EventResponse(BaseModel):
 class WorkflowRunListItem(BaseModel):
     run_id: str
     workflow_id: Optional[int] = None
+    user_id: Optional[str] = None
     status: str
     status_reason: Optional[str] = None
     definition_version: Optional[int] = None

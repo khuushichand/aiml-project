@@ -23,6 +23,13 @@ from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 #
 # Audio Endpoint (includes WebSocket streaming transcription)
 from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+# Guard audio_jobs import to avoid unrelated test breakages (e.g., pydantic validator changes)
+try:
+    from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+    _HAS_AUDIO_JOBS = True
+except Exception as _audio_jobs_err:  # noqa: BLE001 - log and continue for deterministic test startup
+    logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
+    _HAS_AUDIO_JOBS = False
 #
 # Chat Endpoint
 from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
@@ -267,6 +274,19 @@ async def lifespan(app: FastAPI):
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
         session_manager = await get_session_manager()
         logger.info("App Startup: Session manager initialized")
+
+        try:
+            from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+            dispatcher = get_security_alert_dispatcher()
+            dispatcher.validate_configuration()
+            if dispatcher.enabled:
+                logger.info("App Startup: Security alert configuration validated")
+        except ValueError as config_error:
+            logger.error(f"App Startup: Security alert configuration invalid: {config_error}")
+            if not _is_test_mode:
+                raise
+        except Exception as exc:
+            logger.error(f"App Startup: Security alert validation failed: {exc}")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize auth services: {e}")
         # Continue startup even if auth services fail (for backward compatibility)
@@ -383,9 +403,10 @@ async def lifespan(app: FastAPI):
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
 
-    # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), claims rebuild
+    # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
     core_jobs_task = None
+    audio_jobs_task = None
     claims_task = None
     jobs_metrics_task = None
     try:
@@ -464,6 +485,24 @@ async def lifespan(app: FastAPI):
                 logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
+
+    # Audio Jobs worker (MVP)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Audio Jobs worker")
+        else:
+            _enabled = (_os.getenv("AUDIO_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                audio_jobs_stop_event = _asyncio.Event()
+                audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
+                logger.info("Audio Jobs worker started with explicit stop_event signal")
+            else:
+                logger.info("Audio Jobs worker disabled by flag (AUDIO_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
     # Jobs metrics gauges worker (stale processing)
     try:
@@ -696,6 +735,17 @@ async def lifespan(app: FastAPI):
                     core_jobs_task.cancel()
             else:
                 core_jobs_task.cancel()
+        if 'audio_jobs_task' in locals() and audio_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if 'audio_jobs_stop_event' in locals() and audio_jobs_stop_event:
+                try:
+                    audio_jobs_stop_event.set()
+                    await _asyncio.wait_for(audio_jobs_task, timeout=5.0)
+                    logger.info("Audio Jobs worker stopped via stop_event")
+                except Exception:
+                    audio_jobs_task.cancel()
+            else:
+                audio_jobs_task.cancel()
         if 'claims_task' in locals() and claims_task:
             claims_task.cancel()
         # Stop usage aggregators gracefully
@@ -878,6 +928,8 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "Nemo STT setup", "url": _ext_url("/docs-static/NEMO_STT_DOCUMENTATION.md")}},
     {"name": "audio-websocket", "description": "Real-time streaming transcription over WebSocket.",
      "externalDocs": {"description": "Streaming STT", "url": _ext_url("/docs-static/NEMO_STREAMING_DOCUMENTATION.md")}},
+    {"name": "audio-jobs", "description": "Background audio processing via Jobs (fan-out pipeline).",
+     "externalDocs": {"description": "Audio Jobs API", "url": _ext_url("/docs-static/API-related/Audio_Jobs_API.md")}},
     {"name": "chat", "description": "Chat completions and conversation management (OpenAI-compatible).",
      "externalDocs": {"description": "Chat API", "url": _ext_url("/docs-static/API-related/Chat_API_Documentation.md")}},
     {"name": "characters", "description": "Character cards/personas and related operations.",
@@ -1426,6 +1478,8 @@ if _HAS_MEDIA:
 
 # Router for /audio/ endpoints
 app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+if _HAS_AUDIO_JOBS:
+    app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
 
 # WebSocket router for audio streaming (separate to avoid authentication conflicts)
 app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])

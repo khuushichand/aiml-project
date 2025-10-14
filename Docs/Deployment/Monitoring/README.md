@@ -9,6 +9,7 @@ Dashboards (JSON):
 - `mcp-dashboard.json` – MCP Unified: requests, latency, rate limits, errors
 - `web-scraping-dashboard.json` – Scraping throughput, success ratio, latency
 - `security-dashboard.json` – HTTP status, p95 latency, headers, quotas, uploads
+- `rag-reranker-dashboard.json` – RAG reranker guardrails (timeouts, exceptions, budget, docs scored)
 
 Notes
 - Dashboards assume a Prometheus datasource with UID `prometheus`.
@@ -19,3 +20,6 @@ Notes
 Provisioning
 - Example provisioning files: `Samples/Grafana/provisioning/*`
 - Map this directory into `/var/lib/grafana/dashboards` to auto‑load all dashboards.
+
+Prometheus Scrape
+- See `prometheus-scrape-sample.yml` for a ready-to-use scrape config that targets `http://<tldw_host>:8000/metrics`.

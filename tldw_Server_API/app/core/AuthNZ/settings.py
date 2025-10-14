@@ -439,6 +439,18 @@ class Settings(BaseSettings):
         ge=1,
         description="Timeout (seconds) for SMTP connections when sending security alerts."
     )
+    SECURITY_ALERT_FILE_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to write alerts to the file sink (default: use global threshold)."
+    )
+    SECURITY_ALERT_WEBHOOK_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to deliver alerts to the webhook sink (default: use global threshold)."
+    )
+    SECURITY_ALERT_EMAIL_MIN_SEVERITY: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to deliver alerts via email (default: use global threshold)."
+    )
     
     METRICS_PORT: int = Field(
         default=9090,
@@ -686,6 +698,23 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
+        maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
+        maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_FILE_PATH", "security_alert_file_path", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_URL", "security_alert_webhook_url", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_HEADERS", "security_alert_webhook_headers", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_TO", "security_alert_email_to", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_FROM", "security_alert_email_from", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_SUBJECT_PREFIX", "security_alert_email_subject_prefix", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_HOST", "security_alert_smtp_host", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_PORT", "security_alert_smtp_port", lambda v: int(v))
+        maybe_set("SECURITY_ALERT_SMTP_STARTTLS", "security_alert_smtp_starttls", _bool_from_str)
+        maybe_set("SECURITY_ALERT_SMTP_USERNAME", "security_alert_smtp_username", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_PASSWORD", "security_alert_smtp_password", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_SMTP_TIMEOUT", "security_alert_smtp_timeout", lambda v: int(v))
+        maybe_set("SECURITY_ALERT_FILE_MIN_SEVERITY", "security_alert_file_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", "security_alert_webhook_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_EMAIL_MIN_SEVERITY", "security_alert_email_min_severity", lambda v: v.strip())
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:
