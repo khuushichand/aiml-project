@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   request_id TEXT,
   trace_id TEXT,
   failure_timeline TEXT,
+  -- Optional compressed blobs (base64-gz) for payload/result when archiving
+  payload_compressed TEXT,
+  result_compressed TEXT,
   created_at TEXT,
   updated_at TEXT,
   completed_at TEXT,
@@ -140,7 +143,7 @@ CREATE TABLE IF NOT EXISTS job_events (
 );
 CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id);
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
-\n+-- Lightweight per-queue counters to avoid frequent COUNT(*) scans
+\n-- Lightweight per-queue counters to avoid frequent COUNT(*) scans
 CREATE TABLE IF NOT EXISTS job_counters (
   domain TEXT NOT NULL,
   queue TEXT NOT NULL,
@@ -153,6 +156,39 @@ CREATE TABLE IF NOT EXISTS job_counters (
   PRIMARY KEY (domain, queue, job_type)
 );
 CREATE INDEX IF NOT EXISTS idx_job_counters_domain_queue ON job_counters(domain, queue);
+
+-- Queue-level controls (pause/drain) per domain/queue
+CREATE TABLE IF NOT EXISTS job_queue_controls (
+  domain TEXT NOT NULL,
+  queue TEXT NOT NULL,
+  paused INTEGER DEFAULT 0,
+  drain INTEGER DEFAULT 0,
+  updated_at TEXT DEFAULT (DATETIME('now')),
+  PRIMARY KEY (domain, queue)
+);
+
+-- Per-job attachments/logs (small text or URL)
+CREATE TABLE IF NOT EXISTS job_attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  kind TEXT NOT NULL, -- log|artifact|tag
+  content_text TEXT,
+  url TEXT,
+  created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_job_attachments_job ON job_attachments(job_id);
+
+-- SLA policies per job_type
+CREATE TABLE IF NOT EXISTS job_sla_policies (
+  domain TEXT NOT NULL,
+  queue TEXT NOT NULL,
+  job_type TEXT NOT NULL,
+  max_queue_latency_seconds INTEGER,
+  max_duration_seconds INTEGER,
+  enabled INTEGER DEFAULT 1,
+  updated_at TEXT DEFAULT (DATETIME('now')),
+  PRIMARY KEY (domain, queue, job_type)
+);
 """
 
 

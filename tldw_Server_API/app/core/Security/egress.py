@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
 BLOCK_PRIVATE_ENV = "WORKFLOWS_EGRESS_BLOCK_PRIVATE"
+ALLOWED_PORTS_ENV = "WORKFLOWS_EGRESS_ALLOWED_PORTS"
+PROFILE_ENV = "WORKFLOWS_EGRESS_PROFILE"  # strict | permissive | custom
 
 # Webhook-specific per-tenant allow/deny controls
 WEBHOOK_ALLOWLIST_ENV = "WORKFLOWS_WEBHOOK_ALLOWLIST"
@@ -158,9 +160,37 @@ def evaluate_url_policy(
     if not host:
         return URLPolicyResult(False, "URL must include a hostname")
 
+    # Ports policy (defaults 80/443; override via env)
+    def _default_ports() -> list[int]:
+        raw = os.getenv(ALLOWED_PORTS_ENV, "80,443")
+        out = []
+        for part in (raw or "").split(","):
+            p = part.strip()
+            if not p:
+                continue
+            try:
+                out.append(int(p))
+            except Exception:
+                continue
+        return out or [80, 443]
+
+    allowed_ports = _default_ports()
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if allowed_ports and port not in allowed_ports:
+        return URLPolicyResult(False, f"Port not allowed: {port}")
+
     allowlist = list(allowlist) if allowlist is not None else None
     if allowlist is None:
         allowlist = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+
+    # Profile handling: strict requires explicit allowlist match
+    profile = (os.getenv(PROFILE_ENV, "") or "").strip().lower()
+    if not profile:
+        # Per-environment sensible defaults
+        env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
+        profile = "strict" if env in {"prod", "production"} else "permissive"
 
     # Denylist wins if provided
     if denylist:
@@ -173,8 +203,15 @@ def evaluate_url_policy(
             if host == d or host.endswith(f".{d}"):
                 return URLPolicyResult(False, "Host in denylist")
 
-    if allowlist and not _host_matches_allowlist(host, allowlist):
-        return URLPolicyResult(False, "Host not in allowlist")
+    if profile == "strict":
+        if not allowlist:
+            return URLPolicyResult(False, "No allowlist configured (strict)")
+        if not _host_matches_allowlist(host, allowlist):
+            return URLPolicyResult(False, "Host not in allowlist")
+    else:
+        # permissive/custom: if allowlist provided, enforce; else accept any public host
+        if allowlist and not _host_matches_allowlist(host, allowlist):
+            return URLPolicyResult(False, "Host not in allowlist")
 
     if _should_block_private_env(block_private_override):
         ok, ips = _resolve_and_check_private(host)

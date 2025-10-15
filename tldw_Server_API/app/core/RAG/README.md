@@ -245,6 +245,83 @@ res = await unified_rag_pipeline(
 print(res.metadata.get("adaptive_rerun"))
 ```
 
+## Observability & SLOs
+
+Distributed tracing and quality monitoring are integrated for production SLOs:
+
+- OpenTelemetry spans around RAG phases with difficulty labels:
+  - Spans: `rag.retrieval`, `rag.rerank`, `rag.generation`
+  - Attributes: `rag.query_difficulty`, `rag.doc_count`, `rag.strategy`, `rag.model`, `rag.multi_turn`
+  - Enable tracing with `ENABLE_TRACING=true` (default) and scrape with OTLP/Prometheus as configured in telemetry.
+
+- Phase timing metrics (existing): `rag_phase_duration_seconds{phase,difficulty}`, `rag_reranking_duration_seconds{strategy}`.
+
+- Payload exemplars: on low-confidence or errors, redacted exemplar lines are sampled to `Databases/observability/rag_payload_exemplars.jsonl` (rate via `RAG_PAYLOAD_EXEMPLAR_SAMPLING`). See `Docs/Deployment/Monitoring/Exemplars/README.md`.
+
+- Nightly quality dashboards: enable `RAG_QUALITY_EVAL_ENABLED=true` to run a small nightly eval set and export:
+  - `rag_eval_faithfulness_score{dataset}` and `rag_eval_coverage_score{dataset}`
+  - Grafana JSON: `Docs/Deployment/Monitoring/rag-quality-dashboard.json`
+
+## Security & Safety
+
+Per‑tenant row‑level security (Postgres)
+- The DB adapters for ChaChaNotes and Prompt Studio set a session variable for the current tenant/user on PostgreSQL connections:
+  - `SET SESSION app.user_id = '<client_id>'`
+- Apply RLS policies referencing `current_setting('app.user_id', true)` to enforce tenant isolation at the DB layer.
+- Example DDL: `Docs/Deployment/Database/postgres-rls-policies.sql`.
+
+Content policy filters (PII/PHI) before generation
+- Lightweight PII/PHI detectors in `guardrails.py` can redact, drop, or annotate retrieved chunks before generation.
+- Request fields:
+  - `enable_content_policy_filter` (default false)
+  - `content_policy_types`: ["pii", "phi"]
+  - `content_policy_mode`: "redact" | "drop" | "annotate" (default "redact")
+- Metrics: `rag_policy_filtered_chunks_total{mode}`
+
+Document sanitation
+- HTML sanitizer with allow‑listed tags/attrs to strip unsafe markup from retrieved chunks.
+- OCR confidence gating: drop low‑confidence OCR chunks using `metadata.ocr_confidence`.
+- Request fields:
+  - `enable_html_sanitizer`, `html_allowed_tags`, `html_allowed_attrs`
+  - `ocr_confidence_threshold` (float)
+- Metrics: `rag_sanitized_docs_total`, `rag_ocr_dropped_docs_total`
+
+## Generation & Grounding (opt‑in)
+
+The unified pipeline exposes additional generation controls for safer answers:
+
+- Answer abstention: when reranker calibration indicates low evidence, you can abstain or ask a clarifying question instead of producing a potentially unsupported answer.
+  - Fields: `enable_abstention`, `abstention_behavior` in `[continue|ask|decline]`
+  - Works best with `reranking_strategy="two_tier"`.
+
+- Quote‑level citations: quoted phrases in the answer are mapped to source offsets (with fuzzy fallback) and attached under `metadata.quote_citations`.
+
+- Numeric/table‑aware retrieval: when the query contains numbers/units, you can modestly boost table‑like or number‑dense chunks before reranking. Field: `enable_numeric_table_boost`.
+
+- Multi‑turn synthesis (draft → critique → refine): optionally generates a draft, critiques it using retrieved snippets, then refines under a strict time/token budget.
+  - Fields: `enable_multi_turn_synthesis`, `synthesis_time_budget_sec`, `synthesis_draft_tokens`, `synthesis_refine_tokens`
+
+Example (abstention + synthesis):
+
+```python
+res = await unified_rag_pipeline(
+    query="Explain topic X",
+    sources=["media_db"],
+    enable_generation=True,
+    # Abstention path when evidence thin
+    enable_abstention=True,
+    abstention_behavior="ask",
+    # Multi‑turn synthesis with budgets
+    enable_multi_turn_synthesis=True,
+    synthesis_time_budget_sec=5.0,
+    synthesis_draft_tokens=256,
+    synthesis_refine_tokens=512,
+)
+print(res.metadata.get("generation_gate"))
+print(res.metadata.get("synthesis"))
+print(res.metadata.get("quote_citations"))
+```
+
 
 Each flattened chunk contains:
 - `metadata.ancestry_titles`: titles of enclosing sections

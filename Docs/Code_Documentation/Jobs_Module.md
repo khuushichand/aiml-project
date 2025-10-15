@@ -54,6 +54,24 @@ Use these names across domains to keep operations consistent.
   - `JOBS_TTL_AGE_SECONDS`: Max age for queued jobs (by `created_at`).
   - `JOBS_TTL_RUNTIME_SECONDS`: Max runtime for processing jobs (by `COALESCE(started_at, acquired_at)`).
   - `JOBS_TTL_ACTION`: `cancel` (default) or `fail`.
+- Prune & retention (optional):
+  - `JOBS_PRUNE_ENFORCE` (default false): Run background prune sweeps.
+  - `JOBS_RETENTION_DAYS_TERMINAL` (default 0): Days to retain terminal states (`completed|failed|cancelled|quarantined`).
+  - `JOBS_RETENTION_DAYS_NONTERMINAL` (default 0): Days to retain non-terminal (`queued|processing`). Disabled when 0 (recommended unless intentional).
+  - `JOBS_ARCHIVE_COMPRESS` (default false): When archiving, also write compressed copies of `payload`/`result` to `jobs_archive.payload_compressed` / `result_compressed`.
+    - SQLite stores Base64-encoded `gzip64:<...>` strings. Postgres stores raw `BYTEA`.
+  - `JOBS_ARCHIVE_COMPRESS_DROP_JSON` (default false): If true, set `payload`/`result` to NULL in the archive (use compressed columns only).
+- Secret hygiene (creation):
+  - `JOBS_SECRET_REJECT` (default false): Reject job creation if payload appears to contain secrets (keys or regex patterns).
+  - `JOBS_SECRET_REDACT` (default false): Redact detected secrets with `***REDACTED***` (applies even if not rejecting).
+  - `JOBS_SECRET_DENY_KEYS`: Comma-separated sensitive keys to flag (defaults include `api_key, authorization, password, token, secret, ...`).
+  - `JOBS_SECRET_PATTERNS`: Semicolon-separated regex patterns to detect secrets (default includes OpenAI keys, AWS AKIA, GitHub PAT, JWT, Google API, Slack tokens).
+- Graceful shutdown:
+  - `JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC` (default 0): When >0, `/ready` flips to not ready and new acquisitions are gated; shutdown waits up to this many seconds for active leases to finish.
+  - Readiness endpoints: `/ready` and `/health/ready` return `{"status": "not_ready"}` during shutdown to drain traffic.
+  - Acquisition gate: on shutdown the server sets a global acquire gate so `acquire_next_job` returns `None` until restart.
+- Testing time control:
+   - `JOBS_TEST_NOW_EPOCH` (seconds since epoch): If set, JobManager’s internal clock uses this instant for lease renewals and TTL comparisons it controls, enabling time-travel tests without sleeps.
  - Domain‑scoped RBAC (optional):
    - `JOBS_DOMAIN_SCOPED_RBAC` (default false): Enforce domain scope for admin endpoints.
    - `JOBS_REQUIRE_DOMAIN_FILTER` (default false): Require the `domain` query/body field for domain‑scoped endpoints.
@@ -191,7 +209,42 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 ## Notes
 
 - SQLite is suitable for single-instance or dev; Postgres is recommended for multi-worker deployments.
+- Leader election for maintenance (Postgres): TTL and prune sweeps acquire per-`{domain,queue}` advisory locks via `pg_try_advisory_lock` so only one instance performs the sweep for that shard.
 - Avoid long leases; prefer short leases with renewals.
+
+## Developer Ergonomics
+
+- Worker SDK
+  - A lightweight helper lives at `tldw_Server_API/app/core/Jobs/worker_sdk.py`.
+  - Provides auto-renew with jitter, optional progress heartbeats, and simple cancellation checks.
+  - Example usage:
+    ```python
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+    import asyncio
+
+    async def handler(job):
+        # do work...
+        return {"ok": True}
+
+    async def main():
+        jm = JobManager()
+        sdk = WorkerSDK(jm, WorkerConfig(domain="prompt_studio", queue="default", worker_id="w1"))
+        await sdk.run(handler=handler)
+
+    asyncio.run(main())
+    ```
+
+- Local CLI (prints cURL)
+  - `Helper_Scripts/tldw_jobs.py` generates auth-aware cURL for stats, list, prune, TTL, and archive meta.
+  - Examples:
+    - `python Helper_Scripts/tldw_jobs.py stats --domain prompt_studio`
+    - `python Helper_Scripts/tldw_jobs.py prune --domain prompt_studio --queue default --older_than_days 30 --dry_run`
+    - `python Helper_Scripts/tldw_jobs.py archive-meta --job_id 123`
+
+- Archive compression metadata
+  - Admin endpoint: `GET /api/v1/jobs/archive/meta?job_id=<id>`
+  - Returns booleans for JSON presence and compressed payload/result presence in `jobs_archive`.
 - Workers should check `cancel_requested_at` and verify lease validity between chunks before writing final results.
 
 ## API: Stats and Listing
@@ -275,3 +328,43 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
       ```
   - Consider raising or lowering `JOBS_QUARANTINE_THRESHOLD` per environment. Keep it conservative in production to guard against hot loops.
   - If a subset remains problematic, continue quarantine and investigate upstream data, credentials, or provider limits.
+- Domain quotas (optional):
+  - `JOBS_QUOTA_MAX_QUEUED` / `JOBS_QUOTA_MAX_QUEUED_<DOMAIN>` / `JOBS_QUOTA_MAX_QUEUED_USER_<USER_ID>` / `JOBS_QUOTA_MAX_QUEUED_<DOMAIN>_USER_<USER_ID>`
+  - `JOBS_QUOTA_SUBMITS_PER_MIN` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
+  - `JOBS_QUOTA_MAX_INFLIGHT` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
+  - Precedence: domain+user > user > domain > global.
+  - Notes: If owner_user_id is not supplied, domain-level inflight checks are skipped; configure workers to pass owner_user_id when needed.
+
+### Signed Webhooks (optional)
+
+- Enable a background worker that posts HMAC-signed webhooks for `job.completed` and `job.failed` using the job events outbox.
+- Flags:
+  - `JOBS_WEBHOOKS_ENABLED=true`
+  - `JOBS_WEBHOOKS_URL=https://example.com/jobs/webhook`
+  - `JOBS_WEBHOOKS_SECRET_KEYS=primary,oldkey` (rotating; first key used to sign)
+  - `JOBS_WEBHOOKS_INTERVAL_SEC` (default 1.0), `JOBS_WEBHOOKS_TIMEOUT_SEC` (default 5)
+- Headers sent:
+  - `X-Jobs-Event`: `job.completed` | `job.failed`
+  - `X-Jobs-Event-Id`: outbox id (monotonic cursor)
+  - `X-Jobs-Timestamp`: epoch seconds
+  - `X-Jobs-Signature`: `v1=<hex>` where `hex = HMAC_SHA256(secret, f"{ts}.{body}")`
+- Body: JSON `{ event, attrs, job: {id,domain,queue,job_type}, created_at }`
+- Verification example (Python):
+  ```python
+  import hmac, hashlib, time, json
+  def verify(ts: str, body: bytes, sig_header: str, secrets: list[str], max_skew: int = 300) -> bool:
+      if abs(int(time.time()) - int(ts)) > max_skew:
+          return False
+      try:
+          scheme, value = sig_header.split('=', 1)
+      except Exception:
+          return False
+      if scheme != 'v1':
+          return False
+      msg = f"{ts}.".encode() + body
+      for sk in secrets:
+          calc = hmac.new(sk.encode(), msg, hashlib.sha256).hexdigest()
+          if hmac.compare_digest(calc, value):
+              return True
+      return False
+  ```

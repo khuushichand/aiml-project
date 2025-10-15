@@ -10,7 +10,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.responses import FileResponse
@@ -195,12 +195,47 @@ logger.remove()
 
 # Add your desired Loguru sink (e.g., stderr)
 log_level = "DEBUG"
+def _trace_log_patcher(record):
+    """Inject W3C trace context into Loguru records."""
+    try:
+        from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
+        span = _get_tm().get_current_span()
+        trace_id = span.get_span_context().trace_id if span else 0
+        span_id = span.get_span_context().span_id if span else 0
+        if "extra" not in record:
+            record["extra"] = {}
+        record["extra"].setdefault("trace_id", f"{trace_id:032x}" if trace_id else "")
+        record["extra"].setdefault("span_id", f"{span_id:016x}" if span_id else "")
+        if record["extra"].get("trace_id") and record["extra"].get("span_id"):
+            record["extra"].setdefault("traceparent", f"00-{record['extra']['trace_id']}-{record['extra']['span_id']}-01")
+        else:
+            record["extra"].setdefault("traceparent", "")
+        # Baggage extras
+        try:
+            req = _get_tm().get_baggage("request_id")
+            ses = _get_tm().get_baggage("session_id")
+            if req:
+                record["extra"].setdefault("request_id", req)
+            if ses:
+                record["extra"].setdefault("session_id", ses)
+        except Exception:
+            pass
+    except Exception:
+        # Ensure keys exist to avoid KeyError in formatter
+        record.setdefault("extra", {})
+        record["extra"].setdefault("trace_id", "")
+        record["extra"].setdefault("span_id", "")
+        record["extra"].setdefault("traceparent", "")
+        record["extra"].setdefault("request_id", "")
+        record["extra"].setdefault("session_id", "")
+
 logger.add(
     sys.stderr,
     level=log_level,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | trace={extra[trace_id]} span={extra[span_id]} req={extra[request_id]} ses={extra[session_id]} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     colorize=True,
 )
+logger = logger.patch(_trace_log_patcher)
 
 # Configure standard logging to use the InterceptHandler
 loggers_to_intercept = ["uvicorn", "uvicorn.error", "uvicorn.access"] # Add other library names if needed
@@ -213,6 +248,26 @@ for logger_name in loggers_to_intercept:
 
 logger.info("Loguru logger configured with SPECIFIC standard logging interception!")
 
+# Optional JSON-structured logs sink (enable with LOG_JSON=true)
+try:
+    import os as _jsonlog_os
+    if (_jsonlog_os.getenv("LOG_JSON", "").lower() in {"1", "true", "yes", "on"} or
+        _jsonlog_os.getenv("ENABLE_JSON_LOGS", "").lower() in {"1", "true", "yes", "on"}):
+        logger.add(
+            sys.stdout,
+            level=log_level,
+            serialize=True,
+            backtrace=False,
+            diagnose=False,
+            filter=None,
+        )
+        logger.info("JSON logging enabled (serialize=True)")
+except Exception as _e:
+    try:
+        logger.debug(f"Failed to enable JSON logs sink: {_e}")
+    except Exception:
+        pass
+
 
 BASE_DIR     = Path(__file__).resolve().parent
 FAVICON_PATH = BASE_DIR / "static" / "favicon.ico"
@@ -220,6 +275,9 @@ FAVICON_PATH = BASE_DIR / "static" / "favicon.ico"
 ############################# TEST DB Handling #####################################
 # --- TEST DB Instance ---
 test_db_instance_ref = None # Global or context variable to hold the test DB instance
+
+# Global readiness state (flips false during graceful shutdown)
+READINESS_STATE = {"ready": True}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -408,12 +466,98 @@ async def lifespan(app: FastAPI):
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
 
+    # Embeddings: optional startup-time dimension sanity check (opt-in)
+    try:
+        import os as _os
+        if not _skip_heavy and (_os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}):
+            strict_mode = (_os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
+            logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
+            try:
+                import os as _os_mod
+                from pathlib import Path as _Path
+                from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+                from tldw_Server_API.app.core.config import settings as _emb_settings
+
+                def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
+                    mms: list[tuple[str, int, int, str]] = []
+                    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
+                    client = getattr(mgr, 'client', None)
+                    list_fn = getattr(client, 'list_collections', None)
+                    collections = list_fn() if callable(list_fn) else []
+                    for col in collections:
+                        try:
+                            name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
+                            if not name:
+                                continue
+                            get_fn = getattr(client, 'get_collection', None)
+                            c = get_fn(name=name) if callable(get_fn) else col
+                            meta = getattr(c, 'metadata', None) or {}
+                            expected = None
+                            if isinstance(meta, dict) and meta.get('embedding_dimension'):
+                                try:
+                                    expected = int(meta.get('embedding_dimension'))
+                                except Exception:
+                                    expected = None
+                            actual = None
+                            if hasattr(c, 'get') and callable(getattr(c, 'get')):
+                                try:
+                                    res = c.get(limit=1, include=['embeddings'])
+                                    embs = res.get('embeddings') if isinstance(res, dict) else None
+                                    if embs and len(embs) > 0:
+                                        first = embs[0]
+                                        if first and hasattr(first, '__len__'):
+                                            actual = int(len(first))
+                                except Exception:
+                                    pass
+                            if expected is not None and actual is not None and expected != actual:
+                                mms.append((name, expected, actual, user_id))
+                        except Exception as _dc_err:
+                            logger.debug(f"Dimension check skipped for collection (user={user_id}): {_dc_err}")
+                    try:
+                        mgr.close()
+                    except Exception:
+                        pass
+                    return mms
+
+                auth_mode = str(_emb_settings.get("AUTH_MODE", _os.getenv("AUTH_MODE", "single_user")))
+                mismatches: list[tuple[str, int, int, str]] = []
+                if auth_mode == "multi_user":
+                    base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
+                    if base and _Path(base).exists():
+                        for entry in _Path(base).iterdir():
+                            if entry.is_dir():
+                                user_id = entry.name
+                                try:
+                                    mismatches.extend(_check_user(user_id))
+                                except Exception as _ue:
+                                    logger.debug(f"Dimension check error for user {user_id}: {_ue}")
+                    else:
+                        logger.warning("Embeddings dimension check: USER_DB_BASE_DIR missing or does not exist in multi_user mode")
+                else:
+                    user_id = str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                    mismatches.extend(_check_user(user_id))
+
+                if mismatches:
+                    for (n,e,a,u) in mismatches:
+                        logger.error(f"Embeddings dimension mismatch at startup (user={u}) in collection '{n}': expected={e}, actual={a}")
+                    if strict_mode:
+                        raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
+                else:
+                    logger.info("Embeddings dimension sanity check: OK (no mismatches)")
+            except Exception as _dc:
+                logger.error(f"Embeddings dimension sanity check failed: {_dc}")
+                if strict_mode:
+                    raise
+    except Exception as _dim_outer:
+        logger.debug(f"Embeddings startup dimension check path failed early: {_dim_outer}")
+
     # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
     core_jobs_task = None
     audio_jobs_task = None
     claims_task = None
     jobs_metrics_task = None
+    reembed_task = None
     try:
         import os as _os
         import asyncio as _asyncio
@@ -491,6 +635,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
 
+    # Embeddings Vector Compactor (soft-delete propagation)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import run as _run_vec_compactor
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Embeddings Vector Compactor")
+        else:
+            _enabled = (_os.getenv("EMBEDDINGS_COMPACTOR_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                embeddings_compactor_stop_event = _asyncio.Event()
+                embeddings_compactor_task = _asyncio.create_task(_run_vec_compactor(embeddings_compactor_stop_event))
+                logger.info("Embeddings Vector Compactor started with explicit stop_event signal")
+            else:
+                logger.info("Embeddings Vector Compactor disabled by flag (EMBEDDINGS_COMPACTOR_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Embeddings Vector Compactor: {e}")
+
     # Audio Jobs worker (MVP)
     try:
         import os as _os
@@ -527,6 +689,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
+    # Jobs webhooks worker (signed callbacks)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.jobs_webhooks_service import run_jobs_webhooks_worker as _run_jobs_webhooks
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Jobs webhooks worker")
+        else:
+            _enabled = (_os.getenv("JOBS_WEBHOOKS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}) and bool(_os.getenv("JOBS_WEBHOOKS_URL"))
+            if _enabled:
+                jobs_webhooks_stop_event = _asyncio.Event()
+                jobs_webhooks_task = _asyncio.create_task(_run_jobs_webhooks(jobs_webhooks_stop_event))
+                logger.info("Jobs webhooks worker started with explicit stop_event signal")
+            else:
+                logger.info("Jobs webhooks worker disabled by flag or missing URL")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs webhooks worker: {e}")
+
     # Workflows webhook DLQ retry worker
     try:
         import os as _os
@@ -562,6 +742,24 @@ async def lifespan(app: FastAPI):
                 logger.info("Workflows artifact GC worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Workflows artifact GC worker: {e}")
+
+    # Embeddings Re-embed expansion worker (Jobs-driven)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Embeddings.services.reembed_worker import run as _run_reembed
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping re-embed expansion worker")
+        else:
+            _enabled = (_os.getenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                reembed_stop_event = _asyncio.Event()
+                reembed_task = _asyncio.create_task(_run_reembed(reembed_stop_event))
+                logger.info("Embeddings re-embed expansion worker started with explicit stop_event signal")
+            else:
+                logger.info("Embeddings re-embed expansion worker disabled by flag (EMBEDDINGS_REEMBED_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start re-embed expansion worker: {e}")
 
     # Jobs integrity sweeper (periodic validator)
     try:
@@ -671,6 +869,19 @@ async def lifespan(app: FastAPI):
                 logger.info("LLM usage aggregator started")
     except Exception as e:
         logger.warning(f"Failed to start LLM usage aggregator: {e}")
+
+    # Start RAG quality eval scheduler (nightly dashboards)
+    try:
+        _disable_quality_eval = _env_os.getenv("RAG_QUALITY_EVAL_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}
+        if _skip_heavy or _disable_quality_eval:
+            logger.info("RAG quality eval scheduler disabled (skip_heavy or RAG_QUALITY_EVAL_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.quality_eval_scheduler import start_quality_eval_scheduler
+            _quality_task = await start_quality_eval_scheduler()
+            if _quality_task:
+                logger.info("RAG quality eval scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start RAG quality eval scheduler: {e}")
 
     # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
     _authnz_sched_started = False
@@ -787,6 +998,33 @@ async def lifespan(app: FastAPI):
     
     yield
     
+    # Flip readiness early and gate new job acquisitions for graceful shutdown
+    try:
+        READINESS_STATE["ready"] = False
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+        _JM.set_acquire_gate(True)
+    except Exception:
+        pass
+
+    # Optionally wait for leases to finish (bounded wait)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        _max_wait = int(_os.getenv("JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC", "0") or "0")
+        if _max_wait > 0:
+            jm_chk = _JM()
+            deadline = _asyncio.get_event_loop().time() + float(_max_wait)
+            while _asyncio.get_event_loop().time() < deadline:
+                try:
+                    active = jm_chk.count_active_processing()
+                except Exception:
+                    active = 0
+                if active <= 0:
+                    break
+                await _asyncio.sleep(0.5)
+    except Exception:
+        pass
+
     # Cancel/stop background worker(s)
     try:
         if 'cleanup_task' in locals() and cleanup_task:
@@ -815,6 +1053,16 @@ async def lifespan(app: FastAPI):
                 audio_jobs_task.cancel()
         if 'claims_task' in locals() and claims_task:
             claims_task.cancel()
+        if 'embeddings_compactor_task' in locals() and embeddings_compactor_task:
+            if 'embeddings_compactor_stop_event' in locals() and embeddings_compactor_stop_event:
+                try:
+                    embeddings_compactor_stop_event.set()
+                    await _asyncio.wait_for(embeddings_compactor_task, timeout=5.0)
+                    logger.info("Embeddings Vector Compactor stopped via stop_event")
+                except Exception:
+                    embeddings_compactor_task.cancel()
+            else:
+                embeddings_compactor_task.cancel()
         # Stop usage aggregators gracefully
         try:
             if 'usage_task' in locals() and usage_task:
@@ -861,6 +1109,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     jobs_integrity_task.cancel()
+                except Exception:
+                    pass
+
+        # Jobs webhooks worker shutdown
+        if 'jobs_webhooks_task' in locals() and jobs_webhooks_task:
+            try:
+                if 'jobs_webhooks_stop_event' in locals() and jobs_webhooks_stop_event:
+                    jobs_webhooks_stop_event.set()
+                    await _asyncio.wait_for(jobs_webhooks_task, timeout=5.0)
+                    logger.info("Jobs webhooks worker stopped via stop_event")
+                else:
+                    jobs_webhooks_task.cancel()
+            except Exception:
+                try:
+                    jobs_webhooks_task.cancel()
                 except Exception:
                     pass
 
@@ -1089,7 +1352,7 @@ OPENAPI_TAGS = [
     {"name": "sync", "description": "Synchronization operations and helpers."},
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
     {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
-     "externalDocs": {"description": "MCP v2 Developer Guide", "url": _ext_url("/docs-static/MCP_Docs/MCP_v2_Developer_Guide.md")}},
+     "externalDocs": {"description": "MCP Unified Developer Guide", "url": _ext_url("/docs-static/MCP/Unified/Developer_Guide.md")}},
     {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": _ext_url("/docs-static/API-related/Chatbook_Features_API_Documentation.md")}},
@@ -1401,6 +1664,33 @@ else:
     # Request ID propagation (adds X-Request-ID header)
     app.add_middleware(RequestIDMiddleware)
 
+    # Add trace headers middleware: propagate trace context to HTTP responses
+    @app.middleware("http")
+    async def _trace_headers_middleware(request: Request, call_next):
+        from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+        tm = get_tracing_manager()
+        # Ensure request_id is in baggage (RequestIDMiddleware already set it)
+        try:
+            req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+            if req_id:
+                tm.set_baggage("request_id", str(req_id))
+        except Exception:
+            pass
+        response = await call_next(request)
+        # Add trace headers to response
+        try:
+            span = tm.get_current_span()
+            if span:
+                ctx = span.get_span_context()
+                if ctx and getattr(ctx, "is_valid", False):
+                    trace_id = f"{ctx.trace_id:032x}"
+                    span_id = f"{ctx.span_id:016x}"
+                    response.headers.setdefault("X-Trace-Id", trace_id)
+                    response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
+        except Exception:
+            pass
+        return response
+
 # Always apply LLM budget middleware (guarded by settings) even in tests so allowlists/budgets are enforced
 try:
     app.add_middleware(LLMBudgetMiddleware)
@@ -1582,7 +1872,9 @@ async def api_metrics():
 from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
 from tldw_Server_API.app.api.v1.endpoints.moderation import router as moderation_router
 from tldw_Server_API.app.api.v1.endpoints.monitoring import router as monitoring_router
-app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
+app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/healthz, /api/v1/readyz
+# Also expose liveness/readiness at root per ops conventions
+app.include_router(health_router, prefix="", tags=["health"])  # /healthz, /readyz
 app.include_router(moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
 app.include_router(monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
 from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
@@ -1758,6 +2050,9 @@ async def health_check():
 async def readiness_check():
     """Readiness probe for orchestrators and load balancers."""
     try:
+        # Early flip: when shutting down, report not ready immediately
+        if not READINESS_STATE.get("ready", True):
+            return {"status": "not_ready", "reason": "shutdown_in_progress"}
         # DB health
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         db_pool = await get_db_pool()
@@ -1787,6 +2082,11 @@ async def readiness_check():
         }
     except Exception as e:
         return {"status": "not_ready", "error": str(e)}
+
+# /health/ready alias for some orchestrators
+@app.get("/health/ready", openapi_extra={"security": []})
+async def readiness_alias():
+    return await readiness_check()
 
 #
 ## Entry point for running the server

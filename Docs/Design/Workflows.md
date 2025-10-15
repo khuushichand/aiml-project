@@ -103,14 +103,23 @@ See `adapters.py` for configuration keys and behavior of each step.
 
 - Default: SQLite (`Databases/workflows.db`) with WAL enabled.
 - PostgreSQL: Supported when a content backend is configured; schema migrations applied automatically (see tests under `tests/Workflows/test_workflows_postgres_migrations.py`).
-- Tables: `workflows`, `workflow_runs`, `workflow_step_runs`, `workflow_events`, `workflow_artifacts`.
+- Tables: `workflows`, `workflow_runs`, `workflow_step_runs`, `workflow_events`, `workflow_artifacts` (+ optional `workflow_event_counters`, `workflow_webhook_dlq`).
 - Idempotency: `idempotency_key` prevents duplicate run creation per `(tenant_id, user_id, workflow)`.
+- Indices/constraints and types:
+  - Per‑run event ordering: composite index and unique constraint on `(run_id, event_seq)` in `workflow_events`.
+  - Cascading deletes: `workflow_events`, `workflow_step_runs`, and `workflow_artifacts` reference `workflow_runs(run_id)` with `ON DELETE CASCADE` (PostgreSQL). New SQLite DBs use the same FK with `PRAGMA foreign_keys=ON`.
+  - Partial indexes on statuses: `status='running'` and `status='queued'` for faster active/queue queries (PostgreSQL and modern SQLite).
+  - JSON payloads: PostgreSQL stores `workflow_events.payload_json` as `JSONB` with a GIN index; SQLite stores JSON as `TEXT`.
+- Pooling & contention:
+  - PostgreSQL uses `psycopg_pool` when available (min/max size, timeouts, max lifetime/idle) with `dict_row` rows; falls back to a minimal pool if not installed.
+  - SQLite applies `PRAGMA busy_timeout=5000`, `wal_autocheckpoint=1000`; hot write paths include exponential backoff on `database is locked`.
 
 ## Security Model
 
 - AuthNZ: All HTTP endpoints use standard API auth; WS requires a JWT and enforces run‑owner equality (subject must match `run.user_id`).
 - Tenant Isolation: Read operations enforce tenant boundaries, and HTTP reads now enforce run‑owner or admin (consistent with WS).
 - Rate Limits: Ad‑hoc runs and run‑saved endpoints are rate‑limited via `slowapi` if available.
+  - Tests/CI can bypass limits by setting `WORKFLOWS_DISABLE_RATE_LIMITS=true` (auto-detected under pytest).
 - Egress Controls: Webhook step checks URL via `is_url_allowed` to block private IPs/SSRF; optional HMAC signature header.
 - Artifact Downloads: Only `file://` URIs; size and MIME allowlists enforced; basic path containment checks.
 
@@ -151,6 +160,51 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Settings: `WORKFLOWS_ARTIFACT_RETENTION_DAYS` (default 30), `WORKFLOWS_ARTIFACT_GC_INTERVAL_SEC` (default 3600).
   - Behavior: Deletes DB rows for artifacts older than retention. For `file://` URIs, also deletes files from disk.
 - SQLite connection pool: `WORKFLOWS_SQLITE_POOL_SIZE` (default 0 disables) enables a lightweight pool for hot paths (events).
+
+### Security & Governance
+
+- Egress policy (centralized):
+  - Profile: `WORKFLOWS_EGRESS_PROFILE=strict|permissive|custom` (default `strict` in `prod`, `permissive` otherwise based on `ENVIRONMENT`/`APP_ENV`).
+  - Allowed schemes: `http, https` (fixed).
+  - Allowed ports: `WORKFLOWS_EGRESS_ALLOWED_PORTS` (comma‑separated; default `80,443`).
+  - Allowlist (host/domain): `WORKFLOWS_EGRESS_ALLOWLIST` (comma‑separated; supports subdomains via `example.com`).
+  - Block private/reserved IPs: `WORKFLOWS_EGRESS_BLOCK_PRIVATE=true|false` (default true). DNS is resolved and all target IPs must be public.
+  - Webhook‑specific allow/deny (global and per‑tenant) remain available as documented above; they use the centralized evaluator.
+
+- Audit logging (Unified Audit Service):
+  - Workflows endpoints log key events: admin owner overrides, permission denials (tenant mismatch, not owner), and run creation (saved/adhoc). Logs include a request ID when provided (`X-Request-ID`), IP, user agent, endpoint and method where available.
+  - Query audit logs via `GET /api/v1/admin/audit-log`.
+
+- PII/Secrets:
+  - Log redaction for `log` step: `WORKFLOWS_REDACT_LOGS=true|false` (default true) applies PII redaction to messages before emitting to logs.
+  - Field‑level encryption for artifact metadata: enable with `WORKFLOWS_ARTIFACT_ENCRYPTION=true` and provide `WORKFLOWS_ARTIFACT_ENC_KEY` (base64 16/24/32 bytes for AES‑GCM). Encrypted metadata is transparently decrypted on read when the key is present; otherwise a placeholder is returned.
+  - Scoped secrets injection: run requests accept `secrets` (map of strings). These are injected into the execution context as `context.secrets` and never persisted. Secrets are cleared from memory when the run reaches a terminal state.
+
+- Quotas and rate limits:
+  - Endpoint rate‑limits (slowapi) remain as before and are disabled in tests.
+  - Per‑user quotas at run start (saved and ad‑hoc):
+    - Burst: `WORKFLOWS_QUOTA_BURST_PER_MIN` (default 60/min).
+    - Daily: `WORKFLOWS_QUOTA_DAILY_PER_USER` (default 1000/day).
+    - On exceed: returns `429 Too Many Requests` with headers `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.
+    - Disable (e.g., tests): `WORKFLOWS_DISABLE_QUOTAS=true`.
+
+### Observability
+
+- Metrics (Prometheus-compatible):
+  - Counters: `workflows_runs_started{tenant,mode}`, `workflows_runs_completed{tenant}`, `workflows_runs_failed{tenant}`.
+  - Histograms: `workflows_run_duration_ms{tenant}`, `workflows_step_duration_ms{type}`.
+  - Step counters: `workflows_steps_started{type}`, `workflows_steps_succeeded{type}`, `workflows_steps_failed{type}`.
+  - Webhooks: `workflows_webhook_deliveries_total{status,host}` with status in `delivered|failed|blocked`.
+  - Engine gauges: `workflows_engine_queue_depth`.
+  - Scrape: `/metrics` (root) or `/api/v1/metrics` (JSON).
+
+- Tracing (OpenTelemetry):
+  - Spans: `workflows.run` (per run), nested `workflows.step` (per step), and `workflows.webhook` (completion hook delivery).
+  - W3C trace context injected into outbound webhook headers (`traceparent`, optional `baggage`).
+
+- Health & Readiness:
+  - Liveness: `GET /healthz` returns `{status, queue_depth, time}`.
+  - Readiness: `GET /readyz` returns `{ready, engine, db, time}` with DB connectivity and backend schema version (when using PostgreSQL) checked against the expected version.
  
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
 
@@ -187,3 +241,36 @@ In production, when the content backend is configured for PostgreSQL (recommende
 4. Download outputs: `GET /api/v1/workflows/runs/{run_id}/artifacts` and `.../download`
 
 For deeper goals and rationale, see `Workflows-PRD-1.md`.
+
+### Example: Branch → Map → Log
+
+A small pipeline that branches based on an input flag. If `inputs.enabled` is true, it maps over an `items` array and logs each item; otherwise it logs an error and exits.
+
+```
+{
+  "name": "branch-map-log",
+  "version": 1,
+  "inputs": {"enabled": true, "items": ["alpha", "beta", "gamma"]},
+  "steps": [
+    {"id": "s_branch", "type": "branch", "config": {
+      "condition": "{{ inputs.enabled }}",
+      "true_next": "s_map",
+      "false_next": "s_err"
+    }},
+
+    {"id": "s_map", "type": "map", "config": {
+      "items": "{{ inputs.items }}",
+      "concurrency": 2,
+      "step": {"type": "log", "config": {"message": "Item {{ item }}", "level": "info"}}
+    }, "on_success": "s_done", "on_failure": "s_err"},
+
+    {"id": "s_err", "type": "log", "config": {"message": "Disabled or an error occurred", "level": "warning"}},
+    {"id": "s_done", "type": "log", "config": {"message": "All done", "level": "info"}}
+  ]
+}
+```
+
+Notes:
+- `branch` sets `__next__` internally when a target is provided; engine jumps by deterministic IDs.
+- `map` runs the nested step for each element with limited concurrency and returns `{ results, count }` in `last` for downstream steps.
+- `on_failure` on `s_map` routes to `s_err` if the map step cannot complete.

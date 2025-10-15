@@ -22,6 +22,12 @@ import calendar
 from typing import Dict, List, Any, Optional, Union, Literal
 from dataclasses import dataclass, field
 from loguru import logger
+try:
+    # OpenTelemetry telemetry manager (metrics + tracing)
+    from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager, OTEL_AVAILABLE  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    get_telemetry_manager = None  # type: ignore
+    OTEL_AVAILABLE = False  # type: ignore
 
 # Core types
 from .types import Document, SearchResult, DataSource
@@ -35,12 +41,13 @@ except ImportError:
     highlight_func = None
     track_llm_cost = None
 
-# Query intent analysis
+# Query intent analysis / routing
 try:
-    from .query_features import QueryAnalyzer, QueryIntent
+    from .query_features import QueryAnalyzer, QueryIntent, QueryRouter
 except ImportError:
     QueryAnalyzer = None
     QueryIntent = None
+    QueryRouter = None
 
 # HyDE utilities
 try:
@@ -107,6 +114,13 @@ except ImportError:
     RerankingStrategy = None
     RerankingConfig = None
 
+# Advanced retrieval (multi-vector passages)
+try:
+    from .advanced_retrieval import apply_multi_vector_passages, MultiVectorConfig
+except ImportError:
+    apply_multi_vector_passages = None  # type: ignore
+    MultiVectorConfig = None  # type: ignore
+
 try:
     from .rewrite_cache import RewriteCache
 except ImportError:
@@ -147,12 +161,17 @@ try:
         detect_injection_score,
         check_numeric_fidelity,
         build_hard_citations,
+        build_quote_citations,
+        sanitize_html_allowlist,
+        apply_content_policy,
+        gate_docs_by_ocr_confidence,
     )
 except ImportError:
     downweight_injection_docs = None  # type: ignore
     detect_injection_score = None  # type: ignore
     check_numeric_fidelity = None  # type: ignore
     build_hard_citations = None  # type: ignore
+    build_quote_citations = None  # type: ignore
 
 try:
     from .analytics_system import UnifiedFeedbackSystem
@@ -213,6 +232,7 @@ async def unified_rag_pipeline(
     fts_level: Literal["media", "chunk"] = "media",
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
+    enable_intent_routing: bool = False,
     auto_temporal_filters: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
@@ -268,6 +288,14 @@ async def unified_rag_pipeline(
     sibling_window: int = 1,
     include_parent_document: bool = False,
     parent_max_tokens: Optional[int] = 1200,
+
+    # ========== ADVANCED RETRIEVAL ==========
+    enable_multi_vector_passages: bool = False,
+    mv_span_chars: int = 300,
+    mv_stride: int = 150,
+    mv_max_spans: int = 8,
+    mv_flatten_to_spans: bool = False,
+    enable_numeric_table_boost: bool = False,
     
     # ========== RERANKING ==========
     enable_reranking: bool = True,
@@ -289,6 +317,13 @@ async def unified_rag_pipeline(
     generation_model: Optional[str] = None,
     generation_prompt: Optional[str] = None,
     max_generation_tokens: int = 500,
+    # Abstention & multi-turn synthesis
+    enable_abstention: bool = False,
+    abstention_behavior: Literal["continue", "ask", "decline"] = "continue",
+    enable_multi_turn_synthesis: bool = False,
+    synthesis_time_budget_sec: Optional[float] = None,
+    synthesis_draft_tokens: Optional[int] = None,
+    synthesis_refine_tokens: Optional[int] = None,
 
     # ========== POST-VERIFICATION (ADAPTIVE) ==========
     enable_post_verification: bool = False,
@@ -337,6 +372,14 @@ async def unified_rag_pipeline(
     # Pre-generation: instruction-injection filtering and down-weighting
     enable_injection_filter: bool = True,
     injection_filter_strength: float = 0.5,
+    # Content policy: lightweight PII/PHI filtering and sanitation
+    enable_content_policy_filter: bool = False,
+    content_policy_types: List[str] = None,  # ["pii", "phi"]
+    content_policy_mode: Literal["redact", "drop", "annotate"] = "redact",
+    enable_html_sanitizer: bool = False,
+    html_allowed_tags: Optional[List[str]] = None,
+    html_allowed_attrs: Optional[List[str]] = None,
+    ocr_confidence_threshold: Optional[float] = None,
     # Post-generation: hard citations per sentence and numeric fidelity checks
     require_hard_citations: bool = False,
     enable_numeric_fidelity: bool = False,
@@ -557,6 +600,43 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Query expansion failed: {str(e)}")
                 logger.warning(f"Query expansion error: {e}")
+
+        # ========== INTENT ROUTING (optional) ==========
+        if enable_intent_routing and QueryRouter:
+            try:
+                router = QueryRouter()
+                routing = router.route_query(query)
+                # Map routing decisions to current pipeline knobs conservatively
+                # Keep search_mode hybrid by default; adjust hybrid_alpha and top_k
+                strat = str(routing.get("retrieval_strategy", "")).lower()
+                if strat == "precise":
+                    # Favor lexical; shift hybrid_alpha toward FTS
+                    try:
+                        hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
+                    except Exception:
+                        pass
+                    hybrid_alpha = min(hybrid_alpha, 0.5)
+                elif strat == "broad":
+                    # Favor semantic
+                    try:
+                        hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
+                    except Exception:
+                        pass
+                    hybrid_alpha = max(hybrid_alpha, 0.7)
+                # Respect suggested top_k when present
+                try:
+                    tk = int(routing.get("top_k", top_k))
+                    if 1 <= tk <= 100:
+                        top_k = tk
+                except Exception:
+                    pass
+                result.metadata["intent_routing"] = {
+                    "strategy": strat,
+                    "hybrid_alpha": hybrid_alpha,
+                    "top_k": top_k,
+                }
+            except Exception as e:
+                result.errors.append(f"Intent routing failed: {e}")
         
         # ========== CACHE CHECK ==========
         cached_documents = None
@@ -763,6 +843,29 @@ async def unified_rag_pipeline(
         if not result.cache_hit:
             retrieval_start = time.time()
             try:
+                # --- OTEL: retrieval span ---
+                _otel_cm = None
+                _otel_span = None
+                if enable_observability and get_telemetry_manager:
+                    try:
+                        _tm = get_telemetry_manager()
+                        _tr = _tm.get_tracer("tldw.rag")
+                        _attrs = {
+                            "rag.phase": "retrieval",
+                            "rag.search_mode": str(search_mode),
+                            "rag.top_k": int(top_k or 0),
+                            "rag.index_namespace": str(index_namespace or "")
+                        }
+                        _otel_cm = _tr.start_as_current_span("rag.retrieval")
+                        _otel_span = _otel_cm.__enter__()
+                        for _k, _v in _attrs.items():
+                            try:
+                                _otel_span.set_attribute(_k, _v)
+                            except Exception:
+                                pass
+                    except Exception:
+                        _otel_cm = None
+                        _otel_span = None
                 if MultiDatabaseRetriever and RetrievalConfig:
                     
                     # Set up database paths
@@ -903,6 +1006,13 @@ async def unified_rag_pipeline(
                             except Exception:
                                 return "unknown"
                         observe_histogram("rag_phase_duration_seconds", result.timings["retrieval"], labels={"phase": "retrieval", "difficulty": _difficulty(result.documents or [])})
+                        # Also attach difficulty as OTEL attribute if span is active
+                        if _otel_span is not None:
+                            try:
+                                _otel_span.set_attribute("rag.query_difficulty", _difficulty(result.documents or []))
+                                _otel_span.set_attribute("rag.doc_count", int(len(result.documents or [])))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     if metrics:
@@ -911,7 +1021,92 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Document retrieval failed: {str(e)}")
                 logger.error(f"Retrieval error: {e}")
+                # Sample payload exemplar on retrieval failure
+                try:
+                    from .payload_exemplars import maybe_record_exemplar
+                    maybe_record_exemplar(
+                        query=query,
+                        documents=result.documents or [],
+                        answer=result.generated_answer or "",
+                        reason="retrieval_error",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    pass
+            finally:
+                # Ensure OTEL span is closed
+                if _otel_cm is not None:
+                    try:
+                        _otel_cm.__exit__(None, None, None)
+                    except Exception:
+                        pass
+
+        # ========== MULTI-VECTOR PASSAGES (optional, pre-rerank) ==========
+        if enable_multi_vector_passages and result.documents:
+            mv_start = time.time()
+            try:
+                if apply_multi_vector_passages and MultiVectorConfig:
+                    cfg = MultiVectorConfig(
+                        span_chars=int(mv_span_chars or 300),
+                        stride=int(mv_stride or 150),
+                        max_spans_per_doc=int(mv_max_spans or 8),
+                        flatten_to_spans=bool(mv_flatten_to_spans or False),
+                    )
+                    mv_docs = await apply_multi_vector_passages(
+                        query=query,
+                        documents=result.documents,
+                        config=cfg,
+                        user_id=user_id,
+                    )
+                    if mv_docs:
+                        result.documents = mv_docs[: top_k]
+                        result.metadata.setdefault("multi_vector", {})
+                        result.metadata["multi_vector"].update({
+                            "enabled": True,
+                            "span_chars": cfg.span_chars,
+                            "stride": cfg.stride,
+                            "max_spans_per_doc": cfg.max_spans_per_doc,
+                            "flattened": cfg.flatten_to_spans,
+                        })
+                else:
+                    result.errors.append("Multi-vector module not available")
+            except Exception as e:
+                result.errors.append(f"Multi-vector passages failed: {e}")
+            finally:
+                result.timings["multi_vector"] = time.time() - mv_start
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+                    observe_histogram("rag_phase_duration_seconds", result.timings["multi_vector"], labels={"phase": "multi_vector", "difficulty": str(result.metadata.get("query_intent", "na"))})
+                except Exception:
+                    pass
         
+        # ========== NUMERIC/TABLE-AWARE BOOST (optional, pre-rerank) ==========
+        if enable_numeric_table_boost and result.documents:
+            try:
+                import re as _re
+                q_has_num = bool(_re.search(r"\d", query)) or bool(_re.search(r"\b(percent|percentage|million|billion|thousand|\$|usd|eur|kg|g|lb|%|k|m|b)\b", query, _re.I))
+            except Exception:
+                q_has_num = False
+            if q_has_num:
+                affected = 0
+                for d in result.documents:
+                    try:
+                        md = getattr(d, "metadata", None) or {}
+                        chunk_type = str(md.get("chunk_type", "")).lower()
+                        text = getattr(d, "content", "") or ""
+                        numbers = sum(1 for _ in _re.finditer(r"\d", text))
+                        looks_table = (chunk_type == "table") or (text.count("|") >= 3) or ("\t" in text)
+                        if looks_table or numbers >= 6:
+                            s = float(getattr(d, "score", 0.0) or 0.0)
+                            # modest boost within [0,1]
+                            d.score = min(1.0, s * 1.1 + 0.02)
+                            md["numeric_table_boost"] = True
+                            d.metadata = md
+                            affected += 1
+                    except Exception:
+                        continue
+                result.metadata["numeric_table_boost"] = {"enabled": True, "affected": int(affected)}
+
         # ========== GAP ANALYSIS / FOLLOW-UPS (optional) ==========
         if enable_gap_analysis and result.documents:
             try:
@@ -1025,6 +1220,57 @@ async def unified_rag_pipeline(
                 result.metadata["chunk_type_filter_before"] = before
                 result.metadata["chunk_type_filter_after"] = len(result.documents)
             except Exception:
+                pass
+
+        # ========== CONTENT POLICY FILTERS & SANITATION ==========
+        if result.documents:
+            try:
+                # OCR gating
+                if ocr_confidence_threshold is not None:
+                    try:
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                        dropped = gate_docs_by_ocr_confidence(result.documents, float(ocr_confidence_threshold))
+                        if dropped > 0:
+                            increment_counter("rag_ocr_dropped_docs_total", dropped)
+                    except Exception:
+                        pass
+                # HTML sanitation
+                if enable_html_sanitizer:
+                    sanitized = 0
+                    for d in (result.documents or []):
+                        try:
+                            before = d.content or ""
+                            after = sanitize_html_allowlist(before, html_allowed_tags, html_allowed_attrs)
+                            if after != before:
+                                d.content = after
+                                sanitized += 1
+                        except Exception:
+                            continue
+                    try:
+                        if sanitized > 0:
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                            increment_counter("rag_sanitized_docs_total", sanitized)
+                    except Exception:
+                        pass
+                # Content policy (PII/PHI)
+                if enable_content_policy_filter:
+                    summary = apply_content_policy(result.documents, policy_types=(content_policy_types or ["pii"]), mode=str(content_policy_mode or "redact"))
+                    result.metadata.setdefault("content_policy", {})
+                    result.metadata["content_policy"].update({
+                        "enabled": True,
+                        "types": content_policy_types or ["pii"],
+                        "mode": content_policy_mode,
+                        "affected": int(summary.get("affected", 0)),
+                        "dropped": int(summary.get("dropped", 0)),
+                    })
+                    try:
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                        if int(summary.get("affected", 0)) > 0:
+                            increment_counter("rag_policy_filtered_chunks_total", int(summary.get("affected", 0)), labels={"mode": str(content_policy_mode or "redact")})
+                    except Exception:
+                        pass
+            except Exception:
+                # Non-fatal: continue
                 pass
         
         # ========== SECURITY FILTERING ==========
@@ -1222,6 +1468,28 @@ async def unified_rag_pipeline(
         if enable_reranking and result.documents and reranking_strategy != "none":
             rerank_start = time.time()
             try:
+                # --- OTEL: reranking span ---
+                _otel_cm_rk = None
+                _otel_span_rk = None
+                if enable_observability and get_telemetry_manager:
+                    try:
+                        _tm = get_telemetry_manager()
+                        _tr = _tm.get_tracer("tldw.rag")
+                        _attrs = {
+                            "rag.phase": "rerank",
+                            "rag.strategy": str(reranking_strategy),
+                            "rag.top_k": int((rerank_top_k or top_k) or 0),
+                        }
+                        _otel_cm_rk = _tr.start_as_current_span("rag.rerank")
+                        _otel_span_rk = _otel_cm_rk.__enter__()
+                        for _k, _v in _attrs.items():
+                            try:
+                                _otel_span_rk.set_attribute(_k, _v)
+                            except Exception:
+                                pass
+                    except Exception:
+                        _otel_cm_rk = None
+                        _otel_span_rk = None
                 if create_reranker and RerankingStrategy and RerankingConfig:
                     strategy_map = {
                         "flashrank": RerankingStrategy.FLASHRANK,
@@ -1305,6 +1573,11 @@ async def unified_rag_pipeline(
                         observe_histogram("rag_reranking_duration_seconds", result.timings["reranking"], labels={"strategy": reranking_strategy})
                         # Also record as a generic phase without difficulty
                         observe_histogram("rag_phase_duration_seconds", result.timings["reranking"], labels={"phase": "reranking", "difficulty": "na"})
+                        if _otel_span_rk is not None:
+                            try:
+                                _otel_span_rk.set_attribute("rag.doc_count", int(len(result.documents or [])))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     if metrics:
@@ -1324,6 +1597,24 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Reranking failed: {str(e)}")
                 logger.error(f"Reranking error: {e}")
+                # Sample payload exemplar on reranking failure
+                try:
+                    from .payload_exemplars import maybe_record_exemplar
+                    maybe_record_exemplar(
+                        query=query,
+                        documents=result.documents or [],
+                        answer=result.generated_answer or "",
+                        reason="reranking_error",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    pass
+            finally:
+                if _otel_cm_rk is not None:
+                    try:
+                        _otel_cm_rk.__exit__(None, None, None)
+                    except Exception:
+                        pass
 
         # ========== SIBLING INCLUSION ==========
         if include_sibling_chunks and result.documents and sibling_window and sibling_window > 0:
@@ -1414,31 +1705,126 @@ async def unified_rag_pipeline(
         except Exception:
             gated_generation = False
 
-        if enable_generation and not gated_generation:
+        if enable_generation and not gated_generation and not result.cache_hit:
             generation_start = time.time()
             try:
+                # --- OTEL: generation span ---
+                _otel_cm_gen = None
+                _otel_span_gen = None
+                if enable_observability and get_telemetry_manager:
+                    try:
+                        _tm = get_telemetry_manager()
+                        _tr = _tm.get_tracer("tldw.rag")
+                        _attrs = {
+                            "rag.phase": "generation",
+                            "rag.model": str(generation_model or ""),
+                            "rag.multi_turn": bool(enable_multi_turn_synthesis),
+                        }
+                        _otel_cm_gen = _tr.start_as_current_span("rag.generation")
+                        _otel_span_gen = _otel_cm_gen.__enter__()
+                        for _k, _v in _attrs.items():
+                            try:
+                                _otel_span_gen.set_attribute(_k, _v)
+                            except Exception:
+                                pass
+                    except Exception:
+                        _otel_cm_gen = None
+                        _otel_span_gen = None
                 if AnswerGenerator:
                     generator = AnswerGenerator(model=generation_model)
-                    
-                    # Prepare context from documents
-                    context = "\n\n".join([getattr(doc, 'content', str(doc)) for doc in (result.documents[:5] if result.documents else [])])
-                    
-                    answer = await generator.generate(
-                        query=query,
-                        context=context,
-                        prompt_template=generation_prompt,
-                        max_tokens=max_generation_tokens
-                    )
-                    # Normalize
-                    if isinstance(answer, dict) and "answer" in answer:
-                        result.generated_answer = answer.get("answer")
-                        result.metadata.update({k: v for k, v in answer.items() if k != "answer"})
+
+                    # Prepare base context from top documents
+                    context_docs = (result.documents[:5] if result.documents else [])
+                    context = "\n\n".join([getattr(doc, 'content', str(doc)) for doc in context_docs])
+
+                    if enable_multi_turn_synthesis:
+                        # Strict budget control
+                        t0 = time.time()
+                        budget = float(synthesis_time_budget_sec) if synthesis_time_budget_sec else None
+                        aborted = False
+
+                        # Draft
+                        draft_tokens = int(synthesis_draft_tokens or min(max_generation_tokens, 400))
+                        d_start = time.time()
+                        draft_out = await generator.generate(
+                            query=query,
+                            context=context,
+                            prompt_template=generation_prompt,
+                            max_tokens=draft_tokens,
+                        )
+                        d_ans = draft_out.get("answer") if isinstance(draft_out, dict) else draft_out
+                        d_dt = time.time() - d_start
+
+                        # Critique
+                        c_text = None
+                        c_dt = 0.0
+                        try:
+                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+                            # Construct a compact critique prompt using small snippets
+                            snippets = []
+                            for d in context_docs[:3]:
+                                s = (getattr(d, 'content', '') or '')[:250].replace('\n', ' ')
+                                if s:
+                                    snippets.append(f"- {s}")
+                            crit_prompt = (
+                                "You are a careful reviewer.\n"
+                                "Given the user query, retrieved snippets, and the draft answer, list the top 3 issues (missing facts or unsupported claims).\n"
+                                f"Query: {query}\nSnippets:\n" + "\n".join(snippets) + f"\n\nDraft:\n{d_ans}\n\nIssues:"
+                            )
+                            c_start = time.time()
+                            c_text = sgl.analyze(api_name="openai", input_data="", custom_prompt_arg=crit_prompt, model_override=None)
+                            c_dt = time.time() - c_start
+                        except Exception:
+                            c_text = "- Ensure claims are supported by provided snippets.\n- Add missing specifics.\n- Clarify ambiguous statements."
+
+                        # Check budget
+                        if budget is not None and (time.time() - t0) >= budget:
+                            aborted = True
+                            result.generated_answer = d_ans
+                            result.metadata.setdefault("synthesis", {})
+                            result.metadata["synthesis"].update({"enabled": True, "aborted": True, "durations": {"draft": d_dt, "critique": c_dt, "refine": 0.0}})
+                        else:
+                            # Refine
+                            refine_tokens = int(synthesis_refine_tokens or max_generation_tokens)
+                            r_ctx = context + "\n\nCRITIQUE:\n" + (c_text or "")
+                            r_start = time.time()
+                            r_out = await generator.generate(
+                                query=query,
+                                context=r_ctx,
+                                prompt_template=generation_prompt,
+                                max_tokens=refine_tokens,
+                            )
+                            r_ans = r_out.get("answer") if isinstance(r_out, dict) else r_out
+                            r_dt = time.time() - r_start
+                            result.generated_answer = r_ans
+                            result.metadata.setdefault("synthesis", {})
+                            result.metadata["synthesis"].update({"enabled": True, "aborted": False, "durations": {"draft": d_dt, "critique": c_dt, "refine": r_dt}})
                     else:
-                        result.generated_answer = answer
+                        # Single-pass generation
+                        answer = await generator.generate(
+                            query=query,
+                            context=context,
+                            prompt_template=generation_prompt,
+                            max_tokens=max_generation_tokens
+                        )
+                        # Normalize
+                        if isinstance(answer, dict) and "answer" in answer:
+                            result.generated_answer = answer.get("answer")
+                            result.metadata.update({k: v for k, v in answer.items() if k != "answer"})
+                        else:
+                            result.generated_answer = answer
                     result.timings["answer_generation"] = time.time() - generation_start
                     try:
                         from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
                         observe_histogram("rag_phase_duration_seconds", result.timings["answer_generation"], labels={"phase": "generation", "difficulty": str(result.metadata.get("query_intent", "na"))})
+                        if enable_multi_turn_synthesis:
+                            observe_histogram("rag_phase_duration_seconds", result.timings["answer_generation"], labels={"phase": "synthesis", "difficulty": str(result.metadata.get("query_intent", "na"))})
+                        if _otel_span_gen is not None:
+                            try:
+                                _ans_len = len((result.generated_answer or ""))
+                                _otel_span_gen.set_attribute("rag.answer_length", int(_ans_len))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     if metrics:
@@ -1450,6 +1836,23 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Answer generation failed: {str(e)}")
                 logger.error(f"Generation error: {e}")
+                try:
+                    from .payload_exemplars import maybe_record_exemplar
+                    maybe_record_exemplar(
+                        query=query,
+                        documents=result.documents or [],
+                        answer=result.generated_answer or "",
+                        reason="generation_error",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    pass
+            finally:
+                if _otel_cm_gen is not None:
+                    try:
+                        _otel_cm_gen.__exit__(None, None, None)
+                    except Exception:
+                        pass
         elif enable_generation and gated_generation:
             # Record a metadata entry and bump a metric for observability
             result.metadata.setdefault("generation_gate", {})
@@ -1462,6 +1865,40 @@ async def unified_rag_pipeline(
                 increment_counter("rag_generation_gated_total", 1, labels={"strategy": "two_tier"})
             except Exception:
                 pass
+            # Sample payload exemplar when generation is gated
+            try:
+                from .payload_exemplars import maybe_record_exemplar
+                maybe_record_exemplar(
+                    query=query,
+                    documents=result.documents or [],
+                    answer=result.generated_answer or "",
+                    reason="generation_gated",
+                    user_id=user_id,
+                )
+            except Exception:
+                pass
+            # Abstention / clarifying question path
+            if enable_abstention:
+                try:
+                    clar_q = None
+                    if abstention_behavior == "ask":
+                        # Form a concise clarifying question using query analysis if available
+                        if QueryAnalyzer:
+                            try:
+                                qa = QueryAnalyzer(); an = qa.analyze_query(query)
+                                domain = getattr(an, "domain", None)
+                                intent = getattr(getattr(an, "intent", None), "value", None)
+                                clar_q = f"Please clarify: what specific aspect of '{query}' should I focus on{f' in {domain}' if domain else ''}?"
+                            except Exception:
+                                clar_q = None
+                        if not clar_q:
+                            clar_q = f"Could you clarify which specific details about '{query}' you need?"
+                        result.generated_answer = clar_q
+                    elif abstention_behavior == "decline":
+                        result.generated_answer = "I don’t have sufficient grounded evidence to answer confidently. Please clarify your question or provide more context."
+                    # 'continue' leaves generated_answer unset but records gate metadata
+                except Exception:
+                    pass
 
         # ========== HARD CITATIONS (per-sentence) ==========
         # Build per-sentence citation map using claims (if available) or heuristic fallback
@@ -1497,6 +1934,15 @@ async def unified_rag_pipeline(
                                 result.generated_answer = "Insufficient evidence: missing citations for some statements."
         except Exception as e:
             result.errors.append(f"Hard citations mapping failed: {str(e)}")
+
+        # ========== QUOTE-LEVEL CITATIONS ==========
+        try:
+            if result.generated_answer and build_quote_citations:
+                qc = build_quote_citations(result.generated_answer, result.documents or [])
+                if isinstance(qc, dict):
+                    result.metadata["quote_citations"] = qc
+        except Exception as e:
+            result.errors.append(f"Quote citations mapping failed: {str(e)}")
 
         # ========== CLAIMS & FACTUALITY ==========
         if enable_claims and result.generated_answer:

@@ -1,5 +1,7 @@
 # MCP Unified - User Guide
 
+> Part of the MCP Unified documentation set. See `Docs/MCP/Unified/README.md` for the full guide index.
+
 ## Table of Contents
 1. [Overview](#overview)
 2. [Getting Started](#getting-started)

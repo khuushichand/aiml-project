@@ -81,6 +81,32 @@ These pieces are present for future horizontal scaling but are not hooked up to 
 - Edge processing capabilities
 - A/B testing framework for models
 
+## Indexing & Storage Enhancements (New)
+
+- pgvector backend (production option):
+  - The RAG vector-store factory (`rag_service/vector_stores/factory.py`) supports `pgvector` in addition to local Chroma.
+  - Configure via settings `RAG.vector_store_type=pgvector` and `RAG.pgvector.{host,port,database,user,password,dsn}`.
+
+- Incremental re-embed policy with checksum gating:
+  - Re-embed worker (`core/Embeddings/services/reembed_worker.py`) skips unchanged chunks by comparing `metadata.content_hash` with the stored vector’s `content_hash`.
+  - Env: `REEMBED_SKIP_UNCHANGED=true` (default) to enable the skip.
+
+- Ingest dedupe now uses SimHash alongside Jaccard:
+  - Reduces collisions on short technical text.
+  - Env: `INGEST_DEDUP_USE_SIMHASH=true`, `INGEST_SIMHASH_HAMMING_THRESHOLD=3`.
+
+- Fielded metadata for chunks:
+  - Chunker attaches `metadata.headings` and `metadata.captions` (when available) to support future field-aware indexing/boosting.
+
+- FTS synonyms (SQLite index-time):
+  - When `DEFAULT_FTS_CORPUS` is set and `Config_Files/Synonyms/<corpus>.json` is present, the Media SQLite FTS index appends synonym expansions at index time.
+  - Limit expansion via `FTS_SYNONYM_EXPANSION_LIMIT` (default 200 tokens).
+
+- PostgreSQL tsvector field weighting:
+  - Media FTS uses `setweight` with `title` (A) and `content` (C) for better ranking.
+
+See also RAG retriever bm25 weights (`FTS_TITLE_WEIGHT`, `FTS_CONTENT_WEIGHT`).
+
 ## Environment Variables
 - `EMBEDDINGS_RATE_LIMIT`: `on` to enable per-endpoint rate limiting (default `off`).
 - `EMBEDDINGS_DIMENSION_POLICY`: `reduce` | `pad` | `ignore` (default `reduce`) for post-hoc dimension adjustment.

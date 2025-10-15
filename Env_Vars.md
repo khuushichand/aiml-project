@@ -47,7 +47,12 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
  - `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
  - `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
  - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half‑life for decay of per‑user priors (default `7`).
- - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
+- `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
+
+### RAG Quality Evaluations (Nightly)
+- `RAG_QUALITY_EVAL_ENABLED`: Enable nightly eval scheduler in‑process (`true|false`, default `false`).
+- `RAG_QUALITY_EVAL_INTERVAL_SEC`: Interval between eval runs in seconds (default `86400`).
+- `RAG_QUALITY_EVAL_DATASET`: Path to JSONL eval dataset (default `Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl`).
 
 Notes:
 - In production (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the unified pipeline will default to enabling numeric fidelity and strict citations unless explicitly configured otherwise by the request.

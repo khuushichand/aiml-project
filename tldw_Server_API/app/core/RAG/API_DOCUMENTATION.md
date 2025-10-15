@@ -32,6 +32,7 @@ The main RAG endpoint with complete feature access.
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
   "hybrid_alpha": 0.7,      // 0=FTS only, 1=Vector only
+  "enable_intent_routing": false, // analyze intent and adjust hybrid/top_k
   "top_k": 10,              // Max results (1-100)
   "min_score": 0.0,         // Minimum relevance score
   
@@ -56,6 +57,9 @@ The main RAG endpoint with complete feature access.
   "rerank_sentinel_margin": 0.15,     // minimum (top_prob − sentinel_prob) margin
   // Corpus namespace (enables corpus-specific synonyms for query rewrites)
   "index_namespace": "my_corpus"
+  // Advanced retrieval
+  "enable_multi_vector_passages": false, // ColBERT-style max-span scoring on retrieved docs
+  "enable_numeric_table_boost": false,   // Slight boost for table/number-dense chunks on numeric queries
   "enable_table_processing": false,
   "enable_parent_expansion": false,
   "parent_context_size": 500,      // Characters of parent context
@@ -82,6 +86,13 @@ The main RAG endpoint with complete feature access.
   "generation_model": "gpt-4o",     // Model name
   "generation_prompt": "string (optional)",
   "max_generation_tokens": 500,
+  // Abstention & multi-turn synthesis (optional)
+  "enable_abstention": false,
+  "abstention_behavior": "continue",  // "continue" | "ask" | "decline"
+  "enable_multi_turn_synthesis": false,
+  "synthesis_time_budget_sec": 5.0,
+  "synthesis_draft_tokens": 300,
+  "synthesis_refine_tokens": 500,
   
   // ========== POST-VERIFICATION (ADAPTIVE) ==========
   "enable_post_verification": false,
@@ -278,6 +289,37 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
     "enable_generation": true,
     "generation_model": "gpt-4o",
     "top_k": 15
+  }'
+```
+
+**Abstention with Clarifying Question (Two‑Tier gating)**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Summarize obscure topic with little evidence",
+    "sources": ["media_db"],
+    "search_mode": "hybrid",
+    "enable_reranking": true,
+    "reranking_strategy": "two_tier",
+    "enable_generation": true,
+    "enable_abstention": true,
+    "abstention_behavior": "ask"
+  }'
+```
+
+**Multi‑Turn Synthesis (draft→critique→refine)**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Explain topic X",
+    "sources": ["media_db"],
+    "enable_generation": true,
+    "enable_multi_turn_synthesis": true,
+    "synthesis_time_budget_sec": 5.0,
+    "synthesis_draft_tokens": 256,
+    "synthesis_refine_tokens": 512
   }'
 ```
 

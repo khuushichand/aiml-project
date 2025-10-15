@@ -576,6 +576,51 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 - [API Design Guide](./API_Design.md)
 - [Authentication Documentation](./Authentication_Documentation.md)
 
+### 9. Re-Embed Scheduling (Jobs)
+
+Admin-only endpoint to schedule a re-embed expansion job via the Jobs module. The expansion worker reads the job, fetches original chunks for the media, and enqueues new embedding-stage messages directly to the pipeline.
+
+Note: allow the queue and start the worker
+- Set one of:
+  - `JOBS_ALLOWED_QUEUES_EMBEDDINGS=reembed`
+  - `JOBS_ALLOWED_QUEUES=reembed`
+- Start the worker: set `EMBEDDINGS_REEMBED_WORKER_ENABLED=true` (integrated) or run `python -m tldw_Server_API.app.core.Embeddings.services.reembed_worker`.
+
+Endpoint: `POST /api/v1/embeddings/reembed/schedule`
+
+Description: Create a Jobs row (`domain=embeddings`, `queue=reembed`, `job_type=expand_reembed`). Returns the created job info.
+
+Request Body
+```json
+{
+  "media_id": 123,
+  "priority": 50,
+  "user_id": "1",
+  "idempotency_key": "reembed:1:123:hf:stella",  
+  "dedupe_key": "reembed:1:123:hf:stella",       
+  "operation_id": "uuid-optional",               
+  "user_tier": "free",
+  "embedder_name": "huggingface",                
+  "embedder_version": "dunzhang/stella_en_400M_v5" 
+}
+```
+
+Response
+```json
+{
+  "id": 42,
+  "uuid": "a9b5e8c0-...",
+  "status": "queued",
+  "domain": "embeddings",
+  "queue": "reembed",
+  "job_type": "expand_reembed"
+}
+```
+
+Authorization
+- Single-user: `X-API-KEY` with admin privileges (single user is treated as admin).
+- Multi-user: `Authorization: Bearer <JWT>` for an admin user.
+
 ## Version History
 
 - **v0.1**: OpenAI‑compatible endpoint, token arrays support, batch endpoint, caching, health/metrics, circuit breaker, provider fallback

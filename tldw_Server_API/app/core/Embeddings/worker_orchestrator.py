@@ -11,6 +11,7 @@ import os
 
 from loguru import logger
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
+from tldw_Server_API.app.core.Metrics import initialize_telemetry, OTEL_AVAILABLE
 
 from .job_manager import EmbeddingJobManager, JobManagerConfig
 from .worker_config import (
@@ -216,6 +217,13 @@ class WorkerOrchestrator:
         except Exception:
             self._loop = None
         
+        # Initialize OpenTelemetry (optional; console exporter by default)
+        try:
+            initialize_telemetry()
+            logger.info(f"Telemetry initialized (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+        except Exception as _otel_e:
+            logger.debug(f"Telemetry initialization skipped: {_otel_e}")
+
         # Start monitoring if enabled
         if self.config.enable_monitoring:
             start_http_server(self.config.monitoring_port)

@@ -63,9 +63,14 @@ const TTS = {
             supportsCloning: true,
             maxLength: 5000,
             requiresKey: true
+        },
+        neutts: {
+            name: 'NeuTTS',
+            supportsCloning: true,
+            maxLength: 1000
         }
     },
-    
+
     // Initialize the TTS module
     init() {
         console.log('Initializing TTS module...');
@@ -73,6 +78,9 @@ const TTS = {
         this.checkProviderStatus();
         this.refreshVoiceList();
         this.setupEventListeners();
+
+        // Initialize per-provider recorder states
+        this._recorders = {}; // { provider: { mediaRecorder, chunks, isRecording, blob, url } }
         
         // Set initial provider
         this.switchProvider('vibevoice');
@@ -237,8 +245,13 @@ const TTS = {
         this.showStatus('Generating speech...', 'info');
         
         try {
-            // Build request based on provider
-            const request = this.buildRequest();
+        // Build request based on provider
+        let request;
+        if (this.currentProvider === 'neutts') {
+            request = await this.buildNeuTTSRequest();
+        } else {
+            request = this.buildRequest();
+        }
             
             // Make API call
             const apiToken = this.getApiToken();
@@ -334,6 +347,15 @@ const TTS = {
                 request.extra_params.background_music = document.getElementById('vibevoice-music').checked;
                 request.extra_params.enable_singing = document.getElementById('vibevoice-singing').checked;
                 request.extra_params.speaker_count = parseInt(document.getElementById('vibevoice-speakers').value);
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['vibevoice'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('vibevoice-ref-audio')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'kokoro':
@@ -347,6 +369,15 @@ const TTS = {
                 request.model = 'higgs';
                 request.voice = document.getElementById('higgs-voice').value;
                 request.lang_code = document.getElementById('higgs-language').value;
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['higgs'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('higgs-voice-upload')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'chatterbox':
@@ -356,6 +387,15 @@ const TTS = {
                     emotion: document.getElementById('chatterbox-emotion').value,
                     emotion_intensity: parseInt(document.getElementById('chatterbox-intensity').value)
                 };
+                // Optional one-shot voice reference (recorded or file)
+                try {
+                    const rec = this._recorders['chatterbox'];
+                    const refBlob = (rec && rec.blob) ? rec.blob : (document.getElementById('chatterbox-voice-upload')?.files?.[0] || null);
+                    if (refBlob) {
+                        const wav = await this._ensureWav(refBlob);
+                        request.voice_reference = await this._blobToBase64(wav);
+                    }
+                } catch (_) {}
                 break;
                 
             case 'openai':
@@ -372,9 +412,292 @@ const TTS = {
                     clarity: parseInt(document.getElementById('elevenlabs-clarity').value) / 100
                 };
                 break;
+            case 'neutts':
+                // handled in buildNeuTTSRequest (async)
+                break;
         }
         
         return request;
+    },
+
+    async buildNeuTTSRequest() {
+        const text = document.getElementById('tts-text-input').value;
+        const format = document.getElementById('tts-format').value;
+        const streaming = document.getElementById('tts-streaming').checked;
+        const model = document.getElementById('neutts-model').value;
+        const refFileInput = document.getElementById('neutts-ref-audio');
+        const refText = (document.getElementById('neutts-ref-text').value || '').trim();
+        
+        // Prefer recorded blob if available; otherwise use file input
+        const recNeutts = this._recorders['neutts'];
+        let refBlob = (recNeutts && recNeutts.blob) ? recNeutts.blob : null;
+        if (!refBlob) {
+            if (!refFileInput || !refFileInput.files || !refFileInput.files[0]) {
+                throw new Error('Please record or select a reference audio file for NeuTTS');
+            }
+            refBlob = refFileInput.files[0];
+        }
+        if (!refText) {
+            throw new Error('Please enter reference text for NeuTTS');
+        }
+        // Convert to WAV for maximum compatibility
+        const wavBlob = await this._ensureWav(refBlob);
+        const b64 = await this._blobToBase64(wavBlob);
+        
+        return {
+            input: text,
+            response_format: format,
+            stream: streaming,
+            model: model,
+            voice: 'default',
+            voice_reference: b64,
+            extra_params: { reference_text: refText }
+        };
+    },
+
+    // Generic per-provider recording controls
+    async startProviderRecording(provider) {
+        try {
+            const rec = this._recorders[provider] || (this._recorders[provider] = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null });
+            if (rec.isRecording) return;
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            rec.mediaRecorder = mr;
+            rec.chunks = [];
+            rec.isRecording = true;
+            rec.blob = null;
+
+            const statusEl = document.getElementById(`${provider}-rec-status`);
+            const startBtn = document.getElementById(`${provider}-rec-start`);
+            const stopBtn = document.getElementById(`${provider}-rec-stop`);
+            if (statusEl) statusEl.textContent = 'Recording...';
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+            const clearBtn0 = document.getElementById(`${provider}-rec-clear`);
+            if (clearBtn0) clearBtn0.disabled = true;
+
+            mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) rec.chunks.push(e.data); };
+            mr.onstop = async () => {
+                const blob = new Blob(rec.chunks, { type: 'audio/webm' });
+                rec.blob = blob;
+                const url = URL.createObjectURL(blob);
+                rec.url = url;
+                const audioEl = document.getElementById(`${provider}-rec-playback`);
+                if (audioEl) { audioEl.src = url; audioEl.style.display = 'block'; }
+                if (statusEl) statusEl.textContent = 'Recorded';
+                if (startBtn) startBtn.disabled = false;
+                if (stopBtn) stopBtn.disabled = true;
+                try { stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+                rec.isRecording = false;
+                const badge = document.getElementById(`${provider}-recording-badge`);
+                if (badge) badge.style.display = 'inline-block';
+                const clearBtn = document.getElementById(`${provider}-rec-clear`);
+                if (clearBtn) clearBtn.disabled = false;
+                // Disable corresponding file input (if present)
+                const map = { vibevoice: 'vibevoice-ref-audio', higgs: 'higgs-voice-upload', chatterbox: 'chatterbox-voice-upload' };
+                const inputId = map[provider];
+                if (inputId) {
+                    const fi = document.getElementById(inputId);
+                    if (fi) fi.disabled = true;
+                }
+            };
+            mr.start();
+        } catch (e) {
+            console.error('Failed to start recording', e);
+            const statusEl = document.getElementById(`${provider}-rec-status`);
+            if (statusEl) statusEl.textContent = 'Recording failed';
+        }
+    },
+
+    stopProviderRecording(provider) {
+        try {
+            const rec = this._recorders[provider];
+            if (rec && rec.isRecording && rec.mediaRecorder) rec.mediaRecorder.stop();
+        } catch (e) {
+            console.error('Failed to stop recording', e);
+        }
+    },
+
+    clearProviderRecording(provider) {
+        const rec = this._recorders[provider];
+        if (rec) {
+            rec.mediaRecorder = null;
+            rec.chunks = [];
+            rec.blob = null;
+            rec.url = null;
+        }
+        const audioEl = document.getElementById(`${provider}-rec-playback`);
+        if (audioEl) { try { audioEl.pause(); } catch(_){} audioEl.removeAttribute('src'); audioEl.style.display = 'none'; }
+        const badge = document.getElementById(`${provider}-recording-badge`);
+        if (badge) badge.style.display = 'none';
+        const statusEl = document.getElementById(`${provider}-rec-status`);
+        if (statusEl) statusEl.textContent = 'Idle (recording overrides file)';
+        const clearBtn = document.getElementById(`${provider}-rec-clear`);
+        if (clearBtn) clearBtn.disabled = true;
+        const startBtn = document.getElementById(`${provider}-rec-start`);
+        if (startBtn) startBtn.disabled = false;
+        const stopBtn = document.getElementById(`${provider}-rec-stop`);
+        if (stopBtn) stopBtn.disabled = true;
+        const map = { vibevoice: 'vibevoice-ref-audio', higgs: 'higgs-voice-upload', chatterbox: 'chatterbox-voice-upload' };
+        const inputId = map[provider];
+        if (inputId) {
+            const fi = document.getElementById(inputId);
+            if (fi) fi.disabled = false;
+        }
+    },
+
+    async startNeuTTSRecording() {
+        try {
+            if (this._neuttsRecorder.isRecording) return;
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            this._neuttsRecorder.mediaRecorder = mr;
+            this._neuttsRecorder.chunks = [];
+            this._neuttsRecorder.isRecording = true;
+            this._neuttsRecorder.blob = null;
+
+            const statusEl = document.getElementById('neutts-rec-status');
+            const startBtn = document.getElementById('neutts-rec-start');
+            const stopBtn = document.getElementById('neutts-rec-stop');
+            if (statusEl) statusEl.textContent = 'Recording...';
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+
+            mr.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    this._neuttsRecorder.chunks.push(e.data);
+                }
+            };
+            mr.onstop = async () => {
+                const blob = new Blob(this._neuttsRecorder.chunks, { type: 'audio/webm' });
+                this._neuttsRecorder.blob = blob;
+                const url = URL.createObjectURL(blob);
+                this._neuttsRecorder.url = url;
+                const audioEl = document.getElementById('neutts-rec-playback');
+                if (audioEl) {
+                    audioEl.src = url;
+                    audioEl.style.display = 'block';
+                }
+                if (statusEl) statusEl.textContent = 'Recorded';
+                if (startBtn) startBtn.disabled = false;
+                if (stopBtn) stopBtn.disabled = true;
+                // Stop tracks
+                stream.getTracks().forEach(t => t.stop());
+                this._neuttsRecorder.isRecording = false;
+                // Show recorded badge
+                const badge = document.getElementById('neutts-recording-badge');
+                if (badge) badge.style.display = 'inline-block';
+                // Enable clear, disable file input
+                const clearBtn = document.getElementById('neutts-rec-clear');
+                if (clearBtn) clearBtn.disabled = false;
+                const fileInput = document.getElementById('neutts-ref-audio');
+                if (fileInput) fileInput.disabled = true;
+            };
+            mr.start();
+        } catch (e) {
+            console.error('Failed to start recording', e);
+            const statusEl = document.getElementById('neutts-rec-status');
+            if (statusEl) statusEl.textContent = 'Recording failed';
+        }
+    },
+
+    stopNeuTTSRecording() {
+        try {
+            if (this._neuttsRecorder && this._neuttsRecorder.isRecording && this._neuttsRecorder.mediaRecorder) {
+                this._neuttsRecorder.mediaRecorder.stop();
+            }
+        } catch (e) {
+            console.error('Failed to stop recording', e);
+        }
+    },
+
+    clearNeuTTSRecording() {
+        this._neuttsRecorder = { mediaRecorder: null, chunks: [], isRecording: false, blob: null, url: null };
+        const audioEl = document.getElementById('neutts-rec-playback');
+        if (audioEl) { try { audioEl.pause(); } catch(_){} audioEl.removeAttribute('src'); audioEl.style.display = 'none'; }
+        const badge = document.getElementById('neutts-recording-badge');
+        if (badge) badge.style.display = 'none';
+        const statusEl = document.getElementById('neutts-rec-status');
+        if (statusEl) statusEl.textContent = 'Idle (recording overrides file)';
+        const clearBtn = document.getElementById('neutts-rec-clear');
+        if (clearBtn) clearBtn.disabled = true;
+        const startBtn = document.getElementById('neutts-rec-start');
+        if (startBtn) startBtn.disabled = false;
+        const stopBtn = document.getElementById('neutts-rec-stop');
+        if (stopBtn) stopBtn.disabled = true;
+        const fileInput = document.getElementById('neutts-ref-audio');
+        if (fileInput) fileInput.disabled = false;
+    },
+
+    async _ensureWav(blob) {
+        // If already wav, return
+        if (blob && (blob.type === 'audio/wav' || blob.type === 'audio/x-wav')) return blob;
+        // Decode and re-encode to WAV using WebAudio
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const wavBuffer = this._encodeWav(audioBuffer);
+        return new Blob([wavBuffer], { type: 'audio/wav' });
+    },
+
+    _encodeWav(audioBuffer) {
+        const numChannels = 1; // mono
+        const sampleRate = audioBuffer.sampleRate;
+        // Mixdown to mono
+        const data = audioBuffer.numberOfChannels > 1 ? this._mixToMono(audioBuffer) : audioBuffer.getChannelData(0);
+        const pcm16 = this._floatTo16BitPCM(data);
+        const wavBuffer = new ArrayBuffer(44 + pcm16.length * 2);
+        const view = new DataView(wavBuffer);
+        // RIFF header
+        this._writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + pcm16.length * 2, true);
+        this._writeString(view, 8, 'WAVE');
+        this._writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true); // PCM chunk size
+        view.setUint16(20, 1, true);  // PCM
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numChannels * 2, true);
+        view.setUint16(32, numChannels * 2, true);
+        view.setUint16(34, 16, true); // bits per sample
+        this._writeString(view, 36, 'data');
+        view.setUint32(40, pcm16.length * 2, true);
+        // Write PCM
+        let offset = 44;
+        for (let i = 0; i < pcm16.length; i++, offset += 2) {
+            view.setInt16(offset, pcm16[i], true);
+        }
+        return view;
+    },
+
+    _mixToMono(audioBuffer) {
+        const length = audioBuffer.length;
+        const tmp = new Float32Array(length);
+        const ch0 = audioBuffer.getChannelData(0);
+        const ch1 = audioBuffer.getChannelData(1);
+        for (let i = 0; i < length; i++) tmp[i] = 0.5 * (ch0[i] + ch1[i]);
+        return tmp;
+    },
+
+    _floatTo16BitPCM(input) {
+        const output = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) {
+            let s = Math.max(-1, Math.min(1, input[i]));
+            output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return output;
+    },
+
+    async _blobToBase64(blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(arrayBuffer);
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, chunk);
+        }
+        return btoa(binary);
     },
     
     // Get selected voice name
@@ -394,6 +717,8 @@ const TTS = {
                 return document.getElementById('openai-voice').value;
             case 'elevenlabs':
                 return document.getElementById('elevenlabs-voice').value;
+            case 'neutts':
+                return 'cloned';
             default:
                 return 'default';
         }

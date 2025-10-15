@@ -75,8 +75,24 @@ class PostgreSQLConnectionPool(ConnectionPool):
         self._dsn = dsn
         self._use_psycopg_pool = psycopg_pool is not None
         if self._use_psycopg_pool:
-            # Create a psycopg_pool.ConnectionPool
-            self._pool = psycopg_pool.ConnectionPool(self._dsn)
+            # Create a psycopg_pool.ConnectionPool with sane production defaults
+            max_size = max(1, int(self.config.pool_size or 10))
+            timeout = float(self.config.pool_timeout or 30.0)
+            recycle = int(self.config.pool_recycle or 3600)
+            try:
+                self._pool = psycopg_pool.ConnectionPool(
+                    self._dsn,
+                    min_size=1,
+                    max_size=max_size,
+                    timeout=timeout,
+                    max_lifetime=recycle,
+                    max_idle=recycle,
+                    # Ensure JSON is parsed into Python objects consistently
+                    configure=lambda conn: setattr(conn, 'row_factory', dict_row),
+                )
+            except Exception:
+                # Fallback to defaults if parameters unsupported
+                self._pool = psycopg_pool.ConnectionPool(self._dsn)
         else:
             self._pool = None
 
@@ -530,6 +546,67 @@ class PostgreSQLBackend(DatabaseBackend):
         query = " ".join(query_parts)
         
         return self.execute(query, tuple(params), connection)
+
+    # --- Optional FTS synonyms support (table + function) ---
+    def ensure_synonyms_support(self, connection: Optional[Any] = None) -> None:
+        """Create a simple synonyms table and expansion function if not present.
+
+        - Table: fts_synonyms(term TEXT PRIMARY KEY, synonyms TEXT[])
+        - Function: synonyms_expand(text) -> text (original + synonyms appended)
+
+        Enables index-time expansion by calling synonyms_expand(title/content)
+        before to_tsvector when enabled.
+        """
+        if not PSYCOPG2_AVAILABLE:
+            raise DatabaseError("psycopg not available; cannot ensure synonyms support")
+        external_conn = connection is not None
+        conn = connection or self.get_pool().get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fts_synonyms (
+                    term TEXT PRIMARY KEY,
+                    synonyms TEXT[]
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE OR REPLACE FUNCTION synonyms_expand(input TEXT)
+                RETURNS TEXT AS $$
+                DECLARE
+                    arr TEXT[];
+                    tok TEXT;
+                    out TEXT := '';
+                    syns TEXT[];
+                BEGIN
+                    arr := regexp_split_to_array(coalesce(input,''), '[^[:alnum:]]+');
+                    FOREACH tok IN ARRAY arr LOOP
+                        IF length(tok) > 0 THEN
+                            out := out || tok || ' ';
+                            SELECT s.synonyms INTO syns FROM fts_synonyms s WHERE s.term = lower(tok);
+                            IF syns IS NOT NULL THEN
+                                out := out || array_to_string(syns, ' ') || ' ';
+                            END IF;
+                        END IF;
+                    END LOOP;
+                    RETURN trim(out);
+                END;
+                $$ LANGUAGE plpgsql IMMUTABLE;
+                """
+            )
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.error(f"Failed to ensure FTS synonyms support: {exc}")
+            raise DatabaseError(f"Failed to ensure FTS synonyms support: {exc}") from exc
+        finally:
+            if not external_conn:
+                self.get_pool().return_connection(conn)
     
     def update_fts_index(
         self,

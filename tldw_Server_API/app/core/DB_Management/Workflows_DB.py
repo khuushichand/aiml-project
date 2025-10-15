@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS workflow_step_runs (
     workdir TEXT,
     stdout_path TEXT,
     stderr_path TEXT,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS workflow_events (
@@ -117,9 +117,9 @@ CREATE TABLE IF NOT EXISTS workflow_events (
     step_run_id TEXT,
     event_seq INTEGER NOT NULL,
     event_type TEXT NOT NULL,
-    payload_json TEXT,
+    payload_json JSONB,
     created_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS workflow_artifacts (
@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     owned_by TEXT,
     metadata_json TEXT,
     created_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
@@ -145,6 +145,10 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 
 -- Ensure uniqueness of per-run event sequence
     CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON workflow_events(run_id, event_seq);
+
+-- Partial indexes on hot statuses for faster lookups
+    CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running';
+    CREATE INDEX IF NOT EXISTS idx_runs_status_queued ON workflow_runs(status) WHERE status = 'queued';
 
 -- Per-run event sequence counters (optional optimization)
     CREATE TABLE IF NOT EXISTS workflow_event_counters (
@@ -414,7 +418,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 2
+    _CURRENT_SCHEMA_VERSION = 3
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -470,6 +474,9 @@ class WorkflowsDatabase:
                 try:
                     c.execute("PRAGMA journal_mode=WAL;")
                     c.execute("PRAGMA synchronous=NORMAL;")
+                    c.execute("PRAGMA foreign_keys=ON;")
+                    c.execute("PRAGMA busy_timeout=5000;")
+                    c.execute("PRAGMA wal_autocheckpoint=1000;")
                 except Exception:
                     pass
                 self._sqlite_pool.append(c)
@@ -586,6 +593,9 @@ class WorkflowsDatabase:
         try:
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA synchronous=NORMAL;")
+            # Reduce writer stalls and enable periodic checkpoints
+            self._conn.execute("PRAGMA busy_timeout=5000;")
+            self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
         except Exception as e:
             logger.warning(f"Failed to enable WAL on workflows DB: {e}")
 
@@ -656,6 +666,7 @@ class WorkflowsDatabase:
         return {
             1: self._backend_migrate_to_v1,
             2: self._backend_migrate_to_v2,
+            3: self._backend_migrate_to_v3,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -741,6 +752,63 @@ class WorkflowsDatabase:
             f"ALTER TABLE {ident('workflow_runs')} ADD COLUMN IF NOT EXISTS {ident('validation_mode')} TEXT DEFAULT 'block'",
             connection=conn,
         )
+
+    def _backend_migrate_to_v3(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        # Convert payload_json to JSONB if needed
+        try:
+            backend.execute(
+                f"ALTER TABLE {ident('workflow_events')} "
+                f"ALTER COLUMN {ident('payload_json')} TYPE JSONB USING {ident('payload_json')}::jsonb",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
+        # Add GIN index on JSONB payloads
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_events_payload_json_gin')} "
+                f"ON {ident('workflow_events')} USING GIN ({ident('payload_json')})",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
+        # Recreate FK constraints to cascade on run delete
+        for table in ("workflow_events", "workflow_step_runs", "workflow_artifacts"):
+            try:
+                backend.execute(
+                    f"ALTER TABLE {ident(table)} DROP CONSTRAINT IF EXISTS {ident(f'{table}_run_id_fkey')}",
+                    connection=conn,
+                )
+            except Exception:
+                pass
+            try:
+                backend.execute(
+                    f"ALTER TABLE {ident(table)} ADD CONSTRAINT {ident(f'{table}_run_id_fkey')} "
+                    f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE",
+                    connection=conn,
+                )
+            except Exception:
+                pass
+
+        # Partial indexes for hot statuses
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_running')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'running'",
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_queued')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'queued'",
+                connection=conn,
+            )
+        except Exception:
+            pass
         # Dead-letter queue table for webhooks
         backend.execute(
             f"CREATE TABLE IF NOT EXISTS {ident('workflow_webhook_dlq')} ("
@@ -873,7 +941,7 @@ class WorkflowsDatabase:
                 workdir TEXT,
                 stdout_path TEXT,
                 stderr_path TEXT,
-                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id)
+                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
             );
             """
         )
@@ -890,7 +958,7 @@ class WorkflowsDatabase:
                 event_type TEXT NOT NULL,
                 payload_json TEXT,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id)
+                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
             );
             """
         )
@@ -898,6 +966,12 @@ class WorkflowsDatabase:
         # Indices
         cur.execute("CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
+        # Partial indexes for frequently accessed statuses (supported on modern SQLite)
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running'")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_queued ON workflow_runs(status) WHERE status = 'queued'")
+        except Exception:
+            pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")
         # Ensure uniqueness of per-run event sequence
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON workflow_events(run_id, event_seq)")
@@ -965,13 +1039,42 @@ class WorkflowsDatabase:
                 owned_by TEXT,
                 metadata_json TEXT,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id)
+                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
             );
             """
         )
         self._conn.commit()
 
     # ---------- Definitions ----------
+
+    # SQLite write helpers with backoff to mitigate 'database is locked' under bursts
+    def _sqlite_retry_execute(self, query: str, params: Optional[Any] = None, *, max_tries: int = 5) -> None:
+        import time as _time
+        tries = 0
+        while True:
+            try:
+                self._conn.execute(query, params or ())
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and tries < max_tries - 1:
+                    _time.sleep(0.05 * (2 ** tries))
+                    tries += 1
+                    continue
+                raise
+
+    def _sqlite_retry_commit(self) -> None:
+        import time as _time
+        tries = 0
+        while True:
+            try:
+                self._conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and tries < 4:
+                    _time.sleep(0.05 * (2 ** tries))
+                    tries += 1
+                    continue
+                raise
 
     def _acquire_sqlite(self) -> sqlite3.Connection:
         """Acquire a SQLite connection from pool if enabled, else return primary connection."""
@@ -1148,8 +1251,16 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                # Retry with backoff on lock contention
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def get_run(self, run_id: str) -> Optional[WorkflowRun]:
         if self._using_backend():
@@ -1213,6 +1324,78 @@ class WorkflowsDatabase:
         rows = cur.execute(sql, params).fetchall()
         return [WorkflowRun(**dict(r)) for r in rows]
 
+    # ---------- Quotas / Usage ----------
+    def count_runs_for_user_window(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        window_start_iso: str,
+        window_end_iso: Optional[str] = None,
+    ) -> int:
+        """Count runs created by a user within an ISO time window [start, end]."""
+        sql = "SELECT COUNT(*) AS c FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND created_at >= ?"
+        params: List[Any] = [tenant_id, user_id, window_start_iso]
+        if window_end_iso:
+            sql += " AND created_at < ?"
+            params.append(window_end_iso)
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, tuple(params), connection=conn)
+            row = self._row_from_result(result)
+            try:
+                return int(row[0]) if row is not None else 0
+            except Exception:
+                return int((row.get("c") if row else 0) or 0)
+
+        cur = self._conn.cursor()
+        row = cur.execute(sql, params).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row[0])
+        except Exception:
+            try:
+                return int(row.get("c") or 0)  # type: ignore[attr-defined]
+            except Exception:
+                return 0
+
+    def count_runs_for_tenant_window(
+        self,
+        *,
+        tenant_id: str,
+        window_start_iso: str,
+        window_end_iso: Optional[str] = None,
+    ) -> int:
+        """Count runs created within a tenant over a time window."""
+        sql = "SELECT COUNT(*) AS c FROM workflow_runs WHERE tenant_id = ? AND created_at >= ?"
+        params: List[Any] = [tenant_id, window_start_iso]
+        if window_end_iso:
+            sql += " AND created_at < ?"
+            params.append(window_end_iso)
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, tuple(params), connection=conn)
+            row = self._row_from_result(result)
+            try:
+                return int(row[0]) if row is not None else 0
+            except Exception:
+                return int((row.get("c") if row else 0) or 0)
+
+        cur = self._conn.cursor()
+        row = cur.execute(sql, params).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row[0])
+        except Exception:
+            try:
+                return int(row.get("c") or 0)  # type: ignore[attr-defined]
+            except Exception:
+                return 0
+
     def update_run_status(
         self,
         run_id: str,
@@ -1256,8 +1439,15 @@ class WorkflowsDatabase:
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 self._execute_backend(query, params, connection=conn)
         else:
-            self._conn.execute(query, params)
-            self._conn.commit()
+            try:
+                self._conn.execute(query, params)
+                self._conn.commit()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    self._sqlite_retry_execute(query, params)
+                    self._sqlite_retry_commit()
+                else:
+                    raise
         try:
             from loguru import logger as _logger
             _logger.debug(f"WorkflowsDB: run {run_id} -> status={status}")
@@ -1276,8 +1466,15 @@ class WorkflowsDatabase:
                 )
             return
 
-        self._conn.execute("UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?", params)
-        self._conn.commit()
+        try:
+            self._conn.execute("UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?", params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute("UPDATE workflow_runs SET cancel_requested = ? WHERE run_id = ?", params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def is_cancel_requested(self, run_id: str) -> bool:
         if self._using_backend():
@@ -1381,22 +1578,37 @@ class WorkflowsDatabase:
             ).fetchone()
             next_seq = int((row["max_seq"] if isinstance(row, dict) else row[0])) + 1
 
-        cur.execute(
-            """
-            INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tenant_id,
-                run_id,
-                step_run_id,
-                next_seq,
-                event_type,
-                json.dumps(payload or {}),
-                _utcnow_iso(),
-            ),
+        params_insert = (
+            tenant_id,
+            run_id,
+            step_run_id,
+            next_seq,
+            event_type,
+            json.dumps(payload or {}),
+            _utcnow_iso(),
         )
-        conn.commit()
+        try:
+            cur.execute(
+                """
+                INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                params_insert,
+            )
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                # Retry on lock contention
+                self._sqlite_retry_execute(
+                    """
+                    INSERT INTO workflow_events(tenant_id, run_id, step_run_id, event_seq, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params_insert,
+                )
+                self._sqlite_retry_commit()
+            else:
+                raise
         self._release_sqlite(conn)
         return next_seq
 
@@ -1467,8 +1679,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def complete_step_run(
         self,
@@ -1496,8 +1715,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""
@@ -1511,11 +1737,18 @@ class WorkflowsDatabase:
                 )
             return
 
-        self._conn.execute(
-            "UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?",
-            params,
-        )
-        self._conn.commit()
+        try:
+            self._conn.execute(
+                "UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?",
+                params,
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute("UPDATE workflow_step_runs SET attempt = ? WHERE step_run_id = ?", params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def get_last_failed_step_id(self, run_id: str) -> Optional[str]:
         query = (
@@ -1573,8 +1806,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
         try:
             from loguru import logger as _logger
             _logger.debug(f"WorkflowsDB: heartbeat step_run_id={step_run_id}")
@@ -1624,8 +1864,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def find_running_subprocesses_for_run(self, run_id: str) -> List[Dict[str, Any]]:
         sql = (
@@ -1684,8 +1931,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
 
-        self._conn.execute(query, params)
-        self._conn.commit()
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def list_artifacts_for_run(self, run_id: str) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM workflow_artifacts WHERE run_id = ? ORDER BY created_at ASC"
@@ -1699,10 +1953,24 @@ class WorkflowsDatabase:
         out: List[Dict[str, Any]] = []
         for r in rows:
             data = self._row_to_dict(r)
+            # Decode metadata_json; attempt to decrypt if envelope present and key available
+            md: Dict[str, Any] = {}
             try:
-                data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
+                md = json.loads(data.get("metadata_json") or "{}")
+                if isinstance(md, dict) and "_encrypted" in md:
+                    try:
+                        from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
+                        dec = decrypt_json_blob(md.get("_encrypted") or {})
+                        if isinstance(dec, dict):
+                            md = dec
+                        else:
+                            # Hide encrypted content when key not available
+                            md = {"_encrypted": True}
+                    except Exception:
+                        md = {"_encrypted": True}
             except Exception:
                 pass
+            data["metadata_json"] = md
             out.append(data)
         return out
 
@@ -1722,7 +1990,18 @@ class WorkflowsDatabase:
             data = dict(row)
 
         try:
-            data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
+            md = json.loads(data.get("metadata_json") or "{}")
+            if isinstance(md, dict) and "_encrypted" in md:
+                try:
+                    from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
+                    dec = decrypt_json_blob(md.get("_encrypted") or {})
+                    if isinstance(dec, dict):
+                        md = dec
+                    else:
+                        md = {"_encrypted": True}
+                except Exception:
+                    md = {"_encrypted": True}
+            data["metadata_json"] = md
         except Exception:
             pass
         return data
@@ -1733,8 +2012,15 @@ class WorkflowsDatabase:
                 self._execute_backend("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,), connection=conn)
             return
         cur = self._conn.cursor()
-        cur.execute("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,))
-        self._conn.commit()
+        try:
+            cur.execute("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,))
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,))
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def list_artifacts_older_than(self, cutoff_iso: str) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM workflow_artifacts WHERE created_at < ?"
@@ -1773,8 +2059,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
         cur = self._conn.cursor()
-        cur.execute(query, params)
-        self._conn.commit()
+        try:
+            cur.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     # ---------- Webhook DLQ ----------
     def enqueue_webhook_dlq(self, *, tenant_id: str, run_id: str, url: str, body: Optional[Dict[str, Any]] = None, last_error: Optional[str] = None) -> None:
@@ -1798,8 +2091,15 @@ class WorkflowsDatabase:
                 self._execute_backend(query, params, connection=conn)
             return
         cur = self._conn.cursor()
-        cur.execute(query, params)
-        self._conn.commit()
+        try:
+            cur.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
 
     def list_webhook_dlq_due(self, *, limit: int = 50) -> List[Dict[str, Any]]:
         """Return DLQ rows that are due for retry (next_attempt_at is null or <= now).

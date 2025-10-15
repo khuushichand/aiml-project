@@ -27,6 +27,7 @@ The TTS module provides a production-ready, extensible Text-to-Speech service wi
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ❌ | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
+| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, GGUF streaming |
 
 ## Architecture
 
@@ -127,6 +128,8 @@ providers:
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 ```
+
+For NeuTTS installation and usage, see `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`.
 
 ## API Usage
 

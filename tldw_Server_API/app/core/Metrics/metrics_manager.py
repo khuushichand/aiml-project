@@ -375,6 +375,32 @@ class MetricsRegistry:
             )
         )
 
+        # Quality evaluation (nightly eval set) — dashboard inputs
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_faithfulness_score",
+                type=MetricType.GAUGE,
+                description="Average faithfulness score (1 - unsupported_ratio) on eval set",
+                labels=["dataset"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_coverage_score",
+                type=MetricType.GAUGE,
+                description="Average citation coverage on eval set",
+                labels=["dataset"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_eval_last_run_timestamp",
+                type=MetricType.GAUGE,
+                description="Last successful eval run UNIX timestamp",
+                labels=["dataset"],
+            )
+        )
+
         # Generation gating due to low evidence after reranking calibration
         self.register_metric(
             MetricDefinition(
@@ -382,6 +408,30 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total number of times answer generation was gated due to low relevance probability",
                 labels=["strategy"]
+            )
+        )
+
+        # Content policy / sanitation metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_policy_filtered_chunks_total",
+                type=MetricType.COUNTER,
+                description="Documents affected by content policy (pii/phi)",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_sanitized_docs_total",
+                type=MetricType.COUNTER,
+                description="Documents sanitized by HTML allow-list",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_ocr_dropped_docs_total",
+                type=MetricType.COUNTER,
+                description="Documents dropped due to low OCR confidence",
             )
         )
 

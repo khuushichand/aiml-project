@@ -71,6 +71,9 @@ from slowapi.util import get_remote_address
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
 import redis.asyncio as aioredis
+from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
 
 # ============================================================================
@@ -759,6 +762,46 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
         key_parts.append(str(dimensions))
     key_string = "|".join(key_parts)
     return hashlib.sha256(key_string.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# On-demand vector compaction (admin only)
+# ---------------------------------------------------------------------------
+
+class CompactorRunRequest(BaseModel):
+    user_id: Optional[str] = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
+    media_db_path: Optional[str] = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
+
+
+class CompactorRunResponse(BaseModel):
+    user_id: str
+    collections_touched: int
+    ts: float
+
+
+@router.post(
+    "/embeddings/compactor/run",
+    response_model=CompactorRunResponse,
+    summary="Run a one-shot vector compaction for a user (admin only)"
+)
+async def run_compactor_once(
+    req: CompactorRunRequest,
+    current_user: User = Depends(get_request_user),
+):
+    require_admin(current_user)
+    try:
+        # Lazy import to avoid heavy imports on module import
+        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
+    except Exception:
+        raise HTTPException(status_code=503, detail="Compactor unavailable")
+    uid = str(req.user_id or current_user.id)
+    try:
+        touched = await _compact_once(uid, db_path=req.media_db_path or None)
+        return CompactorRunResponse(user_id=uid, collections_touched=int(touched or 0), ts=datetime.utcnow().timestamp())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Compactor run failed: {e}")
 
 # ============================================================================
 # Token-array handling and dimension adjustment helpers
@@ -2266,6 +2309,28 @@ class DLQItem(BaseModel):
     operator_note: Optional[str] = None
 
 
+def _redact_obj(obj: Any, depth: int = 0) -> Any:
+    """Redact likely PII/secrets from nested structures for previews."""
+    if depth > 5:
+        return obj
+    SENSITIVE_KEYS = {"api_key", "authorization", "token", "password", "secret", "access_token", "id_token"}
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            key_low = str(k).lower().replace("-", "_")
+            if key_low in SENSITIVE_KEYS:
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = _redact_obj(v, depth + 1)
+        return out
+    if isinstance(obj, list):
+        return [_redact_obj(x, depth + 1) for x in obj]
+    if isinstance(obj, str):
+        if len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
+            return "***REDACTED***"
+    return obj
+
+
 @router.get(
     "/embeddings/dlq",
     summary="List DLQ items for a stage (admin only)"
@@ -2290,8 +2355,12 @@ async def list_dlq_items(
                 raw_payload = fields.get("payload")
                 if raw_payload:
                     payload = json.loads(raw_payload)
+                elif fields.get("payload_enc"):
+                    payload = decrypt_payload_if_present(fields.get("payload_enc"))
             except Exception:
                 payload = None
+            if payload is not None:
+                payload = _redact_obj(payload)
             ji = fields.get("job_id")
             if job_id and ji != job_id:
                 continue
@@ -2397,6 +2466,25 @@ async def requeue_dlq_item(
         out = {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
         if warning:
             out["warning"] = warning
+        # Audit: DLQ requeue single
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/requeue",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=entry_id,
+                action="requeue",
+                metadata={"from": dlq_stream, "to": live_stream, "stage": req.stage, "warning": bool(warning)},
+            )
+        except Exception:
+            pass
         return out
     except HTTPException:
         dlq_requeued_total.labels(queue_name=dlq_stream, status="not_found").inc()
@@ -2483,6 +2571,34 @@ async def requeue_dlq_bulk(
             if 'warning' in locals() and warning:
                 res["warning"] = warning
             results.append(res)
+        # Audit: DLQ bulk requeue summary
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/requeue/bulk",
+                method="POST",
+            )
+            counts = {"success": 0, "not_found": 0, "blocked": 0, "error": 0}
+            for r in results:
+                st = str(r.get("status", "success"))
+                if st.startswith("blocked"):
+                    counts["blocked"] += 1
+                elif st in counts:
+                    counts[st] += 1
+                elif st.startswith("error"):
+                    counts["error"] += 1
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=dlq_stream,
+                action="bulk_requeue",
+                metadata={"stage": req.stage, **counts, "total": len(req.entry_ids)},
+            )
+        except Exception:
+            pass
         return {"from": dlq_stream, "to": live_stream, "results": results}
     finally:
         await client.close()
@@ -2585,6 +2701,25 @@ async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(ge
             "updated_at": datetime.utcnow().isoformat(),
         }
         await client.hset(_dlq_state_key(dlq_stream, req.entry_id), mapping=val)
+        # Audit: DLQ quarantine state change
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/dlq/state",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="dlq",
+                resource_id=req.entry_id,
+                action="quarantine_state",
+                metadata={"stage": req.stage, "state": st, "operator_note": req.operator_note or ""},
+            )
+        except Exception:
+            pass
         return {"ok": True, "stream": dlq_stream, "entry_id": req.entry_id, "state": st}
     finally:
         await client.close()
@@ -2648,6 +2783,25 @@ async def control_stage(req: StageControlRequest, current_user: User = Depends(g
                 await client.set(_stage_key(st, "paused"), "1")
             else:
                 raise HTTPException(status_code=400, detail="Invalid action; must be pause|resume|drain")
+        # Audit
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/stage/control",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.CONFIG_CHANGED,
+                category=AuditEventCategory.SYSTEM,
+                context=ctx,
+                resource_type="embeddings_stage",
+                resource_id=",".join(stages),
+                action=req.action,
+                metadata={"stages": stages, "action": req.action},
+            )
+        except Exception:
+            pass
         return {"ok": True, "stages": stages, "action": req.action}
     finally:
         await client.close()
@@ -2675,6 +2829,25 @@ async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get
     client = await _get_redis_client()
     try:
         await client.set(_skip_key(req.job_id), "1", ex=int(req.ttl_seconds))
+        # Audit
+        try:
+            svc = await get_audit_service_for_user(current_user)
+            ctx = AuditContext(
+                user_id=str(getattr(current_user, "id", "")),
+                endpoint="/api/v1/embeddings/job/skip",
+                method="POST",
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                category=AuditEventCategory.SECURITY,
+                context=ctx,
+                resource_type="job",
+                resource_id=req.job_id,
+                action="skip",
+                metadata={"ttl_seconds": int(req.ttl_seconds or 0)},
+            )
+        except Exception:
+            pass
         return {"ok": True, "job_id": req.job_id, "ttl_seconds": req.ttl_seconds}
     finally:
         await client.close()
@@ -2692,6 +2865,166 @@ async def get_job_skip_status(job_id: str = Query(..., description="Job ID to ch
         return {"job_id": job_id, "skipped": str(val).lower() in ("1", "true", "yes")}
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Ledger Admin Endpoints (idempotency/dedupe)
+# ---------------------------------------------------------------------------
+
+class LedgerEntry(BaseModel):
+    key: str
+    status: str | None = None
+    ts: int | None = None
+    job_id: str | None = None
+    raw: dict | str | None = None
+    ttl_seconds: int | None = None
+
+
+@router.get(
+    "/embeddings/ledger/status",
+    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)"
+)
+async def get_ledger_status(
+    idempotency_key: str | None = Query(default=None),
+    dedupe_key: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+):
+    """Return current ledger values for provided keys.
+
+    Reads:
+      - embeddings:ledger:idemp:{idempotency_key}
+      - embeddings:ledger:dedupe:{dedupe_key}
+    Values may be plain strings or JSON objects with {status, ts, job_id}.
+    """
+    require_admin(current_user)
+    if not idempotency_key and not dedupe_key:
+        raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
+    client = await _get_redis_client()
+    try:
+        out: dict[str, LedgerEntry | None] = {"idempotency": None, "dedupe": None}
+        if idempotency_key:
+            k = f"embeddings:ledger:idemp:{idempotency_key}"
+            raw = await client.get(k)
+            ttl = await client.ttl(k)
+            entry = LedgerEntry(key=k, ttl_seconds=(int(ttl) if isinstance(ttl, (int, float)) else None))
+            if raw is not None:
+                try:
+                    obj = json.loads(raw)
+                    entry.status = str(obj.get("status")) if isinstance(obj, dict) else None
+                    entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
+                    entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
+                    entry.raw = obj if isinstance(obj, dict) else raw
+                except Exception:
+                    entry.raw = raw
+                    entry.status = str(raw)
+            out["idempotency"] = entry
+        if dedupe_key:
+            k = f"embeddings:ledger:dedupe:{dedupe_key}"
+            raw = await client.get(k)
+            ttl = await client.ttl(k)
+            entry = LedgerEntry(key=k, ttl_seconds=(int(ttl) if isinstance(ttl, (int, float)) else None))
+            if raw is not None:
+                try:
+                    obj = json.loads(raw)
+                    entry.status = str(obj.get("status")) if isinstance(obj, dict) else None
+                    entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
+                    entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
+                    entry.raw = obj if isinstance(obj, dict) else raw
+                except Exception:
+                    entry.raw = raw
+                    entry.status = str(raw)
+            out["dedupe"] = entry
+        return out
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Re-embed Scheduling (admin only)
+# ---------------------------------------------------------------------------
+
+class ReembedScheduleRequest(BaseModel):
+    media_id: int = Field(..., description="Target media_id to re-embed")
+    user_id: Optional[str] = Field(default=None, description="Owner user id; defaults to current admin")
+    idempotency_key: Optional[str] = Field(default=None, description="Optional idempotency key to dedupe creation")
+    dedupe_key: Optional[str] = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
+    operation_id: Optional[str] = Field(default=None, description="Optional operation id for replay prevention")
+    priority: Optional[int] = Field(default=50, ge=0, le=100)
+    user_tier: Optional[str] = Field(default="free")
+    embedder_name: Optional[str] = None
+    embedder_version: Optional[str] = None
+
+
+class ReembedScheduleResponse(BaseModel):
+    id: int
+    uuid: Optional[str] = None
+    status: str
+    domain: str
+    queue: str
+    job_type: str
+
+
+@router.post(
+    "/embeddings/reembed/schedule",
+    response_model=ReembedScheduleResponse,
+    summary="Schedule a re-embed expansion job (admin only)"
+)
+async def schedule_reembed(
+    req: ReembedScheduleRequest,
+    current_user: User = Depends(get_request_user),
+):
+    """Create a Jobs row for the re-embed expansion worker to process.
+
+    Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
+    """
+    require_admin(current_user)
+    # Build payload
+    uid = str(req.user_id or current_user.id)
+    payload = {
+        "user_id": uid,
+        "media_id": int(req.media_id),
+        "idempotency_key": req.idempotency_key,
+        "dedupe_key": req.dedupe_key,
+        "operation_id": req.operation_id,
+        "user_tier": req.user_tier or "free",
+        "embedder_name": req.embedder_name,
+        "embedder_version": req.embedder_version,
+    }
+    # Construct default idempotency/dedupe if not provided
+    if not req.idempotency_key:
+        payload["idempotency_key"] = f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
+    if not req.dedupe_key:
+        payload["dedupe_key"] = payload["idempotency_key"]
+
+    # Create job via JobManager
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager  # local import to avoid hard dep at import-time
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+        row = jm.create_job(
+            domain="embeddings",
+            queue=queue,
+            job_type="expand_reembed",
+            payload=payload,
+            owner_user_id=uid,
+            priority=int(req.priority or 50),
+            idempotency_key=payload.get("idempotency_key"),
+        )
+        return ReembedScheduleResponse(
+            id=int(row.get("id")),
+            uuid=row.get("uuid"),
+            status=str(row.get("status")),
+            domain=str(row.get("domain")),
+            queue=str(row.get("queue")),
+            job_type=str(row.get("job_type")),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
 
 
 # ---------------------------------------------------------------------------

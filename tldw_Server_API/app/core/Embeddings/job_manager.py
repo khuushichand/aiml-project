@@ -20,6 +20,7 @@ from .queue_schemas import (
     UserTier,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
 class JobManagerConfig(BaseModel):
@@ -226,6 +227,18 @@ class EmbeddingJobManager:
         # Track user's active jobs
         await self._track_user_job(user_id, job_id)
         
+        # Create chunking message (propagate trace_id if available)
+        trace_id_hex = None
+        try:
+            tm = get_tracing_manager()
+            span = tm.get_current_span()
+            if span:
+                ctx = span.get_span_context()
+                if ctx and getattr(ctx, "is_valid", False):
+                    trace_id_hex = f"{ctx.trace_id:032x}"
+        except Exception:
+            trace_id_hex = None
+
         # Create chunking message
         chunking_message = ChunkingMessage(
             job_id=job_id,
@@ -236,7 +249,8 @@ class EmbeddingJobManager:
             content=content,
             content_type=content_type,
             chunking_config=chunking_config,
-            source_metadata=metadata or {}
+            source_metadata=metadata or {},
+            **({"trace_id": trace_id_hex} if trace_id_hex else {})
         )
         
         # Add to chunking queue

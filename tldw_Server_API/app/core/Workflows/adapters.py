@@ -635,7 +635,16 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     except Exception:
         pass
     message = _tmpl(msg_t, context) or msg_t
+    # Optional PII redaction in logs
     try:
+        import os as _os
+        redact = str(_os.getenv("WORKFLOWS_REDACT_LOGS", "true")).lower() in {"1", "true", "yes", "on"}
+        if redact:
+            try:
+                from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+                message = PIIDetector().redact(message)
+            except Exception:
+                pass
         if level == "debug":
             logger.debug(message)
         elif level == "warning":
@@ -812,19 +821,42 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         except Exception:
             allowed = is_url_allowed(url)
         if not allowed:
+            # Metrics for blocked deliveries
+            try:
+                from urllib.parse import urlparse as _urlparse
+                host = _urlparse(url).hostname or ""
+                from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
+            except Exception:
+                pass
             return {"dispatched": False, "error": "blocked_egress"}
         try:
             import httpx, hmac, hashlib
             headers = {"content-type": "application/json"}
+            # Inject W3C trace context
+            try:
+                from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
+                _get_tm().inject_context(headers)
+            except Exception:
+                pass
             secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
             body = json.dumps(payload)
             if secret:
                 sig = hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
                 headers["X-Workflows-Signature"] = sig
+                headers["X-Hub-Signature-256"] = f"sha256={sig}"
             timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, data=body, headers=headers)
                 ok = 200 <= resp.status_code < 300
+                # Metrics for success/failure
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    host = _urlparse(url).hostname or ""
+                    from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                    _inc("workflows_webhook_deliveries_total", labels={"status": ("delivered" if ok else "failed"), "host": host})
+                except Exception:
+                    pass
                 # Optional artifact of response metadata
                 try:
                     if callable(context.get("add_artifact")):

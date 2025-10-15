@@ -283,7 +283,9 @@ class EmbeddingWorker(BaseWorker):
     
     async def process_message(self, message: EmbeddingMessage) -> Optional[StorageMessage]:
         """Process embedding message and generate embeddings"""
-        logger.info(f"Processing embedding job {message.job_id} with {len(message.chunks)} chunks")
+        logger.bind(job_id=message.job_id, stage="embedding").info(
+            f"Processing embedding job {message.job_id} with {len(message.chunks)} chunks"
+        )
         
         start_time = time.time()
         cache_hits = 0
@@ -440,7 +442,7 @@ class EmbeddingWorker(BaseWorker):
             # Log cache statistics
             if self.cache:
                 cache_stats = self.cache.get_stats()
-                logger.info(
+                logger.bind(job_id=message.job_id, stage="embedding").info(
                     f"Cache stats for job {message.job_id}: "
                     f"Hits: {cache_hits}, Misses: {cache_misses}, "
                     f"Total hit rate: {cache_stats['hit_rate']:.2%}"
@@ -457,6 +459,7 @@ class EmbeddingWorker(BaseWorker):
                 idempotency_key=message.idempotency_key,
                 dedupe_key=message.dedupe_key,
                 operation_id=message.operation_id,
+                trace_id=message.trace_id,
                 embeddings=embedding_data_list,
                 collection_name=f"user_{message.user_id}_media_{message.media_id}",
                 total_chunks=len(message.chunks),
@@ -469,7 +472,7 @@ class EmbeddingWorker(BaseWorker):
                 }
             )
             
-            logger.info(
+            logger.bind(job_id=message.job_id, stage="embedding").info(
                 f"Generated {len(embedding_data_list)} embeddings for job {message.job_id} "
                 f"in {processing_time_ms}ms using models: {', '.join(models_used)}"
             )
@@ -531,6 +534,13 @@ class EmbeddingWorker(BaseWorker):
                     "models": {model_id: cfg_obj},
                 }
             }
+            # Best-effort hint for HTTP connection pooling/rate limiting to provider wrappers
+            try:
+                from ..connection_pool import get_pool_manager
+                pool = get_pool_manager().get_pool(prov)
+                app_config["http_connection_pool"] = pool  # consumers may opt-in to reuse
+            except Exception:
+                pass
             return app_config
 
         # Resolve create_embeddings_batch at runtime to respect test patches
@@ -561,11 +571,33 @@ class EmbeddingWorker(BaseWorker):
                 api_key = getattr(cfg_obj, "api_key", None) or os.getenv("OPENAI_API_KEY")
                 return fn(batch_texts, model_id, prov, api_url, api_key)
 
-        # Batching and retry logic
+        # Batching and retry logic (adaptive batch sizing)
         max_attempts = 3
         results: List[Any] = []
         # Start with configured max_batch_size or len(texts)
         target_batch = min(getattr(self.embedding_config, "max_batch_size", len(texts)) or len(texts), len(texts))
+        # Track a simple moving window of per-item latency
+        latency_per_item_ms: float = 0.0
+        def _adapt_batch(last_elapsed_s: float, n_items: int) -> int:
+            nonlocal latency_per_item_ms, target_batch
+            if n_items <= 0:
+                return target_batch
+            per_item = (last_elapsed_s * 1000.0) / float(n_items)
+            # exponential moving average
+            if latency_per_item_ms <= 0.0:
+                latency_per_item_ms = per_item
+            else:
+                latency_per_item_ms = 0.7 * latency_per_item_ms + 0.3 * per_item
+            # If fast, increase batch modestly; if slow, reduce
+            try:
+                max_b = max(1, int(getattr(self.embedding_config, "max_batch_size", target_batch) or target_batch))
+            except Exception:
+                max_b = target_batch
+            if latency_per_item_ms < 12.0 and target_batch < max_b:
+                target_batch = min(max_b, target_batch + 2)
+            elif latency_per_item_ms > 120.0 and target_batch > 1:
+                target_batch = max(1, target_batch // 2)
+            return target_batch
 
         idx = 0
         while idx < len(texts):
@@ -577,6 +609,8 @@ class EmbeddingWorker(BaseWorker):
             attempt = 0
             while True:
                 try:
+                    import time as _time
+                    t0 = _time.perf_counter()
                     embeddings = await loop.run_in_executor(
                         None,
                         _call_create,
@@ -587,8 +621,14 @@ class EmbeddingWorker(BaseWorker):
                         provider,
                         config,
                     )
+                    t1 = _time.perf_counter()
                     # Append and move to next batch
                     results.extend(embeddings)
+                    # Adapt batch size based on observed latency
+                    try:
+                        _adapt_batch(t1 - t0, len(batch))
+                    except Exception:
+                        pass
                     idx = end
                     break
                 except MemoryError as me:
@@ -603,6 +643,15 @@ class EmbeddingWorker(BaseWorker):
                     continue
                 except Exception as e:
                     attempt += 1
+                    # On likely rate-limit/network classes, back off batch size
+                    try:
+                        if target_batch > 1 and ("rate limit" in str(e).lower() or "429" in str(e).lower()):
+                            target_batch = max(1, target_batch // 2)
+                            end = min(idx + target_batch, len(texts))
+                            batch = texts[idx:end]
+                            app_cfg = _build_app_config(config.model_name_or_path, provider, config)
+                    except Exception:
+                        pass
                     if attempt < max_attempts:
                         logger.warning(f"Embedding attempt {attempt} failed; retrying: {e}")
                         continue

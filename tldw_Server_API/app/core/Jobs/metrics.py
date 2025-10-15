@@ -133,6 +133,12 @@ def ensure_jobs_metrics_registered() -> None:
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
+            name="prompt_studio.jobs.json_truncated_total",
+            type=MetricType.COUNTER,
+            description="Total JSON truncation events (payload/result)",
+            labels=["domain", "queue", "job_type", "kind"],
+        ),
+        MetricDefinition(
             name="prompt_studio.jobs.stale_processing",
             type=MetricType.GAUGE,
             description="Count of processing jobs with expired leases",
@@ -341,3 +347,14 @@ def increment_cancelled(job: Dict) -> None:
     if not get_metrics_registry:
         return
     get_metrics_registry().increment("prompt_studio.jobs.cancelled_total", 1, _labels(job))
+
+
+def increment_json_truncated(job: Dict, kind: str) -> None:
+    """Increment counter when payload/result JSON is truncated due to caps."""
+    ensure_jobs_metrics_registered()
+    if not get_metrics_registry:
+        return
+    labels = _labels(job)
+    labels = dict(labels)
+    labels["kind"] = str(kind)
+    get_metrics_registry().increment("prompt_studio.jobs.json_truncated_total", 1, labels)

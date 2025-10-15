@@ -216,7 +216,7 @@ Tool results include the serving module:
 {"content": [...], "module": "Media", "tool": "search_media"}
 ```
 
-See `Docs/MCP_Docs/MCP_Modules.md` for a complete guide.
+See `Docs/MCP/Unified/Modules.md` for a complete guide.
 
 ## 🚢 Production Deployment
 
@@ -326,10 +326,10 @@ Security: The Prometheus endpoint is gated by default (admin required). Only set
 
 ## 📚 Documentation
 
-- Developer Guide: `Docs/MCP_Docs/MCP_Unified_Developer_Guide.md`
-- System Admin Guide: `Docs/MCP_Docs/MCP_Unified_Sysadmin_Guide.md`
-- User Guide: `Docs/MCP_Docs/MCP_Unified_User_Guide.md`
-- Module Authoring: `Docs/MCP_Docs/MCP_Modules.md`
+- Developer Guide: `Docs/MCP/Unified/Developer_Guide.md`
+- System Admin Guide: `Docs/MCP/Unified/System_Admin_Guide.md`
+- User Guide: `Docs/MCP/Unified/User_Guide.md`
+- Module Authoring: `Docs/MCP/Unified/Modules.md`
 - Context search design (FTS-first): `Docs/Design/context_mcp_search.md`
 - API documentation available at `/docs` when server is running
 

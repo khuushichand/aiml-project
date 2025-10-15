@@ -75,7 +75,7 @@ def event_loop():
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def reset_singletons():
+async def reset_singletons(request):
     """Auto-reset all singletons before and after each test for clean state."""
     # No session-wide default DB. Tests must use isolated DB fixtures or mocks.
     # Reset before test
@@ -102,21 +102,23 @@ async def reset_singletons():
     await shutdown_audit_service()
     await reset_api_key_manager()
     
-    # Clear any FastAPI dependency overrides
-    try:
-        from tldw_Server_API.app.main import app as _app
-        _app.dependency_overrides.clear()
-        # In TEST_MODE, stub audit service to avoid background task group errors
+        # Clear any FastAPI dependency overrides
         try:
-            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+            from tldw_Server_API.app.main import app as _app
+            _app.dependency_overrides.clear()
+            # In TEST_MODE, stub audit service to avoid background task group errors
+            try:
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
             async def _override_audit_dep(*_args, **_kwargs):
                 return _StubAuditService()
 
-            _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
-        except Exception:
-            # If import fails here, tests that don't hit audit won't care
-            pass
+            # Respect @pytest.mark.real_audit to use real audit service
+            if not request.node.get_closest_marker("real_audit"):
+                _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
+            except Exception:
+                # If import fails here, tests that don't hit audit won't care
+                pass
 
         # Also, in TEST_MODE, strip non-essential middlewares that may perform
         # background DB work after response (to avoid TaskGroup noise in full runs)
@@ -162,6 +164,29 @@ async def reset_singletons():
         settings['CSRF_ENABLED'] = original_csrf_setting
     else:
         settings.pop('CSRF_ENABLED', None)
+
+
+@pytest_asyncio.fixture
+async def real_audit_service(tmp_path):
+    """Enable real UnifiedAuditService for this test and isolate per-user DBs.
+
+    - Sets USER_DB_BASE_DIR to a per-test tmp directory
+    - Resets settings so config picks up new base dir
+    - Ensures audit services are shut down after the test
+    """
+    import os as _os
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+    from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services as _shutdown_all
+
+    _os.environ['USER_DB_BASE_DIR'] = str((tmp_path / 'user_databases').resolve())
+    _reset_settings()
+    try:
+        yield
+    finally:
+        try:
+            await _shutdown_all()
+        except Exception:
+            pass
 
 
 @pytest_asyncio.fixture

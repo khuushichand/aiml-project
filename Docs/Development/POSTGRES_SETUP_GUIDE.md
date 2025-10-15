@@ -15,7 +15,7 @@ docker run --name tldw-postgres \
   -e POSTGRES_PASSWORD=TestPassword123! \
   -e POSTGRES_DB=tldw_multiuser \
   -p 5432:5432 \
-  -d postgres:14-alpine
+  -d postgres:18-bookworm
 
 # 2. Wait a few seconds for it to start, then apply the schema
 sleep 5

@@ -34,9 +34,14 @@ class FakeAsyncRedisSummary:
         self._kv = {}
         # Queues for which XRANGE should return empty (to force age==0.0)
         self._xrange_empty = set()
+        # Simple in-memory streams storage: name -> list[(id, fields)]
+        self._streams = {}
 
     # Queue depth
     async def xlen(self, name):
+        # Prefer in-memory stream length if present
+        if name in self._streams:
+            return len(self._streams.get(name, []))
         if name in self._queues:
             return self._queues[name]
         if name in self._dlq:
@@ -45,6 +50,15 @@ class FakeAsyncRedisSummary:
 
     # Oldest entry for age calculation (SSE uses XRANGE with '-', '+', count=1)
     async def xrange(self, name, min, max, count=None):
+        # Prefer actual stored stream entries
+        if name in self._streams:
+            data = self._streams.get(name, [])
+            if not data:
+                return []
+            # Return earliest entries by insertion order
+            if count is None or count <= 0:
+                return data[:]
+            return data[:count]
         # Optionally simulate empty streams for age==0.0
         if name in self._xrange_empty:
             return []
@@ -90,3 +104,26 @@ class FakeAsyncRedisSummary:
             self._xrange_empty.add(name)
         else:
             self._xrange_empty.discard(name)
+
+    async def ttl(self, key):
+        # Return a fixed TTL for testing purposes when key exists
+        if key in self._kv:
+            return 3600
+        return -2  # key does not exist
+
+    # Stream write (minimal XADD)
+    async def xadd(self, name, fields):
+        lst = self._streams.setdefault(name, [])
+        # Deterministic id: use len-based counter (not ms) to avoid time deps
+        eid = f"{len(lst)+1}-0"
+        # Ensure dict[str, str]
+        f = {}
+        for k, v in (fields or {}).items():
+            try:
+                f[str(k)] = v if isinstance(v, str) else json.dumps(v)
+            except Exception:
+                f[str(k)] = str(v)
+        lst.append((eid, f))
+        # Update default queue depth accounting
+        self._queues[name] = len(lst)
+        return eid

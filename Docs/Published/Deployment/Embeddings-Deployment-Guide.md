@@ -346,12 +346,61 @@ Sample response (polling):
 }
 ```
 
+### Startup Checks & Compaction (optional)
+
+You can enable two optional maintenance features to harden indexing integrity and storage hygiene:
+
+- Startup-time dimension sanity check
+  - Verifies that each Chroma collection’s `embedding_dimension` metadata matches the actual vector length.
+  - In `single_user` mode, checks the single user’s collections. In `multi_user` mode, iterates all user directories under `USER_DB_BASE_DIR` and checks each user’s collections.
+  - Environment flags:
+    - `EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED` = `true|false` (default: false)
+    - `EMBEDDINGS_DIM_CHECK_STRICT` = `true|false` (default: false). When true, any mismatch aborts startup with an error.
+
+- Vector compactor (soft-delete propagation)
+  - Periodically scans the Media DB for soft-deleted documents and removes their vectors from user collections.
+  - Recommended for deployments with frequent deletes or where storage must stay tidy over time.
+  - Environment flags:
+    - `EMBEDDINGS_COMPACTOR_ENABLED` = `true|false` (default: false)
+    - `EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS` (default: 1800)
+    - `COMPACTOR_USER_ID` (default: `SINGLE_USER_FIXED_ID`; in multi-user deployments, run one compactor instance per user, or extend to iterate users as needed)
+    - `MEDIA_DB_PATH` (optional path to `Media_DB_v2.db`; default: `Databases/Media_DB_v2.db`)
+
+Example (single-user):
+```bash
+export EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED=true
+export EMBEDDINGS_DIM_CHECK_STRICT=true  # fail fast on mismatch
+
+export EMBEDDINGS_COMPACTOR_ENABLED=true
+export EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS=1200
+```
+
+Example (multi-user):
+```bash
+export AUTH_MODE=multi_user
+export USER_DB_BASE_DIR=/opt/tldw/Databases/user_databases
+export EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED=true
+# Optional strict mode; consider enabling in CI/staging
+export EMBEDDINGS_DIM_CHECK_STRICT=false
+
+# For compaction, either run per-user or use a supervisor to launch per user_id
+export EMBEDDINGS_COMPACTOR_ENABLED=true
+export COMPACTOR_USER_ID=42
+```
+
 Operator notes:
 - Prefer SSE for live dashboards; fall back to polling when SSE/WebSockets are blocked.
 - A zeroed payload indicates Redis is unreachable or snapshot encountered an error; alert if sustained.
 
 ### Logging
 The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and scrape `/metrics` for Prometheus-formatted metrics.
+
+Structured JSON logs
+- Enable with `LOG_JSON=true` (or `ENABLE_JSON_LOGS=true`). The JSON sink includes request/trace correlation fields when available:
+  - `request_id` (from `X-Request-ID` middleware)
+  - `trace_id`, `span_id`, and computed `traceparent`
+  - Workers bind `job_id` and `stage` to aid operator drill‑down.
+  - Responses include `X-Trace-Id` and `traceparent` headers for easy hop-by-hop correlation.
 
 ### Dead-Letter Queues (DLQ)
 
@@ -483,6 +532,66 @@ groups:
             Queue ages increased >2m over 15m while processing is low. The delayed drainer uses
             a token bucket for safety; consider temporarily increasing EMBEDDINGS_REQUEUE_RATE/BURST during recovery.
 ```
+
+### SLOs & Error Budgets
+
+Define clear service goals and alert on burn rates to catch problems early while avoiding alert fatigue.
+
+- Suggested SLOs
+  - Availability (job success): <0.5% failed jobs over 1h (pipeline-wide)
+  - Queue time (freshness): P95 queue age < 2 minutes
+  - Latency (processing): p95 stage latency < 5 seconds (per stage)
+
+- Supporting metrics
+  - `embedding_stage_jobs_processed_total{stage}` and `embedding_stage_jobs_failed_total{stage}`
+  - `embedding_queue_age_seconds_bucket{queue_name}` (histogram)
+  - `embedding_stage_processing_latency_seconds_bucket{stage}` (histogram)
+  - Newly added: `embedding_stage_batch_size{stage}` and `embedding_stage_payload_bytes_bucket{stage}` (histograms) for tuning batch/payload sizing.
+
+- Example alert rules
+
+```yaml
+groups:
+  - name: tldw-embeddings-slos
+    rules:
+      # Error budget burn: failed / (failed + processed) over 1h > 0.5%
+      - alert: EmbeddingsErrorBudgetBurn
+        expr: (
+          sum(increase(embedding_stage_jobs_failed_total[1h]))
+          /
+          (sum(increase(embedding_stage_jobs_failed_total[1h])) + sum(increase(embedding_stage_jobs_processed_total[1h])))
+        ) > 0.005
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embeddings pipeline error budget burn"
+          description: "Failed jobs exceeded 0.5% over 1h"
+
+      # Queue age p95 too high for any queue
+      - alert: EmbeddingsQueueAgeP95High
+        expr: histogram_quantile(0.95, sum by (le, queue_name) (rate(embedding_queue_age_seconds_bucket[5m]))) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings queue age p95 high"
+          description: "Queue p95 ({{ $labels.queue_name }}) > 2m for >10m"
+
+      # Stage processing latency p99 high (optional tighter SLO)
+      - alert: EmbeddingsStageLatencyP99High
+        expr: histogram_quantile(0.99, sum by (le, stage) (rate(embedding_stage_processing_latency_seconds_bucket[5m]))) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings stage latency p99 high"
+          description: "Stage {{ $labels.stage }} p99 > 10s for >10m"
+```
+
+Notes
+- Histograms use Prometheus’ `histogram_quantile` on per-bucket rates; ensure your scrape interval matches your cardinality/retention targets.
+- Consider multi-window, multi-burn-rate patterns for SLOs if you prefer Google SRE-style alerting.
 
 ## Reliability & Delivery
 

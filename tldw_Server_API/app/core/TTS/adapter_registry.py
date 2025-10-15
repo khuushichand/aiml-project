@@ -34,6 +34,7 @@ class TTSProvider(Enum):
     CHATTERBOX = "chatterbox"
     ELEVENLABS = "elevenlabs"
     VIBEVOICE = "vibevoice"
+    NEUTTS = "neutts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -54,6 +55,7 @@ class TTSAdapterRegistry:
         TTSProvider.CHATTERBOX: "tldw_Server_API.app.core.TTS.adapters.chatterbox_adapter.ChatterboxAdapter",
         TTSProvider.ELEVENLABS: "tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.ElevenLabsTTSAdapter",
         TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
+        TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
     }
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -309,6 +311,11 @@ class TTSAdapterRegistry:
                     alias('top_k', 'vibevoice_top_k')
                     alias('stream_chunk_size', 'vibevoice_stream_chunk_size')
                     alias('stream_buffer_size', 'vibevoice_stream_buffer_size')
+                elif p == 'neutts':
+                    alias('device', 'backbone_device')
+                    alias('backbone_repo', 'backbone_repo')
+                    alias('codec_repo', 'codec_repo')
+                    alias('sample_rate', 'sample_rate')
                 
                 # Generic target latency for local providers
                 if p == 'chatterbox':
@@ -587,6 +594,13 @@ class TTSAdapterFactory:
             "vibevoice-7b": TTSProvider.VIBEVOICE,
             "microsoft/VibeVoice-1.5B": TTSProvider.VIBEVOICE,
             "WestZhang/VibeVoice-Large-pt": TTSProvider.VIBEVOICE
+            ,
+            # NeuTTS models
+            "neutts": TTSProvider.NEUTTS,
+            "neutts-air": TTSProvider.NEUTTS,
+            "neuphonic/neutts-air": TTSProvider.NEUTTS,
+            "neutts-air-q4-gguf": TTSProvider.NEUTTS,
+            "neutts-air-q8-gguf": TTSProvider.NEUTTS,
         }
         
         # Get provider from model name

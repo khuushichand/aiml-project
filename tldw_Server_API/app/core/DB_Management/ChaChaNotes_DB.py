@@ -1576,7 +1576,21 @@ UPDATE db_schema_version
     def _open_new_connection(self):
         try:
             pool = self.backend.get_pool()
-            return pool.get_connection()
+            conn = pool.get_connection()
+            # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.user_id'))
+            try:
+                if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+                    cur = conn.cursor()
+                    # Use SESSION scope so it persists for pooled connection lifecycle
+                    cur.execute("SET SESSION app.user_id = %s", (str(self.client_id),))
+                    try:
+                        conn.commit()
+                    except Exception:
+                        pass
+            except Exception:
+                # Best-effort; if setting fails, continue without crashing
+                pass
+            return conn
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc
 

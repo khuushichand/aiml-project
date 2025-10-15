@@ -890,7 +890,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:14-alpine
+    image: postgres:18-bookworm
     environment:
       POSTGRES_DB: tldw_multiuser
       POSTGRES_USER: tldw_user

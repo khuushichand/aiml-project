@@ -109,6 +109,9 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   request_id TEXT,
   trace_id TEXT,
   failure_timeline JSONB,
+  -- Optional compressed copies for payload/result when archiving (BYTEA)
+  payload_compressed BYTEA,
+  result_compressed BYTEA,
   created_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
@@ -137,7 +140,47 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(JOBS_POSTGRES_DDL)
-            conn.commit()
+                # Additional objects: queue controls, attachments, SLA policies
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS job_queue_controls (
+                      domain TEXT NOT NULL,
+                      queue TEXT NOT NULL,
+                      paused BOOLEAN DEFAULT FALSE,
+                      drain BOOLEAN DEFAULT FALSE,
+                      updated_at TIMESTAMPTZ DEFAULT NOW(),
+                      PRIMARY KEY (domain, queue)
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS job_attachments (
+                      id SERIAL PRIMARY KEY,
+                      job_id INTEGER NOT NULL,
+                      kind TEXT NOT NULL,
+                      content_text TEXT,
+                      url TEXT,
+                      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    """
+                )
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_job_attachments_job ON job_attachments(job_id)")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS job_sla_policies (
+                      domain TEXT NOT NULL,
+                      queue TEXT NOT NULL,
+                      job_type TEXT NOT NULL,
+                      max_queue_latency_seconds INTEGER,
+                      max_duration_seconds INTEGER,
+                      enabled BOOLEAN DEFAULT TRUE,
+                      updated_at TIMESTAMPTZ DEFAULT NOW(),
+                      PRIMARY KEY (domain, queue, job_type)
+                    );
+                    """
+                )
+                conn.commit()
         # Forward-migrate older installs: add missing columns that newer code expects
         try:
             with psycopg.connect(db_url, autocommit=True) as cfix:
@@ -154,6 +197,12 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_code TEXT")
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT")
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_stack JSONB")
+                    # Forward-migrate archive table compressed columns (if table exists)
+                    try:
+                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS payload_compressed BYTEA")
+                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS result_compressed BYTEA")
+                    except Exception:
+                        pass
         except Exception:
             # Best-effort; if the DB already has these or lacks permissions, continue
             pass

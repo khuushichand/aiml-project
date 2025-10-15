@@ -7,6 +7,8 @@
 // Audio Tab Functions (TTS and STT)
 // ============================================================================
 
+let _audioTTSAbort = null;
+
 function updateTTSProviderOptions() {
     const provider = document.getElementById('audioTTS_provider').value;
     const modelSelect = document.getElementById('audioTTS_model');
@@ -184,6 +186,96 @@ function updateTTSProviderOptions() {
         const supportsPitchProviders = ['elevenlabs', 'vibevoice', 'chatterbox'];
         pitchGroup.style.display = supportsPitchProviders.includes(provider) ? 'block' : 'none';
     }
+}
+
+// Build and send request for Audio → TTS panel
+async function audioTTSGenerate() {
+    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
+    const provider = document.getElementById('audioTTS_provider')?.value || '';
+    const model = document.getElementById('audioTTS_model')?.value || '';
+    const voice = document.getElementById('audioTTS_voice')?.value || '';
+    const input = document.getElementById('audioTTS_input')?.value || '';
+    const response_format = document.getElementById('audioTTS_response_format')?.value || 'mp3';
+    const speed = parseFloat(document.getElementById('audioTTS_speed')?.value || '1.0');
+    const stream = !!(document.getElementById('audioTTS_stream')?.checked);
+
+    const req = { model, input, voice, response_format, speed, stream };
+
+    // Prefer recorded mic sample for voice cloning; else use file input if present
+    try {
+        if (window._audioTTSRec && _audioTTSRec.blob) {
+            req.voice_reference = await _audioBlobToBase64Wav(_audioTTSRec.blob);
+        } else {
+            const fileInput = document.getElementById('audioTTS_voiceReference');
+            if (fileInput && fileInput.files && fileInput.files[0]) {
+                const arr = await fileInput.files[0].arrayBuffer();
+                const bytes = new Uint8Array(arr);
+                let bin=''; const step=0x8000;
+                for(let i=0;i<bytes.length;i+=step){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+step)); }
+                req.voice_reference = btoa(bin);
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to attach voice reference', e);
+    }
+
+    const status = document.getElementById('audioTTS_status');
+    if (status) status.textContent = 'Generating...';
+    const stopBtn = document.getElementById('stopButton');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+    _audioTTSAbort = new AbortController();
+
+    try {
+        const res = await fetch(`${baseUrl}/api/v1/audio/speech`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(req),
+            signal: _audioTTSAbort.signal
+        });
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const player = document.getElementById('audioTTS_player');
+        if (player) { player.src = url; player.style.display = 'block'; }
+        const dlBtn = document.getElementById('downloadButton');
+        if (dlBtn) dlBtn.style.display = 'inline-block';
+        if (status) status.textContent = `Done (${(blob.size/1024).toFixed(1)} KB)`;
+    } catch (e) {
+        console.error('Audio TTS failed', e);
+        if (status) status.textContent = (e.name === 'AbortError') ? 'Cancelled' : `Error: ${e.message}`;
+    }
+    finally {
+        const stopBtn = document.getElementById('stopButton');
+        if (stopBtn) stopBtn.style.display = 'none';
+        _audioTTSAbort = null;
+    }
+}
+
+// Button handlers wired in audio_content.html
+async function generateTTS() {
+    return audioTTSGenerate();
+}
+
+function stopTTS() {
+    try { if (_audioTTSAbort) _audioTTSAbort.abort(); } catch (_) {}
+}
+
+function downloadAudio() {
+    const player = document.getElementById('audioTTS_player');
+    if (!player || !player.src) return;
+    const a = document.createElement('a');
+    a.href = player.src;
+    a.download = 'speech.' + ((document.getElementById('audioTTS_response_format')?.value) || 'mp3');
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ try { a.remove(); } catch(_){} }, 0);
 }
 
 function checkTTSProviderStatus() {
@@ -760,6 +852,165 @@ function clearVoiceReference() {
     if (voiceRefPlayer) voiceRefPlayer.src = '';
 }
 
+// ----------------------------------------------------------------------------
+// Audio TTS: Quick mic recording for voice reference
+// ----------------------------------------------------------------------------
+let _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+
+async function startAudioTTSRecording() {
+    try {
+        if (_audioTTSRec.mr) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        _audioTTSRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('audioTTS_rec_status');
+        const b1 = document.getElementById('audioTTS_rec_start');
+        const b2 = document.getElementById('audioTTS_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _audioTTSRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            const blob = new Blob(_audioTTSRec.chunks, { type: 'audio/webm' });
+            _audioTTSRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _audioTTSRec.url = url;
+            const p = document.getElementById('audioTTS_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('audioTTS_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            const clr = document.getElementById('audioTTS_rec_clear');
+            if (clr) clr.disabled = false;
+            const fileInput = document.getElementById('audioTTS_voiceReference');
+            if (fileInput) fileInput.disabled = true;
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        mr.start();
+    } catch (e) {
+        console.error('AudioTTS recording failed', e);
+        const s = document.getElementById('audioTTS_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopAudioTTSRecording() {
+    try { if (_audioTTSRec.mr) _audioTTSRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+function clearAudioTTSRecording() {
+    _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+    const p = document.getElementById('audioTTS_rec_playback');
+    if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
+    const badge = document.getElementById('audioTTS_recording_badge');
+    if (badge) badge.style.display = 'none';
+    const s = document.getElementById('audioTTS_rec_status');
+    if (s) s.textContent = 'Idle (recording overrides file)';
+    const clr = document.getElementById('audioTTS_rec_clear');
+    if (clr) clr.disabled = true;
+    const b1 = document.getElementById('audioTTS_rec_start');
+    if (b1) b1.disabled = false;
+    const b2 = document.getElementById('audioTTS_rec_stop');
+    if (b2) b2.disabled = true;
+    const fileInput = document.getElementById('audioTTS_voiceReference');
+    if (fileInput) fileInput.disabled = false;
+}
+
+async function _audioBlobToBase64Wav(blob) {
+    // Convert to WAV for server compatibility
+    const buf = await blob.arrayBuffer();
+    const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const audioBuffer = await ac.decodeAudioData(buf);
+    const wavView = _encodeWavFromBuffer(audioBuffer);
+    const wavBlob = new Blob([wavView], { type: 'audio/wav' });
+    const wavBuf = await wavBlob.arrayBuffer();
+    const bytes = new Uint8Array(wavBuf);
+    let binary=''; const step=0x8000;
+    for(let i=0;i<bytes.length;i+=step) binary+=String.fromCharCode.apply(null, bytes.subarray(i,i+step));
+    return btoa(binary);
+}
+
+function _encodeWavFromBuffer(audioBuffer){
+    const data = audioBuffer.numberOfChannels>1? _mixToMono(audioBuffer): audioBuffer.getChannelData(0);
+    const sr = audioBuffer.sampleRate;
+    const pcm = _floatTo16(data);
+    const ab = new ArrayBuffer(44 + pcm.length*2); const view = new DataView(ab);
+    _writeStr(view,0,'RIFF'); view.setUint32(4,36+pcm.length*2,true); _writeStr(view,8,'WAVE');
+    _writeStr(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+    view.setUint16(22,1,true); view.setUint32(24,sr,true); view.setUint32(28,sr*2,true);
+    view.setUint16(32,2,true); view.setUint16(34,16,true); _writeStr(view,36,'data'); view.setUint32(40,pcm.length*2,true);
+    let off=44; for(let i=0;i<pcm.length;i++,off+=2) view.setInt16(off, pcm[i], true);
+    return view;
+}
+function _floatTo16(input){ const out=new Int16Array(input.length); for(let i=0;i<input.length;i++){ let s=Math.max(-1,Math.min(1,input[i])); out[i]=s<0?s*0x8000:s*0x7FFF;} return out; }
+function _mixToMono(buf){ const l=buf.length; const a=buf.getChannelData(0), b=buf.getChannelData(1), o=new Float32Array(l); for(let i=0;i<l;i++) o[i]=0.5*(a[i]+b[i]); return o; }
+function _writeStr(view, offset, str){ for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
+
+// File Transcription: Quick mic recording
+let _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
+async function startFileTransRecording() {
+    try {
+        if (_fileTransRec.mr) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        _fileTransRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('fileTrans_rec_status');
+        const b1 = document.getElementById('fileTrans_rec_start');
+        const b2 = document.getElementById('fileTrans_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _fileTransRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            const blob = new Blob(_fileTransRec.chunks, { type: 'audio/webm' });
+            _fileTransRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _fileTransRec.url = url;
+            const p = document.getElementById('fileTrans_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('fileTrans_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            const clr = document.getElementById('fileTrans_rec_clear');
+            if (clr) clr.disabled = false;
+            const file = document.getElementById('fileTrans_audio');
+            if (file) file.disabled = true;
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        mr.start();
+    } catch (e) {
+        console.error('FileTrans recording failed', e);
+        const s = document.getElementById('fileTrans_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopFileTransRecording() {
+    try { if (_fileTransRec.mr) _fileTransRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+function clearFileTransRecording() {
+    _fileTransRec = { mr: null, chunks: [], blob: null, url: null };
+    const p = document.getElementById('fileTrans_rec_playback');
+    if (p) { try { p.pause(); } catch(_){} p.removeAttribute('src'); p.style.display='none'; }
+    const badge = document.getElementById('fileTrans_recording_badge');
+    if (badge) badge.style.display = 'none';
+    const s = document.getElementById('fileTrans_rec_status');
+    if (s) s.textContent = 'Idle (recording overrides file)';
+    const clr = document.getElementById('fileTrans_rec_clear');
+    if (clr) clr.disabled = true;
+    const b1 = document.getElementById('fileTrans_rec_start');
+    if (b1) b1.disabled = false;
+    const b2 = document.getElementById('fileTrans_rec_stop');
+    if (b2) b2.disabled = true;
+    const file = document.getElementById('fileTrans_audio');
+    if (file) file.disabled = false;
+}
+
 // Streaming STT Functions
 function updateModelOptions() {
     const model = document.getElementById('streamingModel').value;
@@ -807,6 +1058,80 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }, 500);
 });
+
+// ----------------------------------------------------------------------------
+// Audio TTS: Quick mic recording for voice reference
+// ----------------------------------------------------------------------------
+let _audioTTSRec = { mr: null, chunks: [], blob: null, url: null };
+
+async function startAudioTTSRecording() {
+    try {
+        if (_audioTTSRec.mr) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        _audioTTSRec = { mr, chunks: [], blob: null, url: null };
+        const s = document.getElementById('audioTTS_rec_status');
+        const b1 = document.getElementById('audioTTS_rec_start');
+        const b2 = document.getElementById('audioTTS_rec_stop');
+        if (s) s.textContent = 'Recording...';
+        if (b1) b1.disabled = true;
+        if (b2) b2.disabled = false;
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size) _audioTTSRec.chunks.push(e.data); };
+        mr.onstop = () => {
+            const blob = new Blob(_audioTTSRec.chunks, { type: 'audio/webm' });
+            _audioTTSRec.blob = blob;
+            const url = URL.createObjectURL(blob);
+            _audioTTSRec.url = url;
+            const p = document.getElementById('audioTTS_rec_playback');
+            if (p) { p.src = url; p.style.display = 'block'; }
+            if (s) s.textContent = 'Recorded';
+            if (b1) b1.disabled = false;
+            if (b2) b2.disabled = true;
+            const badge = document.getElementById('audioTTS_recording_badge');
+            if (badge) badge.style.display = 'inline-block';
+            try { stream.getTracks().forEach(t => t.stop()); } catch(_){}
+        };
+        mr.start();
+    } catch (e) {
+        console.error('AudioTTS recording failed', e);
+        const s = document.getElementById('audioTTS_rec_status');
+        if (s) s.textContent = 'Recording failed';
+    }
+}
+
+function stopAudioTTSRecording() {
+    try { if (_audioTTSRec.mr) _audioTTSRec.mr.stop(); } catch(e){ console.error(e); }
+}
+
+async function _audioBlobToBase64Wav(blob) {
+    // Convert to WAV for server compatibility
+    const buf = await blob.arrayBuffer();
+    const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const audioBuffer = await ac.decodeAudioData(buf);
+    const wavView = _encodeWavFromBuffer(audioBuffer);
+    const wavBlob = new Blob([wavView], { type: 'audio/wav' });
+    const wavBuf = await wavBlob.arrayBuffer();
+    const bytes = new Uint8Array(wavBuf);
+    let binary=''; const step=0x8000;
+    for(let i=0;i<bytes.length;i+=step) binary+=String.fromCharCode.apply(null, bytes.subarray(i,i+step));
+    return btoa(binary);
+}
+
+function _encodeWavFromBuffer(audioBuffer){
+    const data = audioBuffer.numberOfChannels>1? _mixToMono(audioBuffer): audioBuffer.getChannelData(0);
+    const sr = audioBuffer.sampleRate;
+    const pcm = _floatTo16(data);
+    const ab = new ArrayBuffer(44 + pcm.length*2); const view = new DataView(ab);
+    _writeStr(view,0,'RIFF'); view.setUint32(4,36+pcm.length*2,true); _writeStr(view,8,'WAVE');
+    _writeStr(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+    view.setUint16(22,1,true); view.setUint32(24,sr,true); view.setUint32(28,sr*2,true);
+    view.setUint16(32,2,true); view.setUint16(34,16,true); _writeStr(view,36,'data'); view.setUint32(40,pcm.length*2,true);
+    let off=44; for(let i=0;i<pcm.length;i++,off+=2) view.setInt16(off, pcm[i], true);
+    return view;
+}
+function _floatTo16(input){ const out=new Int16Array(input.length); for(let i=0;i<input.length;i++){ let s=Math.max(-1,Math.min(1,input[i])); out[i]=s<0?s*0x8000:s*0x7FFF;} return out; }
+function _mixToMono(buf){ const l=buf.length; const a=buf.getChannelData(0), b=buf.getChannelData(1), o=new Float32Array(l); for(let i=0;i<l;i++) o[i]=0.5*(a[i]+b[i]); return o; }
+function _writeStr(view, offset, str){ for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
 
 // ----------------------------------------------------------------------------
 // File-based Transcription UI
@@ -2992,5 +3317,105 @@ async function createPrompt() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Embeddings Ledger Admin
+// ---------------------------------------------------------------------------
+
+async function embeddingsQueryLedgerStatus() {
+    const idk = (document.getElementById('embeddingsLedger_idemp')?.value || '').trim();
+    const ddk = (document.getElementById('embeddingsLedger_dedupe')?.value || '').trim();
+    const out = document.getElementById('embeddingsLedgerStatus_response');
+    if (!out) return;
+    if (!idk && !ddk) {
+        if (typeof Toast !== 'undefined' && Toast.warn) Toast.warn('Provide idempotency_key and/or dedupe_key');
+        return;
+    }
+    try {
+        const q = new URLSearchParams();
+        if (idk) q.set('idempotency_key', idk);
+        if (ddk) q.set('dedupe_key', ddk);
+        const res = await apiClient.get(`/api/v1/embeddings/ledger/status?${q.toString()}`);
+        out.textContent = Utils.syntaxHighlight(res);
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Failed to fetch ledger status');
+    }
+}
+
 // Make sure functions are globally available
 console.log('Tab functions loaded successfully');
+
+// ---------------------------------------------------------------------------
+// Re-embed Scheduler (Admin)
+// ---------------------------------------------------------------------------
+
+async function embeddingsScheduleReembed() {
+    const midEl = document.getElementById('embeddingsReembed_media_id');
+    const priEl = document.getElementById('embeddingsReembed_priority');
+    const out = document.getElementById('embeddingsReembed_response');
+    if (!midEl || !out) return;
+    const media_id = parseInt(midEl.value || '0', 10);
+    const priority = parseInt(priEl?.value || '50', 10);
+    if (!media_id || media_id <= 0) {
+        if (typeof Toast !== 'undefined' && Toast.warn) Toast.warn('Enter a valid media_id');
+        return;
+    }
+    out.textContent = 'Scheduling...';
+    try {
+        const res = await apiClient.post('/api/v1/embeddings/reembed/schedule', { media_id, priority });
+        out.textContent = Utils.syntaxHighlight(res);
+        if (typeof Toast !== 'undefined' && Toast.success) Toast.success('Re-embed job scheduled');
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Failed to schedule re-embed');
+    }
+}
+
+// Quick helper to schedule re-embed for a specific media id from other tabs
+async function scheduleReembedForMedia(media_id, priority = 50) {
+    try {
+        // Admin-only guard
+        const ok = await isAdminCached();
+        if (!ok) {
+            if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Admin required to schedule re-embed');
+            return;
+        }
+        const res = await apiClient.post('/api/v1/embeddings/reembed/schedule', { media_id, priority });
+        if (typeof Toast !== 'undefined' && Toast.success) Toast.success(`Re-embed scheduled for media ${media_id}`);
+        return res;
+    } catch (e) {
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error(`Failed to schedule re-embed: ${(e && e.message) || 'error'}`);
+        throw e;
+    }
+}
+
+// ------------------------------
+// Admin-only detection and reveal
+// ------------------------------
+let __isAdminFlag = null;
+async function isAdminCached() {
+    if (__isAdminFlag !== null) return __isAdminFlag;
+    try {
+        // Try an admin-only endpoint
+        await apiClient.makeRequest('GET', '/api/v1/embeddings/stage/status');
+        __isAdminFlag = true;
+    } catch (e) {
+        __isAdminFlag = false;
+    }
+    try { window.isAdminFlag = __isAdminFlag; } catch (_) {}
+    return __isAdminFlag;
+}
+
+function revealAdminOnlyElements() {
+    isAdminCached().then((isAdmin) => {
+        if (!isAdmin) return;
+        try {
+            document.querySelectorAll('.admin-only').forEach(el => { el.style.display = ''; });
+        } catch (e) { /* ignore */ }
+    }).catch(() => {});
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Try to reveal admin-only controls after initial load
+    setTimeout(revealAdminOnlyElements, 600);
+});

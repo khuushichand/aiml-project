@@ -44,6 +44,9 @@ class RunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     session_id: Optional[str] = None
+    # Scoped secrets are injected into the execution context but never persisted.
+    # Keys are provider/module specific (e.g., api keys), values are strings.
+    secrets: Optional[Dict[str, str]] = Field(default_factory=dict)
     # Per-run validation behavior for safety checks (e.g., artifact scope)
     # 'block' rejects on validation failure; 'non-block' logs/warns and proceeds.
     validation_mode: Literal["block", "non-block"] = "block"
@@ -54,6 +57,7 @@ class AdhocRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     session_id: Optional[str] = None
+    secrets: Optional[Dict[str, str]] = Field(default_factory=dict)
     validation_mode: Literal["block", "non-block"] = "block"
 
 

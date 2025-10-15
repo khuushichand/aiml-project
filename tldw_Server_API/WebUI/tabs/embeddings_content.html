@@ -217,6 +217,59 @@
         <h3>Response:</h3>
         <pre id="embeddingsModelsDownload_response">---</pre>
     </div>
+
+    <div class="endpoint-section" id="embeddingsLedgerStatus">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/embeddings/ledger/status - Ledger Status</span>
+        </h2>
+        <p>Inspect idempotency/dedupe ledger entries (admin only).</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsLedger_idemp">idempotency_key:</label>
+                    <input type="text" id="embeddingsLedger_idemp" placeholder="reembed:user:media:...">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsLedger_dedupe">dedupe_key:</label>
+                    <input type="text" id="embeddingsLedger_dedupe" placeholder="same as idempotency by default">
+                </div>
+            </div>
+        </div>
+
+        <button class="api-button" onclick="embeddingsQueryLedgerStatus()">Query Ledger</button>
+
+        <h3>Response:</h3>
+        <pre id="embeddingsLedgerStatus_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="embeddingsReembedSchedule">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/reembed/schedule - Schedule Re-Embed</span>
+        </h2>
+        <p>Schedule a re-embed expansion job for a media_id (admin only).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsReembed_media_id">media_id <span class="required">*</span>:</label>
+                    <input type="number" id="embeddingsReembed_media_id" placeholder="123">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsReembed_priority">Priority:</label>
+                    <input type="number" id="embeddingsReembed_priority" value="50" min="0" max="100">
+                </div>
+            </div>
+        </div>
+        <button class="api-button" onclick="embeddingsScheduleReembed()">Schedule Re-Embed</button>
+        <h3>Response:</h3>
+        <pre id="embeddingsReembed_response">---</pre>
+    </div>
 </div>
 
 <!-- DLQ Admin Tab -->

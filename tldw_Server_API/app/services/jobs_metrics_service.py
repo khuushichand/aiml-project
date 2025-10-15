@@ -47,6 +47,10 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
     ttl_age = int(os.getenv("JOBS_TTL_AGE_SECONDS", "0") or "0") or None
     ttl_runtime = int(os.getenv("JOBS_TTL_RUNTIME_SECONDS", "0") or "0") or None
     ttl_action = os.getenv("JOBS_TTL_ACTION", "cancel").lower()
+    # Prune/retention
+    prune_enforce = str(os.getenv("JOBS_PRUNE_ENFORCE", "")).lower() in {"1","true","yes","y","on"}
+    retention_terminal_days = int(os.getenv("JOBS_RETENTION_DAYS_TERMINAL", "0") or "0")
+    retention_nonterminal_days = int(os.getenv("JOBS_RETENTION_DAYS_NONTERMINAL", "0") or "0")
 
     logger.info(f"Starting Jobs metrics gauge loop (every {interval}s)")
     while True:
@@ -376,12 +380,60 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                                 regd.set_gauge("prompt_studio.jobs.duration_p50_seconds", pct(0.5), labels)
                                 regd.set_gauge("prompt_studio.jobs.duration_p90_seconds", pct(0.9), labels)
                                 regd.set_gauge("prompt_studio.jobs.duration_p99_seconds", pct(0.99), labels)
-                # Apply TTL policies if enabled
+                # Apply TTL policies if enabled (leader-elected per domain/queue on Postgres)
                 if ttl_enforce and (ttl_age or ttl_runtime):
                     try:
-                        jm.apply_ttl_policies(age_seconds=ttl_age, runtime_seconds=ttl_runtime, action=ttl_action)
+                        if jm.backend == "postgres":
+                            with jm._pg_cursor(conn) as cur:
+                                cur.execute("SELECT DISTINCT domain, queue FROM jobs")
+                                rows = cur.fetchall() or []
+                            for r in rows:
+                                d = str(r[0]); q = str(r[1])
+                                key = jm._pg_advisory_key("ttl", d, q)
+                                if not jm._pg_try_advisory_lock(key):
+                                    continue
+                                try:
+                                    jm.apply_ttl_policies(age_seconds=ttl_age, runtime_seconds=ttl_runtime, action=ttl_action, domain=d, queue=q)
+                                finally:
+                                    try:
+                                        jm._pg_advisory_unlock(key)
+                                    except Exception:
+                                        pass
+                        else:
+                            jm.apply_ttl_policies(age_seconds=ttl_age, runtime_seconds=ttl_runtime, action=ttl_action)
                     except Exception as _e:
                         logger.debug(f"TTL sweep error: {_e}")
+
+                # Optional prune by retention tiers (leader-elected per domain/queue on Postgres)
+                if prune_enforce and (retention_terminal_days > 0 or retention_nonterminal_days > 0):
+                    try:
+                        if jm.backend == "postgres":
+                            with jm._pg_cursor(conn) as cur:
+                                cur.execute("SELECT DISTINCT domain, queue FROM jobs")
+                                dq_rows = cur.fetchall() or []
+                            for r in dq_rows:
+                                d = str(r[0]); q = str(r[1])
+                                key = jm._pg_advisory_key("prune", d, q)
+                                if not jm._pg_try_advisory_lock(key):
+                                    continue
+                                try:
+                                    if retention_terminal_days > 0:
+                                        jm.prune_jobs(statuses=["completed","failed","cancelled","quarantined"], older_than_days=int(retention_terminal_days), domain=d, queue=q)
+                                    if retention_nonterminal_days > 0:
+                                        # Dangerous; disabled by default. When configured, will prune very old queued/processing (stuck) items.
+                                        jm.prune_jobs(statuses=["queued","processing"], older_than_days=int(retention_nonterminal_days), domain=d, queue=q)
+                                finally:
+                                    try:
+                                        jm._pg_advisory_unlock(key)
+                                    except Exception:
+                                        pass
+                        else:
+                            if retention_terminal_days > 0:
+                                jm.prune_jobs(statuses=["completed","failed","cancelled","quarantined"], older_than_days=int(retention_terminal_days))
+                            if retention_nonterminal_days > 0:
+                                jm.prune_jobs(statuses=["queued","processing"], older_than_days=int(retention_nonterminal_days))
+                    except Exception as _e:
+                        logger.debug(f"Prune sweep error: {_e}")
             finally:
                 try:
                     conn.close()

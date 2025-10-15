@@ -404,6 +404,18 @@ class BackendPromptStudioDatabaseBase:
             return wrapper
 
         raw_conn = self._open_new_connection()
+        # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.user_id'))
+        try:
+            if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+                cur = raw_conn.cursor()
+                cur.execute("SET SESSION app.user_id = %s", (str(self.client_id),))
+                try:
+                    raw_conn.commit()
+                except Exception:
+                    pass
+        except Exception:
+            # Non-fatal if SET fails
+            pass
         wrapper = PromptStudioBackendConnectionWrapper(self, raw_conn)
         self._local.conn = wrapper
         logger.debug(

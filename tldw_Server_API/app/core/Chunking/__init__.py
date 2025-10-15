@@ -185,6 +185,15 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         content_sig = _hashlib.sha1((txt or '').encode('utf-8')).hexdigest()[:12]
         file_sig = _hashlib.md5((file_name or '').encode('utf-8')).hexdigest()[:8]
         chunk_uid = f"ck_{file_sig}_{start_c if start_c is not None else 's'}_{end_c if end_c is not None else 'e'}_{content_sig}"
+        # Fielded metadata
+        try:
+            # Prefer v2 Chunker fields when present
+            ancestry_titles = list(getattr(chunk.metadata, 'ancestry_titles', []) or [])
+        except Exception:
+            ancestry_titles = []
+        headings = ancestry_titles if isinstance(ancestry_titles, list) else []
+        # Basic captions placeholder (can be filled by upstream parsers)
+        captions = []
         result.append({
             'text': chunk.text,
             'text_for_embedding': f"File: {file_name}\n{chunk.text}",
@@ -194,6 +203,9 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
                 'start_char': chunk.metadata.start_char,
                 'end_char': chunk.metadata.end_char,
                 'chunk_uid': chunk_uid,
+                # Structured/fielded metadata for indexing/boosting
+                'headings': headings,
+                'captions': captions,
             }
         })
     

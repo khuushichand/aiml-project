@@ -563,8 +563,8 @@ class QueueStatsResponse(BaseModel):
                 "scheduled": 2,
                 "processing": 1,
                 "quarantined": 0,
-            }
         }
+    }
 
 
 @router.get("/jobs/stats", response_model=list[QueueStatsResponse])
@@ -586,6 +586,59 @@ async def get_jobs_stats(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
+
+
+class ArchiveMetaResponse(BaseModel):
+    job_id: int
+    payload_present: bool
+    result_present: bool
+    payload_compressed_present: bool
+    result_compressed_present: bool
+
+
+@router.get("/jobs/archive/meta", response_model=ArchiveMetaResponse)
+async def get_archive_meta(job_id: int, _=Depends(require_admin)):
+    """Return archive compression metadata for a given job id (if archived)."""
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    conn = jm._connect()
+    try:
+        if jm.backend == "postgres":
+            with jm._pg_cursor(conn) as cur:
+                cur.execute(
+                    "SELECT payload, result, payload_compressed, result_compressed FROM jobs_archive WHERE id = %s",
+                    (int(job_id),),
+                )
+                row = cur.fetchone()
+        else:
+            row = conn.execute(
+                "SELECT payload, result, payload_compressed, result_compressed FROM jobs_archive WHERE id = ?",
+                (int(job_id),),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Archive row not found for job_id")
+        # row can be dict or tuple
+        def _get(ix_or_key):
+            if isinstance(row, dict):
+                return row.get(ix_or_key)
+            return row[ix_or_key]
+        payload_present = _get(0) is not None
+        result_present = _get(1) is not None
+        payload_compressed_present = _get(2) is not None
+        result_compressed_present = _get(3) is not None
+        return ArchiveMetaResponse(
+            job_id=int(job_id),
+            payload_present=bool(payload_present),
+            result_present=bool(result_present),
+            payload_compressed_present=bool(payload_compressed_present),
+            result_compressed_present=bool(result_compressed_present),
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 class JobItem(BaseModel):

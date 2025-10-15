@@ -453,6 +453,7 @@ async def unified_search_endpoint(
             search_mode=request.search_mode,
             fts_level=request.fts_level,
             hybrid_alpha=request.hybrid_alpha,
+            enable_intent_routing=request.enable_intent_routing,
             top_k=request.top_k,
             min_score=request.min_score,
             
@@ -496,6 +497,14 @@ async def unified_search_endpoint(
             sibling_window=request.sibling_window,
             include_parent_document=request.include_parent_document,
             parent_max_tokens=request.parent_max_tokens,
+
+            # Advanced retrieval
+            enable_multi_vector_passages=request.enable_multi_vector_passages,
+            mv_span_chars=request.mv_span_chars,
+            mv_stride=request.mv_stride,
+            mv_max_spans=request.mv_max_spans,
+            mv_flatten_to_spans=request.mv_flatten_to_spans,
+            enable_numeric_table_boost=getattr(request, 'enable_numeric_table_boost', False),
             
             # Reranking
             enable_reranking=request.enable_reranking,
@@ -514,6 +523,12 @@ async def unified_search_endpoint(
             generation_model=request.generation_model,
             generation_prompt=request.generation_prompt,
             max_generation_tokens=request.max_generation_tokens,
+            enable_abstention=getattr(request, 'enable_abstention', False),
+            abstention_behavior=getattr(request, 'abstention_behavior', 'continue'),
+            enable_multi_turn_synthesis=getattr(request, 'enable_multi_turn_synthesis', False),
+            synthesis_time_budget_sec=getattr(request, 'synthesis_time_budget_sec', None),
+            synthesis_draft_tokens=getattr(request, 'synthesis_draft_tokens', None),
+            synthesis_refine_tokens=getattr(request, 'synthesis_refine_tokens', None),
 
             # Post-verification (adaptive)
             enable_post_verification=request.enable_post_verification,
@@ -669,7 +684,7 @@ async def unified_batch_endpoint(
         kwargs = model_dump_compat(request, exclude={"queries", "max_concurrent"})
         kwargs.update(db_paths)
         kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
-        
+
         # Process batch
         results = await unified_batch_pipeline(
             queries=request.queries,

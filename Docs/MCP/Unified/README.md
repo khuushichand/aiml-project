@@ -1,0 +1,16 @@
+# MCP Unified Documentation
+
+The MCP Unified stack is the production Model Context Protocol surface that ships with TLDW. Use this directory as the starting point for all current development, deployment, and client-integration work.
+
+## Available Guides
+
+- `Developer_Guide.md` – System architecture, extension patterns, testing strategy
+- `System_Admin_Guide.md` – Installation, configuration, monitoring, and security hardening
+- `User_Guide.md` – HTTP and WebSocket workflows, authentication, troubleshooting
+- `Modules.md` – Reference for creating and managing pluggable MCP modules
+
+## When to Use MCP Unified
+
+- You are contributing new modules, endpoints, or protocol features.
+- You are deploying or operating the latest TLDW server builds.
+- You want the definitive HTTP/WebSocket contract for the current MCP implementation.

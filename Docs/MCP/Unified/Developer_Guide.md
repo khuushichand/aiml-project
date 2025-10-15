@@ -1,5 +1,7 @@
 # MCP Unified - Developer Guide
 
+> Part of the MCP Unified documentation set. See `Docs/MCP/Unified/README.md` for the full guide index.
+
 ## Table of Contents
 1. [Architecture Overview](#architecture-overview)
 2. [Module Development](#module-development)

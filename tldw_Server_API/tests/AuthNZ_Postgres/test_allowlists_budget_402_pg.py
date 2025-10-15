@@ -4,13 +4,12 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_allowlists_and_budget_402_postgres(setup_test_database):
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+async def test_allowlists_and_budget_402_postgres(test_db_pool):
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
 
-    pool = await get_db_pool()
+    pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
 
     # Ensure tables used by manager and usage exist
@@ -80,7 +79,7 @@ async def test_allowlists_and_budget_402_postgres(setup_test_database):
     user_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "vkpg402")
 
     # Create virtual key with allowlists and small budget
-    mgr = APIKeyManager()
+    mgr = APIKeyManager(pool)
     await mgr.initialize()
     res = await mgr.create_virtual_key(
         user_id=user_id,
@@ -122,4 +121,3 @@ async def test_allowlists_and_budget_402_postgres(setup_test_database):
         )
         assert r.status_code == 402, r.text
         assert "budget_exceeded" in r.text
-

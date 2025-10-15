@@ -1287,7 +1287,7 @@ class ChromaDBManager:
 
     # --- Ingest-time utilities ---
     def _dedupe_text_chunks(self, chunks: List[Dict[str, Any]], threshold: float = 0.9) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-        """Remove near-duplicate chunks using simple character-shingle Jaccard.
+        """Remove near-duplicate chunks using Jaccard + SimHash (short-text friendly).
 
         Args:
             chunks: List of {'text': str, 'metadata': {...}} dicts
@@ -1298,23 +1298,78 @@ class ChromaDBManager:
         """
         try:
             k = 7  # shingle size
+
+            def _simhash64(s: str) -> int:
+                """Compute a simple 64-bit SimHash for short technical text.
+
+                Uses word-level hashing with weighted character n-grams to improve
+                discrimination on short inputs. Deterministic and fast; not cryptographic.
+                """
+                try:
+                    import hashlib as _hash
+                    words = [w for w in re.split(r"\W+", s.lower()) if w]
+                    if not words:
+                        return 0
+                    # small char-gram features per word to reduce collisions
+                    def grams(w: str) -> List[str]:
+                        g = set()
+                        w2 = f"^{w}$"
+                        for n in (2, 3):
+                            if len(w2) >= n:
+                                for i in range(len(w2) - n + 1):
+                                    g.add(w2[i:i+n])
+                        return list(g) or [w]
+                    bits = [0] * 64
+                    for w in words:
+                        feats = grams(w)
+                        for f in feats:
+                            h = int(_hash.sha1(f.encode("utf-8")).hexdigest()[:16], 16)
+                            for b in range(64):
+                                if (h >> b) & 1:
+                                    bits[b] += 1
+                                else:
+                                    bits[b] -= 1
+                    out = 0
+                    for b in range(64):
+                        if bits[b] >= 0:
+                            out |= (1 << b)
+                    return out
+                except Exception:
+                    return 0
+
+            def _hamming(a: int, b: int) -> int:
+                x = a ^ b
+                # Kernighan popcount
+                c = 0
+                while x:
+                    x &= x - 1
+                    c += 1
+                return c
             def shingles(s: str) -> Set[str]:
                 s = s or ""
                 if len(s) < k:
                     return {s}
                 return {s[i:i+k] for i in range(0, len(s) - k + 1)}
 
-            canon: List[Tuple[str, Set[str]]] = []  # (uid, set)
+            canon: List[Tuple[str, Set[str], int]] = []  # (uid, shingle_set, simhash)
             duplicate_map: Dict[str, str] = {}
             filtered: List[Dict[str, Any]] = []
+            # SimHash gating config
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            use_simhash = bool(_settings.get("INGEST_DEDUP_USE_SIMHASH", True))
+            simhash_hamming_thresh = int(_settings.get("INGEST_SIMHASH_HAMMING_THRESHOLD", 3))
 
             for ch in chunks:
                 txt = ch.get('text') or ''
                 md = ch.get('metadata') or {}
                 uid = str(md.get('chunk_uid') or md.get('chunk_index') or f"idx_{len(filtered)}")
                 sh = shingles(txt)
+                sh_val = _simhash64(txt) if use_simhash else 0
                 is_dup = False
-                for (cuid, cset) in canon:
+                for (cuid, cset, csim) in canon:
                     inter = len(sh & cset)
                     union = max(1, len(sh | cset))
                     jac = inter / union
@@ -1323,8 +1378,13 @@ class ChromaDBManager:
                         duplicate_map[uid] = cuid
                         is_dup = True
                         break
+                    if use_simhash and sh_val and csim:
+                        if _hamming(sh_val, csim) <= simhash_hamming_thresh:
+                            duplicate_map[uid] = cuid
+                            is_dup = True
+                            break
                 if not is_dup:
-                    canon.append((uid, sh))
+                    canon.append((uid, sh, sh_val))
                     filtered.append(ch)
             # Annotate duplicates in metadata for traceability
             if duplicate_map:

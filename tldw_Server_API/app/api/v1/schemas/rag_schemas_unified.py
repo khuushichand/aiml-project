@@ -130,6 +130,12 @@ class UnifiedRAGRequest(BaseModel):
         description="Hybrid search weight (0=FTS only, 1=Vector only)",
         example=0.7
     )
+
+    enable_intent_routing: bool = Field(
+        default=False,
+        description="Analyze query intent and adjust retrieval knobs (top_k, hybrid weighting) before retrieval",
+        example=False,
+    )
     
     top_k: int = Field(
         default=10,
@@ -343,6 +349,44 @@ class UnifiedRAGRequest(BaseModel):
         example=1200
     )
 
+    # ========== ADVANCED RETRIEVAL ==========
+    enable_multi_vector_passages: bool = Field(
+        default=False,
+        description="Enable multi-vector passage selection (ColBERT-style approximation) before reranking",
+        example=False,
+    )
+    mv_span_chars: int = Field(
+        default=300,
+        ge=100,
+        le=2000,
+        description="Span window size in characters for multi-vector scoring",
+        example=300,
+    )
+    mv_stride: int = Field(
+        default=150,
+        ge=50,
+        le=1000,
+        description="Stride between spans in characters",
+        example=150,
+    )
+    mv_max_spans: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Maximum spans per document to consider",
+        example=8,
+    )
+    mv_flatten_to_spans: bool = Field(
+        default=False,
+        description="Return best span per document as pseudo-documents instead of reordering parent docs",
+        example=False,
+    )
+    enable_numeric_table_boost: bool = Field(
+        default=False,
+        description="When query includes numbers/units, modestly boost table-like and number-dense chunks before reranking",
+        example=False,
+    )
+
     # ========== CLAIMS & FACTUALITY ==========
     enable_claims: bool = Field(
         default=False,
@@ -485,6 +529,81 @@ class UnifiedRAGRequest(BaseModel):
         le=2000,
         description="Maximum tokens for generated answer",
         example=500
+    )
+    # Abstention & multi-turn synthesis
+    enable_abstention: bool = Field(
+        default=False,
+        description="Allow abstaining (or asking for clarification) when evidence is thin based on calibrated gating",
+        example=False,
+    )
+    abstention_behavior: Literal["continue", "ask", "decline"] = Field(
+        default="continue",
+        description="When abstaining: continue (no answer), ask a clarifying question, or decline",
+        example="ask",
+    )
+    enable_multi_turn_synthesis: bool = Field(
+        default=False,
+        description="Use draft → critique → refine generation under a strict time/token budget",
+        example=False,
+    )
+    synthesis_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Total time budget in seconds for multi-turn synthesis",
+        example=5.0,
+    )
+    synthesis_draft_tokens: Optional[int] = Field(
+        default=None,
+        ge=32,
+        le=4000,
+        description="Max tokens for the draft stage (defaults to min(max_generation_tokens, 400))",
+        example=300,
+    )
+    synthesis_refine_tokens: Optional[int] = Field(
+        default=None,
+        ge=32,
+        le=4000,
+        description="Max tokens for the refine stage (defaults to max_generation_tokens)",
+        example=500,
+    )
+
+    # ========== GENERATION GUARDRAILS ==========
+    enable_content_policy_filter: bool = Field(
+        default=False,
+        description="Apply PII/PHI content policy on retrieved chunks before generation",
+        example=False,
+    )
+    content_policy_types: Optional[List[str]] = Field(
+        default=None,
+        description="Policy types to enforce: ['pii', 'phi']",
+        example=["pii", "phi"],
+    )
+    content_policy_mode: Literal["redact", "drop", "annotate"] = Field(
+        default="redact",
+        description="Policy action: redact matches, drop offending chunks, or annotate only",
+        example="redact",
+    )
+    enable_html_sanitizer: bool = Field(
+        default=False,
+        description="Sanitize HTML with an allow-list of tags/attributes",
+        example=False,
+    )
+    html_allowed_tags: Optional[List[str]] = Field(
+        default=None,
+        description="Allowed HTML tags for sanitizer",
+        example=["p", "b", "i", "ul", "li", "code"],
+    )
+    html_allowed_attrs: Optional[List[str]] = Field(
+        default=None,
+        description="Allowed HTML attributes for sanitizer",
+        example=["href", "title"],
+    )
+    ocr_confidence_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Drop OCR-derived chunks whose metadata.ocr_confidence is below this threshold",
+        example=0.6,
     )
 
     # ========== POST-VERIFICATION (ADAPTIVE) ==========
@@ -929,6 +1048,7 @@ class UnifiedBatchRequest(BaseModel):
     # Search Configuration  
     search_mode: Literal["fts", "vector", "hybrid"] = Field(default="hybrid")
     hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
+    enable_intent_routing: bool = Field(default=False)
     top_k: int = Field(default=10, ge=1, le=100)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
     adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
@@ -972,6 +1092,14 @@ class UnifiedBatchRequest(BaseModel):
     sibling_window: int = Field(default=_DEF_SIB_WIN, ge=0, le=50)
     include_parent_document: bool = Field(default=_DEF_INC_PARENT)
     parent_max_tokens: Optional[int] = Field(default=_DEF_PARENT_MAX_TOK, ge=1)
+
+    # Advanced retrieval
+    enable_multi_vector_passages: bool = Field(default=False)
+    mv_span_chars: int = Field(default=300, ge=100, le=2000)
+    mv_stride: int = Field(default=150, ge=50, le=1000)
+    mv_max_spans: int = Field(default=8, ge=1, le=64)
+    mv_flatten_to_spans: bool = Field(default=False)
+    enable_numeric_table_boost: bool = Field(default=False)
     
     # Reranking
     enable_reranking: bool = Field(default=True)
@@ -991,6 +1119,20 @@ class UnifiedBatchRequest(BaseModel):
     generation_model: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)
+    enable_abstention: bool = Field(default=False)
+    abstention_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
+    enable_multi_turn_synthesis: bool = Field(default=False)
+    synthesis_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    synthesis_draft_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
+    synthesis_refine_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
+    # Guardrails
+    enable_content_policy_filter: bool = Field(default=False)
+    content_policy_types: Optional[List[str]] = Field(default=None)
+    content_policy_mode: Literal["redact", "drop", "annotate"] = Field(default="redact")
+    enable_html_sanitizer: bool = Field(default=False)
+    html_allowed_tags: Optional[List[str]] = Field(default=None)
+    html_allowed_attrs: Optional[List[str]] = Field(default=None)
+    ocr_confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     
     # Post-Verification (Adaptive)
     enable_post_verification: bool = Field(default=False)

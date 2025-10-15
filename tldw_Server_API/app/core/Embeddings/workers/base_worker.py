@@ -17,8 +17,11 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..queue_schemas import EmbeddingJobMessage, JobInfo, JobStatus, WorkerMetrics
+from prometheus_client import Histogram
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 from ..messages import build_dedupe_key, classify_failure, validate_schema
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from .dlq_crypto import encrypt_payload_if_configured
 
 
 T = TypeVar('T', bound=EmbeddingJobMessage)
@@ -60,6 +63,21 @@ class BaseWorker(ABC):
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         logger.info(f"Initialized {self.config.worker_type} worker: {self.config.worker_id}")
+
+    # Prometheus histograms (module-level singletons)
+    # Observes XREADGROUP batch sizes per stage
+    _H_STAGE_BATCH_SIZE = Histogram(
+        "embedding_stage_batch_size",
+        "Observed Redis batch size per stage",
+        ["stage"],
+    )
+    # Observes individual message payload sizes (JSON-serialized) per stage
+    _H_STAGE_PAYLOAD_BYTES = Histogram(
+        "embedding_stage_payload_bytes",
+        "Observed message payload size in bytes per stage",
+        ["stage"],
+        buckets=(128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, float("inf")),
+    )
     
     def _log_signal_notice(self, signum: int):
         """Log signal notice outside of signal handler context."""
@@ -153,6 +171,11 @@ class BaseWorker(ABC):
                 
                 if messages:
                     for stream_name, stream_messages in messages:
+                        # Record batch size per stage
+                        try:
+                            self._H_STAGE_BATCH_SIZE.labels(stage=self._stage_name()).observe(len(stream_messages))
+                        except Exception:
+                            pass
                         await self._process_batch(stream_messages)
                         
             except Exception as e:
@@ -165,6 +188,13 @@ class BaseWorker(ABC):
             start_time = time.time()
             
             try:
+                # Trace one span per message process
+                tm = get_tracing_manager()
+                span_attrs = {
+                    "emb.stage": self._stage_name(),
+                    "emb.queue": self.config.queue_name,
+                    "emb.worker_id": self.config.worker_id,
+                }
                 # Validate envelope early using JSON Schema bundle (best-effort)
                 try:
                     validate_schema(self._stage_name(), data)
@@ -174,6 +204,17 @@ class BaseWorker(ABC):
 
                 # Parse message
                 message = self._parse_message(data)
+                # Enrich span attributes with job_id if available
+                try:
+                    span_attrs["emb.job_id"] = getattr(message, "job_id", "")
+                except Exception:
+                    pass
+                # Observe payload size
+                try:
+                    payload_bytes = len(json.dumps(data, default=str).encode("utf-8")) if isinstance(data, dict) else 0
+                    self._H_STAGE_PAYLOAD_BYTES.labels(stage=self._stage_name()).observe(float(payload_bytes))
+                except Exception:
+                    pass
                 # Operation-level dedupe via operation_id if present
                 try:
                     op_id = (data.get("operation_id") if isinstance(data, dict) else None) or getattr(message, "operation_id", None)
@@ -222,8 +263,12 @@ class BaseWorker(ABC):
                 # Update job status
                 await self._update_job_status(message.job_id, JobStatus.CHUNKING)
                 
-                # Process the message
-                result = await self.process_message(message)
+                # Process the message within a tracing span
+                async with tm.async_span(
+                    f"embeddings.{self._stage_name()}.process",
+                    attributes=span_attrs,
+                ):
+                    result = await self.process_message(message)
                 
                 # Send to next stage
                 if result:
@@ -291,25 +336,30 @@ class BaseWorker(ABC):
                 try:
                     dlq_stream = f"{self.config.queue_name}:dlq"
                     payload = model_dump_compat(message)
-                    safe_payload = json.dumps(payload, default=str)
-                    await self.redis_client.xadd(
-                        dlq_stream,
-                        {
-                            "original_queue": self.config.queue_name,
-                            "consumer_group": self.config.consumer_group,
-                            "worker_id": self.config.worker_id,
-                            "job_id": getattr(message, "job_id", ""),
-                            "job_type": self.config.worker_type,
-                            "error": str(error),
-                            "error_code": error_code,
-                            "failure_type": failure_type,
-                            "dlq_state": "quarantined",
-                            "retry_count": str(getattr(message, "retry_count", 0)),
-                            "max_retries": str(getattr(message, "max_retries", 0)),
-                            "failed_at": datetime.utcnow().isoformat(),
-                            "payload": safe_payload,
-                        },
-                    )
+                    fields = {
+                        "original_queue": self.config.queue_name,
+                        "consumer_group": self.config.consumer_group,
+                        "worker_id": self.config.worker_id,
+                        "job_id": getattr(message, "job_id", ""),
+                        "job_type": self.config.worker_type,
+                        "error": str(error),
+                        "error_code": error_code,
+                        "failure_type": failure_type,
+                        "dlq_state": "quarantined",
+                        "retry_count": str(getattr(message, "retry_count", 0)),
+                        "max_retries": str(getattr(message, "max_retries", 0)),
+                        "failed_at": datetime.utcnow().isoformat(),
+                    }
+                    enc = None
+                    try:
+                        enc = encrypt_payload_if_configured(payload)
+                    except Exception:
+                        enc = None
+                    if enc:
+                        fields["payload_enc"] = enc
+                    else:
+                        fields["payload"] = json.dumps(payload, default=str)
+                    await self.redis_client.xadd(dlq_stream, fields)
                 except Exception as dlq_err:
                     logger.error(f"Failed to publish message {message.job_id} to DLQ: {dlq_err}")
                 logger.error(

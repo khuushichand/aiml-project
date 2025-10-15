@@ -40,6 +40,8 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
 )
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 
 
 def _utcnow_iso() -> str:
@@ -56,12 +58,25 @@ def _get_db() -> WorkflowsDatabase:
 
 
 # Rate limits and size constraints (PRD defaults)
+import os
 try:
     from slowapi import Limiter
     from slowapi.util import get_remote_address
-    limiter = Limiter(key_func=get_remote_address)
-    limit_adhoc = limiter.limit("5/minute")
-    limit_run_saved = limiter.limit("15/minute")
+    _disable_limits = (
+        os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", "").lower() in {"1", "true", "yes", "on"}
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+        or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+        or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+    )
+    limiter = Limiter(key_func=get_remote_address) if not _disable_limits else None
+    if _disable_limits or limiter is None:
+        def limit_adhoc(func):
+            return func
+        def limit_run_saved(func):
+            return func
+    else:
+        limit_adhoc = limiter.limit("5/minute")
+        limit_run_saved = limiter.limit("15/minute")
 except Exception:
     def limit_adhoc(func):
         return func
@@ -192,6 +207,7 @@ async def run_saved(
     body: RunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     d = db.get_definition(workflow_id)
     if not d:
@@ -212,6 +228,41 @@ async def run_saved(
                 error=existing.error,
                 definition_version=existing.definition_version,
             )
+    # Quotas (disable in tests via env)
+    try:
+        import os, datetime as _dt
+        _disable_quotas = (
+            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+        )
+        if not _disable_quotas:
+            # Per-user burst per minute
+            now = _dt.datetime.utcnow()
+            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
+            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
+            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
+            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
+            tenant_id = str(getattr(current_user, "tenant_id", "default"))
+            uid = str(current_user.id)
+            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
+            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
+            if c_min >= burst_limit:
+                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
+                headers = {"X-RateLimit-Limit": str(burst_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}
+                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
+            if c_day >= daily_limit:
+                # Reset at next UTC midnight
+                tomorrow = (now + _dt.timedelta(days=1)).date()
+                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
+                headers = {"X-RateLimit-Limit": str(daily_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(reset_dt.timestamp()))}
+                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     run_id = str(uuid4())
     db.create_run(
         run_id=run_id,
@@ -267,6 +318,12 @@ async def run_saved(
     except Exception:
         pass
     engine = WorkflowEngine(db)
+    # Inject scoped secrets (not persisted)
+    try:
+        if body and getattr(body, "secrets", None):
+            WorkflowEngine.set_run_secrets(run_id, body.secrets)
+    except Exception:
+        pass
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
     # Nudge: wait briefly for background engine to transition off 'queued' in test environments
@@ -294,6 +351,29 @@ async def run_saved(
     except Exception:
         pass
     run = db.get_run(run_id)
+    # Audit: run created
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else "/api/v1/workflows/{id}/run",
+                method=(request.method if request else "POST"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="workflow_run",
+                resource_id=str(run_id),
+                action="run_saved",
+                metadata={"workflow_id": d.id, "mode": mode},
+            )
+    except Exception:
+        pass
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -326,14 +406,62 @@ async def list_runs(
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     is_admin = bool(getattr(current_user, "is_admin", False))
     user_id = None
     if owner and is_admin:
         user_id = str(owner)
+        try:
+            if audit_service and str(owner) != str(current_user.id):
+                ctx = AuditContext(
+                    request_id=(request.headers.get("X-Request-ID") if request else None),
+                    user_id=str(current_user.id),
+                    ip_address=(request.client.host if request and request.client else None),
+                    user_agent=(request.headers.get("user-agent") if request else None),
+                    endpoint=str(request.url.path) if request else "/api/v1/workflows/runs",
+                    method=(request.method if request else "GET"),
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.DATA_READ,
+                    category=AuditEventCategory.DATA_ACCESS,
+                    severity=AuditSeverity.INFO,
+                    context=ctx,
+                    resource_type="workflow_runs",
+                    resource_id="*",
+                    action="admin_owner_override",
+                    metadata={"owner": str(owner)},
+                )
+        except Exception:
+            pass
     else:
         user_id = str(current_user.id)
+        # If a non-admin tried to set owner to a different user, log permission denial
+        if owner and str(owner) != str(current_user.id):
+            try:
+                if audit_service:
+                    ctx = AuditContext(
+                        request_id=(request.headers.get("X-Request-ID") if request else None),
+                        user_id=str(current_user.id),
+                        ip_address=(request.client.host if request and request.client else None),
+                        user_agent=(request.headers.get("user-agent") if request else None),
+                        endpoint=str(request.url.path) if request else "/api/v1/workflows/runs",
+                        method=(request.method if request else "GET"),
+                    )
+                    await audit_service.log_event(
+                        event_type=AuditEventType.PERMISSION_DENIED,
+                        category=AuditEventCategory.SECURITY,
+                        severity=AuditSeverity.WARNING,
+                        context=ctx,
+                        resource_type="workflow_runs",
+                        resource_id="*",
+                        action="owner_filter_denied",
+                        metadata={"attempted_owner": str(owner)},
+                    )
+            except Exception:
+                pass
     # Convenience: compute created_after from last_n_hours if provided
     if last_n_hours is not None:
         try:
@@ -384,6 +512,7 @@ async def run_adhoc(
     body: AdhocRunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    audit_service=Depends(get_audit_service_for_user),
 ):
     import os
     if os.getenv("WORKFLOWS_DISABLE_ADHOC", "false").lower() in {"1", "true", "yes"}:
@@ -408,6 +537,39 @@ async def run_adhoc(
                 definition_version=existing.definition_version,
             )
 
+    # Quotas (disable in tests via env)
+    try:
+        import os, datetime as _dt
+        _disable_quotas = (
+            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+        )
+        if not _disable_quotas:
+            now = _dt.datetime.utcnow()
+            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
+            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
+            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
+            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
+            tenant_id = str(getattr(current_user, "tenant_id", "default"))
+            uid = str(current_user.id)
+            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
+            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
+            if c_min >= burst_limit:
+                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
+                headers = {"X-RateLimit-Limit": str(burst_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}
+                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
+            if c_day >= daily_limit:
+                tomorrow = (now + _dt.timedelta(days=1)).date()
+                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0))
+                headers = {"X-RateLimit-Limit": str(daily_limit), "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(reset_dt.timestamp()))}
+                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     # Persist a snapshot-less run
     run_id = str(uuid4())
     db.create_run(
@@ -423,6 +585,11 @@ async def run_adhoc(
         validation_mode=(body.validation_mode if getattr(body, "validation_mode", None) else "block"),
     )
     engine = WorkflowEngine(db)
+    try:
+        if body and getattr(body, "secrets", None):
+            WorkflowEngine.set_run_secrets(run_id, body.secrets)
+    except Exception:
+        pass
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
     # Nudge: wait briefly for background engine to transition off 'queued' in test environments
@@ -450,6 +617,29 @@ async def run_adhoc(
     except Exception:
         pass
     run = db.get_run(run_id)
+    # Audit: ad-hoc run created
+    try:
+        if audit_service:
+            ctx = AuditContext(
+                request_id=(request.headers.get("X-Request-ID") if request else None),
+                user_id=str(current_user.id),
+                ip_address=(request.client.host if request and request.client else None),
+                user_agent=(request.headers.get("user-agent") if request else None),
+                endpoint=str(request.url.path) if request else "/api/v1/workflows/run",
+                method=(request.method if request else "POST"),
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.API_REQUEST,
+                category=AuditEventCategory.API_CALL,
+                severity=AuditSeverity.INFO,
+                context=ctx,
+                resource_type="workflow_run",
+                resource_id=str(run_id),
+                action="run_adhoc",
+                metadata={"mode": mode},
+            )
+    except Exception:
+        pass
     return WorkflowRunResponse(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
@@ -473,6 +663,8 @@ async def get_run(
     run_id: str,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     run = db.get_run(run_id)
     if not run:
@@ -480,10 +672,48 @@ async def get_run(
     # Tenant isolation
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
+        try:
+            if audit_service:
+                ctx = AuditContext(
+                    request_id=(request.headers.get("X-Request-ID") if request else None),
+                    user_id=str(current_user.id),
+                    endpoint=str(request.url.path) if request else "/api/v1/workflows/runs/{id}",
+                    method=(request.method if request else "GET"),
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.PERMISSION_DENIED,
+                    category=AuditEventCategory.SECURITY,
+                    severity=AuditSeverity.WARNING,
+                    context=ctx,
+                    resource_type="workflow_run",
+                    resource_id=str(run_id),
+                    action="tenant_mismatch",
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Run not found")
     # Owner or admin (if attribute available)
     is_admin = bool(getattr(current_user, "is_admin", False))
     if str(run.user_id) != str(current_user.id) and not is_admin:
+        try:
+            if audit_service:
+                ctx = AuditContext(
+                    request_id=(request.headers.get("X-Request-ID") if request else None),
+                    user_id=str(current_user.id),
+                    endpoint=str(request.url.path) if request else "/api/v1/workflows/runs/{id}",
+                    method=(request.method if request else "GET"),
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.PERMISSION_DENIED,
+                    category=AuditEventCategory.SECURITY,
+                    severity=AuditSeverity.WARNING,
+                    context=ctx,
+                    resource_type="workflow_run",
+                    resource_id=str(run_id),
+                    action="not_owner",
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
         run_id=run.run_id,
@@ -651,6 +881,8 @@ async def download_artifact(
     artifact_id: str,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    request: Request = None,
+    audit_service=Depends(get_audit_service_for_user),
 ):
     from pathlib import Path
     from fastapi.responses import FileResponse
@@ -662,9 +894,47 @@ async def download_artifact(
         raise HTTPException(status_code=404, detail="Artifact not found")
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
+        try:
+            if audit_service:
+                ctx = AuditContext(
+                    request_id=(request.headers.get("X-Request-ID") if request else None),
+                    user_id=str(current_user.id),
+                    endpoint=str(request.url.path) if request else "/api/v1/workflows/artifacts/{id}/download",
+                    method=(request.method if request else "GET"),
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.PERMISSION_DENIED,
+                    category=AuditEventCategory.SECURITY,
+                    severity=AuditSeverity.WARNING,
+                    context=ctx,
+                    resource_type="artifact",
+                    resource_id=str(artifact_id),
+                    action="tenant_mismatch",
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Artifact not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
     if str(run.user_id) != str(current_user.id) and not is_admin:
+        try:
+            if audit_service:
+                ctx = AuditContext(
+                    request_id=(request.headers.get("X-Request-ID") if request else None),
+                    user_id=str(current_user.id),
+                    endpoint=str(request.url.path) if request else "/api/v1/workflows/artifacts/{id}/download",
+                    method=(request.method if request else "GET"),
+                )
+                await audit_service.log_event(
+                    event_type=AuditEventType.PERMISSION_DENIED,
+                    category=AuditEventCategory.SECURITY,
+                    severity=AuditSeverity.WARNING,
+                    context=ctx,
+                    resource_type="artifact",
+                    resource_id=str(artifact_id),
+                    action="not_owner",
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Artifact not found")
     # Only support file:// URIs for direct download
     uri = str(art.get("uri") or "")

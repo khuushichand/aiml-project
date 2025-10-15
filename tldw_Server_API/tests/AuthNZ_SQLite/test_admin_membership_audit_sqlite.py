@@ -6,12 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.mark.real_audit
 @pytest.mark.asyncio
-async def test_admin_org_membership_audit_events_sqlite(tmp_path):
+async def test_admin_org_membership_audit_events_sqlite(tmp_path, real_audit_service):
     # Configure single-user mode with API key and user DB base
     os.environ['AUTH_MODE'] = 'single_user'
     os.environ['SINGLE_USER_API_KEY'] = 'audit-key-123'
-    os.environ['USER_DB_BASE_DIR'] = str(tmp_path / 'user_databases')
+    # real_audit_service fixture sets USER_DB_BASE_DIR and resets settings
 
     # Point AuthNZ DB at tmp path
     db_path = tmp_path / 'users.db'
@@ -72,4 +73,3 @@ async def test_admin_org_membership_audit_events_sqlite(tmp_path):
         assert cnt >= 1
     finally:
         con.close()
-

@@ -62,7 +62,9 @@ class ChunkingWorker(BaseWorker):
     
     async def process_message(self, message: ChunkingMessage) -> Optional[EmbeddingMessage]:
         """Process chunking message and create chunks"""
-        logger.info(f"Processing chunking job {message.job_id} for media {message.media_id}")
+        logger.bind(job_id=message.job_id, stage="chunking").info(
+            f"Processing chunking job {message.job_id} for media {message.media_id}"
+        )
         
         try:
             # Update job status
@@ -113,12 +115,15 @@ class ChunkingWorker(BaseWorker):
                 idempotency_key=message.idempotency_key,
                 dedupe_key=message.dedupe_key,
                 operation_id=message.operation_id,
+                trace_id=message.trace_id,
                 chunks=chunk_data_list,
                 embedding_model_config={},  # Populated later by embedding worker
                 model_provider=""  # Populated later by embedding worker
             )
             
-            logger.info(f"Created {len(chunks)} chunks for job {message.job_id}")
+            logger.bind(job_id=message.job_id, stage="chunking").info(
+                f"Created {len(chunks)} chunks for job {message.job_id}"
+            )
             return embedding_message
             
         except Exception as e:

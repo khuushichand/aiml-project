@@ -48,6 +48,7 @@ from tldw_Server_API.app.core.Workflows.adapters import (
     run_mcp_tool_adapter,
     run_webhook_adapter,
 )
+from tldw_Server_API.app.core.Workflows import metrics as _wf_metrics  # ensure metrics registered
 
 
 class RunMode(str, Enum):
@@ -68,9 +69,28 @@ class WorkflowEngine:
     engine is being implemented per PRD v0.1.
     """
 
+    # Ephemeral, in-memory store of per-run secrets (never persisted)
+    _RUN_SECRETS: dict[str, dict[str, str]] = {}
+
     def __init__(self, db: Optional[WorkflowsDatabase] = None, config: Optional[EngineConfig] = None):
         self.db = self._resolve_database(db)
         self.config = config or EngineConfig()
+
+    @classmethod
+    def set_run_secrets(cls, run_id: str, secrets: Optional[dict[str, str]]) -> None:
+        try:
+            if secrets:
+                # Store a shallow copy to avoid external mutation
+                cls._RUN_SECRETS[run_id] = dict(secrets)
+        except Exception:
+            pass
+
+    @classmethod
+    def _pop_run_secrets(cls, run_id: str) -> Optional[dict[str, str]]:
+        try:
+            return cls._RUN_SECRETS.pop(run_id, None)
+        except Exception:
+            return None
 
     @staticmethod
     def _resolve_database(db: Optional[WorkflowsDatabase]) -> WorkflowsDatabase:
@@ -130,8 +150,22 @@ class WorkflowEngine:
         except Exception:
             inputs = {}
 
-        # Shared context for templating
-        context: Dict[str, Any] = {"inputs": inputs}
+        # Shared context for templating and execution
+        # Include tenant/user for adapters and inject scoped secrets (if any)
+        _tenant = self.config.tenant_id
+        _user_id = None
+        try:
+            _user_id = (self.db.get_run(run_id).user_id if self.db.get_run(run_id) else None)
+            _tenant = (self.db.get_run(run_id).tenant_id if self.db.get_run(run_id) else self.config.tenant_id)
+        except Exception:
+            pass
+        context: Dict[str, Any] = {"inputs": inputs, "tenant_id": _tenant}
+        if _user_id is not None:
+            context["user_id"] = _user_id
+        # Attach and retain secrets for the lifetime of the run
+        secrets = self._RUN_SECRETS.get(run_id) or {}
+        if secrets:
+            context["secrets"] = dict(secrets)
         last_outputs: Dict[str, Any] = {}
 
         try:
@@ -186,7 +220,8 @@ class WorkflowEngine:
                         self.db.append_event(self.config.tenant_id, run_id, "run_cancelled", {"by": "user", "before_step": step_id})
                         return
 
-                    # Execute with retries + timeout
+                    # Execute with retries + timeout (trace nested span per step)
+                    from tldw_Server_API.app.core.Metrics import start_span as _start_span, set_span_attribute as _set_attr
                     step_timeout = int(step.get("timeout_seconds") or 300)
                     max_retries = int(step.get("retry") or 0)
                     attempt = 0
@@ -194,6 +229,7 @@ class WorkflowEngine:
                     outputs: Dict[str, Any] = {}
 
                     step_start_ts = time.time()
+                    jump_to_id_on_failure: Optional[str] = None
                     while attempt <= max_retries:
                         # Update heartbeat
                         try:
@@ -232,10 +268,12 @@ class WorkflowEngine:
                                         raise RuntimeError("forced_error")
                                 except Exception:
                                     pass
-                            outputs = await asyncio.wait_for(
-                                self._run_step_adapter(step_type, step_cfg_eff, context, last_outputs, run_id, step_run_id=step_run_id),
-                                timeout=step_timeout,
-                            )
+                            with _start_span("workflows.step", attributes={"run_id": run_id, "step_id": step_id, "type": step_type, "attempt": attempt}):
+                                _set_attr("workflows.step.timeout_seconds", step_timeout)
+                                outputs = await asyncio.wait_for(
+                                    self._run_step_adapter(step_type, step_cfg_eff, context, last_outputs, run_id, step_run_id=step_run_id),
+                                    timeout=step_timeout,
+                                )
                             # If a prompt renders to explicit bad token, treat as failure (test-friendly)
                             if step_type == "prompt":
                                 try:
@@ -277,6 +315,20 @@ class WorkflowEngine:
                             self.db.complete_step_run(step_run_id=step_run_id, status="failed", outputs=outputs, error=str(err))
                         except Exception:
                             pass
+                        # Check on_failure routing
+                        try:
+                            failure_next = str(step.get("on_failure") or "").strip()
+                            if failure_next and failure_next in id_to_idx:
+                                jump_to_id_on_failure = failure_next
+                        except Exception:
+                            jump_to_id_on_failure = None
+                        if jump_to_id_on_failure:
+                            # Route to failure_next without failing the run
+                            last_outputs = {"__status__": "failed", "error": str(err)}
+                            context.update({"last": last_outputs})
+                            idx = id_to_idx[jump_to_id_on_failure]
+                            continue  # proceed to next selected step
+                        # Otherwise, fail the run
                         self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
                         self.db.append_event(self.config.tenant_id, run_id, "run_failed", {"error": str(err)})
                         # Run failure metrics
@@ -289,6 +341,9 @@ class WorkflowEngine:
                             await self._maybe_send_completion_webhook(definition, run_id, status="failed")
                         except Exception:
                             pass
+                        finally:
+                            # Clear ephemeral secrets after terminal state
+                            self._pop_run_secrets(run_id)
                         return
 
                     # Success path or waiting_human handled inside adapter helper
@@ -392,12 +447,14 @@ class WorkflowEngine:
         except Exception:
             definition = {}
         steps = definition.get("steps") or []
-        # Find next index
+        # Find start index and build id map
         start_idx = 0
+        id_to_idx = {}
         for i, s in enumerate(steps):
-            if (s.get("id") or f"step_{i+1}") == after_step_id:
+            sid_i = s.get("id") or f"step_{i+1}"
+            id_to_idx[str(sid_i)] = i
+            if str(sid_i) == str(after_step_id):
                 start_idx = i + 1
-                break
         context = {"inputs": json.loads(run.inputs_json or "{}")}
         if last_outputs:
             context["last"] = last_outputs
@@ -405,9 +462,16 @@ class WorkflowEngine:
         self.db.update_run_status(run_id, status="running", status_reason=None)
         self.db.append_event(self.config.tenant_id, run_id, "run_resumed", {"after": after_step_id})
 
-        # Execute remaining steps (parity with start_run loop: retries, timeouts, pause/cancel checks)
+        # Execute with branching support
         last = last_outputs or {}
-        for idx, step in enumerate(steps[start_idx:], start=start_idx):
+        idx = start_idx
+        visited = 0
+        max_iters = max(1, len(steps) * 10)
+        while idx < len(steps):
+            if visited > max_iters:
+                raise RuntimeError("branch_loop_exceeded")
+            visited += 1
+            step = steps[idx]
             sid = step.get("id") or f"step_{idx+1}"
             sname = step.get("name") or sid
             stype = (step.get("type") or "").strip()
@@ -432,6 +496,8 @@ class WorkflowEngine:
                     await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
                 except Exception:
                     pass
+                finally:
+                    self._pop_run_secrets(run_id)
                 return
 
             step_timeout = int(step.get("timeout_seconds") or 300)
@@ -439,7 +505,6 @@ class WorkflowEngine:
             attempt = 0
             err: Optional[Exception] = None
             outputs: Dict[str, Any] = {}
-            step_start_ts = time.time()
             while attempt <= max_retries:
                 try:
                     self.db.update_step_lock_and_heartbeat(step_run_id=step_run_id, locked_by="engine", lock_ttl_seconds=int(self.config.heartbeat_interval_sec * 5))
@@ -452,9 +517,8 @@ class WorkflowEngine:
                     pass
                 await self._wait_if_paused(run_id, step_run_id)
                 try:
-                    # Dispatch same as start_run via helper
                     outputs = await asyncio.wait_for(
-                        self._run_step_adapter(stype, {**scfg, "timeout_seconds": step_timeout}, {"inputs": context.get("inputs", {})}, last, run_id, step_run_id=step_run_id),
+                        self._run_step_adapter(stype, {**scfg, "timeout_seconds": step_timeout}, context, last, run_id, step_run_id=step_run_id),
                         timeout=step_timeout,
                     )
                     err = None
@@ -475,6 +539,12 @@ class WorkflowEngine:
                     self.db.complete_step_run(step_run_id=step_run_id, status="failed", outputs=outputs, error=str(err))
                 except Exception:
                     pass
+                failure_next = str(step.get("on_failure") or "").strip()
+                if failure_next and failure_next in id_to_idx:
+                    last = {"__status__": "failed", "error": str(err)}
+                    context.update({"last": last})
+                    idx = id_to_idx[failure_next]
+                    continue
                 self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
                 self.db.append_event(self.config.tenant_id, run_id, "run_failed", {"error": str(err)})
                 try:
@@ -503,6 +573,8 @@ class WorkflowEngine:
                     await self._maybe_send_completion_webhook(definition, run_id, status="cancelled")
                 except Exception:
                     pass
+                finally:
+                    self._pop_run_secrets(run_id)
                 return
 
             self.db.append_event(self.config.tenant_id, run_id, "step_completed", {"step_id": sid, "type": stype})
@@ -510,6 +582,23 @@ class WorkflowEngine:
                 self.db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs=last)
             except Exception:
                 pass
+
+            # Determine next step
+            next_id = None
+            try:
+                if isinstance(last, dict) and last.get("__next__"):
+                    next_id = str(last.get("__next__")).strip()
+            except Exception:
+                next_id = None
+            if not next_id:
+                try:
+                    next_id = str(step.get("on_success") or "").strip() or None
+                except Exception:
+                    next_id = None
+            if next_id and next_id in id_to_idx:
+                idx = id_to_idx[next_id]
+            else:
+                idx += 1
 
         # Finished (success)
         duration_ms = None
@@ -544,6 +633,8 @@ class WorkflowEngine:
         except Exception:
             pass
         finally:
+            # Clear ephemeral secrets after terminal state
+            self._pop_run_secrets(run_id)
             try:
                 WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
             except Exception:
@@ -629,6 +720,19 @@ class WorkflowEngine:
                     _run = self.db.get_run(run_id)
                     tenant_id = _run.tenant_id if _run else self.config.tenant_id
                     ctx["tenant_id"] = tenant_id
+                    # Optional field-level encryption for metadata
+                    enc_name = None
+                    meta_to_store = metadata or {}
+                    try:
+                        import os as _os
+                        if str(_os.getenv("WORKFLOWS_ARTIFACT_ENCRYPTION", "false")).lower() in {"1", "true", "yes", "on"}:
+                            from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+                            env = encrypt_json_blob(meta_to_store)
+                            if env is not None:
+                                meta_to_store = {"_encrypted": env}
+                                enc_name = env.get("_enc", "aesgcm:v1")
+                    except Exception:
+                        pass
                     self.db.add_artifact(
                         artifact_id=artifact_id or str(uuid.uuid4()),
                         tenant_id=tenant_id,
@@ -639,7 +743,8 @@ class WorkflowEngine:
                         size_bytes=size_bytes,
                         mime_type=mime_type,
                         checksum_sha256=checksum_sha256,
-                        metadata=metadata,
+                        encryption=enc_name,
+                        metadata=meta_to_store,
                     )
                 except Exception:
                     pass
@@ -728,6 +833,11 @@ class WorkflowEngine:
                         from urllib.parse import urlparse as _urlparse
                         host = _urlparse(url).hostname or ""
                         self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "blocked"})
+                        try:
+                            from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                            _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                     return
@@ -769,19 +879,36 @@ class WorkflowEngine:
             try:
                 import os, hmac, hashlib
                 from urllib.parse import urlparse as _urlparse
+                # Inject W3C trace context
+                try:
+                    from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
+                    _get_tm().inject_context(headers)
+                except Exception:
+                    pass
                 secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
                 body = _json.dumps(payload, default=str)
                 if secret:
                     sig = hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
                     headers["X-Workflows-Signature"] = sig
+                    # Also set a common alternate header for compatibility with tests/tools
+                    headers["X-Hub-Signature-256"] = f"sha256={sig}"
                 import httpx
                 timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
-                with httpx.Client(timeout=timeout) as client:
-                    resp = client.post(url, data=body, headers=headers)
+                # Trace webhook delivery as a child span
+                from tldw_Server_API.app.core.Metrics import start_span as _start_span, set_span_attribute as _set_attr
+                with _start_span("workflows.webhook", attributes={"run_id": run_id}):
+                    _set_attr("workflows.webhook.url", url)
+                    with httpx.Client(timeout=timeout) as client:
+                        resp = client.post(url, data=body, headers=headers)
                 # Record delivery event (mask full URL)
                 try:
                     host = _urlparse(url).hostname or ""
                     self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "delivered", "code": int(resp.status_code)})
+                    try:
+                        from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                        _inc("workflows_webhook_deliveries_total", labels={"status": "delivered", "host": host})
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             except Exception as _e:
@@ -790,6 +917,11 @@ class WorkflowEngine:
                     from urllib.parse import urlparse as _urlparse
                     host = _urlparse(url).hostname or ""
                     self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "failed"})
+                    try:
+                        from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                        _inc("workflows_webhook_deliveries_total", labels={"status": "failed", "host": host})
+                    except Exception:
+                        pass
                     # Best-effort DLQ enqueue
                     try:
                         body_data = payload
@@ -825,6 +957,11 @@ class WorkflowScheduler:
         self._active_workflow: Dict[Optional[int], int] = {}
         self.tenant_limit = int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2"))
         self.workflow_limit = int(os.getenv("WORKFLOWS_WORKFLOW_CONCURRENCY", "1"))
+        try:
+            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
+            _set_gauge("workflows_engine_queue_depth", 0)
+        except Exception:
+            pass
 
     def schedule(self, engine: "WorkflowEngine", run_id: str, mode: RunMode) -> None:
         run = engine.db.get_run(run_id)
@@ -837,6 +974,12 @@ class WorkflowScheduler:
             self._start(engine, run_id, mode, tenant, wf)
         else:
             self._queue.append((engine, run_id, mode, tenant, wf))
+        # Update queue depth gauge
+        try:
+            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
+            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
+        except Exception:
+            pass
 
     def notify_finished(self, tenant: str, workflow_id: Optional[int]) -> None:
         if tenant:
@@ -852,6 +995,12 @@ class WorkflowScheduler:
                 break
             else:
                 self._queue.rotate(-1)
+        # Update queue depth gauge
+        try:
+            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
+            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
+        except Exception:
+            pass
 
     def _can_start(self, tenant: str, workflow_id: Optional[int]) -> bool:
         return self._active_tenant.get(tenant, 0) < self.tenant_limit and self._active_workflow.get(workflow_id, 0) < self.workflow_limit
@@ -861,6 +1010,23 @@ class WorkflowScheduler:
         if workflow_id is not None:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
         self._spawn(engine.start_run(run_id, mode))
+        # Update queue depth gauge (start removed one only when from queue)
+        try:
+            from tldw_Server_API.app.core.Metrics import set_gauge as _set_gauge
+            _set_gauge("workflows_engine_queue_depth", float(len(self._queue)))
+        except Exception:
+            pass
+
+    # Health/metrics helpers
+    def queue_depth(self) -> int:
+        return len(self._queue)
+
+    def stats(self) -> Dict[str, int]:
+        return {
+            "queue_depth": len(self._queue),
+            "active_tenants": sum(self._active_tenant.values()) if self._active_tenant else 0,
+            "active_workflows": sum(self._active_workflow.values()) if self._active_workflow else 0,
+        }
 
     @staticmethod
     def _spawn(coro):

@@ -1,5 +1,7 @@
 # MCP Unified - System Administrator Guide
 
+> Part of the MCP Unified documentation set. See `Docs/MCP/Unified/README.md` for the full guide index.
+
 ## Table of Contents
 1. [Deployment Overview](#deployment-overview)
 2. [Installation](#installation)
@@ -359,7 +361,7 @@ scrape_configs:
 ```
 
 ### 2. Grafana Dashboard
-Import the provided dashboard JSON from `/Docs/MCP_Docs/grafana-dashboard.json`
+Import the provided dashboard JSONs from `Docs/Deployment/Monitoring/` (or the curated samples in `Samples/Grafana/`) to bootstrap observability.
 
 Key metrics to monitor:
 - Request rate and latency

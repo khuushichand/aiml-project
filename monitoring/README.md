@@ -35,9 +35,12 @@ Notes:
 
 ## Grafana
 
-Import the provided dashboard:
+Import the provided dashboards:
 
-- File: `monitoring/grafana_embeddings_orchestrator.json`
+- Embeddings Orchestrator: `monitoring/grafana_embeddings_orchestrator.json`
+- Workflows: `monitoring/grafana_workflows.json`
+- Service Overview: `monitoring/grafana_service_overview.json`
+- Tenant Overview: `monitoring/grafana_tenant_overview.json`
   - Panels:
     - SSE Connections, Disconnects, Summary Failures
     - Queue Depth by queue
@@ -48,8 +51,26 @@ Import the provided dashboard:
 
 In Grafana:
 1. Dashboards → New → Import
-2. Upload `grafana_embeddings_orchestrator.json`
+2. Upload `grafana_embeddings_orchestrator.json`, `grafana_workflows.json`, `grafana_service_overview.json`, or `grafana_tenant_overview.json`
+3. For dashboards with variables, set the Prometheus data source and use the top‑left dropdowns to filter (Provider / Model / Pipeline / Tenant).
+
+## Alertmanager
+
+An example Alertmanager configuration is provided at `monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
 3. Select the correct Prometheus data source
+
+SLO alert rules for the embeddings pipeline are provided in `monitoring/alerts/embeddings_slos.yaml` and include:
+
+- Error budget burn (>0.5% failures over 1h)
+- Queue age p95 > 2 minutes per queue
+- Stage latency p99 > 10 seconds
+
+Add the file to your Prometheus `rule_files` section, for example:
+
+```yaml
+rule_files:
+  - monitoring/alerts/*.yaml
+```
 
 ## Metrics Primer
 
@@ -73,4 +94,3 @@ Worker orchestrator metrics (from `worker_orchestrator.py`):
 
 - Zeroed summary (all empty maps) indicates Redis/unavailable orchestrator – the WebUI shows a small fallback badge; alert if sustained.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).
-

@@ -251,6 +251,17 @@ class MediaDBRetriever(BaseRetriever):
 
         # Build FTS query
         fts_query = self._build_fts_query(query)
+
+        # Column weights for bm25(title, content)
+        title_w = 2.0
+        content_w = 1.0
+        try:
+            from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+            # Allow nested RAG.FTS config or flat vars
+            title_w = float((_settings.get("RAG", {}) or {}).get("fts_title_weight", _settings.get("FTS_TITLE_WEIGHT", 2.0)))
+            content_w = float((_settings.get("RAG", {}) or {}).get("fts_content_weight", _settings.get("FTS_CONTENT_WEIGHT", 1.0)))
+        except Exception:
+            pass
         
         # Build SQL with filters
         sql = """
@@ -262,13 +273,13 @@ class MediaDBRetriever(BaseRetriever):
                 m.url,
                 m.ingestion_date,
                 m.transcription_model,
-                bm25(media_fts) as rank
+                bm25(media_fts, ?, ?) as rank
             FROM media_fts
             JOIN media m ON media_fts.rowid = m.id
             WHERE media_fts MATCH ?
         """
         
-        params = [fts_query]
+        params = [title_w, content_w, fts_query]
         
         # Add media type filter
         if media_type:

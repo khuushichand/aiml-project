@@ -5,6 +5,7 @@
 provider_priority:
   - openai      # Reliable, high quality
   - kokoro      # Local, fast
+  - neutts      # Local, instant voice cloning (requires setup)
   - chatterbox  # Emotion control
   - dia         # Dialogue specialist
   - higgs       # Advanced multi-lingual
@@ -81,6 +82,21 @@ providers:
     api_url: "http://localhost:7851/api/tts"
     model: "xtts"
 
+  # NeuTTS Air (Neuphonic) Configuration
+  neutts:
+    enabled: true  # Enabled per user request; ensure prerequisites are installed
+    # Backbone options:
+    #  - "neuphonic/neutts-air" (HF transformers)
+    #  - "neuphonic/neutts-air-q4-gguf" or "neuphonic/neutts-air-q8-gguf" (llama-cpp; enables streaming)
+    backbone_repo: "neuphonic/neutts-air"
+    backbone_device: "cpu"  # or "gpu" if using llama-cpp with GPU layers
+    # Codec options: "neuphonic/neucodec", "neuphonic/distill-neucodec", or "neuphonic/neucodec-onnx-decoder"
+    codec_repo: "neuphonic/neucodec"
+    codec_device: "cpu"
+    sample_rate: 24000
+    # Note: Provide `voice_reference` (base64-encoded audio) and `extra_params.reference_text`
+    # in the request for voice cloning. Optionally pre-compute `extra_params.ref_codes`.
+
 # Voice mappings for cross-provider compatibility
 voice_mappings:
   # Generic voice names mapped to provider-specific voices
@@ -130,6 +146,7 @@ format_preferences:
   higgs: ["wav", "mp3", "opus", "flac", "pcm"]
   dia: ["wav", "mp3", "opus", "flac", "pcm"]
   chatterbox: ["wav", "mp3", "opus", "flac", "pcm"]
+  neutts: ["wav", "mp3", "opus", "flac", "pcm"]
 
 # Performance settings
 performance:

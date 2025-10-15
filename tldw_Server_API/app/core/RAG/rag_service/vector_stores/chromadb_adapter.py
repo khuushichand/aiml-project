@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
     ChromaDBManager,
     get_default_chroma_manager
 )
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
 class ChromaDBAdapter(VectorStoreAdapter):
@@ -72,7 +73,12 @@ class ChromaDBAdapter(VectorStoreAdapter):
             metadata["embedding_dimension"] = self.config.embedding_dim
             
             # ChromaDBManager's get_or_create_collection handles creation
-            collection = self.manager.get_or_create_collection(collection_name)
+            tm = get_tracing_manager()
+            with tm.span("vectorstore.chromadb.create_collection", attributes={
+                "vs.collection": collection_name,
+                "vs.embed_dim": int(self.config.embedding_dim),
+            }):
+                collection = self.manager.get_or_create_collection(collection_name)
             
             # Update metadata if provided
             if metadata and hasattr(collection, 'modify'):
@@ -142,18 +148,21 @@ class ChromaDBAdapter(VectorStoreAdapter):
         try:
             # Validate vectors
             self._validate_vectors(vectors)
-            
-            # Store in ChromaDB using existing manager
-            self.manager.store_in_chroma(
-                collection_name=collection_name,
-                texts=documents,
-                embeddings=vectors,
-                ids=ids,
-                metadatas=metadatas
-            )
-            
+            tm = get_tracing_manager()
+            with tm.span("vectorstore.chromadb.upsert", attributes={
+                "vs.collection": collection_name,
+                "vs.count": int(len(vectors)),
+                "vs.embed_dim": int(self.config.embedding_dim),
+            }):
+                # Store in ChromaDB using existing manager
+                self.manager.store_in_chroma(
+                    collection_name=collection_name,
+                    texts=documents,
+                    embeddings=vectors,
+                    ids=ids,
+                    metadatas=metadatas
+                )
             logger.info(f"Upserted {len(vectors)} vectors to collection '{collection_name}'")
-            
         except Exception as e:
             logger.error(f"Failed to upsert vectors to '{collection_name}': {e}")
             raise

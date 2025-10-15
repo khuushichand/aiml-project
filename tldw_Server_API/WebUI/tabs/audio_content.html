@@ -149,6 +149,19 @@
                     <button class="btn-small" onclick="clearVoiceReference()">Clear</button>
                     <div class="voice-analysis" id="voiceAnalysis"></div>
                 </div>
+                <div class="quick-record">
+                    <label>Or Quick Record (mic):
+                        <span class="help-tip" title="Record a clean, mono clip of 3–15 seconds in a quiet environment. Avoid background noise and overlapping speakers. The recording overrides file selection.">?</span>
+                    </label>
+                        <div class="record-controls">
+                            <button class="btn-small" id="audioTTS_rec_start" onclick="startAudioTTSRecording()">Record</button>
+                            <button class="btn-small" id="audioTTS_rec_stop" onclick="stopAudioTTSRecording()" disabled>Stop</button>
+                            <button class="btn-small" id="audioTTS_rec_clear" onclick="clearAudioTTSRecording()" disabled>Clear</button>
+                            <span id="audioTTS_rec_status" class="text-muted">Idle (recording overrides file)</span>
+                            <span id="audioTTS_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                        </div>
+                    <audio id="audioTTS_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
+                </div>
             </div>
         </div>
         
@@ -346,6 +359,19 @@
                 <div class="form-group">
                     <label for="fileTrans_audio">Audio File:</label>
                     <input id="fileTrans_audio" type="file" accept="audio/*">
+                    <div class="quick-record">
+                        <label>Or Quick Record (mic):
+                            <span class="help-tip" title="Record a clean mono clip of 3–30 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span>
+                        </label>
+                        <div class="record-controls">
+                            <button class="btn-small" id="fileTrans_rec_start" onclick="startFileTransRecording()">Record</button>
+                            <button class="btn-small" id="fileTrans_rec_stop" onclick="stopFileTransRecording()" disabled>Stop</button>
+                            <button class="btn-small" id="fileTrans_rec_clear" onclick="clearFileTransRecording()" disabled>Clear</button>
+                            <span id="fileTrans_rec_status" class="text-muted">Idle (recording overrides file)</span>
+                            <span id="fileTrans_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                        </div>
+                        <audio id="fileTrans_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="fileTrans_model">Model:</label>

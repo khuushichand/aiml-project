@@ -6,6 +6,7 @@ Storage worker that writes embeddings to the configured vector store adapter
 from typing import Any, Dict, Optional, List
 
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 from ..queue_schemas import (
     JobStatus,
@@ -43,7 +44,7 @@ class StorageWorker(BaseWorker):
     
     async def process_message(self, message: StorageMessage) -> None:
         """Store embeddings and update database"""
-        logger.info(
+        logger.bind(job_id=message.job_id, stage="storage").info(
             f"Processing storage job {message.job_id} with {len(message.embeddings)} embeddings"
         )
 
@@ -125,17 +126,82 @@ class StorageWorker(BaseWorker):
                     }
                 )
 
+            # If the associated document was soft-deleted, remove vectors and short-circuit
+            try:
+                if await self._is_media_soft_deleted(int(message.media_id)):
+                    logger.warning(f"Media {message.media_id} is soft-deleted; removing vectors and completing job {message.job_id}.")
+                    # Remove any vectors for this media_id from the user-specific collection
+                    first_meta = metadatas[0] if metadatas else {}
+                    hint = {
+                        "embedder_name": first_meta.get("embedder_name", ""),
+                        "embedder_version": first_meta.get("embedder_version", ""),
+                    }
+                    collection = await self._get_or_create_collection(
+                        str(message.user_id), message.collection_name, hint
+                    )
+                    try:
+                        delete = getattr(collection, "delete", None)
+                        if callable(delete):
+                            delete(where={"media_id": str(message.media_id)})
+                    except Exception as _del_err:
+                        logger.error(f"Error removing vectors for soft-deleted media {message.media_id}: {_del_err}")
+                    await self._update_job_status(message.job_id, JobStatus.COMPLETED)
+                    # Update ledger to completed for idempotency
+                    try:
+                        ledger_ttl = int(os.getenv("EMBEDDINGS_LEDGER_TTL_SECONDS", "86400") or 86400)
+                        ts = int(__import__('time').time())
+                        if message.idempotency_key:
+                            await self.redis_client.set(
+                                f"embeddings:ledger:idemp:{message.idempotency_key}",
+                                json.dumps({"status": "completed", "ts": ts, "job_id": message.job_id}),
+                                ex=ledger_ttl
+                            )
+                        if message.dedupe_key:
+                            await self.redis_client.set(
+                                f"embeddings:ledger:dedupe:{message.dedupe_key}",
+                                json.dumps({"status": "completed", "ts": ts, "job_id": message.job_id}),
+                                ex=ledger_ttl
+                            )
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                # Non-fatal: if DB unavailable, proceed with normal store path
+                pass
+
             # Ensure collection via helper (for test compatibility)
+            # Provide embedder/version metadata hint on first creation
+            first_meta = metadatas[0] if metadatas else {}
+            cur_name = str(first_meta.get('embedder_name') or first_meta.get('model_provider') or '')
+            cur_ver = str(first_meta.get('embedder_version') or first_meta.get('model_used') or '')
+            col_meta_hint = {"embedder_name": cur_name, "embedder_version": cur_ver} if (cur_name or cur_ver) else None
+            # Include embedding dimension in metadata hint when available
+            try:
+                inferred_dim = self._infer_embedding_dim(message.embeddings) if message.embeddings else None
+            except Exception:
+                inferred_dim = None
+            if inferred_dim:
+                cm = dict(col_meta_hint or {})
+                cm["embedding_dimension"] = int(inferred_dim)
+            else:
+                cm = col_meta_hint
             collection = await self._get_or_create_collection(
-                str(message.user_id), message.collection_name
+                str(message.user_id), message.collection_name, cm
             )
 
             # Enforce embedder/version policy using collection metadata when available
             try:
                 coll_meta = getattr(collection, 'metadata', None) or {}
-                first_meta = metadatas[0] if metadatas else {}
-                cur_name = str(first_meta.get('embedder_name') or first_meta.get('model_provider') or '')
-                cur_ver = str(first_meta.get('embedder_version') or first_meta.get('model_used') or '')
+                # If collection lacks embedder metadata, set it now (best-effort)
+                if (not coll_meta.get('embedder_name') or not coll_meta.get('embedder_version')) and (cur_name or cur_ver):
+                    try:
+                        modify = getattr(collection, 'modify', None)
+                        if callable(modify):
+                            modify(metadata={"embedder_name": cur_name, "embedder_version": cur_ver})
+                            # refresh local view
+                            coll_meta = getattr(collection, 'metadata', coll_meta)
+                    except Exception:
+                        pass
                 if coll_meta and isinstance(coll_meta, dict):
                     col_name = str(coll_meta.get('embedder_name') or '')
                     col_ver = str(coll_meta.get('embedder_version') or '')
@@ -159,22 +225,71 @@ class StorageWorker(BaseWorker):
             except Exception as _embedder_check_err:
                 logger.debug(f"Embedder/version policy check warning: {_embedder_check_err}")
 
-            # Store in batches via helper (for test compatibility)
-            batch_size = 100
-            for i in range(0, len(ids), batch_size):
+            # Validate collection embedding dimension strictly and surface hard error on mismatch
+            try:
+                target_dim = int(inferred_dim) if inferred_dim else None
+                if target_dim:
+                    cmeta = getattr(collection, 'metadata', {}) or {}
+                    expected = None
+                    if isinstance(cmeta, dict) and cmeta.get('embedding_dimension'):
+                        try:
+                            expected = int(cmeta.get('embedding_dimension'))
+                        except Exception:
+                            expected = None
+                    if expected is None and hasattr(collection, 'get') and callable(getattr(collection, 'get')):
+                        # Sample one vector to infer existing dim when metadata absent
+                        try:
+                            sample = collection.get(limit=1, include=['embeddings'])
+                            emb = None
+                            if isinstance(sample, dict):
+                                embs = sample.get('embeddings')
+                                if embs and isinstance(embs, list) and len(embs) > 0:
+                                    emb = embs[0]
+                            if emb and hasattr(emb, '__len__'):
+                                expected = int(len(emb))
+                        except Exception:
+                            expected = None
+                    if expected is not None and expected != target_dim:
+                        logger.error(f"Embedding dimension mismatch for collection '{message.collection_name}': expected {expected}, new {target_dim}")
+                        raise RuntimeError("EMBEDDING_DIMENSION_MISMATCH")
+            except Exception:
+                # Fail fast per requirement
+                raise
+
+            # Store in batches with adaptive sizing based on observed latency
+            import time as _time
+            batch_size = min(100, max(1, len(ids)))
+            i = 0
+            tm = get_tracing_manager()
+            while i < len(ids):
                 batch_end = min(i + batch_size, len(ids))
-
-                await self._store_batch(
-                    collection,
-                    ids=ids[i:batch_end],
-                    embeddings=embeddings[i:batch_end],
-                    documents=documents[i:batch_end],
-                    metadatas=metadatas[i:batch_end],
-                )
-
+                t0 = _time.perf_counter()
+                async with tm.async_span(
+                    "embeddings.storage.upsert_batch",
+                    attributes={
+                        "emb.collection": str(message.collection_name),
+                        "emb.batch_size": int(batch_end - i),
+                        "emb.job_id": str(message.job_id),
+                    },
+                ):
+                    await self._store_batch(
+                        collection,
+                        ids=ids[i:batch_end],
+                        embeddings=embeddings[i:batch_end],
+                        documents=documents[i:batch_end],
+                        metadatas=metadatas[i:batch_end],
+                    )
+                t1 = _time.perf_counter()
                 # Update progress
                 progress = 75 + (25 * batch_end / len(ids))
                 await self._update_job_progress(message.job_id, progress)
+                # Adapt batch size conservatively: speed up on very fast writes, slow down on slow ones
+                elapsed = t1 - t0
+                if elapsed < 0.10 and batch_size < 500:
+                    batch_size = min(500, batch_size * 2)
+                elif elapsed > 1.50 and batch_size > 10:
+                    batch_size = max(10, batch_size // 2)
+                i = batch_end
 
             # Update SQL database
             await self._update_database(message.media_id, message.total_chunks)
@@ -201,7 +316,9 @@ class StorageWorker(BaseWorker):
             except Exception:
                 pass
 
-            logger.info(f"Successfully stored embeddings for job {message.job_id}")
+            logger.bind(job_id=message.job_id, stage="storage").info(
+                f"Successfully stored embeddings for job {message.job_id}"
+            )
 
         except Exception as e:
             logger.error(f"Error storing embeddings for job {message.job_id}: {e}")
@@ -228,6 +345,31 @@ class StorageWorker(BaseWorker):
     async def _send_to_next_stage(self, result: Any):
         """Storage is the final stage, no next stage"""
         pass
+    
+    async def _is_media_soft_deleted(self, media_id: int) -> bool:
+        """Return True if the media_id is marked deleted in Media DB.
+
+        Best-effort check; returns False on any error.
+        """
+        try:
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # lazy import
+            db_path = os.getenv("MEDIA_DB_PATH", "Databases/Media_DB_v2.db")
+            db = MediaDatabase(db_path=db_path, client_id="embeddings_storage_worker")
+            row = db.execute_query("SELECT deleted FROM Media WHERE id = ?", (int(media_id),)).fetchone()
+            try:
+                db.close_connection()
+            except Exception:
+                pass
+            if row is None:
+                return False
+            try:
+                # tuple or sqlite row
+                val = row[0] if isinstance(row, (tuple, list)) else (row.get('deleted') if hasattr(row, 'get') else None)
+            except Exception:
+                val = None
+            return bool(int(val)) if val is not None else False
+        except Exception:
+            return False
     
     async def _get_adapter_for_user(self, user_id: str, embedding_dim: int) -> VectorStoreAdapter:
         """Return an initialized adapter for a given user and dimension (cached)."""
@@ -260,7 +402,7 @@ class StorageWorker(BaseWorker):
         self._adapter_cache[cache_key] = adapter
         return adapter
 
-    async def _get_or_create_collection(self, user_id: str, collection_name: str):
+    async def _get_or_create_collection(self, user_id: str, collection_name: str, collection_metadata: Optional[Dict[str, Any]] = None):
         """Get or create a collection using ChromaDBManager (test-friendly).
 
         Tries calling manager.get_or_create_collection in a backward-compatible way so
@@ -273,8 +415,12 @@ class StorageWorker(BaseWorker):
             # Backward-compat: some tests expect (user, collection) args
             return manager.get_or_create_collection(user_id, collection_name)  # type: ignore[misc]
         except TypeError:
-            # Actual implementation signature is (collection_name, metadata=None)
-            return manager.get_or_create_collection(collection_name=collection_name)  # type: ignore[misc]
+            # Actual implementation signature is (collection_name, collection_metadata=None)
+            try:
+                return manager.get_or_create_collection(collection_name=collection_name, collection_metadata=collection_metadata)  # type: ignore[misc]
+            except TypeError:
+                # Fallback without metadata
+                return manager.get_or_create_collection(collection_name=collection_name)  # type: ignore[misc]
 
     async def _store_batch(
         self,

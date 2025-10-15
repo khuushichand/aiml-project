@@ -32,6 +32,10 @@
                     <span class="status-indicator" id="status-elevenlabs"></span>
                     <span>ElevenLabs</span>
                 </div>
+                <div class="status-item" data-provider="neutts">
+                    <span class="status-indicator" id="status-neutts"></span>
+                    <span>NeuTTS</span>
+                </div>
             </div>
             <button class="btn btn-sm btn-secondary" onclick="TTS.checkProviderStatus()">
                 <i class="fas fa-sync"></i> Refresh Status
@@ -58,6 +62,9 @@
                 </button>
                 <button class="sub-tab-btn" data-provider="elevenlabs" onclick="TTS.switchProvider('elevenlabs')">
                     <i class="fas fa-podcast"></i> ElevenLabs
+                </button>
+                <button class="sub-tab-btn" data-provider="neutts" onclick="TTS.switchProvider('neutts')">
+                    <i class="fas fa-cloud"></i> NeuTTS
                 </button>
             </div>
 
@@ -115,6 +122,24 @@
                                 <button class="btn btn-sm btn-primary mt-2" onclick="TTS.openVoiceUpload('vibevoice')">
                                     <i class="fas fa-upload"></i> Upload Voice
                                 </button>
+                            </div>
+                            <div class="setting-group">
+                                <label>Voice Reference (optional)</label>
+                                <input type="file" id="vibevoice-ref-audio" class="form-control" accept="audio/*" />
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('vibevoice')" id="vibevoice-rec-start">
+                                        <i class="fas fa-microphone"></i> Record
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('vibevoice')" id="vibevoice-rec-stop" disabled>
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('vibevoice')" id="vibevoice-rec-clear" disabled>
+                                        <i class="fas fa-times"></i> Clear
+                                    </button>
+                                    <span id="vibevoice-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
+                                    <span id="vibevoice-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                                </div>
+                                <audio id="vibevoice-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                             </div>
                             <div class="setting-group">
                                 <label>Speaker Count</label>
@@ -285,6 +310,23 @@
                                 </button>
                             </div>
                             <div class="setting-group">
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–15 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('higgs')" id="higgs-rec-start">
+                                        <i class="fas fa-microphone"></i> Record
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('higgs')" id="higgs-rec-stop" disabled>
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('higgs')" id="higgs-rec-clear" disabled>
+                                        <i class="fas fa-times"></i> Clear
+                                    </button>
+                                    <span id="higgs-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
+                                    <span id="higgs-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                                </div>
+                                <audio id="higgs-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
+                            </div>
+                            <div class="setting-group">
                                 <label>Features</label>
                                 <div class="checkbox-group">
                                     <label class="checkbox-label">
@@ -339,6 +381,23 @@
                                 <button class="btn btn-sm btn-primary mt-2" onclick="TTS.uploadVoiceClone('chatterbox')">
                                     <i class="fas fa-clone"></i> Clone Voice
                                 </button>
+                            </div>
+                            <div class="setting-group">
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 5–20 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startProviderRecording('chatterbox')" id="chatterbox-rec-start">
+                                        <i class="fas fa-microphone"></i> Record
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopProviderRecording('chatterbox')" id="chatterbox-rec-stop" disabled>
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="TTS.clearProviderRecording('chatterbox')" id="chatterbox-rec-clear" disabled>
+                                        <i class="fas fa-times"></i> Clear
+                                    </button>
+                                    <span id="chatterbox-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
+                                    <span id="chatterbox-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                                </div>
+                                <audio id="chatterbox-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
                             </div>
                         </div>
                     </div>
@@ -419,6 +478,54 @@
                                 <input type="range" id="elevenlabs-clarity" class="form-control-range" 
                                     min="0" max="100" value="75">
                                 <span id="elevenlabs-clarity-value">75%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NeuTTS Provider Tab -->
+            <div class="provider-content" id="provider-neutts">
+                <div class="provider-settings card">
+                    <div class="card-header">
+                        <h4><i class="fas fa-cloud"></i> NeuTTS Settings</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="settings-grid">
+                            <div class="setting-group">
+                                <label>Model</label>
+                                <select id="neutts-model" class="form-control">
+                                    <option value="neutts-air">neutts-air (HF, non-streaming)</option>
+                                    <option value="neutts-air-q8-gguf">neutts-air-q8-gguf (GGUF, streaming)</option>
+                                    <option value="neutts-air-q4-gguf">neutts-air-q4-gguf (GGUF, streaming)</option>
+                                </select>
+                            </div>
+                            <div class="setting-group">
+                                <label>Reference Audio (3–15s)</label>
+                                <input type="file" id="neutts-ref-audio" class="form-control" accept="audio/*" />
+                                <small class="text-muted" title="If a recording is present, it overrides the selected file.">Note: recording overrides file selection.</small>
+                            </div>
+                            <div class="setting-group">
+                                <label>Reference Text (matches audio)</label>
+                                <input type="text" id="neutts-ref-text" class="form-control" placeholder="What is said in the reference clip" />
+                            </div>
+                            <div class="setting-group">
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–10 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="TTS.startNeuTTSRecording()" id="neutts-rec-start">
+                                        <i class="fas fa-microphone"></i> Record
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="TTS.stopNeuTTSRecording()" id="neutts-rec-stop" disabled>
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <span id="neutts-rec-status" class="text-muted" title="If a recording is present, it overrides the selected file.">Idle (recording overrides file)</span>
+                                    <span id="neutts-recording-badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
+                                </div>
+                                <audio id="neutts-rec-playback" controls style="width:100%; display:none; margin-top:8px;"></audio>
+                                <small class="text-muted">The recorded clip will be used as the reference audio automatically and overrides file selection.</small>
+                            </div>
+                            <div class="setting-group">
+                                <small class="text-muted">Tip: Enable streaming only when using a GGUF model.</small>
                             </div>
                         </div>
                     </div>

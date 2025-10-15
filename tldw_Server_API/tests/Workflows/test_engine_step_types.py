@@ -77,3 +77,22 @@ def test_log_only_outputs_shape(client_with_wf: TestClient):
     assert out.get("level") == "debug"
     assert out.get("message", "").endswith("Bob")
 
+
+def test_on_failure_routing_to_log(client_with_wf: TestClient):
+    client = client_with_wf
+    # First step intentionally fails; on_failure routes to log step
+    definition = {
+        "name": "fail-then-log",
+        "version": 1,
+        "steps": [
+            {"id": "p1", "type": "prompt", "config": {"template": "bad", "force_error": True}, "on_failure": "l1"},
+            {"id": "l1", "type": "log", "config": {"message": "Fallback for {{ inputs.name }}", "level": "info"}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Zoe"}}).json()["run_id"]
+    data = _wait_for_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    out = data.get("outputs") or {}
+    assert out.get("logged") is True
+    assert "Zoe" in out.get("message", "")

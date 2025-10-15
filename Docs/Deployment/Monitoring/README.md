@@ -10,6 +10,12 @@ Dashboards (JSON):
 - `web-scraping-dashboard.json` – Scraping throughput, success ratio, latency
 - `security-dashboard.json` – HTTP status, p95 latency, headers, quotas, uploads
 - `rag-reranker-dashboard.json` – RAG reranker guardrails (timeouts, exceptions, budget, docs scored)
+- `rag-quality-dashboard.json` – Nightly eval faithfulness/coverage trends (dataset-labeled)
+
+Exemplars
+- Redacted payload exemplars for debugging failed adaptive checks are written to `Databases/observability/rag_payload_exemplars.jsonl` by default.
+- Control with env: `RAG_PAYLOAD_EXEMPLAR_SAMPLING` (0..1), `RAG_PAYLOAD_EXEMPLAR_PATH`.
+- See `Exemplars/README.md` and `exemplar-sink-sample.yml` for ingestion patterns.
 
 Notes
 - Dashboards assume a Prometheus datasource with UID `prometheus`.
@@ -23,3 +29,8 @@ Provisioning
 
 Prometheus Scrape
 - See `prometheus-scrape-sample.yml` for a ready-to-use scrape config that targets `http://<tldw_host>:8000/metrics`.
+
+Nightly Quality Evaluations
+- Enable scheduler: `RAG_QUALITY_EVAL_ENABLED=true` (interval via `RAG_QUALITY_EVAL_INTERVAL_SEC`).
+- Dataset: `Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl` (override with `RAG_QUALITY_EVAL_DATASET`).
+- Metrics: `rag_eval_faithfulness_score{dataset=...}`, `rag_eval_coverage_score{dataset=...}`, `rag_eval_last_run_timestamp{dataset=...}`.

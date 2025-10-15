@@ -2181,10 +2181,33 @@ class MediaDatabase:
         """
         if self.backend_type == BackendType.SQLITE:
             content = content or ""
+            # Optional: append synonyms expansions to content for index-time synonyming
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.synonyms_registry import get_corpus_synonyms  # type: ignore
+                corpus = os.getenv("DEFAULT_FTS_CORPUS", "").strip() or None
+                syn_map = get_corpus_synonyms(corpus)
+            except Exception:
+                syn_map = {}
+            expanded_terms: list[str] = []
+            if syn_map:
+                try:
+                    import re as _re
+                    tokens = set([t for t in _re.split(r"\W+", f"{title} {content}".lower()) if t])
+                    for t in tokens:
+                        al = syn_map.get(t)
+                        if al:
+                            expanded_terms.extend(a for a in al if a)
+                    # Cap expansion to avoid index bloat
+                    max_terms = int(os.getenv("FTS_SYNONYM_EXPANSION_LIMIT", "200") or 200)
+                    if len(expanded_terms) > max_terms:
+                        expanded_terms = expanded_terms[:max_terms]
+                except Exception:
+                    expanded_terms = []
+            exp_str = (" " + " ".join(expanded_terms)) if expanded_terms else ""
             try:
                 conn.execute(
                     "INSERT OR REPLACE INTO media_fts (rowid, title, content) VALUES (?, ?, ?)",
-                    (media_id, title, content),
+                    (media_id, title, f"{content}{exp_str}"),
                 )
                 logging.debug("Updated SQLite FTS entry for Media ID %s", media_id)
             except sqlite3.Error as e:
@@ -2193,16 +2216,34 @@ class MediaDatabase:
             return
 
         if self.backend_type == BackendType.POSTGRESQL:
+            # Use fielded weights: title=A (highest), content=C (lower)
             try:
-                self._execute_with_connection(
-                    conn,
-                    (
+                enable_syn = str(os.getenv("PG_FTS_ENABLE_SYNONYMS", "false")).lower() in {"1","true","yes","on","y"}
+                if enable_syn:
+                    # Best-effort create synonyms support
+                    try:
+                        ensure_fn = getattr(self.backend, 'ensure_synonyms_support', None)
+                        if callable(ensure_fn):
+                            ensure_fn(connection=conn)
+                    except Exception as _syn_err:
+                        logging.debug(f"Synonyms support ensure failed (non-fatal): {_syn_err}")
+                if enable_syn:
+                    sql = (
                         "UPDATE media SET media_fts_tsv = CASE "
-                        "WHEN deleted IS FALSE THEN to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content, '')) "
+                        "WHEN deleted IS FALSE THEN "
+                        " setweight(to_tsvector('english', synonyms_expand(coalesce(title, ''))),'A') || "
+                        " setweight(to_tsvector('english', synonyms_expand(coalesce(content, ''))),'C') "
                         "ELSE NULL END WHERE id = ?"
-                    ),
-                    (media_id,),
-                )
+                    )
+                else:
+                    sql = (
+                        "UPDATE media SET media_fts_tsv = CASE "
+                        "WHEN deleted IS FALSE THEN "
+                        " setweight(to_tsvector('english', coalesce(title, '')),'A') || "
+                        " setweight(to_tsvector('english', coalesce(content, '')),'C') "
+                        "ELSE NULL END WHERE id = ?"
+                    )
+                self._execute_with_connection(conn, sql, (media_id,))
                 logging.debug("Updated PostgreSQL FTS vector for Media ID %s", media_id)
             except DatabaseError as exc:
                 logging.error("Failed to update PostgreSQL FTS for Media ID %s: %s", media_id, exc, exc_info=True)
