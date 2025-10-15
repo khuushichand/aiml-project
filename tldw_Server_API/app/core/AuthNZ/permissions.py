@@ -410,6 +410,10 @@ API_GENERATE_KEYS = "api.generate_keys"
 API_MANAGE_WEBHOOKS = "api.manage_webhooks"
 API_RATE_LIMIT_OVERRIDE = "api.rate_limit_override"
 
+# Workflows permissions
+WORKFLOWS_RUNS_READ = "workflows.runs.read"
+WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
+
 # Role names
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"

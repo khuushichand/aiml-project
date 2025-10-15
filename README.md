@@ -160,6 +160,19 @@ PST/OST note
   - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` (default `20`)
   - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
 
+- Adaptive Post‑Verification (optional):
+  - Enable with request flags on `/api/v1/rag/search`:
+    - `enable_post_verification: true`
+    - `adaptive_max_retries: 1` (0–3)
+    - `adaptive_unsupported_threshold: 0.15` (trigger when (refuted + NEI)/total_claims exceeds threshold)
+    - `adaptive_max_claims: 20`
+    - `adaptive_time_budget_sec: 10`
+    - `low_confidence_behavior: "continue|ask|decline"`
+  - Env toggles:
+    - `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — enables HyDE + multi‑strategy rewrites + diversity during adaptive pass; set to `false` for a simple, single‑query retrieval.
+    - `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for post‑verification.
+  - Response attaches `metadata.post_verification` with `unsupported_ratio`, `total_claims`, `unsupported_count`, `fixed`, `reason`.
+
 ### Reranking (llama.cpp, GGUF: Qwen3, BGE, Jina-AI)
 - **HTTP Reranker Endpoints** [Stable]:
   - `POST /v1/reranking` and `POST /v1/rerank` (versioned public aliases; auth required)

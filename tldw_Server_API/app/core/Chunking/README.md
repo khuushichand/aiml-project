@@ -103,6 +103,40 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Use `structure_aware` for code/docs when possible; otherwise seed headers/fences with `hierarchical_template`.
 - Keep templates JSON-only; put operational notes in `metadata` (never secrets).
 
+## Timecode Mapping for Media Transcripts
+
+Attach approximate time bounds to chunks by supplying a `timecode_map` with character spans and times. The chunker projects `start_time`/`end_time` onto chunk metadata when spans overlap.
+
+Example:
+
+```
+from tldw_Server_API.app.core.Chunking import Chunker
+
+text = "[00:00] intro ... [00:10] content ..."
+segments = [
+    {"start_offset": 0, "end_offset": 120, "start_time": 0.0, "end_time": 10.0},
+    {"start_offset": 120, "end_offset": 300, "start_time": 10.0, "end_time": 25.0},
+]
+
+ck = Chunker()
+chunks = ck.process_text(
+    text,
+    method="sentences",
+    max_size=3,
+    overlap=1,
+    timecode_map=segments,
+    adaptive=True,
+    adaptive_overlap=True,
+)
+for ch in chunks:
+    md = ch["metadata"]
+    print(md.get("start_time"), md.get("end_time"))
+```
+
+Notes:
+- Mapping is best‑effort: if a chunk overlaps a segment, the mapped times cover the overlapped portion proportionally.
+- If multiple segments overlap a chunk, the first overlap is used.
+
 ## Environment Toggles (Regex Safety)
 These environment variables harden regex-based detection used by the eBook chapter strategy (`strategies/ebook_chapters.py`). They do not affect non‑regex strategies.
 

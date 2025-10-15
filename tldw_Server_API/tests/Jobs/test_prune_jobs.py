@@ -15,10 +15,18 @@ def test_prune_jobs_by_status_and_age(tmp_path):
     j2 = jm.create_job(domain="d", queue="default", job_type="t", payload={}, owner_user_id="1")
     j3 = jm.create_job(domain="d", queue="default", job_type="t", payload={}, owner_user_id="1")
 
-    # Complete them
-    jm.complete_job(int(j1["id"]))
-    jm.fail_job(int(j2["id"]), error="x", retryable=False)
-    jm.complete_job(int(j3["id"]))
+    # Acquire and complete/fail them to set terminal statuses
+    acq = jm.acquire_next_job(domain="d", queue="default", lease_seconds=30, worker_id="w1")
+    assert acq and int(acq["id"]) in {int(j1["id"]), int(j2["id"]), int(j3["id"])}
+    jm.complete_job(int(acq["id"]))
+
+    acq2 = jm.acquire_next_job(domain="d", queue="default", lease_seconds=30, worker_id="w1")
+    assert acq2
+    jm.fail_job(int(acq2["id"]), error="x", retryable=False)
+
+    acq3 = jm.acquire_next_job(domain="d", queue="default", lease_seconds=30, worker_id="w1")
+    assert acq3
+    jm.complete_job(int(acq3["id"]))
 
     # Backdate j1/j2 completion times by 40 days
     conn = sqlite3.connect(db_path)
@@ -35,4 +43,3 @@ def test_prune_jobs_by_status_and_age(tmp_path):
     # Remaining should include j3 (recent)
     r3 = jm.get_job(int(j3["id"]))
     assert r3 is not None
-

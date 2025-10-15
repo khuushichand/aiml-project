@@ -68,7 +68,7 @@ def test_ttl_sweep_cancel(monkeypatch, tmp_path):
             "queue": "default",
             "job_type": "export",
         }
-        r = client.post("/api/v1/jobs/ttl/sweep", json=body)
+        r = client.post("/api/v1/jobs/ttl/sweep", json=body, headers={**headers, "X-Confirm": "true"})
         assert r.status_code == 200, r.text
         affected = r.json()["affected"]
         assert affected >= 2
@@ -113,7 +113,7 @@ def test_ttl_sweep_fail(monkeypatch, tmp_path):
             "queue": "default",
             "job_type": "export",
         }
-        r = client.post("/api/v1/jobs/ttl/sweep", json=body)
+        r = client.post("/api/v1/jobs/ttl/sweep", json=body, headers={**headers, "X-Confirm": "true"})
         assert r.status_code == 200
         assert r.json()["affected"] >= 2
 

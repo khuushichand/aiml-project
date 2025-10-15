@@ -87,6 +87,13 @@ class EmbeddingData(BaseModel):
 # Base job message that all queue messages inherit from
 class EmbeddingJobMessage(BaseModel):
     """Base message for all embedding pipeline jobs"""
+    # Message envelope
+    msg_version: int = Field(default=1, description="Message schema version")
+    msg_schema: str = Field(default="tldw.embeddings.v1", alias="schema", description="Logical schema name (alias: schema)")
+    schema_url: Optional[str] = Field(default=None, description="JSON Schema URL for validation")
+    idempotency_key: Optional[str] = Field(default=None, description="Idempotency key for exactly-once semantics where possible")
+    dedupe_key: Optional[str] = Field(default=None, description="Optional dedupe key used to suppress replays within a time window")
+    operation_id: Optional[str] = Field(default=None, description="Operation id for replay prevention across stages/outages")
     job_id: str = Field(..., description="Unique job identifier")
     user_id: str = Field(..., description="User who initiated the job")
     media_id: int = Field(..., description="Media item being processed")
@@ -98,7 +105,7 @@ class EmbeddingJobMessage(BaseModel):
     max_retries: int = Field(default=3, ge=0)
     trace_id: Optional[str] = Field(None, description="For distributed tracing")
     
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, populate_by_name=True)
 
 
 # Chunking stage message

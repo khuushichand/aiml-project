@@ -198,25 +198,27 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
 - Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
 - Authentication:
   - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
-  - Multi-user JWT: not yet supported for this WS endpoint; use single-user token for now. Planned: `Authorization: Bearer <JWT>` header.
+  - Multi-user JWT: supported via `Authorization: Bearer <JWT>` header on the WebSocket upgrade request, or in the first message `{ "type": "auth", "token": "<JWT>" }`.
 - Protocol:
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
   - Server messages include:
-    - `{ "type": "status", "message": "Authenticated" }`
+    - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false }`
     - `{ "type": "transcription", "text": "...", "timestamp": ..., "is_final": true }`
     - `{ "type": "full_transcript", "text": "..." }`
     - `{ "type": "error", "message": "..." }`
+    - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes" }` followed by close with code `4003`.
 
 Helper endpoints
 - `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
-Example (wscat)
+Examples (wscat)
 ```bash
-wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=YOUR_SINGLE_USER_API_KEY"
+wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
+wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
 ```
 
 ### Basic Live Transcription (Local Python)

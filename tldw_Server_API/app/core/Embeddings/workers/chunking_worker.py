@@ -5,6 +5,7 @@ import hashlib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+import unicodedata
 
 # Optional v2 chunker for consistent chunk semantics
 try:
@@ -23,6 +24,7 @@ from ..queue_schemas import (
 )
 from .base_worker import BaseWorker, WorkerConfig
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from ..messages import normalize_message
 
 
 class ChunkingWorker(BaseWorker):
@@ -55,7 +57,8 @@ class ChunkingWorker(BaseWorker):
         
     def _parse_message(self, data: Dict[str, Any]) -> ChunkingMessage:
         """Parse raw message data into ChunkingMessage"""
-        return ChunkingMessage(**data)
+        norm = normalize_message("chunking", data)
+        return ChunkingMessage(**norm)
     
     async def process_message(self, message: ChunkingMessage) -> Optional[EmbeddingMessage]:
         """Process chunking message and create chunks"""
@@ -75,6 +78,9 @@ class ChunkingWorker(BaseWorker):
             chunk_data_list = []
             for i, (chunk_text, start_idx, end_idx) in enumerate(chunks):
                 chunk_id = self._generate_chunk_id(message.job_id, i)
+                # Compute normalized content hash to enable cross-run embedding caching
+                norm_txt = self._normalize_for_hash(chunk_text)
+                content_hash = hashlib.sha256(norm_txt.encode('utf-8')).hexdigest()
                 
                 chunk_data = ChunkData(
                     chunk_id=chunk_id,
@@ -83,7 +89,9 @@ class ChunkingWorker(BaseWorker):
                         **message.source_metadata,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
-                        "content_type": message.content_type
+                        "content_type": message.content_type,
+                        "content_hash": content_hash,
+                        "hash_norm": "ws_v1"
                     },
                     start_index=start_idx,
                     end_index=end_idx,
@@ -102,6 +110,9 @@ class ChunkingWorker(BaseWorker):
                 priority=message.priority,
                 user_tier=message.user_tier,
                 created_at=message.created_at,
+                idempotency_key=message.idempotency_key,
+                dedupe_key=message.dedupe_key,
+                operation_id=message.operation_id,
                 chunks=chunk_data_list,
                 embedding_model_config={},  # Populated later by embedding worker
                 model_provider=""  # Populated later by embedding worker
@@ -256,6 +267,22 @@ class ChunkingWorker(BaseWorker):
         """Generate unique chunk ID"""
         data = f"{job_id}:{chunk_index}"
         return hashlib.sha256(data.encode()).hexdigest()[:16]
+
+    def _normalize_for_hash(self, text: str) -> str:
+        """Normalize text for stable hashing across ingests.
+
+        - Unicode NFC normalization
+        - Strip leading/trailing whitespace
+        - Collapse internal whitespace to a single space
+        - Lowercase
+        """
+        if not isinstance(text, str):
+            text = str(text or "")
+        t = unicodedata.normalize('NFC', text)
+        t = t.strip()
+        t = " ".join(t.split())
+        t = t.lower()
+        return t
     
     async def _update_job_progress(self, job_id: str, percentage: float, total_chunks: int):
         """Update job progress information"""

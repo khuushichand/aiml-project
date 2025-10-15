@@ -62,3 +62,34 @@ class VirtualKeyCreateRequest(BaseModel):
     budget_month_tokens: Optional[int] = None
     budget_day_usd: Optional[float] = None
     budget_month_usd: Optional[float] = None
+
+
+# ============================
+# Organization membership schemas
+# ============================
+
+class OrgMemberAddRequest(BaseModel):
+    user_id: int
+    role: Optional[str] = Field("member", pattern=r"^(owner|admin|member)$")
+
+
+class OrgMemberResponse(BaseModel):
+    org_id: int
+    user_id: int
+    role: str
+
+
+class OrgMemberRoleUpdateRequest(BaseModel):
+    role: str = Field(..., pattern=r"^(owner|admin|member)$")
+
+
+class OrgMemberListItem(BaseModel):
+    user_id: int
+    role: str
+    status: Optional[str] = None
+    added_at: Optional[str] = None
+
+
+class OrgMembershipItem(BaseModel):
+    org_id: int
+    role: str

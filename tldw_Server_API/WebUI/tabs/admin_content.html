@@ -2781,6 +2781,86 @@
 
 <!-- System Status Tab -->
 <div id="tabAdminSystem" class="tab-content">
+    <div class="endpoint-section" id="adminSecurityAlerts">
+        <h2>AuthNZ Security Alerts</h2>
+        <p>Inspect delivery configuration, per-sink thresholds, and recent dispatch health.</p>
+        <div class="btn-group">
+            <button class="btn btn-primary" onclick="loadSecurityAlertStatus()">
+                Refresh Status
+            </button>
+        </div>
+        <div id="adminSecurityAlerts_health" style="margin-top: 10px; padding:6px 10px; border-radius:6px; display:inline-block; background:#d1d5db; color:#111;">--</div>
+        <div class="table-responsive" style="margin-top: 15px;">
+            <table class="table" id="adminSecurityAlerts_table">
+                <thead>
+                    <tr>
+                        <th>Sink</th>
+                        <th>Configured</th>
+                        <th>Min Severity</th>
+                        <th>Last Status</th>
+                        <th>Last Error</th>
+                        <th>Backoff Until</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="6" style="text-align:center;">No data</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <h3>Raw Response:</h3>
+        <pre id="adminSecurityAlerts_response">---</pre>
+        <script>
+            async function loadSecurityAlertStatus() {
+                try {
+                    const resp = await apiClient.makeRequest('GET', '/api/v1/admin/security/alert-status');
+                    document.getElementById('adminSecurityAlerts_response').textContent = JSON.stringify(resp, null, 2);
+                    const health = resp.health || 'unknown';
+                    const pill = document.getElementById('adminSecurityAlerts_health');
+                    pill.textContent = `Health: ${health}`;
+                    if (health === 'ok') {
+                        pill.style.backgroundColor = '#d1fae5';
+                        pill.style.color = '#065f46';
+                    } else if (health === 'degraded') {
+                        pill.style.backgroundColor = '#fef3c7';
+                        pill.style.color = '#92400e';
+                    } else {
+                        pill.style.backgroundColor = '#fee2e2';
+                        pill.style.color = '#991b1b';
+                    }
+
+                    const tbody = document.querySelector('#adminSecurityAlerts_table tbody');
+                    tbody.innerHTML = '';
+                    (resp.sinks || []).forEach(sink => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${sink.sink}</td>
+                            <td>${sink.configured ? 'Yes' : 'No'}</td>
+                            <td>${sink.min_severity || resp.min_severity}</td>
+                            <td>${sink.last_status === true ? 'success' : sink.last_status === false ? 'failure' : 'n/a'}</td>
+                            <td>${sink.last_error || ''}</td>
+                            <td>${sink.backoff_until || ''}</td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+
+                    Toast.success('Security alert status refreshed');
+                } catch (e) {
+                    document.getElementById('adminSecurityAlerts_response').textContent = String(e?.message || e);
+                    Toast.error('Failed to load security alert status: ' + (e?.message || e));
+                }
+            }
+
+            // Auto-refresh when the tab is first shown
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => {
+                    setTimeout(loadSecurityAlertStatus, 200);
+                });
+            } else {
+                setTimeout(loadSecurityAlertStatus, 200);
+            }
+        </script>
+    </div>
+
     <div class="endpoint-section" id="adminSystemStatus">
         <h2>System Status and Health Checks</h2>
         <p>Monitor system health and status across all services.</p>

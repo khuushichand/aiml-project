@@ -439,6 +439,11 @@ class Settings(BaseSettings):
         ge=1,
         description="Timeout (seconds) for SMTP connections when sending security alerts."
     )
+    SECURITY_ALERT_BACKOFF_SECONDS: int = Field(
+        default=30,
+        ge=0,
+        description="Backoff window after a sink failure before retrying (seconds)."
+    )
     SECURITY_ALERT_FILE_MIN_SEVERITY: Optional[str] = Field(
         default=None,
         description="Minimum severity to write alerts to the file sink (default: use global threshold)."
@@ -715,6 +720,7 @@ def _load_overrides_from_config() -> dict:
         maybe_set("SECURITY_ALERT_FILE_MIN_SEVERITY", "security_alert_file_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", "security_alert_webhook_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_EMAIL_MIN_SEVERITY", "security_alert_email_min_severity", lambda v: v.strip())
+        maybe_set("SECURITY_ALERT_BACKOFF_SECONDS", "security_alert_backoff_seconds", lambda v: int(v))
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:

@@ -34,6 +34,15 @@ For the full, frequently updated raw reference, see `Env_Vars.md` in the reposit
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
 
+## Audio Quotas & Workers
+- `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`).
+- `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition heuristic for fair scheduling (`true|false`).
+- `AUDIO_QUOTA_USE_REDIS`: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when `REDIS_URL` is set.
+- `REDIS_URL`: Redis connection string (e.g., `redis://localhost:6379`).
+
+Queues
+- CPU stages use `queue=default`.
+- GPU transcription uses dedicated `queue=transcribe` (see GPU worker container stub).
+
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.
-

@@ -292,9 +292,21 @@
             </div>
         </div>
 
-        <button class="api-button" onclick="makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search', 'json')">
-            Send Request
-        </button>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="ragSimpleSearch_corpus">Corpus/Namespace (optional):</label>
+                    <input type="text" id="ragSimpleSearch_corpus" placeholder="e.g., my_corpus">
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>&nbsp;</label>
+                    <button class="api-button" onclick="ragSimpleApplyAndSend()">Send Request</button>
+                </div>
+            </div>
+        </div>
+        <textarea id="ragSimpleSearch_payload" style="display:none"></textarea>
 
         <h4>Server Presets</h4>
         <div class="form-group">
@@ -395,6 +407,36 @@
                     // ignore
                 }
             })();
+
+            // Build minimal unified RAG payload from Simple controls and send
+            function ragSimpleApplyAndSend() {
+                try {
+                    const q = (document.getElementById('ragSimpleSearch_query')?.value || '').trim();
+                    if (!q) { alert('Enter a query'); return; }
+                    const st = (document.getElementById('ragSimpleSearch_search_type')?.value || 'hybrid');
+                    const limStr = (document.getElementById('ragSimpleSearch_limit')?.value || '10');
+                    const thrStr = (document.getElementById('ragSimpleSearch_threshold')?.value || '0');
+                    const corpus = (document.getElementById('ragSimpleSearch_corpus')?.value || '').trim();
+
+                    const topK = parseInt(limStr, 10);
+                    const minScore = parseFloat(thrStr);
+                    const searchMode = (st === 'semantic') ? 'vector' : ((st === 'fulltext') ? 'fts' : 'hybrid');
+
+                    const payload = {
+                        query: q,
+                        search_mode: searchMode,
+                        ...(topK > 0 ? { top_k: topK } : {}),
+                        ...(minScore >= 0 && minScore <= 1 ? { min_score: minScore } : {}),
+                        ...(corpus ? { corpus, index_namespace: corpus } : {})
+                    };
+                    const hidden = document.getElementById('ragSimpleSearch_payload');
+                    hidden.value = JSON.stringify(payload, null, 2);
+                    // Use generic helper
+                    makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search', 'json');
+                } catch (e) {
+                    Toast.error('Failed to build request: ' + (e?.message || e));
+                }
+            }
         </script>
         
         <h3>cURL Command:</h3>
@@ -402,6 +444,7 @@
         
         <h3>Response:</h3>
         <pre id="ragSimpleSearch_response">---</pre>
+        <div id="ragSimpleSearch_resultList" class="mt-2"></div>
     </div>
 
     <div class="endpoint-section" id="ragComplexSearch">
@@ -457,6 +500,45 @@
   }
 }</textarea>
         </div>
+
+        <div class="columns">
+          <div class="column">
+            <div class="form-group">
+              <label for="ragComplexSearch_corpus">Corpus/Namespace (optional):</label>
+              <input type="text" id="ragComplexSearch_corpus" placeholder="e.g., my_corpus">
+            </div>
+          </div>
+          <div class="column">
+            <div class="form-group">
+              <button class="api-button" onclick="ragApplyCorpusToPayload()">Apply to Payload</button>
+              <div class="help-text">Tip: Sets both <code>corpus</code> and <code>index_namespace</code> to enable per‑corpus synonyms and indexing.</div>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          function ragApplyCorpusToPayload() {
+            try {
+              const input = document.getElementById('ragComplexSearch_corpus');
+              const name = (input?.value || '').trim();
+              const ta = document.getElementById('ragComplexSearch_payload');
+              let obj = {};
+              try { obj = JSON.parse(ta.value); } catch (e) { obj = {}; }
+              if (name) {
+                obj.corpus = name;
+                obj.index_namespace = name;
+              } else {
+                // Clear on empty input
+                delete obj.corpus;
+                delete obj.index_namespace;
+              }
+              ta.value = JSON.stringify(obj, null, 2);
+              Toast.success('Corpus applied to payload');
+            } catch (e) {
+              Toast.error('Failed to apply corpus: ' + (e?.message || e));
+            }
+          }
+        </script>
 
         <h4>Server Presets</h4>
         <div class="form-group">
@@ -542,6 +624,7 @@
         
         <h3>Response:</h3>
         <pre id="ragComplexSearch_response">---</pre>
+        <div id="ragComplexSearch_resultList" class="mt-2"></div>
     </div>
 
     <div class="endpoint-section" id="ragPipelines">
@@ -598,6 +681,96 @@
         <pre id="ragHealth_response">---</pre>
     </div>
 </div>
+
+<script>
+  // Implicit feedback sender
+  async function sendImplicitRagFeedback(eventType, docId, rank, impression, query, corpus) {
+    try {
+      const payload = {
+        event_type: eventType,
+        doc_id: docId,
+        rank: rank,
+        impression_list: impression,
+        query: query || null,
+        corpus: corpus || null
+      };
+      await apiClient.makeRequest('POST', '/api/v1/rag/feedback/implicit', payload);
+    } catch (e) {
+      // Silent by default
+      console.warn('implicit feedback failed', e?.message || e);
+    }
+  }
+
+  function buildResultList(containerId, responsePreId, corpusInputId) {
+    const cont = document.getElementById(containerId);
+    const pre = document.getElementById(responsePreId);
+    const corpusInput = document.getElementById(corpusInputId);
+    if (!cont || !pre) return;
+    const render = () => {
+      let data = null;
+      try {
+        const text = pre.textContent || '';
+        data = JSON.parse(text);
+      } catch (e) {
+        cont.innerHTML = '';
+        return;
+      }
+      const docs = Array.isArray(data?.documents) ? data.documents : [];
+      const query = data?.query || '';
+      const corpus = (corpusInput && corpusInput.value) ? corpusInput.value.trim() : (data?.metadata?.index_namespace || data?.index_namespace || null);
+      if (!docs.length) { cont.innerHTML = ''; return; }
+      const impression = docs.map((d) => d.id);
+      const container = document.createElement('div');
+      container.className = 'card-list';
+      docs.slice(0, 10).forEach((d, i) => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        header.textContent = `[${i+1}] ${d.id}  (score=${(d.score||0).toFixed(3)})`;
+        header.style.cursor = 'pointer';
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        body.style.display = 'none';
+        const content = document.createElement('pre');
+        content.textContent = (d.content || '').slice(0, 1200);
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-sm';
+        copyBtn.textContent = 'Copy snippet';
+        copyBtn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const ok = await Utils.copyToClipboard(d.content || '');
+          if (ok) Toast.success('Copied snippet'); else Toast.error('Copy failed');
+          sendImplicitRagFeedback('copy', d.id, i+1, impression, query, corpus);
+        });
+        body.appendChild(content);
+        body.appendChild(copyBtn);
+        header.addEventListener('click', () => {
+          const show = body.style.display === 'none';
+          body.style.display = show ? 'block' : 'none';
+          sendImplicitRagFeedback('expand', d.id, i+1, impression, query, corpus);
+        });
+        card.appendChild(header);
+        card.appendChild(body);
+        card.addEventListener('click', () => {
+          sendImplicitRagFeedback('click', d.id, i+1, impression, query, corpus);
+        });
+        container.appendChild(card);
+      });
+      cont.innerHTML = '';
+      cont.appendChild(container);
+    };
+    // Observe changes to pre element
+    const observer = new MutationObserver(render);
+    observer.observe(pre, { characterData: true, childList: true, subtree: true });
+  }
+
+  // Wire up observers for Simple and Complex forms
+  (function() {
+    buildResultList('ragSimpleSearch_resultList', 'ragSimpleSearch_response', 'ragSimpleSearch_corpus');
+    buildResultList('ragComplexSearch_resultList', 'ragComplexSearch_response', 'ragComplexSearch_corpus');
+  })();
+</script>
 
 <!-- RAG Embeddings Tab -->
 <div id="tabRAGEmbeddings" class="tab-content">

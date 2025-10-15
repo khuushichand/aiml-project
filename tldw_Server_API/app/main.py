@@ -22,7 +22,12 @@ from starlette.staticfiles import StaticFiles
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 #
 # Audio Endpoint (includes WebSocket streaming transcription)
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+try:
+    from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+    _HAS_AUDIO = True
+except Exception as _audio_err:  # noqa: BLE001 - guard non-critical endpoints in tests
+    logger.warning(f"Audio endpoints unavailable; skipping import: {_audio_err}")
+    _HAS_AUDIO = False
 # Guard audio_jobs import to avoid unrelated test breakages (e.g., pydantic validator changes)
 try:
     from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
@@ -522,6 +527,60 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
+    # Workflows webhook DLQ retry worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.workflows_webhook_dlq_service import run_workflows_webhook_dlq_worker as _run_wf_dlq
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Workflows webhook DLQ worker")
+        else:
+            _wf_enabled = (_os.getenv("WORKFLOWS_WEBHOOK_DLQ_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _wf_enabled:
+                workflows_dlq_stop_event = _asyncio.Event()
+                workflows_dlq_task = _asyncio.create_task(_run_wf_dlq(workflows_dlq_stop_event))
+                logger.info("Workflows webhook DLQ worker started with explicit stop_event signal")
+            else:
+                logger.info("Workflows webhook DLQ worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Workflows webhook DLQ worker: {e}")
+
+    # Workflows artifact GC worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.workflows_artifact_gc_service import run_workflows_artifact_gc_worker as _run_wf_gc
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Workflows artifact GC worker")
+        else:
+            _wf_gc_enabled = (_os.getenv("WORKFLOWS_ARTIFACT_GC_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _wf_gc_enabled:
+                workflows_gc_stop_event = _asyncio.Event()
+                workflows_gc_task = _asyncio.create_task(_run_wf_gc(workflows_gc_stop_event))
+                logger.info("Workflows artifact GC worker started with explicit stop_event signal")
+            else:
+                logger.info("Workflows artifact GC worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Workflows artifact GC worker: {e}")
+
+    # Jobs integrity sweeper (periodic validator)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.jobs_integrity_service import run_jobs_integrity_sweeper as _run_jobs_integrity
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Jobs integrity sweeper")
+        else:
+            _enabled = (_os.getenv("JOBS_INTEGRITY_SWEEP_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                jobs_integrity_stop_event = _asyncio.Event()
+                jobs_integrity_task = _asyncio.create_task(_run_jobs_integrity(jobs_integrity_stop_event))
+                logger.info("Jobs integrity sweeper started with explicit stop_event signal")
+            else:
+                logger.info("Jobs integrity sweeper disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs integrity sweeper: {e}")
+
     # Claims rebuild worker (periodic)
     try:
         import asyncio as _asyncio
@@ -655,11 +714,13 @@ async def lifespan(app: FastAPI):
         else:
             logger.info(f"🔐 Authentication Mode: MULTI USER")
             try:
-                _s = get_settings()
-                if isinstance(_s.DATABASE_URL, str) and _s.DATABASE_URL.startswith("sqlite"):
-                    logger.info("JWT Bearer tokens or X-API-KEY (per-user) supported for SQLite setups")
-                else:
+                # Prefer unified backend detector for diagnostics
+                from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
+                _is_pg = await _is_pg_backend()
+                if _is_pg:
                     logger.info("JWT Bearer tokens required for authentication")
+                else:
+                    logger.info("JWT Bearer tokens or X-API-KEY (per-user) supported for SQLite setups")
             except Exception:
                 logger.info("JWT Bearer tokens required for authentication")
             logger.info("=" * 60)
@@ -686,7 +747,13 @@ async def lifespan(app: FastAPI):
         _prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
         _auth_mode = _s.AUTH_MODE
         _db_url = _s.DATABASE_URL
-        _db_engine = "postgresql" if _db_url.startswith("postgresql") else ("sqlite" if _db_url.startswith("sqlite") else "other")
+        # Use the unified backend detector for the engine label in diagnostics
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
+            _is_pg = await _is_pg_backend()
+            _db_engine = "postgresql" if _is_pg else ("sqlite" if str(_db_url).startswith("sqlite") else "other")
+        except Exception:
+            _db_engine = "other"
         _redis_url = _s.REDIS_URL or ""
         _redis_enabled = bool(_s.REDIS_URL) or bool(_os.getenv("REDIS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
         _csrf_enabled = (_auth_mode == "multi_user") or (_csrf_globals.get('CSRF_ENABLED', None) is True)
@@ -779,6 +846,51 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     jobs_metrics_task.cancel()
+                except Exception:
+                    pass
+
+        # Jobs integrity sweeper shutdown
+        if 'jobs_integrity_task' in locals() and jobs_integrity_task:
+            try:
+                if 'jobs_integrity_stop_event' in locals() and jobs_integrity_stop_event:
+                    jobs_integrity_stop_event.set()
+                    await _asyncio.wait_for(jobs_integrity_task, timeout=5.0)
+                    logger.info("Jobs integrity sweeper stopped via stop_event")
+                else:
+                    jobs_integrity_task.cancel()
+            except Exception:
+                try:
+                    jobs_integrity_task.cancel()
+                except Exception:
+                    pass
+
+        # Workflows webhook DLQ worker shutdown
+        if 'workflows_dlq_task' in locals() and workflows_dlq_task:
+            try:
+                if 'workflows_dlq_stop_event' in locals() and workflows_dlq_stop_event:
+                    workflows_dlq_stop_event.set()
+                    await _asyncio.wait_for(workflows_dlq_task, timeout=5.0)
+                    logger.info("Workflows webhook DLQ worker stopped via stop_event")
+                else:
+                    workflows_dlq_task.cancel()
+            except Exception:
+                try:
+                    workflows_dlq_task.cancel()
+                except Exception:
+                    pass
+
+        # Workflows artifact GC worker shutdown
+        if 'workflows_gc_task' in locals() and workflows_gc_task:
+            try:
+                if 'workflows_gc_stop_event' in locals() and workflows_gc_stop_event:
+                    workflows_gc_stop_event.set()
+                    await _asyncio.wait_for(workflows_gc_task, timeout=5.0)
+                    logger.info("Workflows artifact GC worker stopped via stop_event")
+                else:
+                    workflows_gc_task.cancel()
+            except Exception:
+                try:
+                    workflows_gc_task.cancel()
                 except Exception:
                     pass
     except Exception:
@@ -921,7 +1033,8 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "AuthNZ usage", "url": _ext_url("/docs-static/AUTHNZ_USAGE_EXAMPLES.md")}},
     {"name": "users", "description": "User management: create, list, roles, and profiles.",
      "externalDocs": {"description": "Permission matrix", "url": _ext_url("/docs-static/AUTHNZ_PERMISSION_MATRIX.md")}},
-    {"name": "admin", "description": "Administrative operations and diagnostics."},
+    {"name": "admin", "description": "Administrative operations and diagnostics. Includes Jobs Admin endpoints: stats, prune, TTL sweep, requeue quarantined, and integrity sweep.",
+     "externalDocs": {"description": "Jobs Admin Examples", "url": _ext_url("/docs-static/Code_Documentation/Jobs_Admin_Examples.md")}},
     {"name": "media", "description": "Ingest and process media (video/audio/PDF/EPUB/HTML/Markdown).",
      "externalDocs": {"description": "Overview", "url": _ext_url("/docs-static/Documentation.md")}},
     {"name": "audio", "description": "Audio transcription and TTS (OpenAI-compatible).",
@@ -1329,17 +1442,16 @@ if WEBUI_DIR.exists():
             config["mode"] = "multi-user"
             config["_comment"] = "Multi-user mode - manual authentication required"
             try:
-                _settings = get_settings()
-                dbu = _settings.DATABASE_URL or ""
-                if isinstance(dbu, str) and dbu.startswith("sqlite"):
-                    # Expose hint so the WebUI can prefer X-API-KEY in multi-user SQLite setups
-                    config.setdefault("auth", {})
-                    config["auth"]["multiUserSupportsApiKey"] = True
-                    config["auth"]["preferApiKeyInMultiUser"] = True
-                else:
-                    config.setdefault("auth", {})
+                from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
+                _is_pg = await _is_pg_backend()
+                config.setdefault("auth", {})
+                if _is_pg:
                     config["auth"]["multiUserSupportsApiKey"] = False
                     config["auth"]["preferApiKeyInMultiUser"] = False
+                else:
+                    # Expose hint so the WebUI can prefer X-API-KEY in multi-user SQLite setups
+                    config["auth"]["multiUserSupportsApiKey"] = True
+                    config["auth"]["preferApiKeyInMultiUser"] = True
             except Exception:
                 pass
         
@@ -1436,13 +1548,27 @@ async def root():
 # Metrics endpoint for Prometheus scraping
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
-    """Prometheus metrics endpoint."""
+    """Prometheus metrics endpoint.
+
+    Exposes both the internal registry (JSON-backed) and the default
+    prometheus_client REGISTRY used by embeddings/orchestrator code paths.
+    """
     from fastapi.responses import PlainTextResponse
-    
+    try:
+        from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+    except Exception:
+        PC_REGISTRY = None
+        pc_generate_latest = None
+
     registry = get_metrics_registry()
-    metrics_text = registry.export_prometheus_format()
-    
-    return PlainTextResponse(metrics_text, media_type="text/plain; version=0.0.4")
+    combined = registry.export_prometheus_format() or ""
+    try:
+        if pc_generate_latest and PC_REGISTRY:
+            combined = (combined + "\n" + pc_generate_latest(PC_REGISTRY).decode("utf-8")).strip() + "\n"
+    except Exception:
+        # If prometheus_client is unavailable, ignore
+        pass
+    return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
 
 # OpenTelemetry metrics endpoint (if using OTLP)
 @app.get("/api/v1/metrics", tags=["monitoring"])
@@ -1477,12 +1603,14 @@ if _HAS_MEDIA:
     app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
 
 # Router for /audio/ endpoints
-app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+if _HAS_AUDIO:
+    app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
 if _HAS_AUDIO_JOBS:
     app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
 
 # WebSocket router for audio streaming (separate to avoid authentication conflicts)
-app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
+if _HAS_AUDIO:
+    app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
 
 # Router for chat endpoints/chat temp-file handling
 app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
@@ -1566,12 +1694,22 @@ app.include_router(benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmark
 
 # Router for Setup endpoints (first-time configuration)
 from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
-from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+try:
+    from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+    _HAS_JOBS_ADMIN = True
+except Exception as _e:
+    _HAS_JOBS_ADMIN = False
+    try:
+        from loguru import logger as _logger
+        _logger.warning(f"Skipping jobs_admin router due to import error: {_e}")
+    except Exception:
+        pass
 app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
 
 # Router for Configuration Info endpoint (for documentation)
 app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
-app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+if _HAS_JOBS_ADMIN:
+    app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
 
 # Router for Sync endpoint
 app.include_router(sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])

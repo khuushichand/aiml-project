@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field, root_validator
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS
 
 
 router = APIRouter()
@@ -46,6 +48,7 @@ class SubmitAudioJobResponse(BaseModel):
 async def submit_audio_job(
     req: SubmitAudioJobRequest,
     current_user: User = Depends(get_request_user),
+    request: Request = None,
 ):
     """
     Create an audio job in the Jobs queue. First stage is determined by input:
@@ -72,6 +75,13 @@ async def submit_audio_job(
         else:
             payload["local_path"] = req.local_path.strip()
 
+        # Correlation IDs from middleware
+        rid = None
+        try:
+            if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+                rid = str(request.state.request_id)
+        except Exception:
+            rid = None
         row = jm.create_job(
             domain="audio",
             queue="default",
@@ -80,6 +90,7 @@ async def submit_audio_job(
             owner_user_id=str(current_user.id),
             priority=5,
             max_retries=3,
+            request_id=rid,
         )
         return SubmitAudioJobResponse(
             id=int(row.get("id")),
@@ -264,6 +275,51 @@ async def summarize_audio_jobs_admin(
         raise HTTPException(status_code=500, detail="Failed to summarize jobs")
 
 
+class AudioJobsOwnerSummaryItem(BaseModel):
+    owner_user_id: Optional[str]
+    status: str
+    count: int
+
+
+class AudioJobsSummaryByOwner(BaseModel):
+    items: List[AudioJobsOwnerSummaryItem]
+
+
+@router.get("/jobs/admin/summary-by-owner", response_model=AudioJobsSummaryByOwner, summary="Summarize audio jobs by owner and status (admin)")
+async def summary_by_owner_admin(_=Depends(require_admin)):
+    try:
+        import os
+        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
+                        db_url=os.getenv("JOBS_DB_URL"))
+        conn = jm._connect()
+        items = []
+        try:
+            if jm.backend == "postgres":
+                with jm._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=%s GROUP BY owner_user_id, status",
+                        ("audio",),
+                    )
+                    rows = cur.fetchall() or []
+                    for (owner_user_id, status, count) in rows:
+                        items.append(AudioJobsOwnerSummaryItem(owner_user_id=str(owner_user_id) if owner_user_id is not None else None, status=str(status), count=int(count)))
+            else:
+                rows = conn.execute(
+                    "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=? GROUP BY owner_user_id, status",
+                    ("audio",),
+                ).fetchall() or []
+                for (owner_user_id, status, count) in rows:
+                    items.append(AudioJobsOwnerSummaryItem(owner_user_id=str(owner_user_id) if owner_user_id is not None else None, status=str(status), count=int(count)))
+        finally:
+            conn.close()
+        return AudioJobsSummaryByOwner(items=items)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to summarize by owner: {e}")
+        raise HTTPException(status_code=500, detail="Failed to summarize by owner")
+
+
 class OwnerProcessingSummary(BaseModel):
     owner_user_id: str
     processing: int
@@ -312,3 +368,74 @@ async def owner_processing_summary(
     except Exception as e:
         logger.error(f"Failed to get owner processing summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get owner processing summary")
+
+
+# --- Admin: user tiers (audio) ---
+
+class UserTierResponse(BaseModel):
+    user_id: int
+    tier: str
+
+
+class SetUserTierRequest(BaseModel):
+    tier: str = Field(..., description="Tier name (one of: free, standard, premium)")
+
+
+@router.get("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Get user's audio tier (admin)")
+async def get_user_tier_admin(user_id: int, _=Depends(require_admin)):
+    try:
+        pool = await get_db_pool()
+        # Ensure table exists
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audio_user_tiers (
+                user_id INTEGER PRIMARY KEY,
+                tier TEXT NOT NULL
+            );
+            """
+        )
+        if pool.pool:
+            row = await pool.fetchrow("SELECT tier FROM audio_user_tiers WHERE user_id=$1", int(user_id))
+            tier = str(row["tier"]) if row and row.get("tier") else "free"
+        else:
+            rows = await pool.fetch("SELECT tier FROM audio_user_tiers WHERE user_id=?", int(user_id))
+            tier = str(rows[0][0]) if rows and rows[0] and rows[0][0] else "free"
+        return UserTierResponse(user_id=int(user_id), tier=tier)
+    except Exception as e:
+        logger.error(f"Failed to get user tier: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user tier")
+
+
+@router.put("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Set user's audio tier (admin)")
+async def set_user_tier_admin(user_id: int, req: SetUserTierRequest, _=Depends(require_admin)):
+    try:
+        tier = req.tier.strip().lower()
+        allowed = set(TIER_LIMITS.keys())
+        if tier not in allowed:
+            raise HTTPException(status_code=400, detail=f"Invalid tier. Allowed: {', '.join(sorted(allowed))}")
+        pool = await get_db_pool()
+        # Ensure table exists
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audio_user_tiers (
+                user_id INTEGER PRIMARY KEY,
+                tier TEXT NOT NULL
+            );
+            """
+        )
+        if pool.pool:
+            await pool.execute(
+                "INSERT INTO audio_user_tiers (user_id, tier) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET tier = EXCLUDED.tier",
+                int(user_id), tier,
+            )
+        else:
+            await pool.execute(
+                "INSERT INTO audio_user_tiers (user_id, tier) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET tier=excluded.tier",
+                int(user_id), tier,
+            )
+        return UserTierResponse(user_id=int(user_id), tier=tier)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set user tier: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set user tier")

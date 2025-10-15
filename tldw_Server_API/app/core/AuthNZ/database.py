@@ -460,11 +460,25 @@ async def execute_migration(migration_sql: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Migration failed: {e}")
-        return False
+    return False
 
 
 # --- Internal helpers ---
 _DOLLAR_PARAM = re.compile(r"\$\d+")
+
+#######################################################################################################################
+#
+# Shared backend detection helper
+
+async def is_postgres_backend() -> bool:
+    """Return True if the configured AuthNZ database backend is PostgreSQL.
+
+    Uses the presence of an asyncpg pool on the DatabasePool singleton as the
+    definitive signal, avoiding fragile attribute checks on per-request
+    connections.
+    """
+    pool = await get_db_pool()
+    return getattr(pool, "pool", None) is not None
 
 def _normalize_sqlite_sql(query: str) -> str:
     """Convert Postgres-style $1 placeholders to SQLite '?' when needed.

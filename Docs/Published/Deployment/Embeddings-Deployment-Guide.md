@@ -302,6 +302,54 @@ curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   http://localhost:8000/api/v1/embeddings/circuit-breakers
 ```
 
+### Orchestrator Summary & SSE
+
+The orchestrated embeddings pipeline exposes live operational state for dashboards and automation.
+
+- SSE (live stream, admin-only):
+  - `GET /api/v1/embeddings/orchestrator/events`
+  - Streams a JSON snapshot every few seconds as SSE `data:` frames.
+
+- Polling summary (admin-only):
+  - `GET /api/v1/embeddings/orchestrator/summary`
+  - Returns the same snapshot payload as a single JSON object.
+  - Fallback behavior: if Redis is unavailable, returns HTTP 200 with a zeroed payload (all maps empty, stable keys present) so dashboards don’t break.
+
+Snapshot payload keys:
+- `queues`: map of live queue depths by stream (e.g., `embeddings:embedding`)
+- `dlq`: map of DLQ depths by stream (e.g., `embeddings:embedding:dlq`)
+- `ages`: seconds since oldest message per live queue (0.0 when empty)
+- `stages`: aggregated counters `{ processed, failed }` per stage
+- `flags`: stage control flags `{ paused, drain }` per stage
+- `ts`: server timestamp (seconds)
+
+Examples:
+```bash
+# SSE (watch raw events)
+curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://localhost:8000/api/v1/embeddings/orchestrator/events
+
+# Polling summary (one-shot JSON)
+curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://localhost:8000/api/v1/embeddings/orchestrator/summary | jq .
+```
+
+Sample response (polling):
+```json
+{
+  "queues": {"embeddings:embedding": 2},
+  "dlq": {"embeddings:embedding:dlq": 0},
+  "ages": {"embeddings:embedding": 1.2},
+  "stages": {"embedding": {"processed": 120, "failed": 3}},
+  "flags": {"embedding": {"paused": false, "drain": false}},
+  "ts": 1700001000.123
+}
+```
+
+Operator notes:
+- Prefer SSE for live dashboards; fall back to polling when SSE/WebSockets are blocked.
+- A zeroed payload indicates Redis is unreachable or snapshot encountered an error; alert if sustained.
+
 ### Logging
 The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and scrape `/metrics` for Prometheus-formatted metrics.
 
@@ -391,7 +439,92 @@ groups:
         annotations:
           summary: "Embeddings processing stalled"
           description: "High queue depth with low processing rate for >10m"
+
+      # Oldest message age by queue (p95 over window)
+      - alert: EmbeddingsQueueAgeHigh
+        expr: max_over_time(embedding_queue_age_seconds[10m]) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings queue age high"
+          description: "Oldest message age exceeded 5 minutes for >5m"
+
+      # Stage processing latency outliers
+      - alert: EmbeddingsStageLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(embedding_stage_processing_latency_seconds_bucket[5m])) by (le, stage)) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings stage latency high (p95)"
+          description: "p95 processing latency > 5s for stage {{ $labels.stage }}"
+
+      # Worker liveness: any stalled workers for a sustained period
+      - alert: EmbeddingsWorkersStalled
+        expr: sum(embedding_workers_stalled) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings workers stalled"
+          description: "One or more workers have missing/expired heartbeats for >5m"
+
+      # Possible drainer throttling/backlog: queue ages rising while processing is low
+      - alert: EmbeddingsRequeueThrottled
+        expr: (max_over_time(embedding_queue_age_seconds[15m]) - min_over_time(embedding_queue_age_seconds[15m])) > 120
+              and (sum(rate(embedding_stage_jobs_processed_total[5m])) < 0.5)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeddings requeue possibly throttled/backlogged"
+          description: |
+            Queue ages increased >2m over 15m while processing is low. The delayed drainer uses
+            a token bucket for safety; consider temporarily increasing EMBEDDINGS_REQUEUE_RATE/BURST during recovery.
 ```
+
+## Reliability & Delivery
+
+The embeddings pipeline includes protective mechanisms to deliver reliably and avoid overload during recovery:
+
+- Scheduled retries with backoff and jitter
+  - Workers classify failures as `transient` vs `permanent` and schedule exponential backoff + jitter for transient errors.
+  - After `max_retries`, jobs are marked failed and sent to the stage DLQ with structured fields `error_code` and `failure_type`.
+
+- Token-bucket guard against requeue storms
+  - The orchestrator drains delayed queues via a per-queue token bucket so re-enqueues are smoothed.
+  - Tuning via environment variables:
+    - `EMBEDDINGS_REQUEUE_RATE` (tokens per second; default 50)
+    - `EMBEDDINGS_REQUEUE_BURST` (max tokens; default 200)
+
+- Operator skip for known-poison messages
+  - Mark a job as skipped (admin-only): `POST /api/v1/embeddings/job/skip { job_id, ttl_seconds }`
+  - Check status: `GET /api/v1/embeddings/job/skip/status?job_id=...`
+  - Workers consult the skip registry and will ACK/cancel without processing.
+
+- Stage controls & liveness
+  - Pause/Resume/Drain per stage: `POST /api/v1/embeddings/stage/control`
+  - Orchestrator gauges: `embedding_workers_active{worker_type}`, `embedding_workers_stalled{worker_type}` to monitor worker fleet health.
+
+### Messaging & DLQ Hardening
+
+- Message schema versioning (+ schema URL)
+  - Each message carries `msg_version`, `msg_schema`, and `schema_url` (current: `tldw.embeddings.v1`, URL points to the bundled JSON Schema).
+  - Ingress validation uses a small JSON Schema bundle to validate core envelope fields.
+
+- De-dup window (operation_id)
+  - Workers suppress replays with a short TTL using RedisBloom (if available) or `SET NX` keyed by `operation_id`.
+  - Configure TTL via `EMBEDDINGS_DEDUPE_TTL_SECONDS`.
+
+- DLQ quarantine states
+  - States: `quarantined`, `approved_for_requeue`, `ignored`.
+  - Admin API: `POST /api/v1/embeddings/dlq/state` with `{ stage, entry_id, state, operator_note? }`.
+  - Approval requires an `operator_note`; requeue endpoints enforce `approved_for_requeue` when state exists.
+  - WebUI exposes state, note, and Quarantine/Approve/Ignore actions.
+
+- Optional durability
+  - The pipeline uses Redis Streams and consumer groups. If workload grows, consider adding a dedicated Redis cluster or a lightweight Kafka topic for at-least-once delivery and long-lived retention.
 
 ---
 

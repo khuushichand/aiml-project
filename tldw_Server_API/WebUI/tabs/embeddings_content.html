@@ -101,6 +101,38 @@
         <pre id="embeddingsMetrics_response">---</pre>
     </div>
 
+    <div class="endpoint-section" id="embeddingsStageControls">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/embeddings/stage/control - Stage Controls</span>
+        </h2>
+        <p>Pause / Resume / Drain per-stage workers (admin only).</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="embeddingsStage_stage">Stage:</label>
+                    <select id="embeddingsStage_stage">
+                        <option value="chunking">chunking</option>
+                        <option value="embedding" selected>embedding</option>
+                        <option value="storage">storage</option>
+                        <option value="all">all</option>
+                    </select>
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>Actions:</label><br/>
+                    <button class="api-button" onclick="embeddingsStagePause()">Pause</button>
+                    <button class="api-button" onclick="embeddingsStageResume()">Resume</button>
+                    <button class="api-button btn-warning" onclick="embeddingsStageDrain()">Drain</button>
+                    <button class="api-button" onclick="embeddingsStageStatus()">Status</button>
+                </div>
+            </div>
+        </div>
+        <h3>Status:</h3>
+        <pre id="embeddingsStage_status">---</pre>
+    </div>
+
     <div class="endpoint-section" id="embeddingsModelsList">
         <h2>
             <span class="endpoint-method get">GET</span>
@@ -241,4 +273,13 @@
         <h3>Entries</h3>
         <div id="embeddingsDLQ_results" class="json-viewer">---</div>
     </div>
+    <script>
+        // Initialize DLQ auto-refresh preference
+        try {
+            const saved = Utils.getFromStorage('embeddings-dlq-auto-refresh');
+            if (saved === true) {
+                embeddingsStartDLQAutoRefresh();
+            }
+        } catch (e) { /* ignore */ }
+    </script>
 </div>

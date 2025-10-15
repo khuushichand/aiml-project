@@ -146,7 +146,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
                         ej.download_url = svc._build_download_url(ej.job_id, ej.expires_at)
                         svc._save_export_job(ej)
-                    jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id))
+                    jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 else:
                     try:
                         ej = svc._get_export_job(chatbooks_job_id)
@@ -157,7 +157,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ej.completed_at = datetime.utcnow()
                         ej.error_message = msg
                         svc._save_export_job(ej)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id))
+                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 # Stop renewal
                 try:
                     _renew_task.cancel()
@@ -213,20 +213,20 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                         ij.status = ImportStatus.COMPLETED
                         ij.completed_at = datetime.utcnow()
                         svc._save_import_job(ij)
-                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(lease_id))
+                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 else:
                     if ij:
                         ij.status = ImportStatus.FAILED
                         ij.completed_at = datetime.utcnow()
                         ij.error_message = msg
                         svc._save_import_job(ij)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id))
+                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 try:
                     _renew_task.cancel()
                 except Exception:
                     pass
             else:
-                jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id))
+                jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
         except Exception as e:
             logger.error(f"Core Jobs worker loop error: {e}")
             await asyncio.sleep(poll_sleep)

@@ -29,6 +29,8 @@ from .base_worker import BaseWorker, WorkerConfig
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from ..messages import normalize_message
+import json as _json
 
 
 class EmbeddingWorkerConfig(WorkerConfig):
@@ -189,7 +191,8 @@ class EmbeddingWorker(BaseWorker):
     
     def _parse_message(self, data: Dict[str, Any]) -> EmbeddingMessage:
         """Parse raw message data into EmbeddingMessage"""
-        return EmbeddingMessage(**data)
+        norm = normalize_message("embedding", data)
+        return EmbeddingMessage(**norm)
     
     def _detect_language(self, text: str) -> str:
         """Detect language of text"""
@@ -324,13 +327,35 @@ class EmbeddingWorker(BaseWorker):
                     
                     models_used.add(f"{model_provider}:{model_name}")
                     
-                    # Check cache first
-                    if self.cache and self.embedding_config.enable_caching:
+                    # Check Redis content-hash cache first (cross-run)
+                    redis_cached = None
+                    try:
+                        if self.redis_client and isinstance(chunk.metadata, dict):
+                            chash = chunk.metadata.get("content_hash")
+                            if chash:
+                                rkey = f"embeddings:contentcache:v1:{model_name}:{chash}"
+                                redis_raw = await self.redis_client.get(rkey)
+                                if redis_raw:
+                                    try:
+                                        payload = _json.loads(redis_raw)
+                                        vec = payload.get("embedding")
+                                        if isinstance(vec, list):
+                                            redis_cached = vec
+                                            embedding = vec
+                                            cache_hits += 1
+                                            logger.debug(f"Redis cache hit for chunk {chunk.chunk_id}")
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+
+                    # Then check in‑process LRU cache
+                    if embedding is None and self.cache and self.embedding_config.enable_caching:
                         cached_embedding = self.cache.get(chunk.content, model_name)
                         if cached_embedding:
                             embedding = cached_embedding
                             cache_hits += 1
-                            logger.debug(f"Cache hit for chunk {chunk.chunk_id}")
+                            logger.debug(f"LRU cache hit for chunk {chunk.chunk_id}")
                         else:
                             cache_misses += 1
                     
@@ -365,8 +390,28 @@ class EmbeddingWorker(BaseWorker):
                         if self.cache and self.embedding_config.enable_caching:
                             embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
                             self.cache.put(chunk.content, model_name, embedding_list)
+                        # Populate Redis cache for content_hash
+                        try:
+                            if self.redis_client and isinstance(chunk.metadata, dict):
+                                chash = chunk.metadata.get("content_hash")
+                                if chash:
+                                    rkey = f"embeddings:contentcache:v1:{model_name}:{chash}"
+                                    vec = embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+                                    ttl = int(os.getenv("EMBEDDINGS_CONTENT_CACHE_TTL_SECONDS", "86400") or 86400)
+                                    await self.redis_client.set(rkey, _json.dumps({
+                                        "embedding": vec,
+                                        "dimensions": len(vec),
+                                        "model": model_name,
+                                        "provider": model_provider,
+                                        "ts": int(time.time())
+                                    }), ex=ttl)
+                        except Exception:
+                            pass
                     
                     # Create embedding data object
+                    # Tag embedder and content hash in metadata
+                    embedder_name = model_provider
+                    embedder_version = model_name
                     embedding_data = EmbeddingData(
                         chunk_id=chunk.chunk_id,
                         embedding=embedding if isinstance(embedding, list) else embedding.tolist(),
@@ -375,6 +420,8 @@ class EmbeddingWorker(BaseWorker):
                         metadata={
                             **(chunk.metadata or {}),
                             "model_provider": model_provider,
+                            "embedder_name": embedder_name,
+                            "embedder_version": embedder_version,
                             "cached": embedding is not None and cache_hits > cache_misses
                         }
                     )
@@ -407,6 +454,9 @@ class EmbeddingWorker(BaseWorker):
                 priority=message.priority,
                 user_tier=message.user_tier,
                 created_at=message.created_at,
+                idempotency_key=message.idempotency_key,
+                dedupe_key=message.dedupe_key,
+                operation_id=message.operation_id,
                 embeddings=embedding_data_list,
                 collection_name=f"user_{message.user_id}_media_{message.media_id}",
                 total_chunks=len(message.chunks),

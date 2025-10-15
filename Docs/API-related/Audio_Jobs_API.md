@@ -41,6 +41,13 @@ Base path: `/api/v1/audio`
   - `AUDIO_JOBS_OWNER_STRICT`: enable owner-aware acquisition (default false)
   - `JOBS_LEASE_SECONDS`: lease duration (default 120)
 
+### GPU Worker (stub)
+
+- A GPU-oriented worker stub is provided to process only the `audio_transcribe` stage on GPU nodes.
+- Location: `tldw_Server_API/app/services/audio_transcribe_gpu_worker.py`
+- Container: `tldw_Server_API/Dockerfiles/Dockerfile.audio_gpu_worker`
+- Behavior: acquires `audio` domain jobs and processes only `audio_transcribe`; other stages are re-queued with a short backoff for CPU workers.
+
 ## Quotas & Fairness
 
 - Per-user concurrent job cap enforced both pre- and post-acquisition.
@@ -49,4 +56,3 @@ Base path: `/api/v1/audio`
 ## Notes
 
 - This API complements synchronous `/audio/transcriptions` and real‑time WS; it does not replace them.
-

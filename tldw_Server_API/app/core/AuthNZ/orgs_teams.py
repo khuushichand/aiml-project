@@ -214,3 +214,195 @@ async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
             return [
                 {"team_id": r[0], "user_id": r[1], "role": r[2], "org_id": r[3]} for r in rows
             ]
+
+
+# ============================
+# Organization membership APIs
+# ============================
+
+async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> Dict[str, Any]:
+    """Add a user to an organization (idempotent)."""
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        if hasattr(conn, 'fetchrow'):
+            # Postgres
+            await conn.execute(
+                "INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (org_id, user_id) DO NOTHING",
+                org_id, user_id, role,
+            )
+            row = await conn.fetchrow(
+                "SELECT org_id, user_id, role FROM org_members WHERE org_id = $1 AND user_id = $2",
+                org_id, user_id,
+            )
+            return dict(row) if row else {"org_id": org_id, "user_id": user_id, "role": role}
+        else:
+            # SQLite
+            await conn.execute(
+                "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+                (org_id, user_id, role),
+            )
+            try:
+                await conn.commit()
+            except Exception:
+                pass
+            cur = await conn.execute(
+                "SELECT org_id, user_id, role FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            row = await cur.fetchone()
+            if row:
+                try:
+                    return {"org_id": row[0], "user_id": row[1], "role": row[2]}
+                except Exception:
+                    return dict(row)
+            return {"org_id": org_id, "user_id": user_id, "role": role}
+
+
+async def list_org_members(
+    *, org_id: int, limit: int = 100, offset: int = 0, role: Optional[str] = None, status: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List members of an organization with pagination and optional filters."""
+    pool = await get_db_pool()
+    if pool.pool:
+        # Postgres path
+        conditions = ["org_id = $1"]
+        params: List[Any] = [org_id]
+        p = 1
+        if role:
+            p += 1
+            conditions.append(f"role = ${p}")
+            params.append(role)
+        if status:
+            p += 1
+            conditions.append(f"status = ${p}")
+            params.append(status)
+        where_clause = " AND ".join(conditions)
+        p += 1
+        params.append(limit)
+        p += 1
+        params.append(offset)
+        sql = (
+            f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+            f"ORDER BY added_at DESC LIMIT ${p-1} OFFSET ${p}"
+        )
+        rows = await pool.fetchall(sql, *params)
+        return rows
+    else:
+        # SQLite path
+        async with pool.acquire() as conn:
+            conditions = ["org_id = ?"]
+            params: List[Any] = [org_id]
+            if role:
+                conditions.append("role = ?")
+                params.append(role)
+            if status:
+                conditions.append("status = ?")
+                params.append(status)
+            where_clause = " AND ".join(conditions)
+            sql = (
+                f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+                f"ORDER BY added_at DESC LIMIT ? OFFSET ?"
+            )
+            params.extend([limit, offset])
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+            try:
+                return [
+                    {"user_id": r[0], "role": r[1], "status": r[2], "added_at": r[3]} for r in rows
+                ]
+            except Exception:
+                return rows
+
+
+async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
+    """Remove a user from an organization. Returns removal status."""
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        if hasattr(conn, 'fetchrow'):
+            await conn.execute("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", org_id, user_id)
+        else:
+            await conn.execute("DELETE FROM org_members WHERE org_id = ? AND user_id = ?", (org_id, user_id))
+            try:
+                await conn.commit()
+            except Exception:
+                pass
+        return {"org_id": int(org_id), "user_id": int(user_id), "removed": True}
+
+
+async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
+    """Update an org member's role; returns updated row or None if missing."""
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        if hasattr(conn, 'fetchrow'):
+            row = await conn.fetchrow(
+                "UPDATE org_members SET role = $3 WHERE org_id = $1 AND user_id = $2 RETURNING org_id, user_id, role",
+                org_id, user_id, role,
+            )
+            return dict(row) if row else None
+        else:
+            await conn.execute(
+                "UPDATE org_members SET role = ? WHERE org_id = ? AND user_id = ?",
+                (role, org_id, user_id),
+            )
+            try:
+                await conn.commit()
+            except Exception:
+                pass
+            cur = await conn.execute(
+                "SELECT org_id, user_id, role FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            row = await cur.fetchone()
+            if row:
+                try:
+                    return {"org_id": row[0], "user_id": row[1], "role": row[2]}
+                except Exception:
+                    return dict(row)
+            return None
+
+
+async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
+    """List org memberships for a given user: [{org_id, role}]."""
+    pool = await get_db_pool()
+    if pool.pool:
+        rows = await pool.fetchall(
+            "SELECT org_id, role FROM org_members WHERE user_id = $1 ORDER BY org_id",
+            user_id,
+        )
+        return rows
+    else:
+        async with pool.acquire() as conn:
+            cur = await conn.execute(
+                "SELECT org_id, role FROM org_members WHERE user_id = ? ORDER BY org_id",
+                (user_id,),
+            )
+            rows = await cur.fetchall()
+            try:
+                return [{"org_id": r[0], "role": r[1]} for r in rows]
+            except Exception:
+                return rows
+
+
+async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
+    """Remove a user from a team. Returns a simple dict with removal status."""
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        try:
+            if hasattr(conn, 'fetchrow'):
+                await conn.execute(
+                    "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+                    team_id, user_id,
+                )
+            else:
+                await conn.execute(
+                    "DELETE FROM team_members WHERE team_id = ? AND user_id = ?",
+                    (team_id, user_id),
+                )
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+            return {"team_id": int(team_id), "user_id": int(user_id), "removed": True}
+        except Exception as e:
+            logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}")
+            return {"team_id": int(team_id), "user_id": int(user_id), "removed": False}

@@ -170,7 +170,21 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     
     # Format for embedding
     result = []
+    import hashlib as _hashlib
     for chunk in chunks:
+        # Stable chunk UID constructed from file name, offsets, and content hash
+        try:
+            start_c = getattr(chunk.metadata, 'start_char', None)
+        except Exception:
+            start_c = None
+        try:
+            end_c = getattr(chunk.metadata, 'end_char', None)
+        except Exception:
+            end_c = None
+        txt = chunk.text
+        content_sig = _hashlib.sha1((txt or '').encode('utf-8')).hexdigest()[:12]
+        file_sig = _hashlib.md5((file_name or '').encode('utf-8')).hexdigest()[:8]
+        chunk_uid = f"ck_{file_sig}_{start_c if start_c is not None else 's'}_{end_c if end_c is not None else 'e'}_{content_sig}"
         result.append({
             'text': chunk.text,
             'text_for_embedding': f"File: {file_name}\n{chunk.text}",
@@ -179,6 +193,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
                 'chunk_index': chunk.metadata.index,
                 'start_char': chunk.metadata.start_char,
                 'end_char': chunk.metadata.end_char,
+                'chunk_uid': chunk_uid,
             }
         })
     

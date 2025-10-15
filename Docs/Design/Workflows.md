@@ -5,7 +5,7 @@ This document captures the current state of the Workflows module, its APIs, data
 ## Status & Scope
 
 - Implemented: Linear workflows with a small, composable step set and a robust runtime (retries, timeouts, pause/resume, cancel, heartbeats, orphan reaping). Streaming run events over WebSocket and HTTP polling. Artifacts persisted and downloadable with guardrails. SQLite default; PostgreSQL supported via shared content backend.
-- Non‑goals in v0.1: Branching/parallelism, graph/DAG editor, arbitrary user code execution, distributed workers. These are planned for v0.2+.
+- Non‑goals in v0.1: Full graph editor and distributed workers. Minimal branching (branch/map) has been added to enable early DAG-like flows; richer parallelism is planned for v0.2+.
 
 ## Module Layout
 
@@ -43,6 +43,7 @@ Base prefix: `/api/v1/workflows`
   - `GET /runs/{run_id}/artifacts` → List run artifacts
   - `GET /artifacts/{artifact_id}/download` → Download a single artifact (file:// only)
   - `GET /runs/{run_id}/artifacts/download` → Zip and stream all eligible artifacts
+  - `GET /runs/{run_id}/artifacts/manifest?verify=` → Per-run artifact manifest; optional checksum verification
 - Options discovery
   - `GET /options/chunkers` → Chunker methods, defaults, and basic param schema
   - `GET /step-types` → List available step types for UI builders
@@ -84,6 +85,8 @@ Registered under `StepTypeRegistry`:
 - `wait_for_human`: Pause run with status `waiting_human` until `approve`/`reject`.
 - `delay`: Pause the workflow for a fixed time (milliseconds). Useful for demos, backoffs or pacing.
 - `log`: Log a templated message at the chosen level (`debug|info|warning|error`). Helps with debugging and audit trails.
+- `branch`: Evaluate a boolean condition and optionally jump to a target step id (`true_next` / `false_next`).
+- `map`: Fan‑out over a list and apply a nested step with optional concurrency; returns a list of `results`.
 
 See `adapters.py` for configuration keys and behavior of each step.
 
@@ -127,9 +130,26 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
 - Artifacts: `WORKFLOWS_ARTIFACT_MAX_DOWNLOAD_BYTES`, `WORKFLOWS_ARTIFACT_ALLOWED_MIME`, `WORKFLOWS_ARTIFACT_BULK_MAX_BYTES`
 - Webhooks: `WORKFLOWS_WEBHOOK_SECRET`, `WORKFLOWS_WEBHOOK_TIMEOUT`
 - Completion hooks: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` globally disables completion webhooks.
+- Webhook egress policy: Per‑tenant allow/deny lists are enforced for completion webhooks and webhook steps.
+  - Global: `WORKFLOWS_WEBHOOK_ALLOWLIST`, `WORKFLOWS_WEBHOOK_DENYLIST`
+  - Tenant overrides: `WORKFLOWS_WEBHOOK_ALLOWLIST_<TENANT>`, `WORKFLOWS_WEBHOOK_DENYLIST_<TENANT>` (tenant upper‑cased, `-` → `_`)
+  - Private IP blocking follows `WORKFLOWS_EGRESS_BLOCK_PRIVATE` (defaults true).
 - DB URI (SQLite): `DATABASE_URL_WORKFLOWS=sqlite:///path/to/workflows.db`
 - Webhook global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` disables completion hooks globally
 - Artifact scope validation: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default true). When false, validation failures log a warning but do not block download.
+- Artifact validation modes (per-run override):
+  - Each run can opt into `validation_mode = 'non-block'` to allow artifact downloads even when scope validation fails. This is a per-run override intended for trusted/internal workflows.
+  - Resolution order: per-run setting is evaluated first; if not set (or not `non-block`), the server falls back to `WORKFLOWS_ARTIFACT_VALIDATE_STRICT` (default true).
+  - Example behavior:
+    - `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=false` → downloads proceed with a warning when path scope validation fails.
+    - `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true` and run’s `validation_mode='non-block'` → downloads proceed for that run despite strict env setting.
+  - Scope check uses `commonpath` between the resolved artifact path and recorded `workdir` (when available). Only `file://` artifacts are downloadable via the API.
+- Artifact integrity: When `checksum_sha256` is recorded for an artifact, downloads verify the checksum. On mismatch, responses use `409 Conflict` in strict mode; non‑strict modes warn and continue.
+- Artifact manifest: `GET /runs/{run_id}/artifacts/manifest?verify=true` computes checksums and returns `integrity_summary`.
+- Artifact retention and GC:
+  - Worker: `WORKFLOWS_ARTIFACT_GC_ENABLED=true` to enable.
+  - Settings: `WORKFLOWS_ARTIFACT_RETENTION_DAYS` (default 30), `WORKFLOWS_ARTIFACT_GC_INTERVAL_SEC` (default 3600).
+  - Behavior: Deletes DB rows for artifacts older than retention. For `file://` URIs, also deletes files from disk.
 - SQLite connection pool: `WORKFLOWS_SQLITE_POOL_SIZE` (default 0 disables) enables a lightweight pool for hot paths (events).
  
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
@@ -152,7 +172,7 @@ In production, when the content backend is configured for PostgreSQL (recommende
 
 ## Roadmap (v0.2+)
 
-- Branching/Conditionals/Parallelism: Introduce minimal JSONLogic‑like conditions, `branch`/`join` steps, and foreach/parallel fan‑out with deterministic join semantics.
+- Branching/Conditionals/Parallelism: Expand minimal `branch/map` to full JSONLogic‑like conditions and parallel fan‑out with deterministic fan‑in/merge semantics.
 - Step Library Expansion: STT/TTS adapters, data transformation sandbox, export steps.
 - Schedules/Triggers: Time‑based triggers and inbound webhook triggers.
 - Budgets/Quotas: Per‑tenant/user budgets with enforcement and reporting.

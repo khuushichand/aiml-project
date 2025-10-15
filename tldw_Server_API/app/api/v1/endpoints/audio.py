@@ -47,6 +47,18 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
+# Expose job quota helpers at module scope for tests to monkeypatch
+try:
+    from tldw_Server_API.app.core.Usage.audio_quota import (
+        can_start_job as can_start_job,  # re-export for test monkeypatch
+        finish_job as finish_job,
+        increment_jobs_started as increment_jobs_started,
+        get_limits_for_user as get_limits_for_user,
+    )
+except Exception:
+    # In import-guarded contexts, tests may skip or endpoints not mounted
+    pass
+from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
 
 # For logging (if you use the same logger as in your PDF endpoint)
 from loguru import logger
@@ -241,7 +253,7 @@ async def create_speech(
                 "Cache-Control": "no-cache",
             },
         )
-    else:
+    if not is_multi_user_mode():
         # Non-streaming: Collect all chunks and send as a single response
         all_audio_bytes = b""
         try:
@@ -380,7 +392,6 @@ async def create_transcription(
     
     # Resolve per-tier file size limit
     try:
-        from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user, increment_jobs_started, can_start_job, finish_job
         limits = await get_limits_for_user(current_user.id)
         max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
     except Exception:
@@ -391,8 +402,21 @@ async def create_transcription(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
         )
-    
-    # Save uploaded file to temporary location
+
+    # Before any heavy work, enforce concurrent jobs cap per user
+    ok_job, msg_job = await can_start_job(current_user.id)
+    if not ok_job:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
+
+    # Record job start (best-effort)
+    acquired_job_slot = False
+    try:
+        await increment_jobs_started(current_user.id)
+        acquired_job_slot = True
+    except Exception:
+        pass
+
+    # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
     try:
         # Create temporary file with proper extension
@@ -457,16 +481,7 @@ async def create_transcription(
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
         
-        # Prepare quotas and transcription
-        # Enforce concurrent jobs cap per user (MVP in-process)
-        ok_job, msg_job = await can_start_job(current_user.id)
-        if not ok_job:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
-        # Record job start
-        try:
-            await increment_jobs_started(current_user.id)
-        except Exception:
-            pass
+        # Prepare quotas and transcription now that we hold the slot
 
         # Enforce daily minutes cap by estimated duration
         minutes_est = duration_seconds / 60.0
@@ -538,9 +553,10 @@ async def create_transcription(
                 }
                 transcribed_text = transcribe_audio(**transcribe_params)
         finally:
-            # Make sure we always release job slot on any path after heavy processing began
+            # Make sure we always release job slot on any path
             try:
-                await finish_job(current_user.id)
+                if acquired_job_slot:
+                    await finish_job(current_user.id)
             except Exception:
                 pass
         
@@ -964,91 +980,134 @@ async def websocket_transcribe(
     """
     # Accept the WebSocket connection first
     await websocket.accept()
-    
-    # Authentication check
+
+    # Authentication
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY
-    
+
     authenticated = False
-    
-    # Check if token was provided in query parameter
-    if token:
-        if token == expected_key:
-            logger.info("WebSocket authenticated via query parameter")
-            authenticated = True
+    jwt_user_id: Optional[int] = None
+
+    if is_multi_user_mode():
+        # Prefer Authorization: Bearer <JWT>
+        auth_header = websocket.headers.get("authorization")
+        bearer = None
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                bearer = parts[1]
+        if bearer:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+                from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+
+                jwt_service = get_jwt_service()
+                payload = jwt_service.decode_access_token(bearer)
+                uid = payload.get("user_id") or payload.get("sub")
+                if isinstance(uid, str):
+                    uid = int(uid)
+                if not uid:
+                    raise InvalidTokenError("missing user_id/sub claim")
+                # Blacklist check
+                session_manager = await get_session_manager()
+                if await session_manager.is_token_blacklisted(bearer, payload.get("jti")):
+                    raise InvalidTokenError("token revoked")
+                # Ensure user exists
+                user_row = await _get_user_by_id(int(uid))
+                if not user_row:
+                    raise InvalidTokenError("user not found")
+                jwt_user_id = int(uid)
+                authenticated = True
+            except (InvalidTokenError, TokenExpiredError) as e:
+                logger.warning(f"WS JWT auth failed: {e}")
+                await websocket.send_json({"type": "error", "message": "Invalid or expired token"})
+                await websocket.close(code=4401)
+                return
         else:
-            logger.warning(f"WebSocket: Invalid token provided in query parameter")
-            authenticated = False
-    elif not token:
-        # No token in query, wait for authentication message
-        try:
-            first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-            auth_data = json.loads(first_message)
-            
-            if auth_data.get("type") != "auth":
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
-                })
-                await websocket.close()
+            # No Authorization header; fall back to message-based auth
+            try:
+                first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                auth_data = json.loads(first_message)
+                if auth_data.get("type") != "auth" or not auth_data.get("token"):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required: Authorization: Bearer <JWT> or auth message"
+                    })
+                    await websocket.close(code=4401)
+                    return
+            except Exception as e:
+                logger.warning(f"WS JWT auth (message prelude) failed: {e}")
+                await websocket.send_json({"type": "error", "message": "Invalid authentication message"})
+                await websocket.close(code=4401)
                 return
-            
-            provided_token = auth_data.get("token")
-            
-            if provided_token != expected_key:
-                logger.warning(f"WebSocket connection with invalid token")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid authentication token"
-                })
-                await websocket.close()
-                return
-            
-            # Authentication successful
+                # Accept Bearer token in first message for compatibility
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                    from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+                    from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+                    jwt_service = get_jwt_service()
+                    payload = jwt_service.decode_access_token(auth_data.get("token"))
+                    uid = payload.get("user_id") or payload.get("sub")
+                    if isinstance(uid, str):
+                        uid = int(uid)
+                    if not uid:
+                        raise ValueError("missing user id in token")
+                    session_manager = await get_session_manager()
+                    if await session_manager.is_token_blacklisted(auth_data.get("token"), payload.get("jti")):
+                        raise ValueError("token revoked")
+                    user_row = await _get_user_by_id(int(uid))
+                    if not user_row:
+                        raise ValueError("user not found")
+                    jwt_user_id = int(uid)
+                    authenticated = True
+                except Exception as e:
+                    logger.warning(f"WS JWT auth (message) failed: {e}")
+                    await websocket.send_json({"type": "error", "message": "Invalid or expired token"})
+                    await websocket.close(code=4401)
+                    return
+    if not is_multi_user_mode():
+        # Single-user mode: API key via query or auth message
+        expected_key = settings.SINGLE_USER_API_KEY
+        if token and token == expected_key:
             authenticated = True
-            logger.info("WebSocket authenticated via auth message")
-            await websocket.send_json({"type": "status", "message": "Authenticated"})
-            
-        except asyncio.TimeoutError:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Authentication timeout. Send auth message within 5 seconds."
-            })
+        elif token and token != expected_key:
+            logger.warning("WebSocket: invalid query token")
+            await websocket.send_json({"type": "error", "message": "Invalid authentication token"})
             await websocket.close()
             return
-        except json.JSONDecodeError:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Invalid JSON in authentication message"
-            })
-            await websocket.close()
-            return
-        except Exception as e:
-            logger.error(f"Authentication error: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Authentication failed: {str(e)}"
-            })
-            await websocket.close()
-            return
-    else:
-        # Token was provided but invalid
-        logger.warning(f"WebSocket connection with invalid query token")
-        await websocket.send_json({
-            "type": "error",
-            "message": "Invalid authentication token"
-        })
-        await websocket.close()
-        return
-    
-    # If not authenticated by this point, reject (this shouldn't happen but safety check)
+        else:
+            try:
+                first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                auth_data = json.loads(first_message)
+                if auth_data.get("type") != "auth" or auth_data.get("token") != expected_key:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
+                    })
+                    await websocket.close()
+                    return
+                authenticated = True
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Authentication timeout. Send auth message within 5 seconds."
+                })
+                await websocket.close()
+                return
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid JSON in authentication message"
+                })
+                await websocket.close()
+                return
+
     if not authenticated:
-        await websocket.send_json({
-            "type": "error",
-            "message": "Authentication required"
-        })
-        await websocket.close()
+        await websocket.send_json({"type": "error", "message": "Authentication required"})
+        await websocket.close(code=4401)
         return
     
     try:
@@ -1079,10 +1138,13 @@ async def websocket_transcribe(
         logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
         
         # Enforce per-user streaming quotas and daily minutes during streaming
-        # Resolve user id from single-user mode (since WS uses API key)
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-        _s = _get_settings()
-        user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
+        # Resolve user id for quotas (JWT in multi-user; fixed id in single-user)
+        if is_multi_user_mode() and jwt_user_id is not None:
+            user_id_for_usage = int(jwt_user_id)
+        else:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+            _s = _get_settings()
+            user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
         ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
         if not ok_stream:
@@ -1102,10 +1164,8 @@ async def websocket_transcribe(
             used_minutes += minutes_chunk
 
         try:
-            class _QuotaExceeded(Exception):
-                def __init__(self, quota: str):
-                    super().__init__(quota)
-                    self.quota = quota
+            # Use shared exception class so inner handler can bubble it up
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import QuotaExceeded as _QuotaExceeded
 
             async def _on_audio_quota(seconds: float, sr: int) -> None:
                 nonlocal used_minutes
@@ -1141,12 +1201,30 @@ async def websocket_transcribe(
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        # Best-effort: map quota exception variants to structured error
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
-        except:
+            quota_name = getattr(e, "quota", None)
+            txt = str(e)
+            if not quota_name and ("daily_minutes" in txt or "concurrent_streams" in txt):
+                quota_name = "daily_minutes" if "daily_minutes" in txt else "concurrent_streams"
+            if quota_name:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": quota_name,
+                        "message": "Streaming transcription quota exceeded"
+                    })
+                finally:
+                    try:
+                        await websocket.close(code=4003, reason="quota_exceeded")
+                    except Exception:
+                        pass
+            else:
+                # Let inner handler's error payload (if any) be the authoritative one.
+                # Avoid sending a duplicate generic error frame that could race the client.
+                pass
+        except Exception:
             pass
     finally:
         try:

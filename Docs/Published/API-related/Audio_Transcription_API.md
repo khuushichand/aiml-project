@@ -193,25 +193,110 @@ Note: In the current codebase, STT configuration is read from `Config_Files/conf
 - Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
 - Authentication:
   - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
-  - Multi-user JWT: not currently supported via WebSocket; use single-user token
+  - Multi-user JWT: supported via `Authorization: Bearer <JWT>` header on the WebSocket upgrade request (preferred), or by sending an initial auth message `{ "type": "auth", "token": "<JWT>" }`.
 - Protocol:
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
   - Server messages include:
-    - `{ "type": "status", "message": "Authenticated" }`
+    - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false }`
     - `{ "type": "transcription", "text": "...", "timestamp": ..., "is_final": true }`
     - `{ "type": "full_transcript", "text": "..." }`
     - `{ "type": "error", "message": "..." }`
+    - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes", "message": "..." }` followed by clean close with code `4003`.
 
 Helper endpoints
 - `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
-Example (wscat)
+Examples (wscat)
 ```bash
-wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=YOUR_SINGLE_USER_API_KEY"
+# Single-user
+wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
+
+# Multi-user (JWT header)
+wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
+```
+
+Python example (multi-user, Authorization header)
+```python
+import asyncio
+import json
+import websockets
+
+WS_URL = "ws://localhost:8000/api/v1/audio/stream/transcribe"
+JWT = "<YOUR_JWT>"
+
+async def main():
+    async with websockets.connect(WS_URL, extra_headers={"Authorization": f"Bearer {JWT}"}) as ws:
+        # Optional: send config
+        await ws.send(json.dumps({"type": "config", "sample_rate": 16000, "language": "en"}))
+        # Send a dummy audio chunk (Float32 mono 0.1s of silence)
+        import numpy as np, base64
+        audio = (np.zeros(1600, dtype=np.float32)).tobytes()
+        await ws.send(json.dumps({"type": "audio", "data": base64.b64encode(audio).decode("ascii")}))
+        # Read messages until server closes or we decide to stop
+        try:
+            async for msg in ws:
+                data = json.loads(msg)
+                print("<-", data)
+                if data.get("type") == "transcription":
+                    break
+        except websockets.ConnectionClosed as e:
+            print("closed", e.code, e.reason)
+
+asyncio.run(main())
+```
+
+JavaScript/TypeScript example (Node)
+
+```ts
+// npm i ws
+import WebSocket from 'ws'
+
+const WS_URL = 'ws://localhost:8000/api/v1/audio/stream/transcribe'
+const JWT = process.env.JWT || '<YOUR_JWT>'
+
+async function main() {
+  const ws = new WebSocket(WS_URL, {
+    headers: { Authorization: `Bearer ${JWT}` },
+  })
+
+  ws.on('open', () => {
+    // Optional config
+    ws.send(JSON.stringify({ type: 'config', sample_rate: 16000, language: 'en' }))
+
+    // Send 0.1s of silence (Float32 mono)
+    const duration = 0.1
+    const samples = Math.floor(16000 * duration)
+    const buf = new Float32Array(samples)
+    const b64 = Buffer.from(buf.buffer).toString('base64')
+    ws.send(JSON.stringify({ type: 'audio', data: b64 }))
+  })
+
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(String(data))
+      console.log('<-', msg)
+      if (msg.type === 'transcription') {
+        ws.close()
+      }
+    } catch (e) {
+      console.error('bad message', e)
+    }
+  })
+
+  ws.on('close', (code, reason) => {
+    console.log('closed', code, reason.toString())
+  })
+
+  ws.on('error', (err) => {
+    console.error('ws error', err)
+  })
+}
+
+main().catch(console.error)
 ```
 
 ### Basic Live Transcription (Local Python)

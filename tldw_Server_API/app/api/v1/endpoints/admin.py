@@ -72,7 +72,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_storage_service_dep
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
@@ -92,6 +92,12 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     create_team,
     add_team_member,
     list_team_members,
+    remove_team_member,
+    add_org_member,
+    list_org_members,
+    remove_org_member,
+    update_org_member_role,
+    list_org_memberships_for_user,
 )
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
@@ -101,6 +107,11 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     TeamMemberAddRequest,
     TeamMemberResponse,
     VirtualKeyCreateRequest,
+    OrgMemberAddRequest,
+    OrgMemberResponse,
+    OrgMemberRoleUpdateRequest,
+    OrgMemberListItem,
+    OrgMembershipItem,
 )
 
 #######################################################################################################################
@@ -113,6 +124,8 @@ router = APIRouter(
     dependencies=[Depends(require_admin)],  # All endpoints require admin role
     responses={403: {"description": "Not authorized"}}
 )
+
+# Backend detection now standardized via core AuthNZ database helper
 
 
 #######################################################################################################################
@@ -161,6 +174,7 @@ async def list_users(
     except Exception:
         pass
     try:
+        is_pg = await is_postgres_backend()
         offset = (page - 1) * limit
         
         # Build query conditions
@@ -170,18 +184,18 @@ async def list_users(
         
         if role:
             param_count += 1
-            conditions.append(f"role = ${param_count}" if hasattr(db, 'fetchrow') else "role = ?")
+            conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(role)
         
         if is_active is not None:
             param_count += 1
-            conditions.append(f"is_active = ${param_count}" if hasattr(db, 'fetchrow') else "is_active = ?")
+            conditions.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
             params.append(is_active)
         
         if search:
             param_count += 1
             search_pattern = f"%{search}%"
-            if hasattr(db, 'fetchrow'):
+            if is_pg:
                 conditions.append(f"(username ILIKE ${param_count} OR email ILIKE ${param_count})")
             else:
                 conditions.append("(username LIKE ? OR email LIKE ?)")
@@ -191,7 +205,7 @@ async def list_users(
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
         
         # Get total count
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             # PostgreSQL
             count_query = f"SELECT COUNT(*) FROM users{where_clause}"
             total = await db.fetchval(count_query, *params)
@@ -370,18 +384,19 @@ async def admin_update_user_api_key(
     """Update per-key limits like rate_limit and allowed_ips (admin)."""
     try:
         import json
+        is_pg = await is_postgres_backend()
         fields = []
         params = []
         if request.rate_limit is not None:
-            fields.append("rate_limit = ${}" if hasattr(db, 'fetchrow') else "rate_limit = ?")
+            fields.append("rate_limit = ${}" if is_pg else "rate_limit = ?")
             params.append(request.rate_limit)
         if request.allowed_ips is not None:
-            fields.append("allowed_ips = ${}" if hasattr(db, 'fetchrow') else "allowed_ips = ?")
+            fields.append("allowed_ips = ${}" if is_pg else "allowed_ips = ?")
             params.append(json.dumps(request.allowed_ips))
         if not fields:
             raise HTTPException(status_code=400, detail="No updates provided")
 
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             # PostgreSQL numbered params
             set_clause = ", ".join(fields[i].format(i + 1) for i in range(len(fields)))
             query = f"UPDATE api_keys SET {set_clause} WHERE id = $ {len(fields) + 1} AND user_id = $ {len(fields) + 2}"
@@ -461,7 +476,8 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
 @router.get("/orgs/{org_id}/teams", response_model=list[TeamResponse])
 async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 "SELECT id, org_id, name, slug, description, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM teams WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
                 org_id, limit, offset,
@@ -484,9 +500,39 @@ async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), 
 
 
 @router.post("/teams/{team_id}/members", response_model=TeamMemberResponse)
-async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest) -> TeamMemberResponse:
+async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, request: Request) -> TeamMemberResponse:
     try:
         row = await add_team_member(team_id=team_id, user_id=payload.user_id, role=payload.role or 'member')
+        # Best-effort audit
+        try:
+            actor_id = getattr(request.state, 'user_id', None)
+            if isinstance(actor_id, int):
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
+                _ud = await _get_user(actor_id)
+                if _ud:
+                    _user = _User(**_ud)
+                    _svc = await get_audit_service_for_user(_user)
+                    _ctx = AuditContext(
+                        user_id=str(actor_id),
+                        ip_address=(request.client.host if request.client else None),
+                        user_agent=request.headers.get('user-agent'),
+                        endpoint=str(request.url.path),
+                        method=request.method,
+                    )
+                    await _svc.log_event(
+                        event_type=AuditEventType.DATA_WRITE,
+                        category=AuditEventCategory.AUTHORIZATION,
+                        context=_ctx,
+                        resource_type='team',
+                        resource_id=str(team_id),
+                        action='team_member.add',
+                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                    )
+        except Exception as _e:
+            logger.debug(f"Audit (team member add) skipped/failed: {_e}")
         return TeamMemberResponse(**row)
     except Exception as e:
         logger.error(f"Failed to add team member: {e}")
@@ -502,6 +548,206 @@ async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
         logger.error(f"Failed to list team members: {e}")
         raise HTTPException(status_code=500, detail="Failed to list team members")
 
+
+@router.delete("/teams/{team_id}/members/{user_id}")
+async def admin_remove_team_member(team_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+    """Remove a user from a team (admin)."""
+    try:
+        res = await remove_team_member(team_id=team_id, user_id=user_id)
+        if not res.get("removed"):
+            # Even if delete didn't error, treat as not found when no rows affected
+            # (we don't currently return affected row count; return generic message)
+            return {"message": "No membership found", "team_id": team_id, "user_id": user_id}
+        # Best-effort audit
+        try:
+            actor_id = getattr(request.state, 'user_id', None)
+            if isinstance(actor_id, int):
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
+                _ud = await _get_user(actor_id)
+                if _ud:
+                    _user = _User(**_ud)
+                    _svc = await get_audit_service_for_user(_user)
+                    _ctx = AuditContext(
+                        user_id=str(actor_id),
+                        ip_address=(request.client.host if request.client else None),
+                        user_agent=request.headers.get('user-agent'),
+                        endpoint=str(request.url.path),
+                        method=request.method,
+                    )
+                    await _svc.log_event(
+                        event_type=AuditEventType.DATA_DELETE,
+                        category=AuditEventCategory.AUTHORIZATION,
+                        context=_ctx,
+                        resource_type='team',
+                        resource_id=str(team_id),
+                        action='team_member.remove',
+                        metadata={'target_user_id': user_id}
+                    )
+        except Exception as _e:
+            logger.debug(f"Audit (team member remove) skipped/failed: {_e}")
+        return {"message": "Team member removed", **res}
+    except Exception as e:
+        logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove team member")
+
+
+# ============================
+# Organization membership endpoints
+# ============================
+
+@router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
+async def admin_add_org_member(org_id: int, payload: OrgMemberAddRequest, request: Request) -> OrgMemberResponse:
+    try:
+        row = await add_org_member(org_id=org_id, user_id=payload.user_id, role=payload.role or 'member')
+        # Best-effort audit
+        try:
+            actor_id = getattr(request.state, 'user_id', None)
+            if isinstance(actor_id, int):
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
+                _ud = await _get_user(actor_id)
+                if _ud:
+                    _user = _User(**_ud)
+                    _svc = await get_audit_service_for_user(_user)
+                    _ctx = AuditContext(
+                        user_id=str(actor_id),
+                        ip_address=(request.client.host if request.client else None),
+                        user_agent=request.headers.get('user-agent'),
+                        endpoint=str(request.url.path),
+                        method=request.method,
+                    )
+                    await _svc.log_event(
+                        event_type=AuditEventType.DATA_WRITE,
+                        category=AuditEventCategory.AUTHORIZATION,
+                        context=_ctx,
+                        resource_type='organization',
+                        resource_id=str(org_id),
+                        action='org_member.add',
+                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                    )
+        except Exception as _e:
+            logger.debug(f"Audit (org member add) skipped/failed: {_e}")
+        return OrgMemberResponse(**row)
+    except Exception as e:
+        logger.error(f"Failed to add org member: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add org member")
+
+
+@router.get("/orgs/{org_id}/members", response_model=list[OrgMemberListItem])
+async def admin_list_org_members(
+    org_id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    role: Optional[str] = None,
+    status: Optional[str] = None,
+) -> list[OrgMemberListItem]:
+    try:
+        rows = await list_org_members(org_id=org_id, limit=limit, offset=offset, role=role, status=status)
+        return [OrgMemberListItem(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list org members: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list org members")
+
+
+@router.delete("/orgs/{org_id}/members/{user_id}")
+async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+    try:
+        res = await remove_org_member(org_id=org_id, user_id=user_id)
+        if not res.get("removed"):
+            return {"message": "No membership found", "org_id": org_id, "user_id": user_id}
+        # Best-effort audit
+        try:
+            actor_id = getattr(request.state, 'user_id', None)
+            if isinstance(actor_id, int):
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
+                _ud = await _get_user(actor_id)
+                if _ud:
+                    _user = _User(**_ud)
+                    _svc = await get_audit_service_for_user(_user)
+                    _ctx = AuditContext(
+                        user_id=str(actor_id),
+                        ip_address=(request.client.host if request.client else None),
+                        user_agent=request.headers.get('user-agent'),
+                        endpoint=str(request.url.path),
+                        method=request.method,
+                    )
+                    await _svc.log_event(
+                        event_type=AuditEventType.DATA_DELETE,
+                        category=AuditEventCategory.AUTHORIZATION,
+                        context=_ctx,
+                        resource_type='organization',
+                        resource_id=str(org_id),
+                        action='org_member.remove',
+                        metadata={'target_user_id': user_id}
+                    )
+        except Exception as _e:
+            logger.debug(f"Audit (org member remove) skipped/failed: {_e}")
+        return {"message": "Org member removed", **res}
+    except Exception as e:
+        logger.error(f"Failed to remove org member user_id={user_id} from org_id={org_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove org member")
+
+
+@router.patch("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberResponse)
+async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMemberRoleUpdateRequest, request: Request) -> OrgMemberResponse:
+    try:
+        row = await update_org_member_role(org_id=org_id, user_id=user_id, role=payload.role)
+        if not row:
+            raise HTTPException(status_code=404, detail="Org membership not found")
+        # Best-effort audit
+        try:
+            actor_id = getattr(request.state, 'user_id', None)
+            if isinstance(actor_id, int):
+                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
+                _ud = await _get_user(actor_id)
+                if _ud:
+                    _user = _User(**_ud)
+                    _svc = await get_audit_service_for_user(_user)
+                    _ctx = AuditContext(
+                        user_id=str(actor_id),
+                        ip_address=(request.client.host if request.client else None),
+                        user_agent=request.headers.get('user-agent'),
+                        endpoint=str(request.url.path),
+                        method=request.method,
+                    )
+                    await _svc.log_event(
+                        event_type=AuditEventType.DATA_UPDATE,
+                        category=AuditEventCategory.AUTHORIZATION,
+                        context=_ctx,
+                        resource_type='organization',
+                        resource_id=str(org_id),
+                        action='org_member.update',
+                        metadata={'target_user_id': user_id, 'new_role': payload.role}
+                    )
+        except Exception as _e:
+            logger.debug(f"Audit (org member role update) skipped/failed: {_e}")
+        return OrgMemberResponse(**row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update org member role user_id={user_id} org_id={org_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update org member role")
+
+
+@router.get("/users/{user_id}/org-memberships", response_model=list[OrgMembershipItem])
+async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipItem]:
+    try:
+        rows = await list_org_memberships_for_user(user_id)
+        return [OrgMembershipItem(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list org memberships for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list org memberships")
 
 @router.post("/users/{user_id}/virtual-keys")
 async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateRequest) -> Dict[str, Any]:
@@ -538,7 +784,8 @@ async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) 
         if isinstance(user_id, (tuple, list)):
             user_id = user_id[0]
         user_id = int(user_id)
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = $1 AND COALESCE(is_virtual,FALSE) = TRUE ORDER BY created_at DESC", user_id)
             items = [APIKeyMetadata(**dict(r)) for r in rows]
         else:
@@ -563,7 +810,8 @@ async def admin_get_api_key_audit_log(
 ) -> APIKeyAuditListResponse:
     """Get audit log entries for a specific API key (admin)."""
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT id, api_key_id, action, user_id, ip_address, user_agent, details, created_at
@@ -653,7 +901,8 @@ async def get_user_details(
         User details including all fields
     """
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             user = await db.fetchrow(
                 "SELECT * FROM users WHERE id = $1",
@@ -718,6 +967,7 @@ async def update_user(
         Success message
     """
     try:
+        is_pg = await is_postgres_backend()
         # Build update query dynamically
         updates = []
         params = []
@@ -725,39 +975,39 @@ async def update_user(
         
         if request.email is not None:
             param_count += 1
-            updates.append(f"email = ${param_count}" if hasattr(db, 'fetchrow') else "email = ?")
+            updates.append(f"email = ${param_count}" if is_pg else "email = ?")
             params.append(request.email)
         
         if request.role is not None:
             param_count += 1
-            updates.append(f"role = ${param_count}" if hasattr(db, 'fetchrow') else "role = ?")
+            updates.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(request.role)
         
         if request.is_active is not None:
             param_count += 1
-            updates.append(f"is_active = ${param_count}" if hasattr(db, 'fetchrow') else "is_active = ?")
+            updates.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
             params.append(request.is_active)
         
         if request.is_verified is not None:
             param_count += 1
-            updates.append(f"is_verified = ${param_count}" if hasattr(db, 'fetchrow') else "is_verified = ?")
+            updates.append(f"is_verified = ${param_count}" if is_pg else "is_verified = ?")
             params.append(request.is_verified)
         
         if request.is_locked is not None:
             param_count += 1
-            updates.append(f"is_locked = ${param_count}" if hasattr(db, 'fetchrow') else "is_locked = ?")
+            updates.append(f"is_locked = ${param_count}" if is_pg else "is_locked = ?")
             params.append(request.is_locked)
             
             if not request.is_locked:
                 # Unlock user - reset failed attempts
                 param_count += 1
-                updates.append(f"failed_login_attempts = ${param_count}" if hasattr(db, 'fetchrow') else "failed_login_attempts = ?")
+                updates.append(f"failed_login_attempts = ${param_count}" if is_pg else "failed_login_attempts = ?")
                 params.append(0)
                 updates.append("locked_until = NULL")
         
         if request.storage_quota_mb is not None:
             param_count += 1
-            updates.append(f"storage_quota_mb = ${param_count}" if hasattr(db, 'fetchrow') else "storage_quota_mb = ?")
+            updates.append(f"storage_quota_mb = ${param_count}" if is_pg else "storage_quota_mb = ?")
             params.append(request.storage_quota_mb)
         
         if not updates:
@@ -768,7 +1018,7 @@ async def update_user(
         
         # Add updated_at
         param_count += 1
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             updates.append("updated_at = CURRENT_TIMESTAMP")
             params.append(user_id)
             query = f"UPDATE users SET {', '.join(updates)} WHERE id = ${param_count}"
@@ -778,7 +1028,7 @@ async def update_user(
             query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
         
         # Execute update
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             await db.execute(query, *params)
         else:
             await db.execute(query, params)
@@ -805,7 +1055,8 @@ async def update_user(
 @router.get("/roles", response_model=list[RoleResponse])
 async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch("SELECT id, name, description, COALESCE(is_system, FALSE) as is_system FROM roles ORDER BY name")
             return [RoleResponse(**dict(r)) for r in rows]
         else:
@@ -820,7 +1071,8 @@ async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
 @router.post("/roles", response_model=RoleResponse)
 async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)) -> RoleResponse:
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             row = await db.fetchrow(
                 "INSERT INTO roles (name, description, is_system) VALUES ($1, $2, $3) RETURNING id, name, description, is_system",
                 payload.name, payload.description, False,
@@ -844,7 +1096,8 @@ async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)
 @router.delete("/roles/{role_id}")
 async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute("DELETE FROM roles WHERE id = $1 AND COALESCE(is_system, FALSE) = FALSE", role_id)
         else:
             await db.execute("DELETE FROM roles WHERE id = ? AND COALESCE(is_system, 0) = 0", (role_id,))
@@ -859,7 +1112,8 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
 async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
     """List permissions granted to a specific role (read-only matrix row)."""
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT p.id, p.name, p.description, p.category
@@ -893,7 +1147,8 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
 async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """List tool execution permissions (name starts with 'tools.execute:')."""
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 "SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name"
             )
@@ -921,7 +1176,8 @@ async def create_tool_permission(payload: ToolPermissionCreateRequest, db=Depend
         name = f"tools.execute:{'*' if tool == '*' else tool}"
         desc = payload.description or ("Wildcard tool execution" if tool == '*' else f"Execute tool {tool}")
 
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute(
                 "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
                 name, desc, 'tools',
@@ -955,7 +1211,8 @@ async def delete_tool_permission(perm_name: str, db=Depends(get_db_transaction))
     try:
         if not perm_name.startswith('tools.execute:'):
             raise HTTPException(status_code=400, detail="Invalid tool permission name")
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute("DELETE FROM permissions WHERE name = $1", perm_name)
         else:
             await db.execute("DELETE FROM permissions WHERE name = ?", (perm_name,))
@@ -980,8 +1237,9 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
     name = f"tools.execute:{'*' if tool == '*' else tool}"
     desc = f"Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
     try:
+        is_pg = await is_postgres_backend()
         # Ensure permission exists
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             await db.execute(
                 "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
                 name, desc, 'tools',
@@ -1006,6 +1264,22 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
             perm_id = r[0]
             await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, perm_id))
             await db.commit()
+            # Verify the mapping exists; fallback to hard insert if needed
+            cur2 = await db.execute(
+                "SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?",
+                (role_id, perm_id),
+            )
+            exists = await cur2.fetchone()
+            if not exists:
+                try:
+                    await db.execute(
+                        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                        (role_id, perm_id),
+                    )
+                    await db.commit()
+                except Exception:
+                    # Ignore if constraint error due to racing insert
+                    pass
             return ToolPermissionResponse(name=r[1], description=r[2], category=r[3])
     except HTTPException:
         raise
@@ -1022,7 +1296,8 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
     """
     name = f"tools.execute:{'*' if tool_name.strip() == '*' else tool_name.strip()}"
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", name)
             if not row:
                 return {"message": "Permission not found; nothing to revoke", "name": name}
@@ -1045,7 +1320,8 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
 async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """List tool execution permissions assigned to a role."""
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT p.name, p.description, p.category
@@ -1079,6 +1355,7 @@ async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction
 async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatchRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """Grant multiple tool execution permissions to a role in one call."""
     try:
+        is_pg = await is_postgres_backend()
         results: list[ToolPermissionResponse] = []
         # Reuse single-grant logic inline
         for tool in payload.tool_names:
@@ -1088,7 +1365,7 @@ async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatc
             name = f"tools.execute:{'*' if tool == '*' else tool}"
             desc = "Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
 
-            if hasattr(db, 'fetchrow'):
+            if is_pg:
                 await db.execute(
                     "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
                     name, desc, 'tools',
@@ -1122,13 +1399,14 @@ async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatc
 async def revoke_tool_permissions_batch(role_id: int, payload: ToolPermissionBatchRequest, db=Depends(get_db_transaction)) -> dict:
     """Revoke multiple tool execution permissions from a role."""
     try:
+        is_pg = await is_postgres_backend()
         revoked: list[str] = []
         for tool in payload.tool_names:
             tool = tool.strip()
             if not tool:
                 continue
             name = f"tools.execute:{'*' if tool == '*' else tool}"
-            if hasattr(db, 'fetchrow'):
+            if is_pg:
                 row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", name)
                 if row:
                     await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, row['id'])
@@ -1159,9 +1437,10 @@ def _normalize_tool_prefix(raw_prefix: str) -> str:
 async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermissionPrefixRequest, db=Depends(get_db_transaction)) -> list[ToolPermissionResponse]:
     """Grant all existing tool permissions with names starting with the prefix."""
     try:
+        is_pg = await is_postgres_backend()
         prefix = _normalize_tool_prefix(payload.prefix)
         results: list[ToolPermissionResponse] = []
-        if hasattr(db, 'fetch'):
+        if is_pg:
             rows = await db.fetch("SELECT id, name, description, category FROM permissions WHERE name LIKE $1", prefix + '%')
             for r in rows:
                 await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, r['id'])
@@ -1183,9 +1462,10 @@ async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermission
 async def revoke_tool_permissions_by_prefix(role_id: int, payload: ToolPermissionPrefixRequest, db=Depends(get_db_transaction)) -> dict:
     """Revoke all tool permissions with names starting with the prefix from a role."""
     try:
+        is_pg = await is_postgres_backend()
         prefix = _normalize_tool_prefix(payload.prefix)
         names: list[str] = []
-        if hasattr(db, 'fetch'):
+        if is_pg:
             rows = await db.fetch("SELECT id, name FROM permissions WHERE name LIKE $1", prefix + '%')
             for r in rows:
                 await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, r['id'])
@@ -1220,11 +1500,12 @@ async def get_roles_matrix(
     - search: substring match on name/description (case-insensitive)
     """
     try:
+        is_pg = await is_postgres_backend()
         # Role filters + pagination
         role_clauses = []
         role_params: list[Any] = []
         total_roles = 0
-        if hasattr(db, 'fetch'):
+        if is_pg:
             # Postgres
             if role_search:
                 role_clauses.append(f"name ILIKE ${len(role_params)+1}")
@@ -1266,7 +1547,7 @@ async def get_roles_matrix(
         # Build WHERE for permissions
         clauses = []
         params: list[Any] = []
-        if hasattr(db, 'fetch'):
+        if is_pg:
             # Postgres
             if category:
                 clauses.append(f"category = ${len(params)+1}")
@@ -1338,11 +1619,12 @@ async def get_roles_matrix_boolean(
 ) -> RolePermissionBooleanMatrixResponse:
     """Return a compact boolean matrix: roles x permission_names, with optional filters."""
     try:
+        is_pg = await is_postgres_backend()
         # Roles with filters + pagination
         role_clauses = []
         role_params: list[Any] = []
         total_roles = 0
-        if hasattr(db, 'fetch'):
+        if is_pg:
             if role_search:
                 role_clauses.append(f"name ILIKE ${len(role_params)+1}")
                 role_params.append(f"%{role_search}%")
@@ -1378,7 +1660,7 @@ async def get_roles_matrix_boolean(
         # Build WHERE for permissions
         clauses = []
         params: list[Any] = []
-        if hasattr(db, 'fetch'):
+        if is_pg:
             if category:
                 clauses.append(f"category = ${len(params)+1}")
                 params.append(category)
@@ -1404,7 +1686,7 @@ async def get_roles_matrix_boolean(
             perm_names = [row[1] for row in perm_rows]
 
         # Grants set (also restrict to selected roles if any)
-        if hasattr(db, 'fetch'):
+        if is_pg:
             role_ids = [r.id for r in roles]
             grant_sql = (
                 f"""
@@ -1461,7 +1743,8 @@ async def get_roles_matrix_boolean(
 async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str]:
     """List distinct permission categories (for UI filters)."""
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch("SELECT DISTINCT category FROM permissions WHERE category IS NOT NULL ORDER BY category")
             return [r['category'] for r in rows]
         else:
@@ -1476,13 +1759,14 @@ async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str
 @router.get("/permissions", response_model=list[PermissionResponse])
 async def list_permissions(category: str | None = None, search: str | None = None, db=Depends(get_db_transaction)) -> list[PermissionResponse]:
     try:
+        is_pg = await is_postgres_backend()
         clauses = []
         params = []
         if category:
-            clauses.append("category = $1" if hasattr(db, 'fetch') else "category = ?")
+            clauses.append("category = $1" if is_pg else "category = ?")
             params.append(category)
         if search:
-            if hasattr(db, 'fetch'):
+            if is_pg:
                 clauses.append("(name ILIKE $%d OR description ILIKE $%d)" % (len(params)+1, len(params)+1))
                 params.append(f"%{search}%")
             else:
@@ -1490,7 +1774,7 @@ async def list_permissions(category: str | None = None, search: str | None = Non
                 params.append(f"%{search}%")
                 params.append(f"%{search}%")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        if hasattr(db, 'fetch'):
+        if is_pg:
             rows = await db.fetch(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", *params)
             return [PermissionResponse(**dict(r)) for r in rows]
         else:
@@ -1505,10 +1789,8 @@ async def list_permissions(category: str | None = None, search: str | None = Non
 @router.post("/permissions", response_model=PermissionResponse)
 async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_transaction)) -> PermissionResponse:
     try:
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-        _settings = _get_settings()
-        _is_pg = str(_settings.DATABASE_URL).startswith("postgresql")
-        if _is_pg:
+        is_pg = await is_postgres_backend()
+        if is_pg:
             row = await db.fetchrow(
                 "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) RETURNING id, name, description, category",
                 payload.name, payload.description, payload.category,
@@ -1518,16 +1800,20 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
             # SQLite: tolerate duplicates via INSERT OR IGNORE, then return the row by name
             await db.execute(
                 "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)",
-                payload.name, payload.description, payload.category,
+                (payload.name, payload.description, payload.category),
             )
             # Fetch the row via adapter
-            row = await db.fetchone(
+            cur = await db.execute(
                 "SELECT id, name, description, category FROM permissions WHERE name = ?",
-                payload.name,
+                (payload.name,),
             )
-            if isinstance(row, dict):
-                return PermissionResponse(**row)
-            # Fallback mapping if adapter returns sequence
+            row = await cur.fetchone()
+            # Row may be a tuple-like (aiosqlite.Row) or dict-like via adapter; handle both
+            try:
+                if isinstance(row, dict):
+                    return PermissionResponse(**row)
+            except Exception:
+                pass
             return PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3])
     except Exception as e:
         logger.error(f"Failed to create permission: {e}")
@@ -1541,7 +1827,8 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
 @router.post("/roles/{role_id}/permissions/{permission_id}")
 async def grant_permission_to_role(role_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, permission_id)
         else:
             await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, permission_id))
@@ -1555,7 +1842,8 @@ async def grant_permission_to_role(role_id: int, permission_id: int, db=Depends(
 @router.delete("/roles/{role_id}/permissions/{permission_id}")
 async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2", role_id, permission_id)
         else:
             await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, permission_id))
@@ -1569,7 +1857,8 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
 async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> UserRoleListResponse:
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT r.id, r.name, r.description, COALESCE(r.is_system,0) as is_system
@@ -1601,8 +1890,8 @@ async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> 
 @router.post("/users/{user_id}/roles/{role_id}")
 async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        # Detect Postgres by presence of asyncpg-style fetch/fetchval
-        if hasattr(db, 'fetch') or hasattr(db, 'fetchval'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute(
                 "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT (user_id, role_id) DO NOTHING",
                 user_id, role_id,
@@ -1622,7 +1911,8 @@ async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transac
 @router.delete("/users/{user_id}/roles/{role_id}")
 async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        if hasattr(db, 'fetch') or hasattr(db, 'fetchval'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", user_id, role_id)
         else:
             await db.execute("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?", (user_id, role_id))
@@ -1636,7 +1926,8 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
 async def list_user_overrides(user_id: int, db=Depends(get_db_transaction)) -> UserOverridesResponse:
     try:
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT p.id as permission_id, p.name as permission_name, up.granted, up.expires_at
@@ -1669,11 +1960,11 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
-        _is_pg = str(_settings.DATABASE_URL).startswith("postgresql")
+        _is_pg = await is_postgres_backend()
         # In single-user mode, ensure the fixed user row exists before applying overrides (SQLite/PG FK safety)
         from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode as _is_single
         if _is_single() and int(user_id) == int(getattr(_settings, 'SINGLE_USER_FIXED_ID', 1)):
-            if _is_pg and hasattr(db, 'execute'):
+            if _is_pg:
                 await db.execute(
                     """
                     INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
@@ -1691,12 +1982,12 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
                     """,
                     user_id, 'single_user', 'single_user@example.local', '',
                 )
-                if hasattr(db, 'commit'):
+                if not _is_pg:
                     await db.commit()
         # Resolve permission_id if only name provided
         perm_id = payload.permission_id
         if not perm_id and payload.permission_name:
-            if hasattr(db, 'fetchval'):
+            if _is_pg:
                 perm_id = await db.fetchval("SELECT id FROM permissions WHERE name = $1", payload.permission_name)
             else:
                 cur = await db.execute("SELECT id FROM permissions WHERE name = ?", (payload.permission_name,))
@@ -1725,7 +2016,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
                 user_id, perm_id, granted, payload.expires_at,
             )
             # Commit on SQLite acquire()-based connection
-            if hasattr(db, 'commit'):
+            if not _is_pg:
                 await db.commit()
         return {"message": "Override upserted"}
     except HTTPException:
@@ -1743,14 +2034,12 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
 @router.delete("/users/{user_id}/overrides/{permission_id}")
 async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-        _settings = _get_settings()
-        _is_pg = str(_settings.DATABASE_URL).startswith("postgresql")
+        _is_pg = await is_postgres_backend()
         if _is_pg:
             await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
         else:
             cur = await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
-            if hasattr(db, 'commit'):
+            if not _is_pg:
                 await db.commit()
         return {"message": "Override deleted"}
     except Exception as e:
@@ -1770,7 +2059,8 @@ async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transa
     try:
         perms: set[str] = set()
         # Role-derived permissions
-        if hasattr(db, 'fetch'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             rows = await db.fetch(
                 """
                 SELECT DISTINCT p.name
@@ -1840,13 +2130,14 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
     - all_permissions: union of both, sorted
     """
     try:
+        is_pg = await is_postgres_backend()
         # Fetch role information
         role_name: Optional[str] = None
         # Defensive: normalize role_id to plain int
         if isinstance(role_id, (tuple, list)):
             role_id = role_id[0]
         role_id = int(role_id)
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             r = await db.fetchrow("SELECT id, name FROM roles WHERE id = $1", role_id)
             if not r:
                 raise HTTPException(status_code=404, detail="Role not found")
@@ -1902,7 +2193,8 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
 @router.post("/roles/{role_id}/rate-limits", response_model=RateLimitResponse)
 async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
     try:
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute(
                 """
                 INSERT INTO rbac_role_rate_limits (role_id, resource, limit_per_min, burst)
@@ -1931,7 +2223,8 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
 @router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
 async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
     try:
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             await db.execute(
                 """
                 INSERT INTO rbac_user_rate_limits (user_id, resource, limit_per_min, burst)
@@ -1981,7 +2274,8 @@ async def delete_user(
             )
         
         # Soft delete - just mark as inactive
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             result = await db.execute(
                 "UPDATE users SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
@@ -2035,7 +2329,8 @@ async def create_registration_code(
         # Calculate expiration
         expires_at = datetime.utcnow() + timedelta(days=request.expiry_days)
         
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
                 INSERT INTO registration_codes 
@@ -2098,7 +2393,8 @@ async def list_registration_codes(
         List of registration codes
     """
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             if include_expired:
                 query = """
@@ -2182,7 +2478,8 @@ async def delete_registration_code(
         Success message
     """
     try:
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 "DELETE FROM registration_codes WHERE id = $1",
@@ -2221,6 +2518,7 @@ async def get_security_alert_status() -> SecurityAlertStatusResponse:
     sink_status_map: Dict[str, Optional[bool]] = status.get("last_sink_status", {})
     sink_error_map: Dict[str, Optional[str]] = status.get("last_sink_errors", {})
     sink_threshold_map: Dict[str, Optional[str]] = status.get("sink_thresholds", {})
+    sink_backoff_map: Dict[str, Optional[str]] = status.get("sink_backoff_until", {})
 
     sink_rows = []
     for sink_name, configured in (
@@ -2235,6 +2533,7 @@ async def get_security_alert_status() -> SecurityAlertStatusResponse:
                 min_severity=sink_threshold_map.get(sink_name),
                 last_status=sink_status_map.get(sink_name),
                 last_error=sink_error_map.get(sink_name),
+                backoff_until=sink_backoff_map.get(sink_name),
             )
         )
 
@@ -2242,10 +2541,14 @@ async def get_security_alert_status() -> SecurityAlertStatusResponse:
     if status.get("enabled", False):
         if status.get("last_validation_errors"):
             overall_health = "errors"
-        elif status.get("last_dispatch_success") is False:
-            overall_health = "degraded"
-        elif all(row.last_status is False for row in sink_rows if row.configured):
-            overall_health = "degraded"
+        else:
+            configured_rows = [row for row in sink_rows if row.configured]
+            if status.get("last_dispatch_success") is False:
+                overall_health = "degraded"
+            elif any(row.last_error for row in configured_rows):
+                overall_health = "degraded"
+            elif configured_rows and all(row.last_status is False for row in configured_rows):
+                overall_health = "degraded"
 
     return SecurityAlertStatusResponse(
         enabled=status.get("enabled", False),
@@ -2274,7 +2577,8 @@ async def get_system_stats(
     try:
         stats = {}
         
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             # User stats
             user_stats = await db.fetchrow("""
@@ -2427,22 +2731,23 @@ async def get_audit_log(
         Audit log entries
     """
     try:
+        is_pg = await is_postgres_backend()
         conditions = []
         params = []
         param_count = 0
         
         if user_id:
             param_count += 1
-            conditions.append(f"user_id = ${param_count}" if hasattr(db, 'fetchrow') else "user_id = ?")
+            conditions.append(f"user_id = ${param_count}" if is_pg else "user_id = ?")
             params.append(user_id)
         
         if action:
             param_count += 1
-            conditions.append(f"action = ${param_count}" if hasattr(db, 'fetchrow') else "action = ?")
+            conditions.append(f"action = ${param_count}" if is_pg else "action = ?")
             params.append(action)
         
         # Date filter
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
         else:
             conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
@@ -2450,7 +2755,7 @@ async def get_audit_log(
         
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
         
-        if hasattr(db, 'fetchrow'):
+        if is_pg:
             # PostgreSQL
             query = f"""
                 SELECT a.id, a.user_id, u.username, a.action, a.details,
@@ -2522,8 +2827,7 @@ async def get_usage_daily(
         conditions: list[str] = []
         params: list = []
 
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
 
         if user_id is not None:
             if is_pg:
@@ -2646,8 +2950,7 @@ async def get_usage_top(
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
 
@@ -2772,8 +3075,7 @@ async def export_usage_daily_csv(
 ) -> PlainTextResponse:
     """Export usage_daily rows as CSV (includes bytes_in_total when available)."""
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
 
@@ -2874,8 +3176,7 @@ async def export_usage_top_csv(
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
         if start:
@@ -3004,8 +3305,7 @@ async def get_llm_usage(
         offset = (page - 1) * limit
         conditions: list[str] = []
         params: list = []
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
 
         def add_cond(sql: str, value):
             if value is None:
@@ -3091,8 +3391,7 @@ async def get_llm_usage_summary(
     db=Depends(get_db_transaction)
 ) -> LLMUsageSummaryResponse:
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
         if start:
@@ -3163,8 +3462,7 @@ async def get_llm_top_spenders(
     db=Depends(get_db_transaction)
 ) -> LLMTopSpendersResponse:
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
         if start:
@@ -3219,8 +3517,7 @@ async def export_llm_usage_csv(
 ) -> PlainTextResponse:
     """Export filtered llm_usage_log rows as CSV."""
     try:
-        pool = await get_db_pool()
-        is_pg = bool(getattr(pool, 'pool', None))
+        is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
 

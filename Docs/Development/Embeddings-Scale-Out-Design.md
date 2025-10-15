@@ -152,10 +152,18 @@ Processing semantics
 
 Retries and DLQ
 - Exponential backoff per message; `max_retries` default 3. After exhaustion, job marked `failed`.
+- Scheduled retries are implemented via a per-queue delayed ZSET (`<queue>:delayed`) with jitter; the orchestrator drains due items into the live stream (avoids sleeping workers).
 - DLQ implemented: workers publish failures to `embeddings:chunking:dlq`, `embeddings:embedding:dlq`, or `embeddings:storage:dlq` with original payload and error context for operator action.
 
 Idempotency
 - Storage should be idempotent per `(job_id, chunk_id)` to tolerate replays. Recommend unique constraints or dedupe keys in vector store metadata.
+
+Message schema & validation
+- All messages include `msg_version` and `schema` (default `tldw.embeddings.v1`).
+- A validator normalizes and validates stage messages before processing; future versions may evolve with migration shims.
+
+Dedupe window
+- Workers suppress accidental replays within a configurable window using Redis `SET NX` keyed by a stage-specific dedupe key (or explicit `dedupe_key`).
 
 Progress & TTL
 - Job status stored at `job:{job_id}`; progress fields updated by workers; TTL applied to completed/failed jobs (24h default).
@@ -202,12 +210,20 @@ Idempotency invariants
 
 Metrics
 - Orchestrator exposes Prometheus gauges/counters: worker counts, queue depths, total jobs by status.
+- Queue age histogram: `embedding_queue_age_seconds{queue_name}` (age of oldest message observed over time).
+- Stage processing latency histogram: `embedding_stage_processing_latency_seconds{stage}` (observed from worker snapshots).
 - Workers publish heartbeats and metrics in Redis (`worker:heartbeat:*`, `worker:metrics:*`).
 - API exposes endpoint-level metrics and circuit breaker status for provider calls.
- - DLQ metrics (orchestrator): `embedding_dlq_queue_depth{queue}` and `embedding_dlq_ingest_rate{queue}` (approximate rate via depth derivative).
+- DLQ metrics (orchestrator): `embedding_dlq_queue_depth{queue}` and `embedding_dlq_ingest_rate{queue}` (approximate rate via depth derivative).
 
 Alerts (suggested)
 - Queue depth > threshold per stage; worker heartbeat missing; error rate spikes; GPU memory > 90%; P95/P99 latency breaches.
+
+SSE live updates
+- Admin API exposes `/api/v1/embeddings/orchestrator/events` (SSE) for low-latency dashboard updates; WebUI toggles between polling and SSE.
+
+Stage controls
+- Admin API supports per-stage `pause`, `resume`, and `drain` flags. `drain` pauses new reads while allowing in-flight batches to finish.
 
 ## Operator Runbook
 

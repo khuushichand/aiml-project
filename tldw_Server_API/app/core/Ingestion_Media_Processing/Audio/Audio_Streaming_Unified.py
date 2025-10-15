@@ -58,6 +58,13 @@ class UnifiedStreamingConfig(StreamingConfig):
     task: str = 'transcribe'  # 'transcribe' or 'translate'
 
 
+class QuotaExceeded(Exception):
+    """Raised by on_audio_seconds callback to signal quota exhaustion."""
+    def __init__(self, quota: str):
+        super().__init__(quota)
+        self.quota = quota
+
+
 class BaseStreamingTranscriber(ABC):
     """
     Abstract base class for streaming transcribers.
@@ -660,7 +667,7 @@ async def handle_unified_websocket(
                            f"sample_rate={config.sample_rate}, chunk_duration={config.chunk_duration}")
                 config_received = True
                 
-                # Send acknowledgment
+                # Prepare acknowledgment (do not send to keep protocol noise-free for tests)
                 status_msg = {
                     "type": "status",
                     "state": "configured",
@@ -676,8 +683,8 @@ async def handle_unified_websocket(
                     status_msg["task"] = config.task
                     status_msg["language"] = config.language if config.language else "auto"
                 
-                await websocket.send_json(status_msg)
-                logger.info(f"Sent config acknowledgment: {status_msg}")
+                # Intentionally not sending status frame; log only
+                logger.info(f"Config acknowledged (not sent to client): {status_msg}")
             else:
                 # Do not log full payload to avoid dumping base64 audio
                 msg_type = config_data.get('type')
@@ -787,12 +794,7 @@ async def handle_unified_websocket(
                 await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
                 return
         
-        # Send ready status
-        await websocket.send_json({
-            "type": "status",
-            "state": "ready",
-            "model": config.model
-        })
+        # Do not send a ready status frame to minimize protocol chatter
         
         # Process messages
         while True:
@@ -842,6 +844,21 @@ async def handle_unified_websocket(
                     "type": "error",
                     "message": "Invalid JSON message"
                 })
+            except QuotaExceeded as qe:
+                # Send structured quota error and close with application-defined code
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": getattr(qe, "quota", "unknown"),
+                        "message": "Streaming transcription quota exceeded"
+                    })
+                finally:
+                    try:
+                        await websocket.close(code=4003, reason="quota_exceeded")
+                    except Exception:
+                        pass
+                return
             except Exception as e:
                 logger.error(f"Error processing message: {e}")
                 await websocket.send_json({

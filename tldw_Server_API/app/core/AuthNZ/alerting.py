@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -91,6 +91,8 @@ class SecurityAlertDispatcher:
             )
         except ValueError as threshold_error:
             raise ValueError(f"Security alert severity configuration error: {threshold_error}") from threshold_error
+        self.backoff_seconds = max(0, int(getattr(self.settings, "SECURITY_ALERT_BACKOFF_SECONDS", 30)))
+        self._sink_backoff: Dict[str, datetime] = {}
 
         if self.file_path:
             try:
@@ -132,6 +134,18 @@ class SecurityAlertDispatcher:
         if not threshold:
             return True
         return _SEVERITY_ORDER.get(severity, 0) >= _SEVERITY_ORDER[threshold]
+
+    def _sink_in_backoff(self, sink: str, now: datetime) -> bool:
+        expiry = self._sink_backoff.get(sink)
+        return bool(expiry and expiry > now)
+
+    def _set_backoff(self, sink: str, now: datetime) -> None:
+        if self.backoff_seconds > 0:
+            self._sink_backoff[sink] = now + timedelta(seconds=self.backoff_seconds)
+
+    def _clear_backoff(self, sink: str) -> None:
+        if sink in self._sink_backoff:
+            del self._sink_backoff[sink]
 
     def validate_configuration(self) -> None:
         """
@@ -221,6 +235,8 @@ class SecurityAlertDispatcher:
         if not self._meets_threshold(severity):
             return False
 
+        current_time = datetime.now(timezone.utc)
+
         sink_status: Dict[str, Optional[bool]] = {
             "file": None,
             "webhook": None,
@@ -234,38 +250,53 @@ class SecurityAlertDispatcher:
         errors: list[tuple[str, Exception]] = []
 
         if self.file_path:
-            if self._severity_passes(severity, self.file_min_severity):
+            if self._sink_in_backoff("file", current_time):
+                sink_status["file"] = False
+                sink_errors["file"] = "backoff"
+            elif self._severity_passes(severity, self.file_min_severity):
                 try:
                     await self._write_file(record)
                     sink_status["file"] = True
+                    self._clear_backoff("file")
                 except Exception as exc:
                     sink_status["file"] = False
                     sink_errors["file"] = str(exc)
                     errors.append(("file", exc))
+                    self._set_backoff("file", current_time)
             else:
                 sink_status["file"] = None
 
         if self.webhook_url:
-            if self._severity_passes(severity, self.webhook_min_severity):
+            if self._sink_in_backoff("webhook", current_time):
+                sink_status["webhook"] = False
+                sink_errors["webhook"] = "backoff"
+            elif self._severity_passes(severity, self.webhook_min_severity):
                 try:
                     await self._send_webhook(record)
                     sink_status["webhook"] = True
+                    self._clear_backoff("webhook")
                 except Exception as exc:
                     sink_status["webhook"] = False
                     sink_errors["webhook"] = str(exc)
                     errors.append(("webhook", exc))
+                    self._set_backoff("webhook", current_time)
             else:
                 sink_status["webhook"] = None
 
         if self._can_send_email():
-            if self._severity_passes(severity, self.email_min_severity):
+            if self._sink_in_backoff("email", current_time):
+                sink_status["email"] = False
+                sink_errors["email"] = "backoff"
+            elif self._severity_passes(severity, self.email_min_severity):
                 try:
                     await self._send_email(record)
                     sink_status["email"] = True
+                    self._clear_backoff("email")
                 except Exception as exc:
                     sink_status["email"] = False
                     sink_errors["email"] = str(exc)
                     errors.append(("email", exc))
+                    self._set_backoff("email", current_time)
             else:
                 sink_status["email"] = None
 
@@ -273,14 +304,28 @@ class SecurityAlertDispatcher:
         self._dispatch_count += 1
         self._last_sink_status = sink_status
         self._last_sink_errors = sink_errors
-        success = not errors
+
+        has_failure = bool(errors) or any(
+            status is False for status in sink_status.values() if status is not None
+        )
+        success = not has_failure
         self._last_dispatch_success = success
-        self._last_dispatch_error = str(errors[0][1]) if errors else None
+        if errors:
+            self._last_dispatch_error = str(errors[0][1])
+        elif not success:
+            self._last_dispatch_error = "backoff"
+        else:
+            self._last_dispatch_error = None
 
         update_security_alert_metrics(sink_status, success)
 
         for sink_name, exc in errors:
             logger.warning(f"Security alert sink '{sink_name}' failed: {exc}")
+        for sink_name, err in sink_errors.items():
+            if err == "backoff":
+                logger.warning(
+                    f"Security alert sink '{sink_name}' in backoff window; delivery skipped"
+                )
 
         return success
 
@@ -369,6 +414,7 @@ class SecurityAlertDispatcher:
                 "webhook": self.webhook_min_severity,
                 "email": self.email_min_severity,
             },
+            "sink_backoff_until": self._sink_backoff,
             "last_validation_time": self._last_validation_time,
             "last_validation_errors": self._last_validation_errors,
         }

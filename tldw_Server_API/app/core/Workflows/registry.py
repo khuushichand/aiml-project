@@ -23,6 +23,8 @@ class StepTypeRegistry:
             "delay": StepType("delay", "Pause the workflow for a fixed time (ms)"),
             "log": StepType("log", "Log a templated message at a chosen level"),
             "wait_for_human": StepType("wait_for_human", "Pause for human approval or edits"),
+            "branch": StepType("branch", "Evaluate a condition and jump to the next step by id"),
+            "map": StepType("map", "Fan-out over a list and apply a step with optional concurrency; returns results list"),
         }
 
     def list(self) -> List[StepType]:

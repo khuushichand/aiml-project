@@ -20,6 +20,9 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import VectorStoreFactory
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+from ..messages import normalize_message
+import os
+import json
 
 
 class StorageWorker(BaseWorker):
@@ -35,7 +38,8 @@ class StorageWorker(BaseWorker):
     
     def _parse_message(self, data: Dict[str, Any]) -> StorageMessage:
         """Parse raw message data into StorageMessage"""
-        return StorageMessage(**data)
+        norm = normalize_message("storage", data)
+        return StorageMessage(**norm)
     
     async def process_message(self, message: StorageMessage) -> None:
         """Store embeddings and update database"""
@@ -44,6 +48,58 @@ class StorageWorker(BaseWorker):
         )
 
         try:
+            # Idempotency ledger short-circuit
+            ledger_ttl = int(os.getenv("EMBEDDINGS_LEDGER_TTL_SECONDS", "86400") or 86400)
+            id_key = (message.idempotency_key or "").strip() or None
+            dd_key = (message.dedupe_key or "").strip() or None
+            short_circuit = False
+            if self.redis_client:
+                async def _is_completed(raw: Optional[str]) -> bool:
+                    try:
+                        if not raw:
+                            return False
+                        s = str(raw)
+                        if s.lower() == "completed":
+                            return True
+                        try:
+                            obj = json.loads(s)
+                            return str(obj.get("status", "")).lower() == "completed"
+                        except Exception:
+                            return False
+                    except Exception:
+                        return False
+
+                if id_key:
+                    st = await self.redis_client.get(f"embeddings:ledger:idemp:{id_key}")
+                    if await _is_completed(st):
+                        short_circuit = True
+                if not short_circuit and dd_key:
+                    st = await self.redis_client.get(f"embeddings:ledger:dedupe:{dd_key}")
+                    if await _is_completed(st):
+                        short_circuit = True
+            if short_circuit:
+                logger.info(f"Idempotency ledger short-circuit for job {message.job_id}")
+                await self._update_job_status(message.job_id, JobStatus.COMPLETED)
+                return
+            # Mark in-progress in ledger
+            try:
+                if self.redis_client:
+                    ts = int(__import__('time').time())
+                    if id_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:idemp:{id_key}",
+                            json.dumps({"status": "in_progress", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+                    if dd_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:dedupe:{dd_key}",
+                            json.dumps({"status": "in_progress", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+            except Exception:
+                pass
+
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.STORING)
 
@@ -63,6 +119,9 @@ class StorageWorker(BaseWorker):
                         "media_id": str(message.media_id),
                         "model_used": embedding_data.model_used,
                         "dimensions": str(embedding_data.dimensions),
+                        # Ensure embedder tagging present at storage time
+                        "embedder_name": (embedding_data.metadata or {}).get("embedder_name") or (embedding_data.metadata or {}).get("model_provider"),
+                        "embedder_version": (embedding_data.metadata or {}).get("embedder_version") or embedding_data.model_used,
                     }
                 )
 
@@ -70,6 +129,35 @@ class StorageWorker(BaseWorker):
             collection = await self._get_or_create_collection(
                 str(message.user_id), message.collection_name
             )
+
+            # Enforce embedder/version policy using collection metadata when available
+            try:
+                coll_meta = getattr(collection, 'metadata', None) or {}
+                first_meta = metadatas[0] if metadatas else {}
+                cur_name = str(first_meta.get('embedder_name') or first_meta.get('model_provider') or '')
+                cur_ver = str(first_meta.get('embedder_version') or first_meta.get('model_used') or '')
+                if coll_meta and isinstance(coll_meta, dict):
+                    col_name = str(coll_meta.get('embedder_name') or '')
+                    col_ver = str(coll_meta.get('embedder_version') or '')
+                    if (col_name and col_ver) and (col_name != cur_name or col_ver != cur_ver):
+                        # Schedule re-embed request sidecar
+                        try:
+                            if self.redis_client:
+                                await self.redis_client.xadd('embeddings:reembed:requests', {
+                                    'user_id': str(message.user_id),
+                                    'collection': message.collection_name,
+                                    'current_embedder_name': col_name,
+                                    'current_embedder_version': col_ver,
+                                    'new_embedder_name': cur_name,
+                                    'new_embedder_version': cur_ver,
+                                    'job_id': message.job_id,
+                                })
+                        except Exception:
+                            pass
+                        if os.getenv('EMBEDDER_ENFORCE_NO_MIX', 'false').lower() in ('1','true','yes'):
+                            raise RuntimeError('EMBEDDER_MISMATCH: collection uses different embedder/version')
+            except Exception as _embedder_check_err:
+                logger.debug(f"Embedder/version policy check warning: {_embedder_check_err}")
 
             # Store in batches via helper (for test compatibility)
             batch_size = 100
@@ -94,10 +182,47 @@ class StorageWorker(BaseWorker):
             # Mark job as completed
             await self._update_job_status(message.job_id, JobStatus.COMPLETED)
 
+            # Update ledger to completed
+            try:
+                if self.redis_client:
+                    ts = int(__import__('time').time())
+                    if id_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:idemp:{id_key}",
+                            json.dumps({"status": "completed", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+                    if dd_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:dedupe:{dd_key}",
+                            json.dumps({"status": "completed", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+            except Exception:
+                pass
+
             logger.info(f"Successfully stored embeddings for job {message.job_id}")
 
         except Exception as e:
             logger.error(f"Error storing embeddings for job {message.job_id}: {e}")
+            # Record failure in ledger
+            try:
+                if self.redis_client:
+                    ts = int(__import__('time').time())
+                    if id_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:idemp:{id_key}",
+                            json.dumps({"status": "failed", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+                    if dd_key:
+                        await self.redis_client.set(
+                            f"embeddings:ledger:dedupe:{dd_key}",
+                            json.dumps({"status": "failed", "ts": ts, "job_id": message.job_id}),
+                            ex=ledger_ttl
+                        )
+            except Exception:
+                pass
             raise
     
     async def _send_to_next_stage(self, result: Any):

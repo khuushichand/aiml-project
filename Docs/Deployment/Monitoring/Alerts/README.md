@@ -10,6 +10,7 @@ Included files
 - `app-alerts.yml` – App/API alerts (HTTP 5xx ratio, high p95 latency)
 - `mcp-alerts.yml` – MCP Unified alerts (p95 latency, rate limit spikes)
 - `rag-alerts.yml` – RAG reranker alerts (LLM timeouts, exceptions, budget exhaustions)
+- `rag-slo-alerts.yml` – RAG SLOs (p95 latency, faithfulness ratio, burn-rate)
 
 Notes
 - The YAML uses Grafana’s unified alerting provisioning (apiVersion: 1).
@@ -57,6 +58,11 @@ The AuthNZ scheduler now emits structured security alerts (auth failure spikes, 
    SECURITY_ALERT_WEBHOOK_MIN_SEVERITY=medium
    SECURITY_ALERT_EMAIL_MIN_SEVERITY=critical
    SECURITY_ALERT_FILE_MIN_SEVERITY=low
+   ```
+
+5. (Optional) Extend the retry backoff after delivery failures (seconds):
+   ```
+   SECURITY_ALERT_BACKOFF_SECONDS=45
    ```
 
  All values can also be supplied via `[AuthNZ]` in `Config_Files/config.txt` (see `Env_Vars.md` for keys). The dispatcher writes to the file sink even when webhooks or SMTP fail, so operators can tail the log during setup.

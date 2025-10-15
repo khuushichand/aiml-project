@@ -249,19 +249,35 @@ async function embeddingsListDLQ() {
             const eid = item.entry_id;
             const job = item.job_id || '';
             const err = (item.error || '').toString().slice(0, 120);
+            const code = (item.fields && item.fields.error_code) ? item.fields.error_code : '-';
+            const ftype = (item.fields && item.fields.failure_type) ? item.fields.failure_type : '-';
+            const state = (item.dlq_state || '-');
+            const note = (item.operator_note || '');
             return `<tr>
                 <td><code>${eid}</code></td>
                 <td>${job}</td>
                 <td class="text-muted">${Utils.escapeHtml(err)}</td>
-                <td><button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button></td>
+                <td>${Utils.escapeHtml(code)}</td>
+                <td>${Utils.escapeHtml(ftype)}</td>
+                <td>${Utils.escapeHtml(state)}</td>
+                <td>${Utils.escapeHtml(note)}</td>
+                <td>
+                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <div class="btn-group" style="margin-top:4px">
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
+                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                    </div>
+                </td>
             </tr>`;
         }).join('');
         out.innerHTML = `
             <table class="table">
                 <thead>
-                    <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Action</th></tr>
+                    <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
                 </thead>
-                <tbody>${rows || '<tr><td colspan="4">No DLQ items</td></tr>'}</tbody>
+                <tbody>${rows || '<tr><td colspan="8">No DLQ items</td></tr>'}</tbody>
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
@@ -275,12 +291,16 @@ async function embeddingsRequeueDLQ(entryId) {
     const stage = document.getElementById('embeddingsDLQ_stage').value;
     const out = document.getElementById('embeddingsDLQ_results');
     try {
-        await apiClient.post('/api/v1/embeddings/dlq/requeue', {
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue', {
             stage,
             entry_id: entryId,
             delete_from_dlq: true
         });
-        Toast.success('Requeued DLQ item');
+        if (res && res.warning) {
+            Toast.warn(`Requeued with warning: ${res.warning}`);
+        } else {
+            Toast.success('Requeued DLQ item');
+        }
         // Refresh list
         embeddingsListDLQ();
     } catch (e) {
@@ -310,26 +330,53 @@ async function embeddingsListDLQ2() {
             const eid = item.entry_id;
             const job = item.job_id || '';
             const err = (item.error || '').toString().slice(0, 120);
+            const code = (item.fields && item.fields.error_code) ? item.fields.error_code : '-';
+            const ftype = (item.fields && item.fields.failure_type) ? item.fields.failure_type : '-';
+            const state = (item.dlq_state || '-');
+            const note = (item.operator_note || '');
             return `<tr>
                 <td><input type="checkbox" class="dlq-select" data-entry-id="${eid}" /></td>
                 <td><code>${eid}</code></td>
                 <td>${job}</td>
                 <td class="text-muted">${Utils.escapeHtml(err)}</td>
-                <td><button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button></td>
+                <td>${Utils.escapeHtml(code)}</td>
+                <td>${Utils.escapeHtml(ftype)}</td>
+                <td>${Utils.escapeHtml(state)}</td>
+                <td>${Utils.escapeHtml(note)}</td>
+                <td>
+                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <div class="btn-group" style="margin-top:4px">
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
+                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
+                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                    </div>
+                </td>
             </tr>`;
         }).join('');
         out.innerHTML = `
             <table class="table">
                 <thead>
-                    <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Action</th></tr>
+                    <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
                 </thead>
-                <tbody>${rows || '<tr><td colspan="5">No DLQ items</td></tr>'}</tbody>
+                <tbody>${rows || '<tr><td colspan="9">No DLQ items</td></tr>'}</tbody>
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
+    }
+}
+
+async function embeddingsSkipJob(jobId) {
+    if (!jobId) return;
+    if (!confirm(`Mark job ${jobId} as skipped?`)) return;
+    try {
+        await apiClient.post('/api/v1/embeddings/job/skip', { job_id: jobId, ttl_seconds: 7*24*3600 });
+        Toast.success(`Job ${jobId} marked as skipped`);
+    } catch (e) {
+        Toast.error('Failed to mark job as skipped');
     }
 }
 
@@ -352,12 +399,16 @@ async function embeddingsRequeueDLQSelected() {
             Toast.error('No DLQ entries selected');
             return;
         }
-        await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
             stage,
             entry_ids: selected,
             delete_from_dlq: true
         });
-        Toast.success(`Requeued ${selected.length} DLQ item(s)`);
+        if (res && Array.isArray(res.results) && res.results.some(r => r.warning)) {
+            Toast.warn('Some entries requeued with validation warnings');
+        } else {
+            Toast.success(`Requeued ${selected.length} DLQ item(s)`);
+        }
         embeddingsListDLQ2();
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
@@ -375,12 +426,16 @@ async function embeddingsRequeueDLQAllFiltered() {
             Toast.error('No DLQ entries listed');
             return;
         }
-        await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
+        const res = await apiClient.post('/api/v1/embeddings/dlq/requeue/bulk', {
             stage,
             entry_ids: all,
             delete_from_dlq: true
         });
-        Toast.success(`Requeued ${all.length} DLQ item(s)`);
+        if (res && Array.isArray(res.results) && res.results.some(r => r.warning)) {
+            Toast.warn('Some entries requeued with validation warnings');
+        } else {
+            Toast.success(`Requeued ${all.length} DLQ item(s)`);
+        }
         embeddingsListDLQ2();
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
@@ -418,10 +473,66 @@ async function embeddingsRefreshDLQBadges() {
     } catch (e) { /* ignore */ }
 }
 
+async function embeddingsSetDLQState(entryId, state) {
+    const stage = document.getElementById('embeddingsDLQ_stage').value;
+    let operator_note = undefined;
+    if (state === 'approved_for_requeue') {
+        operator_note = prompt('Approval note (required):', 'Reviewed and safe to requeue');
+        if (!operator_note || !operator_note.trim()) {
+            Toast.error('Approval note is required');
+            return;
+        }
+    }
+    try {
+        await apiClient.post('/api/v1/embeddings/dlq/state', { stage, entry_id: entryId, state, operator_note });
+        Toast.success('DLQ state updated');
+        embeddingsListDLQ2();
+    } catch (e) {
+        Toast.error('Failed to update DLQ state');
+    }
+}
+
+async function embeddingsApproveDLQ(entryId) {
+    return embeddingsSetDLQState(entryId, 'approved_for_requeue');
+}
+
+// ----------------------------------------------------------------------------
+// Embeddings Stage Controls (pause/resume/drain)
+// ----------------------------------------------------------------------------
+
+async function embeddingsStageStatus() {
+    const out = document.getElementById('embeddingsStage_status');
+    try {
+        const res = await apiClient.get('/api/v1/embeddings/stage/status');
+        out.textContent = Utils.syntaxHighlight(res);
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error('Failed to fetch stage status');
+    }
+}
+
+async function embeddingsStageControl(action) {
+    const stage = document.getElementById('embeddingsStage_stage').value;
+    const out = document.getElementById('embeddingsStage_status');
+    try {
+        await apiClient.post('/api/v1/embeddings/stage/control', { stage, action });
+        Toast.success(`${action} sent to ${stage}`);
+        await embeddingsStageStatus();
+    } catch (e) {
+        out.textContent = JSON.stringify(e.response || e, null, 2);
+        Toast.error(`Failed to ${action} stage`);
+    }
+}
+
+async function embeddingsStagePause() { return embeddingsStageControl('pause'); }
+async function embeddingsStageResume() { return embeddingsStageControl('resume'); }
+async function embeddingsStageDrain() { return embeddingsStageControl('drain'); }
+
 function embeddingsStartDLQAutoRefresh() {
     try { embeddingsStopDLQAutoRefresh(); } catch (e) { /* ignore */ }
     embeddingsRefreshDLQBadges();
     embeddingsDLQTimer = setInterval(embeddingsRefreshDLQBadges, 10000);
+    try { Utils.saveToStorage('embeddings-dlq-auto-refresh', true); } catch (e) { /* ignore */ }
 }
 
 function embeddingsStopDLQAutoRefresh() {
@@ -429,6 +540,7 @@ function embeddingsStopDLQAutoRefresh() {
         clearInterval(embeddingsDLQTimer);
         embeddingsDLQTimer = null;
     }
+    try { Utils.saveToStorage('embeddings-dlq-auto-refresh', false); } catch (e) { /* ignore */ }
 }
 
 async function segmentTranscriptRun() {

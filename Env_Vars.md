@@ -36,9 +36,38 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_TIMEOUT_SEC`: Per-document LLM rerank timeout (seconds). Default `10`.
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
+ - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
+ - `RAG_REWRITE_CACHE_PATH`: Optional path for query→rewrite cache JSONL (default `Databases/Rewrite_Cache/rewrite_cache.jsonl`).
+
+### RAG Guardrails (Production Defaults)
+- `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non‑prod environments where you still want strict behavior.
+- `RAG_ENABLE_NUMERIC_FIDELITY`: Force-enable numeric fidelity verification of answers (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
+- `RAG_REQUIRE_HARD_CITATIONS`: Force-enable per‑sentence hard citations mapping (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
+- `RAG_NUMERIC_FIDELITY_BEHAVIOR`: Default behavior when numeric values are not verified in sources: `continue` | `ask` | `decline` | `retry`. Default `ask` when strict mode is active.
+ - `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
+ - `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
+ - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half‑life for decay of per‑user priors (default `7`).
+ - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
+
+Notes:
+- In production (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the unified pipeline will default to enabling numeric fidelity and strict citations unless explicitly configured otherwise by the request.
+
+### Two‑Tier Reranking Calibration & Gating
+- `RAG_RERANK_CALIB_BIAS`: Logistic calibration bias. Default `-1.5`.
+- `RAG_RERANK_CALIB_W_ORIG`: Weight for original retrieval score. Default `0.8`.
+- `RAG_RERANK_CALIB_W_CE`: Weight for cross-encoder score. Default `2.5`.
+- `RAG_RERANK_CALIB_W_LLM`: Weight for LLM reranker score. Default `3.0`.
+- `RAG_MIN_RELEVANCE_PROB`: Minimum calibrated probability to allow generation. Default `0.35`.
+- `RAG_SENTINEL_MARGIN`: Required margin of (top_prob − sentinel_prob) to consider evidence strong enough. Default `0.10`.
+
+### Ingest & Chunking
+- `INGEST_ENABLE_DEDUP`: Enable near‑duplicate removal at ingestion time (`true|false`, default `true`).
+- `INGEST_DEDUP_THRESHOLD`: Jaccard similarity threshold for shingle‑based dedupe (0–1, default `0.9`).
+- Chunker adaptive controls are primarily request‑level, but ingestion defaults set `adaptive=true` and `adaptive_overlap=true`.
 
 ### RAG Adaptive Post-Verification
 - `RAG_ADAPTIVE_TIME_BUDGET_SEC`: Optional hard cap (seconds) for post-generation verification and repair. When unset or `0`, no cap is applied. Other knobs are request-level (`enable_post_verification`, `adaptive_max_retries`, `adaptive_unsupported_threshold`, `adaptive_max_claims`).
+- `RAG_ADAPTIVE_ADVANCED_REWRITES`: Toggle advanced rewrite strategy (HyDE + multi-strategy + diversity) for the adaptive pass. `true|false` (default `true`). When `false`, the adaptive pass uses a simple single-query retrieval.
 
 ### Chunking (regex safety and templates)
 - `CHUNKING_REGEX_TIMEOUT`: Float seconds to cap regex execution for chapter/section detection and template boundaries. Default: `2`. Values <= 0 disable. On timeout, strategies fall back to safe paths.
@@ -62,6 +91,11 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
+
+## Audio Jobs
+- `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default `false`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
+- `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition for fairness across users (`true|false`, default `false`). When enabled, the worker preferentially acquires jobs for owners under their concurrent-job caps.
+- `AUDIO_QUOTA_USE_REDIS`: Use Redis for distributed audio concurrency tracking (`true|false`, default `true` when `REDIS_URL` is set). Falls back to in-process counters when disabled or unavailable.
 
 Pytest markers
 - `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).
@@ -99,6 +133,7 @@ Pytest markers
 - `SECURITY_ALERT_FILE_MIN_SEVERITY`: Override the global severity threshold for the file sink; choose from `low|medium|high|critical`.
 - `SECURITY_ALERT_WEBHOOK_MIN_SEVERITY`: Override the global severity threshold for the webhook sink.
 - `SECURITY_ALERT_EMAIL_MIN_SEVERITY`: Override the global severity threshold for email delivery.
+- `SECURITY_ALERT_BACKOFF_SECONDS`: Cooldown applied after a sink fails before retrying (default `30`).
 - `SHOW_API_KEY_ON_STARTUP`: In single-user mode, show API key once at startup (`true|false`). Avoid in production.
 - `REDIS_ENABLED`: Boolean hint used in logs/metrics reporting.
 
@@ -141,6 +176,7 @@ Runtime overrides (non‑persistent) are available via API:
   File-based overrides are also supported at `tldw_Server_API/Config_Files/model_pricing.json`.
 
 ## Embeddings
+- `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage‑specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma‑separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
 
 ## LLM Provider Keys

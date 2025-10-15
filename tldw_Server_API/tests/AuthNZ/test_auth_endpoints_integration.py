@@ -77,22 +77,6 @@ def _isolate_app_state_per_test(monkeypatch):
                 app.middleware_stack = app.build_middleware_stack()
         except Exception:
             pass
-        # Provide a lightweight DB transaction override only for refresh-401
-        # tests to avoid opening real DB pools in invalid-token paths.
-        try:
-            from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_db_transaction as _get_db_tx
-            current = os.getenv("PYTEST_CURRENT_TEST", "")
-            if ("test_refresh_token_invalid" in current) or ("test_refresh_with_various_token_lengths" in current):
-                class _FakeDB:
-                    async def fetchrow(self, *args, **kwargs):
-                        return None
-                    async def execute(self, *args, **kwargs):
-                        return None
-                async def _fake_db_dep():
-                    return _FakeDB()
-                app.dependency_overrides[_get_db_tx] = _fake_db_dep
-        except Exception:
-            pass
     except Exception:
         # If reload fails for any reason, at least clear overrides on existing app
         try:
@@ -350,22 +334,19 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
-    async def test_refresh_token_invalid(self, jwt_service):
+    async def test_refresh_token_invalid(self, isolated_test_environment, jwt_service):
         """Test refresh with invalid token."""
+        client, _ = isolated_test_environment
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_jwt_service_dep
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
-        
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": "invalid.token.here"}
-            )
-        
+
+        response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": "invalid.token.here"}
+        )
+
         assert response.status_code == 401
-        
+
         app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
@@ -479,23 +460,20 @@ class TestAuthEndpointsProperty:
         token_length=st.integers(min_value=10, max_value=1000)
     )
     @hypothesis_settings(max_examples=10, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_refresh_with_various_token_lengths(self, token_length, jwt_service):
+    async def test_refresh_with_various_token_lengths(self, isolated_test_environment, token_length, jwt_service):
         """Test refresh endpoint with tokens of various lengths."""
+        client, _ = isolated_test_environment
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_jwt_service_dep
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
         
         # Generate a token-like string of specified length
         fake_token = "a" * token_length
-        
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": fake_token}
-            )
-        
+
+        response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": fake_token}
+        )
+
         # Should always return 401 for invalid tokens
         assert response.status_code == 401
         

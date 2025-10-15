@@ -618,6 +618,22 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     msg_t = str(config.get("message", ""))
     level = str(config.get("level", "info")).lower()
+    # Pre-pass replacements for common templates like {{ inputs.name || '' }} and {{ inputs.name }}
+    try:
+        import re
+        if isinstance(context.get("inputs"), dict):
+            # Handle {{ inputs.key || '' }}
+            def repl_fallback(m):
+                key = m.group(1)
+                return str(context["inputs"].get(key, ""))
+            msg_t = re.sub(r"\{\{\s*inputs\.(\w+)\s*\|\|\s*''\s*\}\}", repl_fallback, msg_t)
+            # Handle {{ inputs.key }}
+            def repl_simple(m):
+                key = m.group(1)
+                return str(context["inputs"].get(key, ""))
+            msg_t = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, msg_t)
+    except Exception:
+        pass
     message = _tmpl(msg_t, context) or msg_t
     try:
         if level == "debug":
@@ -631,6 +647,81 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     except Exception:
         pass
     return {"logged": True, "message": message, "level": level}
+
+
+async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate a simple boolean condition and select the next step.
+
+    Config:
+      - condition: str (templated). Treated as true iff rendered lower() in {"1","true","yes","on"}.
+      - true_next: str (step id)
+      - false_next: str (step id)
+    Output: { "__next__": step_id, "branch": "true"|"false" }
+    """
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    cond_t = str(config.get("condition", "")).strip()
+    rendered = (_tmpl(cond_t, context) or cond_t).strip().lower()
+    is_true = rendered in {"1", "true", "yes", "on"}
+    next_id = str(config.get("true_next") if is_true else config.get("false_next") or "").strip()
+    # Do not force if not provided; engine will fall back to natural order
+    out = {"branch": "true" if is_true else "false"}
+    if next_id:
+        out["__next__"] = next_id
+    return out
+
+
+async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Fan-out over a list of items and apply a simple step to each item.
+
+    Config:
+      - items: list | str (templated path). If str, it is treated as a template and then JSON-parsed if possible or split by ','.
+      - step: {type, config}
+      - concurrency: int (default 4)
+    Output: { "results": [ ... ], "count": n }
+    Limitations: Supported nested step types are a subset: prompt, log, delay, rag_search, media_ingest, mcp_tool, webhook.
+    """
+    items_cfg = config.get("items")
+    items: list
+    if isinstance(items_cfg, list):
+        items = items_cfg
+    else:
+        from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+        raw = _tmpl(str(items_cfg or ""), context) or str(items_cfg or "")
+        try:
+            import json as _json
+            parsed = _json.loads(raw)
+            items = parsed if isinstance(parsed, list) else [raw]
+        except Exception:
+            items = [s.strip() for s in str(raw).split(",") if str(s).strip()]
+
+    sub = config.get("step") or {}
+    sub_type = str(sub.get("type") or "").strip()
+    sub_cfg = sub.get("config") or {}
+    concurrency = max(1, int(config.get("concurrency", 4)))
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _run_one(item):
+        async with sem:
+            sub_ctx = {**context, "item": item}
+            if sub_type == "prompt":
+                return await run_prompt_adapter(sub_cfg, sub_ctx)
+            if sub_type == "log":
+                return await run_log_adapter(sub_cfg, sub_ctx)
+            if sub_type == "delay":
+                return await run_delay_adapter(sub_cfg, sub_ctx)
+            if sub_type == "rag_search":
+                return await run_rag_search_adapter(sub_cfg, sub_ctx)
+            if sub_type == "media_ingest":
+                return await run_media_ingest_adapter(sub_cfg, sub_ctx)
+            if sub_type == "mcp_tool":
+                return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
+            if sub_type == "webhook":
+                return await run_webhook_adapter(sub_cfg, sub_ctx)
+            return {"error": f"unsupported_substep:{sub_type}"}
+
+    results = await asyncio.gather(*[_run_one(it) for it in items], return_exceptions=False)
+    return {"results": results, "count": len(results)}
 
 
 async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -713,7 +804,14 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         return {"dispatched": False, "test_mode": True}
 
     if url:
-        if not is_url_allowed(url):
+        # Prefer tenant-scoped policy when available
+        try:
+            from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant
+            tenant_id = str(context.get("tenant_id") or "default")
+            allowed = is_webhook_url_allowed_for_tenant(url, tenant_id)
+        except Exception:
+            allowed = is_url_allowed(url)
+        if not allowed:
             return {"dispatched": False, "error": "blocked_egress"}
         try:
             import httpx, hmac, hashlib

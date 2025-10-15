@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     RegistrationError,
     DuplicateUserError,
@@ -228,7 +229,8 @@ async def register_user(
         user_uuid = str(uuid4())
         
         # Create user in database
-        if hasattr(db, 'fetchval'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             user_id = await db.fetchval(
                 """
@@ -285,8 +287,8 @@ async def register_user(
         # If using SQLite backend, generate an API key so the user can authenticate via X-API-KEY
         api_key_value = None
         try:
-            db_url = settings.DATABASE_URL or ""
-            if isinstance(db_url, str) and db_url.startswith("sqlite"):
+            is_pg2 = await is_postgres_backend()
+            if not is_pg2:
                 api_mgr = await get_api_key_manager()
                 key_result = await api_mgr.create_api_key(
                     user_id=user_id,

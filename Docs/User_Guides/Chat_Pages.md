@@ -7,35 +7,6 @@
 - [Character Chat Page](#character-chat-page)
 - [Chat Dictionaries](#chat-dictionaries)
 
-
-
-# Link Dump:
-https://github.com/caspianmoon/memoripy
-https://arxiv.org/abs/2407.03974
-https://arxiv.org/abs/2408.13718
-https://github.com/p-e-w/sorcery
-https://artefact2.github.io/llm-sampling/
-https://kalami.medium.com/prompt-decorators-a-simple-way-to-improve-ai-responses-c3f3c2579a8c
-https://github.com/t41372/Open-LLM-VTuber
-- Other Chat Front-ends:
-    https://prompt.16x.engineer/
-	https://www.librechat.ai/docs/features/fork
-	https://github.com/danny-avila/LibreChat
-https://github.com/PioneerMNDR/MousyHub
-- https://arxiv.org/html/2505.18092v2
-https://github.com/MVPandey/CAE
-https://rentry.org/SillyT_Lorebook
-https://rentry.org/NG_CharCard
-
-
-
-
-
-
-
-
-
-- 
 ### Introduction
 
 

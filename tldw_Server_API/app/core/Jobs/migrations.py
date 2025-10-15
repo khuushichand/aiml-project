@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   idempotency_key TEXT,
   payload TEXT,
   result TEXT,
-  status TEXT NOT NULL CHECK (status IN ('queued','processing','completed','failed','cancelled')),
+  -- status now includes 'quarantined' for poison message handling
+  status TEXT NOT NULL CHECK (status IN ('queued','processing','completed','failed','cancelled','quarantined')),
   priority INTEGER DEFAULT 5 CHECK (priority >= 1 AND priority <= 10),
   max_retries INTEGER DEFAULT 3 CHECK (max_retries >= 0 AND max_retries <= 100),
   retry_count INTEGER DEFAULT 0,
@@ -43,8 +44,19 @@ CREATE TABLE IF NOT EXISTS jobs (
   cancel_requested_at TEXT,
   cancelled_at TEXT,
   cancellation_reason TEXT,
+  -- completion token for exactly-once finalize semantics
+  completion_token TEXT,
+  -- failure streak tracking for poison message quarantine
+  failure_streak_code TEXT,
+  failure_streak_count INTEGER DEFAULT 0,
+  quarantined_at TEXT,
   progress_percent REAL CHECK (progress_percent IS NULL OR (progress_percent >= 0 AND progress_percent <= 100)),
   progress_message TEXT,
+  -- correlation
+  request_id TEXT,
+  trace_id TEXT,
+  -- structured failure history (JSON array of {ts, error_code, retry_backoff})
+  failure_timeline TEXT,
   created_at TEXT DEFAULT (DATETIME('now')),
   updated_at TEXT DEFAULT (DATETIME('now')),
   completed_at TEXT
@@ -97,13 +109,50 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   cancel_requested_at TEXT,
   cancelled_at TEXT,
   cancellation_reason TEXT,
+  completion_token TEXT,
+  failure_streak_code TEXT,
+  failure_streak_count INTEGER,
+  quarantined_at TEXT,
   progress_percent REAL,
   progress_message TEXT,
+  request_id TEXT,
+  trace_id TEXT,
+  failure_timeline TEXT,
   created_at TEXT,
   updated_at TEXT,
   completed_at TEXT,
   archived_at TEXT DEFAULT (DATETIME('now'))
 );
+
+-- Append-only outbox for job events (CDC/event bus)
+CREATE TABLE IF NOT EXISTS job_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER,
+  domain TEXT,
+  queue TEXT,
+  job_type TEXT,
+  event_type TEXT NOT NULL,
+  attrs_json TEXT,
+  owner_user_id TEXT,
+  request_id TEXT,
+  trace_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
+\n+-- Lightweight per-queue counters to avoid frequent COUNT(*) scans
+CREATE TABLE IF NOT EXISTS job_counters (
+  domain TEXT NOT NULL,
+  queue TEXT NOT NULL,
+  job_type TEXT NOT NULL,
+  ready_count INTEGER DEFAULT 0,
+  scheduled_count INTEGER DEFAULT 0,
+  processing_count INTEGER DEFAULT 0,
+  quarantined_count INTEGER DEFAULT 0,
+  updated_at TEXT DEFAULT (DATETIME('now')),
+  PRIMARY KEY (domain, queue, job_type)
+);
+CREATE INDEX IF NOT EXISTS idx_job_counters_domain_queue ON job_counters(domain, queue);
 """
 
 

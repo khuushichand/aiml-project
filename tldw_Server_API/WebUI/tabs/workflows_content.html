@@ -17,6 +17,11 @@
   <div class="form-group">
     <button class="api-button" onclick="wfCreateDefinition()">Create Definition</button>
     <button class="api-button" onclick="wfListDefinitions()">List Definitions</button>
+    <button class="api-button" onclick="wfInsertDelay()">Insert Delay Step</button>
+    <button class="api-button" onclick="wfInsertLog()">Insert Log Step</button>
+    <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
+    <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
+    <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -29,6 +34,10 @@
     <label>Inputs (JSON)</label>
     <input type="text" id="wfRun_inputs" placeholder='{"name":"Alice"}' />
     <button class="api-button" onclick="wfRunSaved()">Run Saved</button>
+  </div>
+  <div class="form-group" style="margin-bottom:4px">
+    <button class="api-button" onclick="wfCopyJson('wfDef_result')">Copy</button>
+    <button class="api-button" onclick="wfClearJson('wfDef_result')">Clear</button>
   </div>
   <pre id="wfDef_result" class="json-viewer"></pre>
   <script>
@@ -63,6 +72,68 @@
       Toast.success('Run started: '+(resp?.run_id||''));
     }catch(e){ Toast.error('Run failed: '+(e?.message||e)); }
   }
+  function wfInsertDelay(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'delay_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'delay', config: { milliseconds: 1000 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted delay step');
+    }catch(e){ Toast.error('Could not insert delay: '+(e?.message||e)); }
+  }
+  function wfInsertLog(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'log_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'log', config: { message: 'Run {{ inputs.name || \"\" }}', level: 'info' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted log step');
+    }catch(e){ Toast.error('Could not insert log: '+(e?.message||e)); }
+  }
+  function wfInsertPrompt(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'prompt_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'prompt', config: { template: 'Hello {{ inputs.name }}' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted prompt step');
+    }catch(e){ Toast.error('Could not insert prompt: '+(e?.message||e)); }
+  }
+  function wfInsertRagSearch(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'rag_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'rag_search', config: { query: '{{ inputs.query || "example" }}', sources: ['media_db'], search_mode: 'hybrid', top_k: 5 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted RAG search step');
+    }catch(e){ Toast.error('Could not insert rag_search: '+(e?.message||e)); }
+  }
+  function wfInsertMediaIngest(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'ingest_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'media_ingest', config: { sources: [{ uri: 'file:///path/to/file.txt' }], extraction: { extract_text: true }, chunking: { method: 'simple', max_size: 800, overlap: 100 } }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted media_ingest step');
+    }catch(e){ Toast.error('Could not insert media_ingest: '+(e?.message||e)); }
+  }
+  function wfCopyJson(id){
+    try{
+      const txt = document.getElementById(id).textContent||'';
+      navigator.clipboard.writeText(txt).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed'));
+    }catch(e){ Toast.error('Copy failed: '+(e?.message||e)); }
+  }
+  function wfClearJson(id){ try{ document.getElementById(id).textContent=''; }catch(e){} }
   </script>
 </div>
 
@@ -93,9 +164,20 @@
     <label>Workflow ID</label>
     <input type="text" id="wfList_workflow_id" placeholder="optional">
     <label>Created After</label>
-    <input type="text" id="wfList_created_after" placeholder="YYYY-MM-DDTHH:MM:SSZ">
+    <input type="datetime-local" id="wfList_created_after" placeholder="YYYY-MM-DD HH:MM">
     <label>Created Before</label>
-    <input type="text" id="wfList_created_before" placeholder="YYYY-MM-DDTHH:MM:SSZ">
+    <input type="datetime-local" id="wfList_created_before" placeholder="YYYY-MM-DD HH:MM">
+    <label>Date Presets</label>
+    <select id="wfList_presets" onchange="wfApplyPreset()">
+      <option value="">(none)</option>
+      <option value="today">Today</option>
+      <option value="yesterday">Yesterday</option>
+      <option value="lasthour">Last hour</option>
+      <option value="last24h">Last 24h</option>
+      <option value="thisweek">This week</option>
+      <option value="last7d">Last 7 days</option>
+      <option value="last30d">Last 30 days</option>
+    </select>
     <label>Order By</label>
     <select id="wfList_order_by">
       <option value="created_at" selected>created_at</option>
@@ -112,6 +194,7 @@
     <label>Offset</label>
     <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
     <button class="api-button" onclick="wfListRuns()">List Runs</button>
+    <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
   </div>
   <div class="form-group">
     <label>Run ID</label>
@@ -121,6 +204,9 @@
     <label>Events Limit</label>
     <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
     <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto" onchange="wfToggleAutoEvents()"> Auto-refresh</label>
+    <label style="margin-left:8px">Filter (types)</label>
+    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px"/>
     <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
     <button class="api-button" onclick="wfDownloadAllServer()">Download All (server)</button>
     <button class="api-button" onclick="wfDownloadAllClient()">Download All (client)</button>
@@ -131,7 +217,15 @@
     <button class="api-button" onclick="wfCancel()">Cancel</button>
     <button class="api-button" onclick="wfRetry()">Retry</button>
   </div>
+  <div class="form-group" style="margin-bottom:4px">
+    <button class="api-button" onclick="wfCopyJson('wfRun_result')">Copy</button>
+    <button class="api-button" onclick="wfClearJson('wfRun_result')">Clear</button>
+  </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
+  <div class="form-group" style="margin-top:4px;color:var(--color-base-0)">
+    <span id="wfEvents_info"></span>
+  </div>
+  <div id="wfEvents_table"></div>
   <div id="wfRun_list" class="json-viewer" style="margin-top:8px"></div>
   <div class="form-group">
     <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
@@ -162,8 +256,12 @@
       if (picked.length){ picked.forEach(s=>params.append('status', s)); }
       if (statusText){ statusText.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>params.append('status', s)); }
       const wf = document.getElementById('wfList_workflow_id').value.trim(); if (wf){ params.set('workflow_id', wf); }
-      const ca = document.getElementById('wfList_created_after').value.trim(); if (ca){ params.set('created_after', ca); }
-      const cb = document.getElementById('wfList_created_before').value.trim(); if (cb){ params.set('created_before', cb); }
+      const caRaw = document.getElementById('wfList_created_after').value.trim();
+      const cbRaw = document.getElementById('wfList_created_before').value.trim();
+      const ca = caRaw ? new Date(caRaw).toISOString() : '';
+      const cb = cbRaw ? new Date(cbRaw).toISOString() : '';
+      if (ca){ params.set('created_after', ca); }
+      if (cb){ params.set('created_before', cb); }
       const lh = document.getElementById('wfList_last_hours').value.trim(); if (lh){ params.set('last_n_hours', lh); }
       params.set('order_by', document.getElementById('wfList_order_by').value);
       params.set('order', document.getElementById('wfList_order').value);
@@ -186,29 +284,75 @@
   function wfPrevPage(){ try{ const off = Math.max(0, (wfLastList.offset||0) - (wfLastList.limit||25)); document.getElementById('wfList_offset').value = off; wfListRuns(); }catch(e){} }
   function wfNextPage(){ try{ if (wfLastList.next_offset != null){ document.getElementById('wfList_offset').value = wfLastList.next_offset; wfListRuns(); } }catch(e){} }
   async function wfGetRun(){ try{ const id=val('wfRun_run_id'); const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}`); set('wfRun_result',r);}catch(e){Toast.error(e?.message||e);} }
-  let wfEventsState = { runId: null, lastSeq: null };
+  let wfEventsState = { runId: null, lastSeq: null, timer: null };
+  let wfPayloadCache = {};
   async function wfGetEvents(){
     try{
       const id=val('wfRun_run_id');
       const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
-      const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events?limit=${limit}`);
+      const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
+      const t0 = performance.now();
+      const r=await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${id}/events?${params.toString()}`);
+      const latency = Math.round(performance.now()-t0);
       set('wfRun_result',r);
       wfEventsState.runId = id;
       wfEventsState.lastSeq = Array.isArray(r)&&r.length? r[r.length-1].event_seq : null;
+      wfRenderEventsTable(r, latency, false);
     }catch(e){Toast.error(e?.message||e);} }
   async function wfGetNextEvents(){
     try{
       const id = val('wfRun_run_id');
       const limit = parseInt(document.getElementById('wfEvents_limit').value||'500');
-      let url = `/api/v1/workflows/runs/${id}/events?limit=${limit}`;
-      if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ url += `&since=${wfEventsState.lastSeq}`; }
+      const typesRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (wfEventsState.runId===id && wfEventsState.lastSeq!=null){ params.set('since', String(wfEventsState.lastSeq)); }
+      if (typesRaw){ typesRaw.split(',').map(s=>s.trim()).filter(Boolean).forEach(t=>params.append('types', t)); }
+      let url = `/api/v1/workflows/runs/${id}/events?${params.toString()}`;
+      const t0 = performance.now();
       const r = await apiClient.makeRequest('GET', url);
+      const latency = Math.round(performance.now()-t0);
       // Append to existing result view
       const cur = (()=>{ try{ return JSON.parse(document.getElementById('wfRun_result').textContent||'[]'); }catch(e){ return []; } })();
       const merged = Array.isArray(cur)? cur.concat(r) : r;
       set('wfRun_result', merged);
       if (Array.isArray(r)&&r.length){ wfEventsState.lastSeq = r[r.length-1].event_seq; wfEventsState.runId = id; }
+      wfRenderEventsTable(r, latency, true);
     }catch(e){ Toast.error(e?.message||e); }
+  }
+  function wfToggleAutoEvents(){
+    try{
+      const chk = document.getElementById('wfEvents_auto');
+      if (chk.checked){
+        if (wfEventsState.timer) clearInterval(wfEventsState.timer);
+        wfEventsState.timer = setInterval(()=>{ try{ wfGetNextEvents(); }catch(e){} }, 1000);
+        // Ensure interval is cleared when tab/page is hidden or unloaded
+        const _wfCleanup = ()=>{ try{ if (wfEventsState.timer){ clearInterval(wfEventsState.timer); wfEventsState.timer = null; } }catch(e){} };
+        document.addEventListener('visibilitychange', ()=>{ if (document.hidden) _wfCleanup(); }, { once: true });
+        window.addEventListener('beforeunload', _wfCleanup, { once: true });
+      } else {
+        if (wfEventsState.timer) { clearInterval(wfEventsState.timer); wfEventsState.timer = null; }
+      }
+    }catch(e){}
+  }
+  function wfClearFilters(){
+    try{
+      // Clear run list filters
+      document.getElementById('wfList_status').value = '';
+      document.getElementById('wfList_workflow_id').value = '';
+      document.getElementById('wfList_last_hours').value = '';
+      document.getElementById('wfList_created_after').value = '';
+      document.getElementById('wfList_created_before').value = '';
+      document.getElementById('wfList_presets').value = '';
+      document.getElementById('wfList_order_by').value = 'created_at';
+      document.getElementById('wfList_order').value = 'desc';
+      // Reset status chips
+      document.querySelectorAll('#wfList_status_chips .chip').forEach(ch=>{ ch.setAttribute('data-selected','0'); ch.style.background=''; });
+      // Clear events filter text
+      const evt = document.getElementById('wfEvents_filter'); if (evt) evt.value = '';
+      Toast.success('Filters cleared');
+    }catch(e){}
   }
   async function wfListArtifacts(){
     try{
@@ -261,6 +405,52 @@
   async function wfCtl(action){ const id=val('wfRun_run_id'); try{ await apiClient.makeRequest('POST',`/api/v1/workflows/runs/${id}/${action}`); Toast.success(action+' requested'); }catch(e){Toast.error(e?.message||e);} }
   function val(id){ return document.getElementById(id).value.trim(); }
   function set(id,obj){ document.getElementById(id).textContent = JSON.stringify(obj,null,2); }
+  function wfApplyPreset(){
+    try{
+      const v = document.getElementById('wfList_presets').value;
+      const afterEl = document.getElementById('wfList_created_after');
+      const beforeEl = document.getElementById('wfList_created_before');
+      const now = new Date();
+      const fmt = (d)=>{ const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+      if (v==='today'){
+        const start = new Date(); start.setHours(0,0,0,0);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='yesterday'){
+        const start = new Date(); start.setDate(start.getDate()-1); start.setHours(0,0,0,0);
+        const end = new Date(start); end.setHours(23,59,59,999);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(end);
+      } else if (v==='lasthour'){
+        const start = new Date(now.getTime() - 60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last24h'){
+        const start = new Date(now.getTime() - 24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='thisweek'){
+        const day = now.getDay(); // 0=Sun..6=Sat
+        const delta = (day + 6) % 7; // days since Monday
+        const start = new Date(now);
+        start.setDate(now.getDate() - delta);
+        start.setHours(0,0,0,0);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last7d'){
+        const start = new Date(now.getTime() - 7*24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else if (v==='last30d'){
+        const start = new Date(now.getTime() - 30*24*60*60*1000);
+        afterEl.value = fmt(start);
+        beforeEl.value = fmt(now);
+      } else {
+        afterEl.value = '';
+        beforeEl.value = '';
+      }
+    }catch(e){}
+  }
   async function wfDownloadAllServer(){
     try{
       const id = val('wfRun_run_id');
@@ -317,6 +507,38 @@
       setTimeout(()=>URL.revokeObjectURL(objUrl), 1500);
     }catch(e){ Toast.error('Download all (client) failed: '+(e?.message||e)); }
   }
+  // Modal for payload preview
+  </script>
+</div>
+<div id="wfModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:1000">
+  <div style="background:var(--color-base-100);max-width:80%;max-height:80%;overflow:auto;padding:12px;border-radius:8px">
+    <div style="margin-bottom:8px">
+      <button class="api-button" onclick="wfCloseModal()">Close</button>
+      <button class="api-button" onclick="wfCopyModal()">Copy</button>
+    </div>
+    <pre id="wfModal_content" class="json-viewer"></pre>
+  </div>
+</div>
+<div id="tabWorkflowsApprovals" class="tab-content">
+  <h2>Workflows: Approvals</h2>
+  <div class="form-group">
+    <label>Run ID</label>
+    <input type="text" id="wfAppr_run_id" placeholder="uuid" />
+    <label>Step ID</label>
+    <input type="text" id="wfAppr_step_id" placeholder="step id" />
+  </div>
+  <div class="form-group">
+    <label>Comment</label>
+    <input type="text" id="wfAppr_comment" placeholder="optional comment" />
+    <label>Edited Fields (JSON)</label>
+    <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
+  </div>
+  <div class="form-group">
+    <button class="api-button" onclick="wfApprove()">Approve</button>
+    <button class="api-button" onclick="wfReject()">Reject</button>
+  </div>
+  <pre id="wfAppr_result" class="json-viewer"></pre>
+  <script>
   async function createZipFromFiles(files){
     const entries = [];
     for (const f of files){ const ab = await f.blob.arrayBuffer(); const data = new Uint8Array(ab); entries.push({ name: f.name, data, crc: crc32(data), size: data.length }); }
@@ -380,7 +602,8 @@
       Toast.success('Sent '+action);
     }catch(e){ Toast.error('Action failed: '+(e?.message||e)); }
   }
-  </script>
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m])); }
+</script>
 </div>
 <script>
   function renderRunTable(resp){
@@ -422,4 +645,86 @@
       set('wfRun_result', r);
     }catch(e){ Toast.error('Events failed: '+(e?.message||e)); }
   }
+</script>
+<script>
+  function wfRenderEventsTable(items, latencyMs, append){
+    const info = document.getElementById('wfEvents_info');
+    const tbl = document.getElementById('wfEvents_table');
+    const colors = {
+      run_started:'#0a84ff', step_started:'#0070c9', step_completed:'#2e7d32', step_failed:'#c62828',
+      step_timeout:'#f0ad4e', waiting_human:'#6f42c1', run_cancelled:'#616161', run_failed:'#c62828', run_completed:'#2e7d32',
+      heartbeat:'#888', snapshot:'#555'
+    };
+    function chip(type){ const c = colors[type]||'#555'; return `<span style="display:inline-block;padding:2px 6px;border-radius:10px;background:${c};color:#fff;font-size:11px">${type}</span>`; }
+    if (!append){ tbl.innerHTML = '<table style="width:100%;border-collapse:collapse" id="wfEvents_table_inner"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Seq</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Type</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Created</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--color-base-40)">Payload</th></tr></thead><tbody></tbody></table>'; }
+    const tbody = document.querySelector('#wfEvents_table_inner tbody');
+    const fRaw = (document.getElementById('wfEvents_filter')?.value||'').trim();
+    const fSet = new Set((fRaw? fRaw.split(','): []).map(s=>s.trim().toLowerCase()).filter(Boolean));
+    let lastSeq = wfEventsState.lastSeq || null;
+    let added = 0;
+    (Array.isArray(items)? items: []).forEach(e => {
+      const etype = String(e.event_type||'').toLowerCase();
+      if (fSet.size && !fSet.has(etype)) return;
+      const tr = document.createElement('tr');
+      const key = String(wfEventsState.runId||'')+':'+String(e.event_seq);
+      const payloadStr = JSON.stringify(e.payload||{}, null, 2);
+      wfPayloadCache[key] = payloadStr;
+      const preview = payloadStr.length > 160 ? escapeHtml(payloadStr.slice(0,160)) + '…' : escapeHtml(payloadStr);
+      const viewBtn = payloadStr.length > 160 ? ` <button class=\"api-button\" onclick=\"wfOpenModalPayload('${key}')\">View</button>` : '';
+      tr.innerHTML = `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${e.event_seq}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${chip(e.event_type)}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\">${e.created_at||''}</td>`+
+                     `<td style=\"padding:4px;border-bottom:1px solid var(--color-base-30)\"><code style=\"font-size:11px\">${preview}</code>${viewBtn}</td>`;
+      tbody.appendChild(tr);
+      lastSeq = e.event_seq;
+      added += 1;
+    });
+    const msg = `events ${added} • last_seq ${lastSeq!=null?lastSeq:'-'} • fetch ${latencyMs||0}ms`;
+    info.textContent = msg;
+  }
+  let _wfModalOpener = null;
+  function wfOpenModalPayload(key){
+    try{
+      const modal = document.getElementById('wfModal');
+      const pre = document.getElementById('wfModal_content');
+      pre.textContent = wfPayloadCache[key] || '';
+      modal.style.display = 'flex';
+      // Accessibility: capture opener and add Esc/backdrop close
+      _wfModalOpener = document.activeElement;
+      // Focus trap within modal
+      const focusables = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(el=>!el.hasAttribute('disabled'));
+      if (focusables.length){ focusables[0].focus(); }
+      const onKey = (ev)=>{
+        if (ev.key === 'Escape'){ wfCloseModal(); return; }
+        if (ev.key === 'Tab'){
+          if (!focusables.length) return;
+          const first = focusables[0]; const last = focusables[focusables.length-1];
+          if (ev.shiftKey){
+            if (document.activeElement === first){ last.focus(); ev.preventDefault(); }
+          } else {
+            if (document.activeElement === last){ first.focus(); ev.preventDefault(); }
+          }
+        }
+      };
+      const onClick = (ev)=>{ if (ev.target && ev.target.id === 'wfModal'){ wfCloseModal(); } };
+      document.addEventListener('keydown', onKey);
+      modal.addEventListener('click', onClick);
+      modal._wf_onKey = onKey; modal._wf_onClick = onClick;
+      // ARIA for dialog
+      modal.setAttribute('role','dialog');
+      modal.setAttribute('aria-modal','true');
+    }catch(e){}
+  }
+  function wfCloseModal(){
+    try{
+      const modal = document.getElementById('wfModal');
+      modal.style.display='none';
+      if (modal._wf_onKey){ document.removeEventListener('keydown', modal._wf_onKey); modal._wf_onKey = null; }
+      if (modal._wf_onClick){ modal.removeEventListener('click', modal._wf_onClick); modal._wf_onClick = null; }
+      if (_wfModalOpener && typeof _wfModalOpener.focus === 'function'){ _wfModalOpener.focus(); }
+      _wfModalOpener = null;
+    }catch(e){}
+  }
+  function wfCopyModal(){ try{ const txt=document.getElementById('wfModal_content').textContent||''; navigator.clipboard.writeText(txt).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed')); }catch(e){} }
+  function escapeHtml(s){ return (s||'').replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'}[m])); }
 </script>

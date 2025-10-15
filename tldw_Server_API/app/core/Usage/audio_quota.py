@@ -15,11 +15,25 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import os
 from typing import Dict, Optional, Tuple
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+try:
+    from redis import asyncio as redis_async  # type: ignore
+except Exception:  # pragma: no cover
+    redis_async = None  # type: ignore
+
+try:
+    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, MetricDefinition, MetricType
+except Exception:  # pragma: no cover
+    get_metrics_registry = None  # type: ignore
+    MetricDefinition = None  # type: ignore
+    MetricType = None  # type: ignore
 
 
 # Default tier limits (can be extended later via configuration or DB)
@@ -49,12 +63,73 @@ _active_streams: Dict[int, int] = {}
 _active_jobs: Dict[int, int] = {}
 _lock = asyncio.Lock()
 
+_redis_client = None
+
+
+def _use_redis() -> bool:
+    if not redis_async:
+        return False
+    try:
+        s = get_settings()
+        if not getattr(s, "REDIS_URL", None):
+            return False
+        if os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() in {"0", "false", "no", "off"}:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+async def _get_redis():
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    if not _use_redis():
+        return None
+    try:
+        s = get_settings()
+        _redis_client = redis_async.from_url(s.REDIS_URL)  # type: ignore[attr-defined]
+        await _redis_client.ping()
+        return _redis_client
+    except Exception as e:
+        logger.warning(f"Redis unavailable for audio quotas: {e}")
+        _redis_client = None
+        return None
+
+
+def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
+    try:
+        if not get_metrics_registry or not MetricDefinition or not MetricType:
+            return
+        reg = get_metrics_registry()
+        try:
+            reg.register_metric(MetricDefinition(name=name, type=MetricType.GAUGE, description=name, labels=list(labels.keys())))
+        except Exception:
+            pass
+        reg.set_gauge(name, float(value), labels)
+    except Exception:
+        pass
+
+
+def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
+    try:
+        if not get_metrics_registry or not MetricDefinition or not MetricType:
+            return
+        reg = get_metrics_registry()
+        try:
+            reg.register_metric(MetricDefinition(name=name, type=MetricType.COUNTER, description=name, labels=list(labels.keys())))
+        except Exception:
+            pass
+        reg.increment(name, 1, labels)
+    except Exception:
+        pass
+
 
 async def _ensure_tables(pool: DatabasePool) -> None:
     """Ensure audio usage tables exist."""
     try:
+        # Create tables separately to satisfy SQLite single-statement execution
         if pool.pool:
-            # PostgreSQL schema
             await pool.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audio_usage_daily (
@@ -63,11 +138,18 @@ async def _ensure_tables(pool: DatabasePool) -> None:
                     minutes_used DOUBLE PRECISION NOT NULL DEFAULT 0,
                     jobs_started INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (user_id, day)
-                );
+                )
+                """
+            )
+            await pool.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audio_user_tiers (
+                    user_id INTEGER PRIMARY KEY,
+                    tier TEXT NOT NULL
+                )
                 """
             )
         else:
-            # SQLite schema
             await pool.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audio_usage_daily (
@@ -76,7 +158,15 @@ async def _ensure_tables(pool: DatabasePool) -> None:
                     minutes_used REAL NOT NULL DEFAULT 0,
                     jobs_started INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (user_id, day)
-                );
+                )
+                """
+            )
+            await pool.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audio_user_tiers (
+                    user_id INTEGER PRIMARY KEY,
+                    tier TEXT NOT NULL
+                )
                 """
             )
     except Exception as e:
@@ -84,12 +174,18 @@ async def _ensure_tables(pool: DatabasePool) -> None:
 
 
 async def get_user_tier(user_id: int) -> str:
-    """Return user tier string. MVP: default to 'free'.
-
-    Future: look up from a dedicated table or reuse existing subscriptions.
-    """
-    # TODO: Integrate with user tiers when available
-    return "free"
+    """Return user tier string from DB if set, else 'free'."""
+    try:
+        pool = await get_db_pool()
+        await _ensure_tables(pool)
+        # Use portable fetchone helper (supports both backends)
+        row = await pool.fetchone("SELECT tier FROM audio_user_tiers WHERE user_id = ?", int(user_id))
+        if row and row.get("tier"):
+            return str(row["tier"]).strip()
+        return "free"
+    except Exception as e:
+        logger.debug(f"get_user_tier failed: {e}")
+        return "free"
 
 
 async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
@@ -185,36 +281,96 @@ async def increment_jobs_started(user_id: int) -> None:
 
 async def can_start_job(user_id: int) -> Tuple[bool, str]:
     limits = await get_limits_for_user(user_id)
+    max_jobs = int(limits.get("concurrent_jobs") or 0)
+    r = await _get_redis()
+    if r and max_jobs:
+        key = f"audio:active_jobs:{int(user_id)}"
+        try:
+            new_val = await r.incr(key)
+            if new_val > max_jobs:
+                await r.decr(key)
+                _metrics_increment("audio.quota_violations_total", {"type": "concurrent_jobs"})
+                return False, f"Concurrent job limit reached ({max_jobs})"
+            _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+            return True, "OK"
+        except Exception as e:
+            logger.debug(f"Redis error in can_start_job: {e}")
     async with _lock:
         active = _active_jobs.get(user_id, 0)
-        max_jobs = int(limits.get("concurrent_jobs") or 0)
         if max_jobs and active >= max_jobs:
+            _metrics_increment("audio.quota_violations_total", {"type": "concurrent_jobs"})
             return False, f"Concurrent job limit reached ({max_jobs})"
-        _active_jobs[user_id] = active + 1
+        new_val = active + 1
+        _active_jobs[user_id] = new_val
+        _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
         return True, "OK"
 
 
 async def finish_job(user_id: int) -> None:
+    r = await _get_redis()
+    if r:
+        try:
+            key = f"audio:active_jobs:{int(user_id)}"
+            new_val = await r.decr(key)
+            if new_val < 0:
+                await r.set(key, 0)
+                new_val = 0
+            _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+            return
+        except Exception as e:
+            logger.debug(f"Redis error in finish_job: {e}")
     async with _lock:
         cur = _active_jobs.get(user_id, 0)
-        _active_jobs[user_id] = max(0, cur - 1)
+        new_val = max(0, cur - 1)
+        _active_jobs[user_id] = new_val
+        _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
 
 
 async def can_start_stream(user_id: int) -> Tuple[bool, str]:
     limits = await get_limits_for_user(user_id)
+    max_streams = int(limits.get("concurrent_streams") or 0)
+    r = await _get_redis()
+    if r and max_streams:
+        key = f"audio:active_streams:{int(user_id)}"
+        try:
+            new_val = await r.incr(key)
+            if new_val > max_streams:
+                await r.decr(key)
+                _metrics_increment("audio.quota_violations_total", {"type": "concurrent_streams"})
+                return False, f"Concurrent streams limit reached ({max_streams})"
+            _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+            return True, "OK"
+        except Exception as e:
+            logger.debug(f"Redis error in can_start_stream: {e}")
     async with _lock:
         active = _active_streams.get(user_id, 0)
-        max_streams = int(limits.get("concurrent_streams") or 0)
         if max_streams and active >= max_streams:
+            _metrics_increment("audio.quota_violations_total", {"type": "concurrent_streams"})
             return False, f"Concurrent streams limit reached ({max_streams})"
-        _active_streams[user_id] = active + 1
+        new_val = active + 1
+        _active_streams[user_id] = new_val
+        _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
         return True, "OK"
 
 
 async def finish_stream(user_id: int) -> None:
+    r = await _get_redis()
+    if r:
+        try:
+            key = f"audio:active_streams:{int(user_id)}"
+            new_val = await r.decr(key)
+            if new_val < 0:
+                await r.set(key, 0)
+                new_val = 0
+            _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+            return
+        except Exception as e:
+            logger.debug(f"Redis error in finish_stream: {e}")
     async with _lock:
         cur = _active_streams.get(user_id, 0)
-        _active_streams[user_id] = max(0, cur - 1)
+        new_val = max(0, cur - 1)
+        _active_streams[user_id] = new_val
+        _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
 
 
 async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> Tuple[bool, Optional[float]]:
@@ -229,6 +385,7 @@ async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> T
     used = await get_daily_minutes_used(user_id)
     remaining = float(limit) - float(used)
     if minutes_requested > remaining:
+        _metrics_increment("audio.quota_violations_total", {"type": "daily_minutes"})
         return False, max(0.0, remaining)
     return True, remaining - minutes_requested
 
@@ -237,4 +394,3 @@ def bytes_to_seconds(byte_count: int, sample_rate: int) -> float:
     # Float32 mono: 4 bytes per sample
     samples = max(0, int(byte_count // 4))
     return float(samples) / float(sample_rate or 16000)
-

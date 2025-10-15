@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     SessionError
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 #######################################################################################################################
 #
@@ -111,7 +112,8 @@ async def update_user_profile(
         
         if request.email and request.email != current_user.get('email'):
             # Update email
-            if hasattr(db, 'execute'):
+            is_pg = await is_postgres_backend()
+            if is_pg:
                 # PostgreSQL
                 await db.execute(
                     "UPDATE users SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
@@ -175,7 +177,8 @@ async def change_password(
     """
     try:
         # Fetch user's password hash from database
-        if hasattr(db, 'fetchval'):
+        is_pg_fetch = await is_postgres_backend()
+        if is_pg_fetch:
             # PostgreSQL
             password_hash = await db.fetchval(
                 "SELECT password_hash FROM users WHERE id = $1",
@@ -224,7 +227,8 @@ async def change_password(
         new_hash = password_service.hash_password(request.new_password)
         
         # Update password in database
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 """

@@ -520,6 +520,50 @@ class UnifiedFeedbackSystem:
                 result["errors"].append(f"Analytics error: {str(e)}")
         
         return result
+
+    async def record_implicit_interaction(
+        self,
+        *,
+        user_id: Optional[str],
+        query: Optional[str],
+        doc_id: Optional[str],
+        event_type: str,
+        impression: Optional[List[str]] = None,
+        corpus: Optional[str] = None,
+    ) -> None:
+        """Record a lightweight implicit signal (click/expand/copy).
+
+        Updates per-user personalization priors and pairwise preferences.
+        Also emits anonymized analytics event when enabled.
+        """
+        try:
+            # Update per-user store (isolated per tenant)
+            try:
+                from .user_personalization_store import UserPersonalizationStore  # lazy import
+                store = UserPersonalizationStore(user_id or "anon")
+                store.record_event(event_type=event_type, doc_id=doc_id, corpus=corpus, impression=impression or [])
+            except Exception as e:
+                logger.debug(f"Personalization store update failed: {e}")
+
+            # Emit anonymized analytics
+            if self.enable_analytics and self.analytics:
+                qh = None
+                if query:
+                    import hashlib
+                    qh = hashlib.sha256(query.encode()).hexdigest()
+                evt = AnalyticsEvent(
+                    event_type=AnalyticsEventType.FEEDBACK,
+                    query_hash=qh,
+                    metrics={
+                        "implicit": True,
+                        "type": event_type,
+                        "doc_id": doc_id,
+                        "list_size": len(impression or []),
+                    },
+                )
+                await self.analytics.record_event(evt)
+        except Exception as e:
+            logger.debug(f"Implicit interaction recording failed: {e}")
     
     async def record_search(
         self,
@@ -687,12 +731,15 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
 
 
 async def apply_feedback_boost(context: Any, **kwargs) -> Any:
-    """Apply feedback-based boosting to search results."""
+    """Apply feedback-based boosting to search results using per-user priors."""
     if not context.config.get("feedback", {}).get("apply_boost", False):
         return context
-    
-    # This would require accessing historical feedback data
-    # to boost documents that have received positive feedback
-    # Implementation depends on specific requirements
-    
-    return context
+    try:
+        user_id = context.config.get("user_id")
+        from .user_personalization_store import UserPersonalizationStore
+        store = UserPersonalizationStore(user_id or "anon")
+        context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
+        return context
+    except Exception as e:
+        logger.debug(f"Feedback boost failed: {e}")
+        return context

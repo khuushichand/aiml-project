@@ -1,0 +1,51 @@
+name: Embeddings Pipeline Tests
+
+on:
+  pull_request:
+    paths:
+      - 'tldw_Server_API/app/core/Embeddings/**'
+      - 'tldw_Server_API/app/api/v1/endpoints/embeddings_*'
+      - 'tldw_Server_API/WebUI/**'
+      - 'tldw_Server_API/tests/Embeddings/**'
+      - '.github/workflows/embeddings-tests.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'tldw_Server_API/app/core/Embeddings/**'
+      - 'tldw_Server_API/app/api/v1/endpoints/embeddings_*'
+      - 'tldw_Server_API/WebUI/**'
+      - 'tldw_Server_API/tests/Embeddings/**'
+
+jobs:
+  embeddings-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Minimal set to run embeddings unit tests (no heavy ML deps)
+          pip install pytest fastapi starlette pydantic loguru redis==5.* httpx
+
+      - name: Run embeddings tests (fail-fast)
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          DISABLE_HEAVY_STARTUP: '1'
+          TEST_MODE: 'true'
+        run: |
+          set -e
+          pytest -q \
+            tldw_Server_API/tests/Embeddings/test_dlq_admin_endpoints.py \
+            tldw_Server_API/tests/Embeddings/test_dlq_roundtrip.py \
+            tldw_Server_API/tests/Embeddings/test_storage_worker_idempotency.py \
+            tldw_Server_API/tests/Embeddings/test_orchestrator_sse.py \
+            tldw_Server_API/tests/Embeddings/test_message_validator.py
+

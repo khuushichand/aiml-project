@@ -252,19 +252,19 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             if ok:
                 if next_type:
                     # Create next stage
-                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(job.get("lease_id")))
+                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
                     jm.create_job(
                         domain=DOMAIN,
-                        queue="default",
+                        queue=("transcribe" if next_type == "audio_transcribe" else "default"),
                         job_type=next_type,
                         payload=updated_payload,
                         owner_user_id=str(owner),
                         priority=5,
                     )
                 else:
-                    jm.complete_job(int(job["id"]), result={"payload": updated_payload}, worker_id=worker_id, lease_id=str(job.get("lease_id")))
+                    jm.complete_job(int(job["id"]), result={"payload": updated_payload}, worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
             else:
-                jm.fail_job(int(job["id"]), error=msg_err, retryable=True, worker_id=worker_id, lease_id=str(job.get("lease_id")))
+                jm.fail_job(int(job["id"]), error=msg_err, retryable=True, worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
 
         except Exception as e:
             logger.error(f"Audio worker loop error: {e}")

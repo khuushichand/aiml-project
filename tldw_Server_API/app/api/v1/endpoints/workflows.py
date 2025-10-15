@@ -35,6 +35,11 @@ from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
+from tldw_Server_API.app.core.AuthNZ.permissions import (
+    PermissionChecker,
+    WORKFLOWS_RUNS_READ,
+    WORKFLOWS_RUNS_CONTROL,
+)
 
 
 def _utcnow_iso() -> str:
@@ -137,17 +142,6 @@ async def list_definitions(
     ]
 
 
-@router.get("/step-types")
-async def get_step_types():
-    """List available workflow step types for UI discovery.
-
-    Note: Declared before `/{workflow_id}` to avoid path parameter shadowing.
-    """
-    reg = StepTypeRegistry()
-    steps = reg.list()
-    return [{"name": s.name, "description": s.description} for s in steps]
-
-
 ## get_definition moved below '/runs*' routes to avoid path shadowing
 
 
@@ -229,6 +223,7 @@ async def run_saved(
         definition_snapshot=json.loads(d.definition_json or "{}"),
         idempotency_key=body.idempotency_key if body else None,
         session_id=body.session_id if body else None,
+        validation_mode=(body.validation_mode if body and getattr(body, "validation_mode", None) else "block"),
     )
     # Special-case: if first step is prompt with force_error or template='bad', mark run failed immediately
     try:
@@ -309,10 +304,15 @@ async def run_saved(
         outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
         error=run.error,
         definition_version=run.definition_version,
+        validation_mode=getattr(run, 'validation_mode', None),
     )
 
 
-@router.get("/runs", response_model=WorkflowRunListResponse)
+@router.get(
+    "/runs",
+    response_model=WorkflowRunListResponse,
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def list_runs(
     status: Optional[List[str]] = Query(None, description="Filter by status (repeatable)"),
     owner: Optional[str] = Query(None, description="Owner user id (admin only)"),
@@ -420,6 +420,7 @@ async def run_adhoc(
         definition_snapshot=body.definition.model_dump(),
         idempotency_key=body.idempotency_key,
         session_id=body.session_id,
+        validation_mode=(body.validation_mode if getattr(body, "validation_mode", None) else "block"),
     )
     engine = WorkflowEngine(db)
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
@@ -459,10 +460,15 @@ async def run_adhoc(
         outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
         error=run.error,
         definition_version=run.definition_version,
+        validation_mode=getattr(run, 'validation_mode', None),
     )
 
 
-@router.get("/runs/{run_id}", response_model=WorkflowRunResponse)
+@router.get(
+    "/runs/{run_id}",
+    response_model=WorkflowRunResponse,
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def get_run(
     run_id: str,
     current_user: User = Depends(get_request_user),
@@ -489,14 +495,28 @@ async def get_run(
         outputs=json.loads(run.outputs_json or "null") if run.outputs_json else None,
         error=run.error,
         definition_version=run.definition_version,
+        validation_mode=getattr(run, 'validation_mode', None),
     )
 
 
-@router.get("/runs/{run_id}/events")
+@router.get(
+    "/runs/{run_id}/events",
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "cURL",
+                "source": "curl -H 'X-API-KEY: $API_KEY' 'http://127.0.0.1:8000/api/v1/workflows/runs/{run_id}/events?limit=100'",
+            }
+        ]
+    },
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def get_run_events(
     run_id: str,
     since: Optional[int] = Query(None),
     limit: int = Query(500, ge=1, le=1000),
+    types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
@@ -510,7 +530,9 @@ async def get_run_events(
     is_admin = bool(getattr(current_user, "is_admin", False))
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
-    events = db.get_events(run_id, since=since, limit=limit)
+    # Normalize types to lower-case for consistency with UI filter chips
+    types_norm = [t.strip() for t in (types or []) if str(t).strip()]
+    events = db.get_events(run_id, since=since, limit=limit, types=types_norm if types_norm else None)
     out: List[EventResponse] = []
     for e in events:
         out.append(
@@ -524,7 +546,10 @@ async def get_run_events(
     return out
 
 
-@router.get("/runs/{run_id}/artifacts")
+@router.get(
+    "/runs/{run_id}/artifacts",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def get_run_artifacts(
     run_id: str,
     current_user: User = Depends(get_request_user),
@@ -557,7 +582,71 @@ async def get_run_artifacts(
     return results
 
 
-@router.get("/artifacts/{artifact_id}/download")
+@router.get(
+    "/runs/{run_id}/artifacts/manifest",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_artifacts_manifest(
+    run_id: str,
+    verify: bool = Query(False, description="Compute and validate recorded checksums"),
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    arts = db.list_artifacts_for_run(run_id)
+    manifest = []
+    mismatches = 0
+    for a in arts:
+        entry = {
+            "artifact_id": a.get("artifact_id"),
+            "type": a.get("type"),
+            "uri": a.get("uri"),
+            "size_bytes": a.get("size_bytes"),
+            "mime_type": a.get("mime_type"),
+            "checksum_sha256": a.get("checksum_sha256"),
+            "created_at": a.get("created_at"),
+            "metadata": a.get("metadata_json") or {},
+        }
+        if verify and entry["uri"] and str(entry["uri"]).startswith("file://") and entry.get("checksum_sha256"):
+            try:
+                from pathlib import Path as _P
+                import hashlib as _h
+                fp = _P(str(entry["uri"])[7:])
+                if fp.exists() and fp.is_file():
+                    h = _h.sha256()
+                    with fp.open("rb") as f:
+                        for chunk in iter(lambda: f.read(65536), b""):
+                            h.update(chunk)
+                    calc = h.hexdigest()
+                    if calc != entry.get("checksum_sha256"):
+                        entry["integrity"] = {"ok": False, "calculated": calc}
+                        mismatches += 1
+                    else:
+                        entry["integrity"] = {"ok": True}
+            except Exception:
+                entry["integrity"] = {"ok": False, "error": "hash_error"}
+                mismatches += 1
+        manifest.append(entry)
+
+    resp = {"artifacts": manifest}
+    if verify:
+        resp["integrity_summary"] = {"mismatch_count": mismatches}
+    return resp
+
+
+@router.get(
+    "/artifacts/{artifact_id}/download",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def download_artifact(
     artifact_id: str,
     current_user: User = Depends(get_request_user),
@@ -597,8 +686,17 @@ async def download_artifact(
             except Exception:
                 raise ValueError("validation_error")
     except Exception as _e:
-        # Allow non-blocking on validation failure if configured, default to blocking
-        strict = str(__import__("os").getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+        # Allow non-blocking on validation failure depending on run override or env toggle.
+        # Semantics:
+        #   - If run.validation_mode == 'non-block' => always allow (non-strict)
+        #   - Otherwise fall back to env WORKFLOWS_ARTIFACT_VALIDATE_STRICT (default true)
+        import os as _os
+        env_strict = str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+        run_val = getattr(run, 'validation_mode', None)
+        if isinstance(run_val, str) and run_val.lower() == 'non-block':
+            strict = False
+        else:
+            strict = env_strict
         if strict:
             raise HTTPException(status_code=400, detail="Invalid artifact path scope")
         else:
@@ -608,6 +706,32 @@ async def download_artifact(
                 pass
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+    # Optional integrity verification when checksum recorded
+    try:
+        checksum = str(art.get("checksum_sha256") or "").strip()
+        if checksum:
+            import hashlib as _hashlib
+            h = _hashlib.sha256()
+            with p.open("rb") as _f:
+                for chunk in iter(lambda: _f.read(65536), b""):
+                    h.update(chunk)
+            calc = h.hexdigest()
+            if calc != checksum:
+                # Respect validation mode override
+                run_val = getattr(run, 'validation_mode', None)
+                non_block = isinstance(run_val, str) and run_val.lower() == 'non-block'
+                if not non_block and str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}:
+                    raise HTTPException(status_code=409, detail="Artifact checksum mismatch")
+                else:
+                    try:
+                        logger.warning(f"Artifact checksum mismatch for {artifact_id}; proceeding due to non-strict mode")
+                    except Exception:
+                        pass
+    except HTTPException:
+        raise
+    except Exception:
+        # Do not block on hashing errors
+        pass
     # Guardrails: max size and allowed MIME
     import os as _os
     import mimetypes as _m
@@ -625,7 +749,10 @@ async def download_artifact(
     return FileResponse(str(p), filename=p.name, media_type=mime)
 
 
-@router.get("/runs/{run_id}/artifacts/download")
+@router.get(
+    "/runs/{run_id}/artifacts/download",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def download_run_artifacts_zip(
     run_id: str,
     current_user: User = Depends(get_request_user),
@@ -741,14 +868,36 @@ async def get_chunker_options():
 
 
 
-@router.post("/runs/{run_id}/{action}")
+@router.post(
+    "/runs/{run_id}/{action}",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
 async def control_run(
     run_id: str,
     action: str,
+    request: Request,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
+    # Enforce tenant + owner/admin
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
+    # Admin impersonation audit trail (header opt-in)
+    try:
+        imp = str(request.headers.get("x-impersonate-user", "")).strip()
+        is_admin = bool(getattr(current_user, "is_admin", False))
+        if imp and is_admin and str(imp) != str(current_user.id):
+            db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
+    except Exception:
+        pass
     if action == "pause":
         engine.pause(run_id)
     elif action == "resume":
@@ -775,7 +924,122 @@ async def control_run(
     return {"ok": True}
 
 
-@router.post("/runs/{run_id}/retry")
+@router.get(
+    "/step-types",
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "cURL",
+                "source": "curl -H 'X-API-KEY: $API_KEY' http://127.0.0.1:8000/api/v1/workflows/step-types",
+            }
+        ]
+    },
+)
+async def list_step_types():
+    """Return available step types with basic JSONSchema, examples, and min engine version.
+
+    This is a lightweight introspection surface to help UIs validate configurations.
+    """
+    reg = StepTypeRegistry()
+    steps = reg.list()
+    # Minimal schemas (can be expanded incrementally)
+    schemas = {
+        "prompt": {
+            "type": "object",
+            "properties": {
+                "template": {"type": "string"},
+                "model": {"type": "string"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
+                "retry": {"type": "integer", "minimum": 0, "default": 0},
+            },
+            "required": ["template"],
+            "additionalProperties": True,
+            "example": {"template": "Hello {{inputs.name}}", "model": "gpt-4o-mini"},
+            "min_engine_version": "0.1.0",
+        },
+        "branch": {
+            "type": "object",
+            "properties": {
+                "condition": {"type": "string"},
+                "true_next": {"type": "string"},
+                "false_next": {"type": "string"}
+            },
+            "required": ["condition"],
+            "additionalProperties": False,
+            "example": {"condition": "{{ inputs.enabled }}", "true_next": "step_b", "false_next": "step_c"},
+            "min_engine_version": "0.1.1",
+        },
+        "map": {
+            "type": "object",
+            "properties": {
+                "items": {"type": ["array", "string"]},
+                "step": {"type": "object"},
+                "concurrency": {"type": "integer", "minimum": 1, "default": 4}
+            },
+            "required": ["items", "step"],
+            "additionalProperties": True,
+            "example": {"items": [1,2,3], "step": {"type":"log", "config": {"message": "Item {{ item }}"}}, "concurrency": 2},
+            "min_engine_version": "0.1.1",
+        },
+        "rag_search": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer", "minimum": 1, "default": 5},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 60},
+            },
+            "required": ["query"],
+            "additionalProperties": True,
+            "example": {"query": "large language models safety", "top_k": 8},
+            "min_engine_version": "0.1.0",
+        },
+        "webhook": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "include_outputs": {"type": "boolean", "default": True},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+            },
+            "required": [],
+            "additionalProperties": True,
+            "example": {"url": "https://example.com/hooks/workflow"},
+            "min_engine_version": "0.1.0",
+        },
+        "delay": {
+            "type": "object",
+            "properties": {"ms": {"type": "integer", "minimum": 1, "default": 1000}},
+            "required": ["ms"],
+            "additionalProperties": False,
+            "example": {"ms": 500},
+            "min_engine_version": "0.1.0",
+        },
+        "log": {
+            "type": "object",
+            "properties": {"message": {"type": "string"}, "level": {"type": "string", "enum": ["debug", "info", "warning", "error"], "default": "info"}},
+            "required": ["message"],
+            "additionalProperties": True,
+            "example": {"message": "step reached", "level": "debug"},
+            "min_engine_version": "0.1.0",
+        },
+    }
+    out = []
+    for s in steps:
+        sch = schemas.get(s.name, {"type": "object", "additionalProperties": True, "min_engine_version": "0.1.0"})
+        out.append({
+            "name": s.name,
+            "description": s.description,
+            "schema": sch,
+            "example": sch.get("example", {}),
+            "min_engine_version": sch.get("min_engine_version", "0.1.0"),
+        })
+    return out
+
+
+@router.post(
+    "/runs/{run_id}/retry",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
 async def retry_run(
     run_id: str,
     current_user: User = Depends(get_request_user),
@@ -783,6 +1047,12 @@ async def retry_run(
 ):
     run = db.get_run(run_id)
     if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
     # Resume from last failed step if present
@@ -794,7 +1064,10 @@ async def retry_run(
     return {"ok": True}
 
 
-@router.get("/{workflow_id}")
+@router.get(
+    "/{workflow_id}",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+)
 async def get_definition(
     workflow_id: int,
     current_user: User = Depends(get_request_user),
@@ -831,7 +1104,10 @@ class HumanReviewPayload(BaseModel):
     edited_fields: Optional[Dict[str, Any]] = None
 
 
-@router.post("/runs/{run_id}/steps/{step_id}/approve")
+@router.post(
+    "/runs/{run_id}/steps/{step_id}/approve",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
 async def approve_step(
     run_id: str,
     step_id: str,
@@ -853,7 +1129,10 @@ async def approve_step(
     return {"ok": True}
 
 
-@router.post("/runs/{run_id}/steps/{step_id}/reject")
+@router.post(
+    "/runs/{run_id}/steps/{step_id}/reject",
+    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+)
 async def reject_step(
     run_id: str,
     step_id: str,
@@ -877,6 +1156,7 @@ async def workflows_ws(
     websocket: WebSocket,
     run_id: str,
     token: Optional[str] = Query(None),
+    types: Optional[List[str]] = Query(None),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     # Extract token: prefer query param; fallback to Authorization header
@@ -904,6 +1184,8 @@ async def workflows_ws(
         raise RuntimeError("Forbidden")
 
     await websocket.accept()
+    # Normalize event types if provided for server-side filtering
+    types_norm = [t.strip() for t in (types or []) if str(t).strip()]
     last_seq: Optional[int] = None
     try:
         # On connect, send a snapshot event
@@ -917,7 +1199,7 @@ async def workflows_ws(
             }
         )
         while True:
-            events = db.get_events(run_id, since=last_seq)
+            events = db.get_events(run_id, since=last_seq, types=(types_norm or None))
             if events:
                 for e in events:
                     payload = e.get("payload_json") or {}

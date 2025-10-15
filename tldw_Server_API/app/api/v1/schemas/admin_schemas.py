@@ -155,6 +155,7 @@ class SecurityAlertSinkStatus(BaseModel):
     min_severity: Optional[str] = None
     last_status: Optional[bool] = None
     last_error: Optional[str] = None
+    backoff_until: Optional[datetime] = None
 
 
 class SecurityAlertStatusResponse(BaseModel):

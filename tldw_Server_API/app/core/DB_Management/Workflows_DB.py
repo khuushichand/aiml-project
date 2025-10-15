@@ -55,30 +55,31 @@ CREATE TABLE IF NOT EXISTS workflows (
     UNIQUE (tenant_id, name, version)
 );
 
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    run_id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    workflow_id INTEGER,
-    status TEXT NOT NULL,
-    status_reason TEXT,
-    user_id TEXT NOT NULL,
-    inputs_json TEXT NOT NULL,
-    outputs_json TEXT,
-    error TEXT,
-    duration_ms INTEGER,
-    created_at TIMESTAMPTZ NOT NULL,
-    started_at TIMESTAMPTZ,
-    ended_at TIMESTAMPTZ,
-    definition_version INTEGER,
-    definition_snapshot_json TEXT,
-    idempotency_key TEXT,
-    session_id TEXT,
-    tokens_input INTEGER,
-    tokens_output INTEGER,
-    cost_usd DOUBLE PRECISION,
-    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
-    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-);
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+        run_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        workflow_id INTEGER,
+        status TEXT NOT NULL,
+        status_reason TEXT,
+        user_id TEXT NOT NULL,
+        inputs_json TEXT NOT NULL,
+        outputs_json TEXT,
+        error TEXT,
+        duration_ms INTEGER,
+        created_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ,
+        definition_version INTEGER,
+        definition_snapshot_json TEXT,
+        idempotency_key TEXT,
+        session_id TEXT,
+        validation_mode TEXT DEFAULT 'block',
+        tokens_input INTEGER,
+        tokens_output INTEGER,
+        cost_usd DOUBLE PRECISION,
+        cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+    );
 
 CREATE TABLE IF NOT EXISTS workflow_step_runs (
     step_run_id TEXT PRIMARY KEY,
@@ -140,13 +141,29 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
-CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
+    CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
+
+-- Ensure uniqueness of per-run event sequence
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON workflow_events(run_id, event_seq);
 
 -- Per-run event sequence counters (optional optimization)
-CREATE TABLE IF NOT EXISTS workflow_event_counters (
-    run_id TEXT PRIMARY KEY,
-    next_seq INTEGER NOT NULL
-);
+    CREATE TABLE IF NOT EXISTS workflow_event_counters (
+        run_id TEXT PRIMARY KEY,
+        next_seq INTEGER NOT NULL
+    );
+
+    -- Dead-letter queue for webhook deliveries (optional retry worker)
+    CREATE TABLE IF NOT EXISTS workflow_webhook_dlq (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        body_json TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL
+    );
 """
 
 
@@ -393,10 +410,11 @@ class WorkflowRun:
     tokens_input: Optional[int] = None
     tokens_output: Optional[int] = None
     cost_usd: Optional[float] = None
+    validation_mode: Optional[str] = "block"
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 1
+    _CURRENT_SCHEMA_VERSION = 2
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -637,6 +655,7 @@ class WorkflowsDatabase:
     def _get_backend_migrations(self):
         return {
             1: self._backend_migrate_to_v1,
+            2: self._backend_migrate_to_v2,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -697,11 +716,43 @@ class WorkflowsDatabase:
             connection=conn,
         )
 
+        # Ensure uniqueness of per-run event sequence (idempotent via unique index)
+        backend.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {ident('ux_events_run_seq')} ON {ident('workflow_events')} ({ident('run_id')}, {ident('event_seq')})",
+            connection=conn,
+        )
+
         # Event counters table (idempotent)
         backend.execute(
             f"CREATE TABLE IF NOT EXISTS {ident('workflow_event_counters')} ("
             f"run_id TEXT PRIMARY KEY,"
             f"next_seq INTEGER NOT NULL"
+            ")",
+            connection=conn,
+        )
+
+    def _backend_migrate_to_v2(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        # Add validation_mode to workflow_runs
+        backend.execute(
+            f"ALTER TABLE {ident('workflow_runs')} ADD COLUMN IF NOT EXISTS {ident('validation_mode')} TEXT DEFAULT 'block'",
+            connection=conn,
+        )
+        # Dead-letter queue table for webhooks
+        backend.execute(
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_webhook_dlq')} ("
+            f"id BIGSERIAL PRIMARY KEY,"
+            f"tenant_id TEXT NOT NULL,"
+            f"run_id TEXT NOT NULL,"
+            f"url TEXT NOT NULL,"
+            f"body_json TEXT,"
+            f"attempts INTEGER NOT NULL DEFAULT 0,"
+            f"next_attempt_at TIMESTAMPTZ,"
+            f"last_error TEXT,"
+            f"created_at TIMESTAMPTZ NOT NULL"
             ")",
             connection=conn,
         )
@@ -783,6 +834,7 @@ class WorkflowsDatabase:
                 definition_snapshot_json TEXT,
                 idempotency_key TEXT,
                 session_id TEXT,
+                validation_mode TEXT DEFAULT 'block',
                 tokens_input INTEGER,
                 tokens_output INTEGER,
                 cost_usd REAL,
@@ -847,6 +899,8 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")
+        # Ensure uniqueness of per-run event sequence
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON workflow_events(run_id, event_seq)")
         self._conn.commit()
 
         # Optional per-run event counters for SQLite
@@ -855,6 +909,23 @@ class WorkflowsDatabase:
             CREATE TABLE IF NOT EXISTS workflow_event_counters (
                 run_id TEXT PRIMARY KEY,
                 next_seq INTEGER NOT NULL
+            );
+            """
+        )
+
+        # Dead-letter queue for webhooks
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_webhook_dlq (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                body_json TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL
             );
             """
         )
@@ -1048,6 +1119,7 @@ class WorkflowsDatabase:
         definition_snapshot: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
         session_id: Optional[str] = None,
+        validation_mode: str = "block",
     ) -> None:
         params = (
             run_id,
@@ -1060,14 +1132,15 @@ class WorkflowsDatabase:
             json.dumps(definition_snapshot) if definition_snapshot else None,
             idempotency_key,
             session_id,
+            validation_mode,
         )
 
         query = """
             INSERT INTO workflow_runs(
                 run_id, tenant_id, workflow_id, status, status_reason, user_id, inputs_json, outputs_json,
                 error, duration_ms, created_at, started_at, ended_at, definition_version, definition_snapshot_json,
-                idempotency_key, session_id
-            ) VALUES (?, ?, ?, 'queued', NULL, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?)
+                idempotency_key, session_id, validation_mode
+            ) VALUES (?, ?, ?, 'queued', NULL, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?)
         """
 
         if self._using_backend():
@@ -1327,12 +1400,16 @@ class WorkflowsDatabase:
         self._release_sqlite(conn)
         return next_seq
 
-    def get_events(self, run_id: str, since: Optional[int] = None, limit: int = 500) -> List[Dict[str, Any]]:
+    def get_events(self, run_id: str, since: Optional[int] = None, limit: int = 500, types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM workflow_events WHERE run_id = ?"
         params: List[Any] = [run_id]
         if since is not None:
             sql += " AND event_seq > ?"
             params.append(int(since))
+        if types:
+            placeholders = ",".join(["?"] * len(types))
+            sql += f" AND event_type IN ({placeholders})"
+            params.extend(list(types))
         sql += " ORDER BY event_seq ASC LIMIT ?"
         params.append(int(limit))
         if self._using_backend():
@@ -1650,6 +1727,29 @@ class WorkflowsDatabase:
             pass
         return data
 
+    def delete_artifact(self, artifact_id: str) -> None:
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,), connection=conn)
+            return
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM workflow_artifacts WHERE artifact_id = ?", (artifact_id,))
+        self._conn.commit()
+
+    def list_artifacts_older_than(self, cutoff_iso: str) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM workflow_artifacts WHERE created_at < ?"
+        rows: List[Any]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(sql, (cutoff_iso,), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(sql, (cutoff_iso,)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append(self._row_to_dict(r))
+        return out
+
     # ---------- Human-in-the-loop decisions ----------
     def approve_step_decision(
         self,
@@ -1674,6 +1774,132 @@ class WorkflowsDatabase:
             return
         cur = self._conn.cursor()
         cur.execute(query, params)
+        self._conn.commit()
+
+    # ---------- Webhook DLQ ----------
+    def enqueue_webhook_dlq(self, *, tenant_id: str, run_id: str, url: str, body: Optional[Dict[str, Any]] = None, last_error: Optional[str] = None) -> None:
+        params = (
+            tenant_id,
+            run_id,
+            url,
+            json.dumps(body or {}),
+            0,
+            None,
+            last_error or "",
+            _utcnow_iso(),
+        )
+        query = """
+            INSERT INTO workflow_webhook_dlq(
+                tenant_id, run_id, url, body_json, attempts, next_attempt_at, last_error, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+        cur = self._conn.cursor()
+        cur.execute(query, params)
+        self._conn.commit()
+
+    def list_webhook_dlq_due(self, *, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return DLQ rows that are due for retry (next_attempt_at is null or <= now).
+
+        Results are ordered by next_attempt_at (nulls first via COALESCE to created_at) then id for stability.
+        """
+        if self._using_backend():
+            query = (
+                "SELECT id, tenant_id, run_id, url, body_json, attempts, next_attempt_at, last_error, created_at "
+                "FROM workflow_webhook_dlq "
+                "WHERE next_attempt_at IS NULL OR next_attempt_at <= NOW() "
+                "ORDER BY COALESCE(next_attempt_at, created_at) ASC, id ASC "
+                "LIMIT %s"
+            )
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                rows = self._fetchall_backend(query, (limit,), connection=conn)
+            return [dict(r) if isinstance(r, dict) else {
+                "id": r[0], "tenant_id": r[1], "run_id": r[2], "url": r[3], "body_json": r[4],
+                "attempts": r[5], "next_attempt_at": r[6], "last_error": r[7], "created_at": r[8]
+            } for r in rows or []]
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT id, tenant_id, run_id, url, body_json, attempts, next_attempt_at, last_error, created_at
+            FROM workflow_webhook_dlq
+            WHERE next_attempt_at IS NULL OR next_attempt_at <= datetime('now')
+            ORDER BY COALESCE(next_attempt_at, created_at) ASC, id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows or []:
+            try:
+                out.append({
+                    "id": r[0],
+                    "tenant_id": r[1],
+                    "run_id": r[2],
+                    "url": r[3],
+                    "body_json": r[4],
+                    "attempts": r[5],
+                    "next_attempt_at": r[6],
+                    "last_error": r[7],
+                    "created_at": r[8],
+                })
+            except Exception:
+                # Attempt dict row style access (when using row_factory)
+                out.append({
+                    "id": r.get("id"),
+                    "tenant_id": r.get("tenant_id"),
+                    "run_id": r.get("run_id"),
+                    "url": r.get("url"),
+                    "body_json": r.get("body_json"),
+                    "attempts": r.get("attempts"),
+                    "next_attempt_at": r.get("next_attempt_at"),
+                    "last_error": r.get("last_error"),
+                    "created_at": r.get("created_at"),
+                })
+        return out
+
+    def delete_webhook_dlq(self, *, dlq_id: int) -> None:
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend("DELETE FROM workflow_webhook_dlq WHERE id = %s", (dlq_id,), connection=conn)
+            return
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM workflow_webhook_dlq WHERE id = ?", (dlq_id,))
+        self._conn.commit()
+
+    def update_webhook_dlq_failure(self, *, dlq_id: int, last_error: str, next_attempt_at_iso: Optional[str], attempts: Optional[int] = None) -> None:
+        """Update DLQ row after a failed attempt.
+
+        If attempts is provided, set to that value; else increment by 1.
+        """
+        if self._using_backend():
+            if attempts is None:
+                query = (
+                    "UPDATE workflow_webhook_dlq SET attempts = attempts + 1, last_error = %s, next_attempt_at = %s WHERE id = %s"
+                )
+                params = (last_error, next_attempt_at_iso, dlq_id)
+            else:
+                query = (
+                    "UPDATE workflow_webhook_dlq SET attempts = %s, last_error = %s, next_attempt_at = %s WHERE id = %s"
+                )
+                params = (attempts, last_error, next_attempt_at_iso, dlq_id)
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+        cur = self._conn.cursor()
+        if attempts is None:
+            cur.execute(
+                "UPDATE workflow_webhook_dlq SET attempts = attempts + 1, last_error = ?, next_attempt_at = ? WHERE id = ?",
+                (last_error, next_attempt_at_iso, dlq_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE workflow_webhook_dlq SET attempts = ?, last_error = ?, next_attempt_at = ? WHERE id = ?",
+                (attempts, last_error, next_attempt_at_iso, dlq_id),
+            )
         self._conn.commit()
 
     def reject_step_decision(

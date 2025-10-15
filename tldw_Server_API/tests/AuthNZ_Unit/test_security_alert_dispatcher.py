@@ -222,3 +222,62 @@ def test_security_alert_per_sink_thresholds(tmp_path, monkeypatch):
     assert status["last_sink_status"]["file"] is True
     assert status["last_sink_status"]["webhook"] is None
     assert status["sink_thresholds"]["webhook"] == "critical"
+
+
+def test_security_alert_backoff(tmp_path, monkeypatch):
+    log_file = tmp_path / "alerts.log"
+
+    class FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise httpx.HTTPError("boom")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.alerting.httpx.AsyncClient",
+        FailingClient,
+    )
+
+    settings = SimpleNamespace(
+        SECURITY_ALERTS_ENABLED=True,
+        SECURITY_ALERT_MIN_SEVERITY="low",
+        SECURITY_ALERT_FILE_PATH=str(log_file),
+        SECURITY_ALERT_WEBHOOK_URL="https://example.invalid/webhook",
+        SECURITY_ALERT_WEBHOOK_HEADERS=None,
+        SECURITY_ALERT_BACKOFF_SECONDS=60,
+        SECURITY_ALERT_EMAIL_TO=None,
+        SECURITY_ALERT_EMAIL_FROM=None,
+        SECURITY_ALERT_EMAIL_SUBJECT_PREFIX="[AuthNZ]",
+        SECURITY_ALERT_SMTP_HOST=None,
+        SECURITY_ALERT_SMTP_PORT=587,
+        SECURITY_ALERT_SMTP_STARTTLS=True,
+        SECURITY_ALERT_SMTP_USERNAME=None,
+        SECURITY_ALERT_SMTP_PASSWORD=None,
+        SECURITY_ALERT_SMTP_TIMEOUT=10,
+        SECURITY_ALERT_WEBHOOK_MIN_SEVERITY=None,
+        SECURITY_ALERT_EMAIL_MIN_SEVERITY=None,
+        SECURITY_ALERT_FILE_MIN_SEVERITY=None,
+    )
+
+    dispatcher = SecurityAlertDispatcher(settings=settings)
+    dispatcher.validate_configuration()
+
+    async def _run_sequence():
+        first = await dispatcher.dispatch("Subject", "Message", severity="critical")
+        second = await dispatcher.dispatch("Subject", "Message", severity="critical")
+        return first, second
+
+    first_ok, second_ok = asyncio.run(_run_sequence())
+    assert first_ok is False
+    assert second_ok is False
+
+    info = dispatcher.get_status()
+    assert info["last_sink_errors"]["webhook"] in {"boom", "backoff"}
+    assert info["sink_backoff_until"]["webhook"] is not None

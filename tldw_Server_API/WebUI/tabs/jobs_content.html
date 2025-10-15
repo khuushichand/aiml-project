@@ -7,6 +7,7 @@
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/jobs/stats - Jobs Queue Stats</span>
+            <a href="/docs-static/Code_Documentation/Jobs_Admin_Examples.md" target="_blank" rel="noopener" style="margin-left:10px; font-size: 0.9em;">Examples</a>
         </h2>
         <p>Queue depth and processing counts per domain/queue/job_type. Supports auto-refresh.</p>
 
@@ -56,10 +57,11 @@
                         <th>Queued (ready)</th>
                         <th>Scheduled</th>
                         <th>Processing</th>
+                        <th>Quarantined</th>
                     </tr>
                 </thead>
                 <tbody id="adminJobs_tableBody">
-                    <tr><td colspan="6" class="text-muted">No data</td></tr>
+                    <tr><td colspan="7" class="text-muted">No data</td></tr>
                 </tbody>
             </table>
         </div>
@@ -70,8 +72,12 @@
         <h2>
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/jobs/prune - Prune Jobs</span>
+            <a href="/docs-static/Code_Documentation/Jobs_Admin_Examples.md" target="_blank" rel="noopener" style="margin-left:10px; font-size: 0.9em;">Examples</a>
         </h2>
-        <p>Delete jobs by status older than a threshold. Use with caution in production.</p>
+        <p>
+            Delete jobs by status older than a threshold. Use with caution in production.
+            <span title="Destructive actions require X-Confirm: true header when not using Dry Run." style="margin-left:8px; color: var(--color-text-secondary); cursor: help;">(Requires X-Confirm for real runs)</span>
+        </p>
 
         <div class="columns">
             <div class="column">
@@ -95,7 +101,7 @@
                     <label><input type="checkbox" id="adminJobs_dryRun" checked> Dry Run (count only)</label>
                 </div>
                 <div class="form-group">
-                    <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()">Prune Jobs</button>
+                    <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()" title="Requires X-Confirm: true header when Dry Run is unchecked">Prune Jobs</button>
                 </div>
             </div>
         </div>
@@ -110,8 +116,12 @@
         <h2>
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/jobs/ttl/sweep - TTL Sweep</span>
+            <a href="/docs-static/Code_Documentation/Jobs_Admin_Examples.md" target="_blank" rel="noopener" style="margin-left:10px; font-size: 0.9em;">Examples</a>
         </h2>
-        <p>Cancel or fail jobs that exceed a max age (queued) or runtime (processing). Scoped by current filters.</p>
+        <p>
+            Cancel or fail jobs that exceed a max age (queued) or runtime (processing). Scoped by current filters.
+            <span title="Destructive actions require X-Confirm: true header." style="margin-left:8px; color: var(--color-text-secondary); cursor: help;">(Requires X-Confirm)</span>
+        </p>
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -132,13 +142,65 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <button id="adminJobsTTL_btn" class="btn btn-warning" onclick="adminRunTTLSweep()">Run TTL Sweep</button>
+                    <button id="adminJobsTTL_btn" class="btn btn-warning" onclick="adminRunTTLSweep()" title="Requires X-Confirm: true header">Run TTL Sweep</button>
                 </div>
             </div>
         </div>
         <h3>Response:</h3>
         <div id="adminJobsTTL_summary" class="text-muted" style="margin-bottom:6px;">—</div>
         <pre id="adminJobsTTL_result">---</pre>
+    </div>
+
+    <!-- Requeue Quarantined -->
+    <div class="endpoint-section" id="adminJobsRequeueQuarantined">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/jobs/batch/requeue_quarantined - Requeue Quarantined</span>
+        </h2>
+        <p>Requeue jobs in 'quarantined' status. Scope by current Domain/Queue/Job Type filters.</p>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label><input type="checkbox" id="adminJobsRequeue_dryRun" checked> Dry Run (count only)</label>
+                </div>
+                <div class="form-group">
+                    <button id="adminJobsRequeue_btn" class="btn btn-warning" onclick="adminRequeueQuarantined()">Requeue Quarantined</button>
+                </div>
+            </div>
+        </div>
+        <h3>Response:</h3>
+        <div id="adminJobsRequeue_summary" class="text-muted" style="margin-bottom:6px;">—</div>
+        <pre id="adminJobsRequeue_result">---</pre>
+    </div>
+
+    <!-- Live Job Events -->
+    <div class="endpoint-section" id="adminJobsEvents">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/jobs/events/stream - Live Events</span>
+        </h2>
+        <p>Live job events stream (append-only). Shows recent events and simple failure-timeline sparklines per job.</p>
+        <div class="metrics-controls">
+            <button id="adminJobsEvents_start" class="btn btn-primary" onclick="adminStartJobsEvents()">Start Stream</button>
+            <button id="adminJobsEvents_stop" class="btn btn-secondary" onclick="adminStopJobsEvents()">Stop</button>
+        </div>
+        <div class="table-responsive mt-2">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Event</th>
+                        <th>Domain/Queue/Type</th>
+                        <th>Failure Timeline</th>
+                        <th>Correlation</th>
+                        <th>Attrs</th>
+                    </tr>
+                </thead>
+                <tbody id="adminJobsEvents_tableBody">
+                    <tr><td colspan="6" class="text-muted">Not connected</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -170,6 +232,7 @@
                         <td>${row.queued ?? 0}</td>
                         <td>${row.scheduled ?? 0}</td>
                         <td>${row.processing ?? 0}</td>
+                        <td>${row.quarantined ?? 0}</td>
                     `;
                     // Make rows clickable to apply filter
                     tr.style.cursor = 'pointer';
@@ -419,6 +482,45 @@
             }
         }
 
+        async function adminRequeueQuarantined() {
+            const btn = document.getElementById('adminJobsRequeue_btn');
+            const resultEl = document.getElementById('adminJobsRequeue_result');
+            const summaryEl = document.getElementById('adminJobsRequeue_summary');
+            const domain = (document.getElementById('adminJobs_domain')?.value || '').trim();
+            const queue = (document.getElementById('adminJobs_queue')?.value || '').trim();
+            const jobType = (document.getElementById('adminJobs_jobType')?.value || '').trim();
+            const dryRun = !!document.getElementById('adminJobsRequeue_dryRun')?.checked;
+            if (!domain) {
+                Toast.error('Provide a domain to scope requeue');
+                return;
+            }
+            try {
+                if (btn) btn.disabled = true;
+                Loading.show(resultEl, 'Requeuing quarantined…');
+                if (summaryEl) summaryEl.textContent = 'Running requeue…';
+                const body = { domain, dry_run: dryRun };
+                if (queue) body.queue = queue;
+                if (jobType) body.job_type = jobType;
+                const headers = dryRun ? {} : { 'X-Confirm': 'true' };
+                const res = await apiClient.makeRequest('POST', '/api/v1/jobs/batch/requeue_quarantined', { body, headers });
+                resultEl.textContent = JSON.stringify(res, null, 2);
+                const affected = (res && typeof res.affected === 'number') ? res.affected : (res?.data?.affected || 0);
+                Toast.success(`${dryRun ? 'Would requeue' : 'Requeued'} ${affected} job(s)`);
+                const ts = new Date().toLocaleString();
+                const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
+                if (summaryEl) summaryEl.textContent = `${dryRun ? 'Dry run' : 'Requeued'} ${affected} quarantined job(s) [${scope || 'unscoped'}] — ${ts}`;
+                if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
+            } catch (e) {
+                const err = e && (e.response || e);
+                resultEl.textContent = JSON.stringify(err, null, 2);
+                Toast.error('Requeue failed');
+                if (summaryEl) summaryEl.textContent = '—';
+            } finally {
+                if (btn) btn.disabled = false;
+                Loading.hide(resultEl);
+            }
+        }
+
         // Initialize on load
         (function(){
             if (document.readyState === 'loading') {
@@ -427,5 +529,118 @@
                 adminJobsInit();
             }
         })();
+
+        // ---- Live Events stream helpers ----
+        let adminJobsEventsAbort = null;
+        let adminJobsEventsCursor = 0;
+        const adminJobsFailureTimelines = {}; // job_id -> [retry_backoff...]
+
+        function renderSparkline(vals) {
+            if (!vals || !vals.length) return '';
+            const ticks = ['▁','▂','▃','▄','▅','▆','▇','█'];
+            const max = Math.max(...vals);
+            if (max <= 0) return '▁'.repeat(Math.min(vals.length, 20));
+            return vals.slice(-20).map(v => {
+                const idx = Math.min(ticks.length - 1, Math.floor((v / max) * (ticks.length - 1)));
+                return ticks[idx];
+            }).join('');
+        }
+
+        function adminJobsEventsAuthHeaders() {
+            const h = { 'Accept': 'text/event-stream' };
+            try {
+                if (apiClient && apiClient.token) {
+                    if (apiClient.authMode === 'multi-user' && !apiClient.preferApiKeyInMultiUser) {
+                        h['Authorization'] = `Bearer ${apiClient.token}`;
+                    } else {
+                        h['X-API-KEY'] = apiClient.token;
+                    }
+                }
+            } catch (e) { /* ignore */ }
+            return h;
+        }
+
+        function adminStopJobsEvents() {
+            try { if (adminJobsEventsAbort) adminJobsEventsAbort.abort(); } catch (e) {}
+            adminJobsEventsAbort = null;
+        }
+
+        async function adminStartJobsEvents() {
+            adminStopJobsEvents();
+            const controller = new AbortController();
+            adminJobsEventsAbort = controller;
+            const tbody = document.getElementById('adminJobsEvents_tableBody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-muted">Connecting…</td></tr>';
+            const url = new URL((apiClient?.baseUrl || '') + '/api/v1/jobs/events/stream');
+            url.searchParams.set('after_id', String(adminJobsEventsCursor || 0));
+            let reader;
+            try {
+                const res = await fetch(url.toString(), { headers: adminJobsEventsAuthHeaders(), signal: controller.signal });
+                if (!res.ok || !res.body) throw new Error('Failed to open stream');
+                reader = res.body.getReader();
+            } catch (e) {
+                if (tbody) tbody.innerHTML = `<tr><td colspan=\"6\" class=\"text-error\">${(e && e.message) || 'Stream failed'}</td></tr>`;
+                return;
+            }
+            const decoder = new TextDecoder();
+            let buf = '';
+            const events = [];
+            while (true) {
+                let chunk;
+                try {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    chunk = decoder.decode(value, { stream: true });
+                } catch (e) { break; }
+                buf += chunk;
+                const parts = buf.split('\n\n');
+                buf = parts.pop();
+                for (const part of parts) {
+                    const line = part.trim();
+                    const prefix = 'data:';
+                    if (line.startsWith(prefix)) {
+                        try {
+                            const obj = JSON.parse(line.slice(prefix.length).trim());
+                            // Update cursor via synthetic monotonic counter (table id not exposed in SSE payload)
+                            adminJobsEventsCursor += 1;
+                            // Track failure timeline from attrs
+                            const jid = obj.job_id || obj.attrs?.job_id;
+                            const backoff = obj.attrs?.retry_backoff;
+                            if (jid && typeof backoff === 'number') {
+                                const arr = adminJobsFailureTimelines[jid] || [];
+                                arr.push(backoff);
+                                adminJobsFailureTimelines[jid] = arr.slice(-20);
+                            }
+                            events.push(obj);
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+                // Render last 20
+                if (tbody) {
+                    tbody.innerHTML = '';
+                    const last = events.slice(-20);
+                    for (const ev of last) {
+                        const tr = document.createElement('tr');
+                        const jid = ev.job_id || '';
+                        const corr = [];
+                        if (ev.request_id) corr.push(`<span class=\"chip\">req:${ev.request_id}</span>`);
+                        if (ev.trace_id) corr.push(`<span class=\"chip\">trace:${ev.trace_id}</span>`);
+                        const tl = adminJobsFailureTimelines[jid] || [];
+                        tr.innerHTML = `
+                            <td>${jid || ''}</td>
+                            <td>${ev.event || ''}</td>
+                            <td>${[ev.domain, ev.queue, ev.job_type].filter(Boolean).join('/')}</td>
+                            <td style=\"font-family:monospace\">${renderSparkline(tl)}</td>
+                            <td>${corr.join(' ')}</td>
+                            <td><code style=\"font-size: 11px;\">${JSON.stringify(ev.attrs || {})}</code></td>
+                        `;
+                        tbody.appendChild(tr);
+                    }
+                    if (!last.length) {
+                        tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No events yet</td></tr>';
+                    }
+                }
+            }
+        }
     </script>
 </div>

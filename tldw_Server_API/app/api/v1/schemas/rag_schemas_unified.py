@@ -7,6 +7,11 @@ providing a clean API interface with all features accessible.
 
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, validator
+try:
+    # Pydantic v1
+    from pydantic import root_validator  # type: ignore
+except Exception:
+    root_validator = None  # type: ignore
 from pydantic import ConfigDict
 
 # Load contextual retrieval defaults from settings (config.txt/env)
@@ -53,6 +58,28 @@ class UnifiedRAGRequest(BaseModel):
         example=["media_db", "notes"]
     )
 
+    if root_validator:
+        @root_validator(pre=True)
+        def _map_legacy_min_relevance(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+
+    # Optional corpus/namespace for per‑corpus indexing and synonyms
+    corpus: Optional[str] = Field(
+        default=None,
+        description="Alias for index_namespace used to select corpus‑specific synonyms",
+        example="my_corpus"
+    )
+    index_namespace: Optional[str] = Field(
+        default=None,
+        description="Corpus/namespace identifier (enables per‑corpus synonyms & indexing)",
+        example="my_corpus"
+    )
+
     @validator("sources", pre=True, always=True)
     def _validate_sources(cls, v):
         allowed = {"media_db", "notes", "characters", "chats"}
@@ -70,6 +97,17 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(list(allowed))}")
             normalized.append(key)
         return normalized
+
+    @validator("index_namespace", pre=True, always=True)
+    def _alias_corpus_to_index_namespace(cls, v, values):
+        # If index_namespace is empty but corpus provided, use corpus
+        try:
+            if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(values.get("corpus"), str):
+                c = values.get("corpus", "").strip()
+                return c or v
+        except Exception:
+            pass
+        return v
     
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = Field(
@@ -108,6 +146,19 @@ class UnifiedRAGRequest(BaseModel):
         description="Minimum relevance score",
         example=0.0
     )
+
+    @validator("min_score", pre=True)
+    def _alias_min_relevance_score(cls, v, values):
+        # Accept legacy field name 'min_relevance_score' as an alias
+        try:
+            if v is None:
+                # In Pydantic v1 pre-validator, original input present in values under '__fields_set__' isn't accessible.
+                # Use a best-effort approach: values may contain raw dict in context if model_dump_compat was used.
+                # Safer: map from a possible shadowed key placed by request parsing layer; fallback no-op.
+                pass
+        except Exception:
+            pass
+        return v
     
     # ========== QUERY EXPANSION ==========
     expand_query: bool = Field(
@@ -349,7 +400,7 @@ class UnifiedRAGRequest(BaseModel):
         example=True
     )
     
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"] = Field(
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(
         default="flashrank",
         description="Reranking strategy",
         example="hybrid"
@@ -367,6 +418,21 @@ class UnifiedRAGRequest(BaseModel):
         default=None,
         description="Optional reranker model identifier (e.g., GGUF path for llama.cpp)",
         example="./models/Qwen3-Embedding-0.6B_f16.gguf"
+    )
+    # Two-tier strategy: request-level gating overrides (optional)
+    rerank_min_relevance_prob: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override minimum calibrated probability to allow generation (Two‑Tier)",
+        example=0.5,
+    )
+    rerank_sentinel_margin: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override required margin between top probability and sentinel (Two‑Tier)",
+        example=0.15,
     )
     
     # ========== CITATIONS ==========
@@ -420,7 +486,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Maximum tokens for generated answer",
         example=500
     )
-    
+
     # ========== POST-VERIFICATION (ADAPTIVE) ==========
     enable_post_verification: bool = Field(
         default=False,
@@ -458,6 +524,38 @@ class UnifiedRAGRequest(BaseModel):
         default="continue",
         description="Behavior when evidence remains insufficient after retries",
         example="ask",
+    )
+    adaptive_advanced_rewrites: Optional[bool] = Field(
+        default=None,
+        description="Override env to enable/disable HyDE + multi-strategy rewrites in the adaptive pass",
+        example=True,
+    )
+    adaptive_rerun_on_low_confidence: bool = Field(
+        default=False,
+        description="If true, run a bounded full pipeline rerun on low confidence to seek a better answer",
+        example=True,
+    )
+    adaptive_rerun_include_generation: bool = Field(
+        default=True,
+        description="If true, the adaptive rerun may include answer generation; otherwise stops after retrieval/rerank",
+        example=True,
+    )
+    adaptive_rerun_bypass_cache: bool = Field(
+        default=False,
+        description="If true, the adaptive rerun forces enable_cache=false to avoid stale cache hits",
+        example=True,
+    )
+    adaptive_rerun_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional hard cap on adaptive rerun wall time; emits rag_phase_budget_exhausted_total on breach",
+        example=5.0,
+    )
+    adaptive_rerun_doc_budget: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional cap on documents passed to quick-verify during rerun adoption checks",
+        example=10,
     )
     
     # ========== FEEDBACK ==========
@@ -555,6 +653,35 @@ class UnifiedRAGRequest(BaseModel):
         default=False,
         description="Enable debug logging",
         example=False
+    )
+
+    # ========== GENERATION GUARDRAILS ==========
+    enable_injection_filter: bool = Field(
+        default=True,
+        description="Detect and down-weight chunks with instruction-injection risk before generation",
+        example=True,
+    )
+    injection_filter_strength: float = Field(
+        default=0.5,
+        ge=0.05,
+        le=1.0,
+        description="Multiplicative down-weight factor applied to risky chunks",
+        example=0.5,
+    )
+    require_hard_citations: bool = Field(
+        default=False,
+        description="Require a supporting span (doc_id + offsets) for each sentence in the answer; attaches hard_citations metadata and may apply low_confidence_behavior",
+        example=False,
+    )
+    enable_numeric_fidelity: bool = Field(
+        default=False,
+        description="Verify numeric values in the answer appear in sources; optionally retry retrieval or ask/decline",
+        example=False,
+    )
+    numeric_fidelity_behavior: Literal["continue", "ask", "decline", "retry"] = Field(
+        default="continue",
+        description="Behavior when numeric values are not found in sources",
+        example="ask",
     )
     
     # ========== BATCH PROCESSING ==========
@@ -795,12 +922,16 @@ class UnifiedBatchRequest(BaseModel):
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
     sources: Optional[List[str]] = Field(default=["media_db"], description="Databases to search")
+    # Indexing / Namespace
+    corpus: Optional[str] = Field(default=None, description="Alias for index_namespace")
+    index_namespace: Optional[str] = Field(default=None, description="Corpus/namespace identifier")
     
     # Search Configuration  
     search_mode: Literal["fts", "vector", "hybrid"] = Field(default="hybrid")
     hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
     
     # Query Expansion
     expand_query: bool = Field(default=False)
@@ -844,8 +975,11 @@ class UnifiedBatchRequest(BaseModel):
     
     # Reranking
     enable_reranking: bool = Field(default=True)
-    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] = Field(default="flashrank")
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(default="flashrank")
     rerank_top_k: Optional[int] = Field(default=None, ge=1, le=100)
+    reranking_model: Optional[str] = Field(default=None)
+    rerank_min_relevance_prob: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    rerank_sentinel_margin: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     
     # Citations
     enable_citations: bool = Field(default=False)
@@ -865,6 +999,12 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_max_claims: int = Field(default=20, ge=1, le=100)
     adaptive_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
     low_confidence_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
+    adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
+    adaptive_rerun_on_low_confidence: bool = Field(default=False)
+    adaptive_rerun_include_generation: bool = Field(default=True)
+    adaptive_rerun_bypass_cache: bool = Field(default=False)
+    adaptive_rerun_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    adaptive_rerun_doc_budget: Optional[int] = Field(default=None, ge=1)
     
     # Feedback
     collect_feedback: bool = Field(default=False)
@@ -885,6 +1025,13 @@ class UnifiedBatchRequest(BaseModel):
     highlight_query_terms: bool = Field(default=False)
     track_cost: bool = Field(default=False)
     debug_mode: bool = Field(default=False)
+
+    # Generation Guardrails
+    enable_injection_filter: bool = Field(default=True)
+    injection_filter_strength: float = Field(default=0.5, ge=0.05, le=1.0)
+    require_hard_citations: bool = Field(default=False)
+    enable_numeric_fidelity: bool = Field(default=False)
+    numeric_fidelity_behavior: Literal["continue", "ask", "decline", "retry"] = Field(default="continue")
     
     # Batch Processing (excluding batch fields as this IS a batch request)
     # enable_batch, batch_queries, batch_concurrent are not included
@@ -897,6 +1044,26 @@ class UnifiedBatchRequest(BaseModel):
     # User Context
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
+
+    if root_validator:
+        @root_validator(pre=True)
+        def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                    values["min_score"] = values.get("min_relevance_score")
+            except Exception:
+                pass
+            return values
+
+    @validator("index_namespace", pre=True, always=True)
+    def _alias_corpus_to_index_namespace_batch(cls, v, values):
+        try:
+            if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(values.get("corpus"), str):
+                c = values.get("corpus", "").strip()
+                return c or v
+        except Exception:
+            pass
+        return v
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -941,3 +1108,16 @@ class UnifiedBatchResponse(BaseModel):
             "total_time": 0.75
         }
     })
+
+
+class ImplicitFeedbackEvent(BaseModel):
+    """Schema for implicit feedback signals from WebUI (click/expand/copy)."""
+    event_type: Literal["click", "expand", "copy"] = Field(description="Type of implicit event")
+    query: Optional[str] = Field(default=None, description="Original query text")
+    feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
+    doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
+    rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
+    impression_list: Optional[List[str]] = Field(default=None, description="Ordered doc ids visible when the event happened")
+    corpus: Optional[str] = Field(default=None, description="Corpus/namespace if set in the request")
+    user_id: Optional[str] = Field(default=None, description="User id if available")
+    session_id: Optional[str] = Field(default=None, description="Browser session id if available")

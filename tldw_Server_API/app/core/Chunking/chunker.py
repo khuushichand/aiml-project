@@ -1268,6 +1268,16 @@ class Chunker:
                 density = max(0.0, min(3.0, len(processed_text) / 10000.0))
                 scaled = int(base_adaptive * (1.0 + 0.2 * density))
                 max_size = max(min_adaptive, min(max_adaptive_hi, scaled))
+                # Optional adaptive overlap tuned by density
+                if bool(opts.get('adaptive_overlap', False)):
+                    try:
+                        base_overlap = int(opts.get('base_overlap') or overlap or 0)
+                        max_overlap = int(opts.get('max_adaptive_overlap') or max(0, base_overlap + 100))
+                        # Increase overlap slightly for denser/longer docs; cap to avoid waste
+                        tuned = int(base_overlap + (density * 10))
+                        overlap = max(0, min(max_overlap, tuned))
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1367,6 +1377,23 @@ class Chunker:
         total = len(norm_chunks)
         out: List[Dict[str, Any]] = []
         norm_start = time.perf_counter()
+        # Optional timecode mapping for media transcripts: segments with offsets and times
+        time_segments = None
+        try:
+            segs = opts.get('timecode_map')
+            if isinstance(segs, list):
+                # Expect list of {start_offset,end_offset,start_time,end_time}
+                val = []
+                for s in segs:
+                    if not isinstance(s, dict):
+                        continue
+                    so = s.get('start_offset'); eo = s.get('end_offset')
+                    st = s.get('start_time'); et = s.get('end_time')
+                    if isinstance(so, int) and isinstance(eo, int) and (isinstance(st, (int, float)) and isinstance(et, (int, float))):
+                        val.append((so, eo, float(st), float(et)))
+                time_segments = sorted(val, key=lambda x: x[0]) if val else None
+        except Exception:
+            time_segments = None
         for i, item in enumerate(norm_chunks):
             # Normalize
             txt = item.get('text') if isinstance(item, dict) else str(item)
@@ -1392,6 +1419,22 @@ class Chunker:
                 if isinstance(start, int) and isinstance(end, int) and end > start:
                     mid = 0.5 * (float(start) + float(end))
                     rel = mid / max(1.0, float(len(processed_text)))
+                    # Map approximate timecodes when provided
+                    if time_segments is not None:
+                        try:
+                            # Find the segment whose span overlaps the chunk mid; linear scan is fine for small N
+                            for (so, eo, st, et) in time_segments:
+                                if start <= eo and end >= so:
+                                    # Simple proportional mapping within the segment
+                                    seg_len = max(1.0, float(eo - so))
+                                    frac = (min(end, eo) - max(start, so)) / seg_len
+                                    cst = st + 0.0  # start time of overlapped segment
+                                    cet = st + frac * (et - st)
+                                    md.setdefault('start_time', round(cst, 3))
+                                    md.setdefault('end_time', round(cet, 3))
+                                    break
+                        except Exception:
+                            pass
                 else:
                     rel = (i + 1) / total if total > 0 else 0.0
             except Exception:

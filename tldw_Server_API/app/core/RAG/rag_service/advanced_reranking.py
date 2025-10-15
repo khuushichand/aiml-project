@@ -34,6 +34,7 @@ class RerankingStrategy(Enum):
     MULTI_CRITERIA = "multi_criteria" # Multiple ranking factors
     HYBRID = "hybrid"                # Combine strategies
     LLAMA_CPP = "llama_cpp"          # Embedding-based rerank via llama.cpp GGUF
+    TWO_TIER = "two_tier"            # Cross-encoder prefilter then LLM rerank
 
 
 @dataclass
@@ -69,6 +70,9 @@ class RerankingConfig:
     transformers_device: Optional[str] = None  # 'auto' | 'cuda' | 'cpu'
     transformers_trust_remote_code: bool = False
     transformers_max_length: Optional[int] = None
+    # Two-tier gating overrides (optional per-request)
+    min_relevance_prob: Optional[float] = None
+    sentinel_margin: Optional[float] = None
 
 
 @dataclass
@@ -1274,6 +1278,239 @@ def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfi
         return TransformersCrossEncoderReranker(config)
     elif strategy == RerankingStrategy.LLAMA_CPP:
         return LlamaCppReranker(config)
+    elif strategy == RerankingStrategy.TWO_TIER:
+        # Two-tier uses CE for fast pass and LLM for final scoring
+        return TwoTierReranker(config, llm_client=llm_client)
     else:
         # Default to FlashRank
         return FlashRankReranker(config)
+
+
+class TwoTierReranker(BaseReranker):
+    """
+    Two-tier reranking pipeline:
+      1) Fast cross-encoder reranking (e.g., BAAI/bge-reranker) to select top N (default 50)
+      2) LLM-based reranking on that shortlist to top K (default 10)
+
+    Also injects a small sentinel "irrelevant" document to calibrate low-evidence
+    scenarios and computes a calibrated probability of relevance via a logistic
+    mapping over features (original, CE score, LLM score). The final rerank score
+    is the calibrated probability.
+
+    Exposes last run calibration in self.last_metadata for the pipeline to gate
+    answer generation.
+    """
+
+    def __init__(self, config: RerankingConfig, llm_client=None, cross_reranker: Optional[BaseReranker] = None, llm_reranker: Optional[BaseReranker] = None):
+        super().__init__(config)
+        # Determine shortlist sizes (stage1 >> stage2)
+        try:
+            stage2_top_k = int(max(1, self.config.top_k))
+        except Exception:
+            stage2_top_k = 10
+        try:
+            # default stage1 to max(50, 5x stage2) but bounded by 100
+            stage1_top_k = min(100, max(50, stage2_top_k * 5))
+        except Exception:
+            stage1_top_k = 50
+
+        self.stage1_top_k = stage1_top_k
+        self.stage2_top_k = stage2_top_k
+
+        # Create internal rerankers if not injected (DI for tests)
+        self._cross = cross_reranker
+        self._llm = llm_reranker
+        self.llm_client = llm_client
+
+        if self._cross is None:
+            # Auto-select cross-encoder model from config/env
+            model_id = None
+            try:
+                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                cfg = load_and_log_configs() or {}
+            except Exception:
+                cfg = {}
+            model_id = self.config.model_name or cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL") or "BAAI/bge-reranker-v2-m3"
+            ce_cfg = RerankingConfig(
+                strategy=RerankingStrategy.CROSS_ENCODER,
+                model_name=model_id,
+                top_k=stage1_top_k,
+                transformers_device=getattr(self.config, 'transformers_device', None),
+                transformers_trust_remote_code=getattr(self.config, 'transformers_trust_remote_code', False),
+                transformers_max_length=getattr(self.config, 'transformers_max_length', None),
+            )
+            self._cross = TransformersCrossEncoderReranker(ce_cfg)
+
+        if self._llm is None:
+            llm_cfg = RerankingConfig(
+                strategy=RerankingStrategy.LLM_SCORING,
+                top_k=stage2_top_k,
+                batch_size=self.config.batch_size,
+            )
+            self._llm = LLMReranker(llm_cfg, llm_client=self.llm_client)
+
+        # Place to store calibration/sentinel info for the caller
+        self.last_metadata: Dict[str, Any] = {}
+
+    async def rerank(
+        self,
+        query: str,
+        documents: List[Document],
+        original_scores: Optional[List[float]] = None
+    ) -> List[ScoredDocument]:
+        if not documents:
+            self.last_metadata = {"strategy": "two_tier", "reason": "no_documents"}
+            return []
+
+        # Inject sentinel doc for calibration
+        sentinel = Document(
+            id="sentinel:irrelevant",
+            content=(
+                "This passage is intentionally irrelevant to most queries. "
+                "It contains generic filler text and should be scored as not relevant."
+            ),
+            metadata={"sentinel": True, "source": "synthetic"},
+            source=DataSource.WEB_CONTENT,
+            score=0.0,
+        )
+
+        pool_docs = list(documents)
+        pool_docs.append(sentinel)
+        # Stage 1: Cross-encoder fast scoring
+        ce_t0 = time.time()
+        ce_results: List[ScoredDocument] = await self._cross.rerank(query, pool_docs, original_scores=None)
+        ce_dt = time.time() - ce_t0
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+            observe_histogram("rag_phase_duration_seconds", ce_dt, labels={"phase": "rerank_fast", "difficulty": "na"})
+        except Exception:
+            pass
+
+        # Track CE scores in a map, and record sentinel CE score
+        ce_scores: Dict[str, float] = {}
+        ce_sentinel_score: float = 0.0
+        for sd in ce_results:
+            did = getattr(sd.document, 'id', None) or str(id(sd.document))
+            ce_scores[did] = float(sd.rerank_score)
+            if getattr(sd.document, 'id', '') == sentinel.id:
+                ce_sentinel_score = float(sd.rerank_score)
+
+        # Sort desc by CE score and select top shortlist (excluding sentinel)
+        ce_sorted = sorted(
+            [sd for sd in ce_results if getattr(sd.document, 'id', '') != sentinel.id],
+            key=lambda x: x.rerank_score,
+            reverse=True,
+        )
+        shortlist_docs = [sd.document for sd in ce_sorted[: self.stage1_top_k]]
+
+        # Stage 2: LLM reranking on shortlist + sentinel for calibration
+        llm_input = list(shortlist_docs)
+        llm_input.append(sentinel)
+        llm_t0 = time.time()
+        llm_results: List[ScoredDocument] = await self._llm.rerank(query, llm_input, original_scores=None)
+        llm_dt = time.time() - llm_t0
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+            observe_histogram("rag_phase_duration_seconds", llm_dt, labels={"phase": "rerank_llm", "difficulty": "na"})
+        except Exception:
+            pass
+
+        # Map LLM scores and capture sentinel
+        llm_scores: Dict[str, float] = {}
+        llm_sentinel_score: float = 0.0
+        llm_scored_docs: List[ScoredDocument] = []
+        for sd in llm_results:
+            did = getattr(sd.document, 'id', None) or str(id(sd.document))
+            llm_scores[did] = float(sd.rerank_score)
+            if did == sentinel.id:
+                llm_sentinel_score = float(sd.rerank_score)
+            else:
+                llm_scored_docs.append(sd)
+
+        # Calibrate final probability using logistic over (orig, CE, LLM)
+        w0 = _get_float_env("RAG_RERANK_CALIB_BIAS", -1.5)
+        w1 = _get_float_env("RAG_RERANK_CALIB_W_ORIG", 0.8)
+        w2 = _get_float_env("RAG_RERANK_CALIB_W_CE", 2.5)
+        w3 = _get_float_env("RAG_RERANK_CALIB_W_LLM", 3.0)
+
+        def _logistic(x: float) -> float:
+            try:
+                return 1.0 / (1.0 + np.exp(-x))
+            except Exception:
+                # Safe fallback
+                return 0.5
+
+        final_scored: List[ScoredDocument] = []
+        for sd in llm_scored_docs:
+            did = getattr(sd.document, 'id', None) or str(id(sd.document))
+            orig = float(getattr(sd.document, 'score', 0.0) or 0.0)
+            ce = float(ce_scores.get(did, orig))
+            llm = float(llm_scores.get(did, sd.rerank_score))
+            # Simple bounded normalization for orig
+            try:
+                orig_n = max(0.0, min(1.0, orig))
+            except Exception:
+                orig_n = 0.0
+            logit = (w0 + (w1 * orig_n) + (w2 * ce) + (w3 * llm))
+            prob = float(_logistic(logit))
+            # Attach breakdown
+            sd.criteria_scores = {
+                **(sd.criteria_scores or {}),
+                "orig": orig_n,
+                "ce": ce,
+                "llm": llm,
+                "calibrated_prob": prob,
+            }
+            sd.rerank_score = prob
+            sd.relevance_score = prob
+            sd.explanation = "two_tier(logistic(orig,ce,llm))"
+            final_scored.append(sd)
+
+        # Sort by calibrated probability
+        final_scored.sort(key=lambda x: x.rerank_score, reverse=True)
+        out = final_scored[: self.stage2_top_k]
+
+        # Compute sentinel calibrated probability too
+        s_orig = 0.0
+        s_ce = float(ce_sentinel_score)
+        s_llm = float(llm_sentinel_score)
+        s_prob = float(_logistic(w0 + (w1 * s_orig) + (w2 * s_ce) + (w3 * s_llm)))
+
+        # Threshold gating
+        # Per-request overrides take precedence over env defaults
+        threshold = (
+            self.config.min_relevance_prob
+            if getattr(self.config, 'min_relevance_prob', None) is not None
+            else _get_float_env("RAG_MIN_RELEVANCE_PROB", 0.35)
+        )
+        margin_thr = (
+            self.config.sentinel_margin
+            if getattr(self.config, 'sentinel_margin', None) is not None
+            else _get_float_env("RAG_SENTINEL_MARGIN", 0.10)
+        )
+        top_prob = float(out[0].rerank_score) if out else 0.0
+        prob_margin = top_prob - s_prob
+        gated = (top_prob < threshold) or (prob_margin < margin_thr)
+
+        # Persist metadata for unified pipeline to consume
+        self.last_metadata = {
+            "strategy": "two_tier",
+            "cross_model": getattr(self._cross, 'config', None) and getattr(self._cross.config, 'model_name', None),
+            "stage1_top_k": self.stage1_top_k,
+            "stage2_top_k": self.stage2_top_k,
+            "sentinel_scores": {"cross": s_ce, "llm": s_llm, "calibrated": s_prob},
+            "top_doc_prob": top_prob,
+            "threshold": threshold,
+            "margin_threshold": margin_thr,
+            "prob_margin": prob_margin,
+            "gated": gated,
+        }
+
+        return out
+
+
+def _get_float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return float(default)

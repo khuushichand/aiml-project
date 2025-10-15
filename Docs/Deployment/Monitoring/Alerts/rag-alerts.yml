@@ -201,3 +201,35 @@ groups:
               params:
                 - 0
               refId: F
+
+      # Adaptive rerun budget exhaustion signals (alerts when budget breaches occur)
+      - uid: tldw_rag_adaptive_rerun_budget
+        title: RAG adaptive rerun budget exhausted
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'Adaptive rerun budget exhaustions > 0.5/min'
+          description: 'sum(rate(rag_phase_budget_exhausted_total{phase="adaptive_rerun"}[5m])) > 0.5'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_phase_budget_exhausted_total{phase="adaptive_rerun"}[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "budget_exhausted"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0.5
+              refId: B

@@ -294,6 +294,31 @@ class MetricsRegistry:
                 buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
             )
         )
+        # Adaptive rerun metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_performed_total",
+                type=MetricType.COUNTER,
+                description="Total number of adaptive RAG reruns performed",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_adopted_total",
+                type=MetricType.COUNTER,
+                description="Total number of adaptive RAG reruns whose results were adopted",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_adaptive_rerun_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of adaptive RAG reruns",
+                unit="s",
+                labels=["adopted"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
         self.register_metric(
             MetricDefinition(
                 name="rag_reranker_llm_budget_exhausted_total",
@@ -308,6 +333,78 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total documents scored by LLM reranker",
                 labels=["strategy"]
+            )
+        )
+
+        # Per-phase timers and budgets (observability/SLOs)
+        self.register_metric(
+            MetricDefinition(
+                name="rag_phase_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration per RAG pipeline phase",
+                unit="s",
+                labels=["phase", "difficulty"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_reranking_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Reranking duration (overall) in seconds",
+                unit="s",
+                labels=["strategy"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_phase_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Budget exhaustion events per phase",
+                labels=["phase"]
+            )
+        )
+
+        # Faithfulness tracking for SLOs
+        self.register_metric(
+            MetricDefinition(
+                name="rag_total_claims_checked_total",
+                type=MetricType.COUNTER,
+                description="Total claims evaluated during post-generation verification",
+            )
+        )
+
+        # Generation gating due to low evidence after reranking calibration
+        self.register_metric(
+            MetricDefinition(
+                name="rag_generation_gated_total",
+                type=MetricType.COUNTER,
+                description="Total number of times answer generation was gated due to low relevance probability",
+                labels=["strategy"]
+            )
+        )
+
+        # Generation guardrails
+        self.register_metric(
+            MetricDefinition(
+                name="rag_injection_chunks_downweighted_total",
+                type=MetricType.COUNTER,
+                description="Total retrieved chunks downweighted due to instruction-injection risk",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_numeric_mismatches_total",
+                type=MetricType.COUNTER,
+                description="Total numeric tokens from answers not found in sources",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_missing_hard_citations_total",
+                type=MetricType.COUNTER,
+                description="Total answers with missing supporting spans for one or more sentences",
             )
         )
         

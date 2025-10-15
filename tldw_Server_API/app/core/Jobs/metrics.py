@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, Optional
+import random
 
 from loguru import logger
 import os
@@ -153,6 +154,49 @@ def ensure_jobs_metrics_registered() -> None:
             labels=["domain", "queue", "job_type"],
             buckets=[0.0, 1, 2, 5, 10, 30, 60, 120, 300, 600],
         ),
+        # Per-owner SLO gauges (P50/P90/P99)
+        MetricDefinition(
+            name="prompt_studio.jobs.queue_latency_p50_seconds",
+            type=MetricType.GAUGE,
+            description="P50 queue latency per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.queue_latency_p90_seconds",
+            type=MetricType.GAUGE,
+            description="P90 queue latency per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.queue_latency_p99_seconds",
+            type=MetricType.GAUGE,
+            description="P99 queue latency per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.duration_p50_seconds",
+            type=MetricType.GAUGE,
+            description="P50 processing duration per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.duration_p90_seconds",
+            type=MetricType.GAUGE,
+            description="P90 processing duration per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.duration_p99_seconds",
+            type=MetricType.GAUGE,
+            description="P99 processing duration per owner and job_type",
+            unit="s",
+            labels=["domain", "queue", "job_type", "owner_user_id"],
+        ),
     ]
     for d in defn:
         try:
@@ -177,7 +221,21 @@ def observe_queue_latency(job: Dict, acquired_at: Optional[datetime], created_at
     if not acquired_at or not created_at:
         return
     latency = max(0.0, (acquired_at - created_at).total_seconds())
-    get_metrics_registry().observe("prompt_studio.jobs.queue_latency_seconds", latency, _labels(job))
+    labels = _labels(job)
+    # Optional exemplars: attach sample of trace/request IDs as labels at a low rate
+    try:
+        if os.getenv("JOBS_METRICS_EXEMPLARS", "").lower() in {"1","true","yes","y","on"}:
+            rate = float(os.getenv("JOBS_METRICS_EXEMPLAR_SAMPLING", "0.01") or "0.01")
+            if random.random() < max(0.0, min(1.0, rate)):
+                if job.get("trace_id"):
+                    labels = dict(labels)
+                    labels["trace_id"] = str(job.get("trace_id"))
+                if job.get("request_id"):
+                    labels = dict(labels)
+                    labels["request_id"] = str(job.get("request_id"))
+    except Exception:
+        pass
+    get_metrics_registry().observe("prompt_studio.jobs.queue_latency_seconds", latency, labels)
 
 
 def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Optional[datetime]) -> None:
@@ -193,7 +251,20 @@ def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Op
     except Exception:
         return
     duration = max(0.0, (completed_at - start).total_seconds())
-    get_metrics_registry().observe("prompt_studio.jobs.duration_seconds", duration, _labels(job))
+    labels = _labels(job)
+    try:
+        if os.getenv("JOBS_METRICS_EXEMPLARS", "").lower() in {"1","true","yes","y","on"}:
+            rate = float(os.getenv("JOBS_METRICS_EXEMPLAR_SAMPLING", "0.01") or "0.01")
+            if random.random() < max(0.0, min(1.0, rate)):
+                if job.get("trace_id"):
+                    labels = dict(labels)
+                    labels["trace_id"] = str(job.get("trace_id"))
+                if job.get("request_id"):
+                    labels = dict(labels)
+                    labels["request_id"] = str(job.get("request_id"))
+    except Exception:
+        pass
+    get_metrics_registry().observe("prompt_studio.jobs.duration_seconds", duration, labels)
 
 
 def increment_retries(job: Dict) -> None:

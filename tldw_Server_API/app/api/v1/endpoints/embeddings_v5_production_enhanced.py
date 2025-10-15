@@ -25,7 +25,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
 from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import tiktoken
 from loguru import logger
 from asyncio import Lock
@@ -238,6 +238,37 @@ dlq_requeue_errors_total = get_or_create_counter(
     'embedding_dlq_requeue_errors_total',
     'Errors during DLQ requeue operations',
     ['queue_name', 'error_type']
+)
+
+# Orchestrator observability metrics
+orchestrator_sse_connections = get_or_create_gauge(
+    'orchestrator_sse_connections',
+    'Current number of active SSE connections to orchestrator'
+)
+
+orchestrator_sse_disconnects_total = get_or_create_counter(
+    'orchestrator_sse_disconnects_total',
+    'Total number of SSE disconnect events from orchestrator',
+    []
+)
+
+orchestrator_summary_failures_total = get_or_create_counter(
+    'orchestrator_summary_failures_total',
+    'Total number of summary failures (fallbacks returned)',
+    []
+)
+
+# Export queue age and stage flags for Prometheus scraping
+embedding_queue_age_current_seconds = get_or_create_gauge(
+    'embedding_queue_age_current_seconds',
+    'Current age (seconds) of oldest message per queue',
+    ['queue_name']
+)
+
+embedding_stage_flag = get_or_create_gauge(
+    'embedding_stage_flag',
+    'Per-stage control flags as gauges (1=true,0=false)',
+    ['stage', 'flag']
 )
 
 # ============================================================================
@@ -2231,6 +2262,8 @@ class DLQItem(BaseModel):
     failed_at: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
     fields: Dict[str, Any] = Field(default_factory=dict)
+    dlq_state: Optional[str] = None
+    operator_note: Optional[str] = None
 
 
 @router.get(
@@ -2262,6 +2295,19 @@ async def list_dlq_items(
             ji = fields.get("job_id")
             if job_id and ji != job_id:
                 continue
+            # sidecar state (quarantine/approval)
+            dlq_state = None
+            operator_note = None
+            try:
+                state_key = f"dlqstate:{stream}:{entry_id}"
+                state_map = await client.hgetall(state_key)
+                if isinstance(state_map, dict):
+                    dlq_state = state_map.get("state") or fields.get("dlq_state")
+                    operator_note = state_map.get("operator_note")
+            except Exception:
+                # Fallback to inline DLQ state fields if available
+                dlq_state = fields.get("dlq_state")
+
             items.append(DLQItem(
                 entry_id=entry_id,
                 queue=stream,
@@ -2270,6 +2316,8 @@ async def list_dlq_items(
                 failed_at=fields.get("failed_at"),
                 payload=payload,
                 fields=fields,
+                dlq_state=dlq_state,
+                operator_note=operator_note,
             ))
         await client.close()
         return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
@@ -2305,10 +2353,35 @@ async def requeue_dlq_item(
         if not entries:
             raise HTTPException(status_code=404, detail="DLQ entry not found")
         entry_id, fields = entries[0]
+        # Quarantine enforcement: require approved_for_requeue if any state present
+        try:
+            st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{entry_id}")
+            effective_state = st_map.get("state") or fields.get("dlq_state")
+        except Exception:
+            effective_state = fields.get("dlq_state")
+        if effective_state and effective_state not in ("approved_for_requeue",):
+            dlq_requeued_total.labels(queue_name=dlq_stream, status="blocked").inc()
+            raise HTTPException(status_code=400, detail=f"DLQ entry in state '{effective_state}', not approved for requeue")
         # Prepare requeue payload
         requeue_fields = dict(fields)
+        warning = None
+        # Validate original payload JSON (if present) and surface warnings
+        try:
+            raw = fields.get("payload")
+            if raw:
+                try:
+                    original = json.loads(raw)
+                except Exception:
+                    original = None
+                if isinstance(original, dict):
+                    try:
+                        validate_schema(req.stage, original)
+                    except Exception as ve:
+                        warning = f"payload schema validation failed: {ve}"
+        except Exception:
+            pass
         # Remove DLQ-specific fields
-        for k in ["consumer_group", "worker_id", "failed_at", "error"]:
+        for k in ["consumer_group", "worker_id", "failed_at", "error", "payload"]:
             requeue_fields.pop(k, None)
         if req.override_fields:
             requeue_fields.update(req.override_fields)
@@ -2321,7 +2394,10 @@ async def requeue_dlq_item(
             except Exception:
                 pass
         dlq_requeued_total.labels(queue_name=dlq_stream, status="success").inc()
-        return {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
+        out = {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
+        if warning:
+            out["warning"] = warning
+        return out
     except HTTPException:
         dlq_requeued_total.labels(queue_name=dlq_stream, status="not_found").inc()
         raise
@@ -2360,10 +2436,36 @@ async def requeue_dlq_bulk(
                 if not entries:
                     status = "not_found"
                 else:
-                    _, fields = entries[0]
+                    eid_found, fields = entries[0]
+                    try:
+                        st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{eid_found}")
+                        effective_state = st_map.get("state") or fields.get("dlq_state")
+                    except Exception:
+                        effective_state = fields.get("dlq_state")
+                    if effective_state and effective_state not in ("approved_for_requeue",):
+                        status = f"blocked:{effective_state}"
+                        results.append({"entry_id": eid, "status": status})
+                        continue
                     requeue_fields = dict(fields)
+                    warning = None
+                    # Validate original payload JSON (if present) and surface warnings
+                    try:
+                        raw = fields.get("payload")
+                        if raw:
+                            try:
+                                original = json.loads(raw)
+                            except Exception:
+                                original = None
+                            if isinstance(original, dict):
+                                try:
+                                    validate_schema(req.stage, original)
+                                except Exception as ve:
+                                    warning = f"payload schema validation failed: {ve}"
+                    except Exception:
+                        pass
                     for k in ["consumer_group", "worker_id", "failed_at", "error"]:
                         requeue_fields.pop(k, None)
+                    requeue_fields.pop("payload", None)
                     if req.override_fields:
                         requeue_fields.update(req.override_fields)
                     await client.xadd(live_stream, requeue_fields)
@@ -2377,7 +2479,10 @@ async def requeue_dlq_bulk(
                 dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
             else:
                 dlq_requeued_total.labels(queue_name=dlq_stream, status=status).inc()
-            results.append({"entry_id": eid, "status": status})
+            res = {"entry_id": eid, "status": status}
+            if 'warning' in locals() and warning:
+                res["warning"] = warning
+            results.append(res)
         return {"from": dlq_stream, "to": live_stream, "results": results}
     finally:
         await client.close()
@@ -2436,5 +2541,323 @@ async def get_dlq_stats(
             pass
 
         return {"queues": depths, "dlq": dlq_depths, "total_dlq": total_dlq, "stages": stages}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# DLQ Quarantine State Management (admin only)
+# ---------------------------------------------------------------------------
+
+class DLQStateSetRequest(BaseModel):
+    stage: str
+    entry_id: str
+    state: str  # quarantined | approved_for_requeue | ignored
+    operator_note: Optional[str] = None
+
+
+def _dlq_state_key(stream: str, entry_id: str) -> str:
+    return f"dlqstate:{stream}:{entry_id}"
+
+
+@router.post(
+    "/embeddings/dlq/state",
+    summary="Set DLQ quarantine state (admin only)"
+)
+async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        dlq_stream = _dlq_stream_name(req.stage)
+        # Validate entry exists
+        entries = await client.xrange(dlq_stream, min=req.entry_id, max=req.entry_id, count=1)
+        if not entries:
+            raise HTTPException(status_code=404, detail="DLQ entry not found")
+        st = (req.state or "").strip().lower()
+        if st not in ("quarantined", "approved_for_requeue", "ignored"):
+            raise HTTPException(status_code=400, detail="Invalid state")
+        if st == "approved_for_requeue" and not (req.operator_note and req.operator_note.strip()):
+            raise HTTPException(status_code=400, detail="operator_note is required to approve requeue")
+        val = {
+            "state": st,
+            "operator_note": req.operator_note or "",
+            "updated_by": getattr(current_user, "username", "admin"),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        await client.hset(_dlq_state_key(dlq_stream, req.entry_id), mapping=val)
+        return {"ok": True, "stream": dlq_stream, "entry_id": req.entry_id, "state": st}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Stage Controls: pause/resume/drain per stage (admin only)
+# ---------------------------------------------------------------------------
+
+class StageControlRequest(BaseModel):
+    stage: str  # chunking|embedding|storage|all
+    action: str  # pause|resume|drain
+
+
+def _stage_key(stage: str, suffix: str) -> str:
+    stage = stage.strip().lower()
+    if stage not in {"chunking", "embedding", "storage"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage")
+    return f"embeddings:stage:{stage}:{suffix}"
+
+
+@router.get(
+    "/embeddings/stage/status",
+    summary="Get per-stage pause/drain flags (admin only)"
+)
+async def get_stage_status(current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        out = {}
+        for st in ("chunking", "embedding", "storage"):
+            paused = await client.get(_stage_key(st, "paused"))
+            drain = await client.get(_stage_key(st, "drain"))
+            out[st] = {
+                "paused": str(paused).lower() in ("1", "true", "yes"),
+                "drain": str(drain).lower() in ("1", "true", "yes"),
+            }
+        return out
+    finally:
+        await client.close()
+
+
+@router.post(
+    "/embeddings/stage/control",
+    summary="Pause/Resume/Drain a stage (admin only)"
+)
+async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
+        for st in stages:
+            if req.action == "pause":
+                await client.set(_stage_key(st, "paused"), "1")
+            elif req.action == "resume":
+                await client.delete(_stage_key(st, "paused"))
+                await client.delete(_stage_key(st, "drain"))
+            elif req.action == "drain":
+                # Mark drain intent and pause new reads; in-flight items will finish
+                await client.set(_stage_key(st, "drain"), "1")
+                await client.set(_stage_key(st, "paused"), "1")
+            else:
+                raise HTTPException(status_code=400, detail="Invalid action; must be pause|resume|drain")
+        return {"ok": True, "stages": stages, "action": req.action}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Job skip registry (admin only)
+# ---------------------------------------------------------------------------
+
+class JobSkipRequest(BaseModel):
+    job_id: str
+    ttl_seconds: Optional[int] = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
+
+
+def _skip_key(job_id: str) -> str:
+    return f"embeddings:skip:job:{job_id}"
+
+
+@router.post(
+    "/embeddings/job/skip",
+    summary="Mark a job_id as skipped (admin only)"
+)
+async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        await client.set(_skip_key(req.job_id), "1", ex=int(req.ttl_seconds))
+        return {"ok": True, "job_id": req.job_id, "ttl_seconds": req.ttl_seconds}
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/embeddings/job/skip/status",
+    summary="Check if a job_id is marked as skipped (admin only)"
+)
+async def get_job_skip_status(job_id: str = Query(..., description="Job ID to check"), current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    try:
+        val = await client.get(_skip_key(job_id))
+        return {"job_id": job_id, "skipped": str(val).lower() in ("1", "true", "yes")}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator snapshot + SSE (admin only)
+# ---------------------------------------------------------------------------
+
+async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[float] = None) -> Dict[str, Any]:
+    """Compute a single orchestrator snapshot.
+
+    Returns dict with keys: queues, dlq, ages, stages, flags, ts
+    """
+    from time import time as _now
+    if now_ts is None:
+        now_ts = _now()
+
+    # Build the same structure as get_dlq_stats and add queue ages and stage flags
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    depths: Dict[str, int] = {}
+    dlq_depths: Dict[str, int] = {}
+    ages: Dict[str, float] = {}
+    for q in queues:
+        try:
+            depths[q] = await client.xlen(q)
+        except Exception:
+            depths[q] = 0
+        # queue age (oldest entry)
+        try:
+            rng = await client.xrange(q, min='-', max='+', count=1)
+            if rng:
+                first_id, _ = rng[0]
+                ts_ms = int(str(first_id).split('-')[0])
+                ages[q] = max(0.0, (now_ts * 1000 - ts_ms) / 1000.0)
+            else:
+                ages[q] = 0.0
+        except Exception:
+            ages[q] = 0.0
+        dq = f"{q}:dlq"
+        try:
+            dlq_depths[dq] = await client.xlen(dq)
+        except Exception:
+            dlq_depths[dq] = 0
+        try:
+            embedding_queue_age_current_seconds.labels(queue_name=q).set(float(ages.get(q, 0.0)))
+        except Exception:
+            pass
+
+    # stage counters (aggregate from worker snapshots)
+    stages: Dict[str, Dict[str, int]] = {
+        "chunking": {"processed": 0, "failed": 0},
+        "embedding": {"processed": 0, "failed": 0},
+        "storage": {"processed": 0, "failed": 0},
+    }
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = await client.scan(cursor, match="worker:metrics:*", count=100)
+            for k in keys:
+                data = await client.get(k)
+                if not data:
+                    continue
+                try:
+                    m = json.loads(data)
+                    st = str(m.get("worker_type", "")).lower()
+                    if st in stages:
+                        stages[st]["processed"] += int(m.get("jobs_processed", 0) or 0)
+                        stages[st]["failed"] += int(m.get("jobs_failed", 0) or 0)
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+    except Exception:
+        pass
+
+    # stage flags
+    flags: Dict[str, Dict[str, bool]] = {}
+    for st in ("chunking", "embedding", "storage"):
+        p = await client.get(f"embeddings:stage:{st}:paused")
+        d = await client.get(f"embeddings:stage:{st}:drain")
+        flags[st] = {
+            "paused": str(p).lower() in ("1", "true", "yes"),
+            "drain": str(d).lower() in ("1", "true", "yes"),
+        }
+        try:
+            embedding_stage_flag.labels(stage=st, flag="paused").set(1.0 if flags[st]["paused"] else 0.0)
+            embedding_stage_flag.labels(stage=st, flag="drain").set(1.0 if flags[st]["drain"] else 0.0)
+        except Exception:
+            pass
+
+    return {"queues": depths, "dlq": dlq_depths, "ages": ages, "stages": stages, "flags": flags, "ts": now_ts}
+
+
+async def _sse_orchestrator_stream(client: aioredis.Redis):
+    import asyncio as _asyncio
+    import random as _random
+    while True:
+        try:
+            payload = await _build_orchestrator_snapshot(client)
+            data = json.dumps(payload)
+            # Emit event type for clients that use it
+            yield f"event: summary\ndata: {data}\n\n"
+            # Optional heartbeat comment
+            yield ":\n\n"
+            # Jittered interval around 5s
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+        except Exception as e:
+            # keep the stream alive; emit error info once
+            try:
+                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            except Exception:
+                pass
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+
+
+@router.get(
+    "/embeddings/orchestrator/events",
+    summary="SSE: embeddings orchestrator live summary (admin only)"
+)
+async def orchestrator_events(current_user: User = Depends(get_request_user)):
+    require_admin(current_user)
+    client = await _get_redis_client()
+    async def _gen():
+        try:
+            orchestrator_sse_connections.inc()
+            async for chunk in _sse_orchestrator_stream(client):
+                yield chunk
+        finally:
+            try:
+                orchestrator_sse_connections.dec()
+                orchestrator_sse_disconnects_total.inc()
+            except Exception:
+                pass
+            try:
+                await client.close()
+            except Exception:
+                pass
+    # The client will keep the connection; we don't close Redis here (shared)
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@router.get(
+    "/embeddings/orchestrator/summary",
+    summary="Orchestrator summary for polling (admin only)"
+)
+async def orchestrator_summary(current_user: User = Depends(get_request_user)):
+    """Return a snapshot identical to the SSE payload.
+
+    Includes: queues, dlq, ages, stages, flags, ts
+    """
+    require_admin(current_user)
+    try:
+        client = await _get_redis_client()
+    except Exception:
+        # Fallback: return zeroed structure with stable shape for polling clients
+        try:
+            orchestrator_summary_failures_total.inc()
+        except Exception:
+            pass
+        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
+    try:
+        return await _build_orchestrator_snapshot(client)
+    except Exception:
+        # Return best-effort empty snapshot on failure while preserving shape
+        try:
+            orchestrator_summary_failures_total.inc()
+        except Exception:
+            pass
+        return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
     finally:
         await client.close()

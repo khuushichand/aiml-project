@@ -139,7 +139,20 @@ class WorkflowEngine:
             await self._reap_orphans()
 
             with start_span("workflows.run", attributes={"run_id": run_id, "mode": str(mode)}):
-                for idx, step in enumerate(steps):
+                # Build index for id-based jumps
+                id_to_idx = {}
+                for i, s in enumerate(steps):
+                    sid_i = s.get("id") or f"step_{i+1}"
+                    id_to_idx[str(sid_i)] = i
+
+                idx = 0
+                visited = 0
+                max_iters = max(1, len(steps) * 10)
+                while idx < len(steps):
+                    if visited > max_iters:
+                        raise RuntimeError("branch_loop_exceeded")
+                    visited += 1
+                    step = steps[idx]
                     step_id = step.get("id") or f"step_{idx+1}"
                     step_name = step.get("name") or step_id
                     step_type = (step.get("type") or "").strip()
@@ -312,6 +325,23 @@ class WorkflowEngine:
                         self.db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs=last_outputs)
                     except Exception:
                         pass
+
+                    # Determine next step (branching)
+                    next_id = None
+                    try:
+                        if isinstance(last_outputs, dict) and last_outputs.get("__next__"):
+                            next_id = str(last_outputs.get("__next__")).strip()
+                    except Exception:
+                        next_id = None
+                    if not next_id:
+                        try:
+                            next_id = str(step.get("on_success") or "").strip() or None
+                        except Exception:
+                            next_id = None
+                    if next_id and next_id in id_to_idx:
+                        idx = id_to_idx[next_id]
+                    else:
+                        idx += 1
 
             # Complete run with duration
             duration_ms = None
@@ -598,6 +628,7 @@ class WorkflowEngine:
                 try:
                     _run = self.db.get_run(run_id)
                     tenant_id = _run.tenant_id if _run else self.config.tenant_id
+                    ctx["tenant_id"] = tenant_id
                     self.db.add_artifact(
                         artifact_id=artifact_id or str(uuid.uuid4()),
                         tenant_id=tenant_id,
@@ -624,6 +655,12 @@ class WorkflowEngine:
             return await run_mcp_tool_adapter(step_cfg, ctx)
         if step_type == "webhook":
             return await run_webhook_adapter(step_cfg, ctx)
+        if step_type == "branch":
+            from tldw_Server_API.app.core.Workflows.adapters import run_branch_adapter
+            return await run_branch_adapter(step_cfg, ctx)
+        if step_type == "map":
+            from tldw_Server_API.app.core.Workflows.adapters import run_map_adapter
+            return await run_map_adapter(step_cfg, ctx)
         if step_type == "delay":
             from tldw_Server_API.app.core.Workflows.adapters import run_delay_adapter
             return await run_delay_adapter(step_cfg, ctx)
@@ -683,8 +720,16 @@ class WorkflowEngine:
                 return
             # SSRF/egress control
             try:
-                from tldw_Server_API.app.core.Security.egress import is_url_allowed
-                if not is_url_allowed(url):
+                from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant
+                tenant_id_for_policy = (self.db.get_run(run_id).tenant_id if self.db.get_run(run_id) else self.config.tenant_id)
+                if not is_webhook_url_allowed_for_tenant(url, tenant_id_for_policy):
+                    # Explicitly record blocked delivery for observability
+                    try:
+                        from urllib.parse import urlparse as _urlparse
+                        host = _urlparse(url).hostname or ""
+                        self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "blocked"})
+                    except Exception:
+                        pass
                     return
             except Exception:
                 # If egress module unavailable, do not send
@@ -723,6 +768,7 @@ class WorkflowEngine:
             headers = {"content-type": "application/json", "X-Workflow-Id": str(run.workflow_id or ""), "X-Run-Id": str(run.run_id)}
             try:
                 import os, hmac, hashlib
+                from urllib.parse import urlparse as _urlparse
                 secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
                 body = _json.dumps(payload, default=str)
                 if secret:
@@ -731,9 +777,30 @@ class WorkflowEngine:
                 import httpx
                 timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
                 with httpx.Client(timeout=timeout) as client:
-                    client.post(url, data=body, headers=headers)
-            except Exception:
-                # Do not raise – webhook is best-effort
+                    resp = client.post(url, data=body, headers=headers)
+                # Record delivery event (mask full URL)
+                try:
+                    host = _urlparse(url).hostname or ""
+                    self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "delivered", "code": int(resp.status_code)})
+                except Exception:
+                    pass
+            except Exception as _e:
+                # Record failure and enqueue DLQ entry; do not raise
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    host = _urlparse(url).hostname or ""
+                    self.db.append_event(self.config.tenant_id, run_id, "webhook_delivery", {"host": host, "status": "failed"})
+                    # Best-effort DLQ enqueue
+                    try:
+                        body_data = payload
+                    except Exception:
+                        body_data = None
+                    try:
+                        self.db.enqueue_webhook_dlq(tenant_id=self.config.tenant_id, run_id=run_id, url=url, body=body_data, last_error=str(_e))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
                 return
         except Exception:
             return

@@ -41,9 +41,11 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
     UnifiedRAGRequest,
     UnifiedRAGResponse,
     UnifiedBatchRequest,
-    UnifiedBatchResponse
+    UnifiedBatchResponse,
+    ImplicitFeedbackEvent,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
@@ -513,6 +515,20 @@ async def unified_search_endpoint(
             generation_prompt=request.generation_prompt,
             max_generation_tokens=request.max_generation_tokens,
 
+            # Post-verification (adaptive)
+            enable_post_verification=request.enable_post_verification,
+            adaptive_max_retries=request.adaptive_max_retries,
+            adaptive_unsupported_threshold=request.adaptive_unsupported_threshold,
+            adaptive_max_claims=request.adaptive_max_claims,
+            adaptive_time_budget_sec=request.adaptive_time_budget_sec,
+            low_confidence_behavior=request.low_confidence_behavior,
+            adaptive_advanced_rewrites=getattr(request, 'adaptive_advanced_rewrites', None),
+            adaptive_rerun_on_low_confidence=getattr(request, 'adaptive_rerun_on_low_confidence', False),
+            adaptive_rerun_include_generation=getattr(request, 'adaptive_rerun_include_generation', True),
+            adaptive_rerun_bypass_cache=getattr(request, 'adaptive_rerun_bypass_cache', False),
+            adaptive_rerun_time_budget_sec=getattr(request, 'adaptive_rerun_time_budget_sec', None),
+            adaptive_rerun_doc_budget=getattr(request, 'adaptive_rerun_doc_budget', None),
+
             # Claims & factuality
             enable_claims=request.enable_claims,
             claim_extractor=request.claim_extractor,
@@ -582,6 +598,33 @@ async def unified_search_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}"
         )
+
+
+@router.post(
+    "/feedback/implicit",
+    summary="Record implicit RAG feedback",
+    description="Capture click/expand/copy signals from the WebUI for learning-to-rank and personalization.",
+    dependencies=[Depends(check_rate_limit)]
+)
+async def rag_implicit_feedback(
+    request: ImplicitFeedbackEvent,
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        user_id = request.user_id or (current_user.username if current_user else None)
+        collector = UnifiedFeedbackSystem()
+        await collector.record_implicit_interaction(
+            user_id=user_id,
+            query=request.query,
+            doc_id=request.doc_id,
+            event_type=request.event_type,
+            impression=request.impression_list or [],
+            corpus=request.corpus,
+        )
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"Failed to record implicit feedback: {e}")
+        raise HTTPException(status_code=400, detail="Could not record feedback")
 
 
 @router.post(

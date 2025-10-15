@@ -3,7 +3,7 @@
 #
 # Imports:
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Sequence, Literal
+from typing import List, Dict, Any, Optional, Union, Sequence, Literal, Tuple, Set
 import threading
 import re
 import os
@@ -11,6 +11,7 @@ import os
 import chromadb
 import tempfile
 import uuid
+# Redundant in some environments, but keep explicit Dict import for clarity
 from typing import Dict
 try:
     # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
@@ -625,6 +626,9 @@ class ChromaDBManager:
         try:
             # Chunking (pass options as kwargs for compatibility). Support hierarchical mode.
             effective_chunk_opts: Dict = dict(chunk_options or {})
+            # Enable adaptive chunking with overlap tuning by default for large docs
+            effective_chunk_opts.setdefault('adaptive', True)
+            effective_chunk_opts.setdefault('adaptive_overlap', True)
             if hierarchical_chunking is True or (hierarchical_template and isinstance(hierarchical_template, dict)):
                 effective_chunk_opts['hierarchical'] = True if hierarchical_chunking is None else bool(hierarchical_chunking)
                 if hierarchical_template:
@@ -636,6 +640,23 @@ class ChromaDBManager:
                 logger.warning(
                     f"User '{self.user_id}': No chunks generated for media_id {media_id}, file {file_name}. Skipping storage.")
                 return
+
+            # Ingest-time deduplication (near-duplicate removal)
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            try:
+                ingest_dedup_enabled = bool(_settings.get("INGEST_ENABLE_DEDUP", True))
+                dedup_threshold = float(_settings.get("INGEST_DEDUP_THRESHOLD", 0.9))
+            except Exception:
+                ingest_dedup_enabled = True
+                dedup_threshold = 0.9
+            duplicate_map: Dict[str, str] = {}
+            if ingest_dedup_enabled and chunks and len(chunks) > 1:
+                chunks, duplicate_map = self._dedupe_text_chunks(chunks, threshold=dedup_threshold)
+                if duplicate_map:
+                    logger.info(f"User '{self.user_id}': Deduplicated {len(duplicate_map)} near-duplicate chunks for media_id {media_id}.")
 
             # TODO: Point 6 - MediaDatabase interaction
             # Placeholder for new MediaDatabase interactions:
@@ -1262,7 +1283,61 @@ class ChromaDBManager:
         """Deletes items from a collection by their IDs."""
         if not ids:
             logger.warning(f"User '{self.user_id}': No IDs provided for deletion. Skipping.")
-            return
+        return
+
+    # --- Ingest-time utilities ---
+    def _dedupe_text_chunks(self, chunks: List[Dict[str, Any]], threshold: float = 0.9) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        """Remove near-duplicate chunks using simple character-shingle Jaccard.
+
+        Args:
+            chunks: List of {'text': str, 'metadata': {...}} dicts
+            threshold: Jaccard similarity >= threshold marks as duplicate
+
+        Returns:
+            (filtered_chunks, duplicate_map) where duplicate_map maps duplicate_chunk_uid -> canonical_chunk_uid
+        """
+        try:
+            k = 7  # shingle size
+            def shingles(s: str) -> Set[str]:
+                s = s or ""
+                if len(s) < k:
+                    return {s}
+                return {s[i:i+k] for i in range(0, len(s) - k + 1)}
+
+            canon: List[Tuple[str, Set[str]]] = []  # (uid, set)
+            duplicate_map: Dict[str, str] = {}
+            filtered: List[Dict[str, Any]] = []
+
+            for ch in chunks:
+                txt = ch.get('text') or ''
+                md = ch.get('metadata') or {}
+                uid = str(md.get('chunk_uid') or md.get('chunk_index') or f"idx_{len(filtered)}")
+                sh = shingles(txt)
+                is_dup = False
+                for (cuid, cset) in canon:
+                    inter = len(sh & cset)
+                    union = max(1, len(sh | cset))
+                    jac = inter / union
+                    if jac >= threshold:
+                        # Mark duplicate of canonical cuid
+                        duplicate_map[uid] = cuid
+                        is_dup = True
+                        break
+                if not is_dup:
+                    canon.append((uid, sh))
+                    filtered.append(ch)
+            # Annotate duplicates in metadata for traceability
+            if duplicate_map:
+                for ch in chunks:
+                    md = ch.get('metadata') or {}
+                    uid = str(md.get('chunk_uid') or md.get('chunk_index') or '')
+                    if uid in duplicate_map:
+                        md['duplicate_of'] = duplicate_map[uid]
+                        ch['metadata'] = md
+            return filtered, duplicate_map
+        except Exception as e:
+            logger.warning(f"User '{self.user_id}': Dedupe failed ({e}); returning original chunks.")
+            return chunks, {}
 
         target_collection = self.get_or_create_collection(collection_name)  # Ensures collection exists
         with self._lock:

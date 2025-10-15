@@ -44,6 +44,9 @@ class RunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     session_id: Optional[str] = None
+    # Per-run validation behavior for safety checks (e.g., artifact scope)
+    # 'block' rejects on validation failure; 'non-block' logs/warns and proceeds.
+    validation_mode: Literal["block", "non-block"] = "block"
 
 
 class AdhocRunRequest(BaseModel):
@@ -51,6 +54,7 @@ class AdhocRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     session_id: Optional[str] = None
+    validation_mode: Literal["block", "non-block"] = "block"
 
 
 class WorkflowRunResponse(BaseModel):
@@ -63,6 +67,7 @@ class WorkflowRunResponse(BaseModel):
     outputs: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     definition_version: Optional[int] = None
+    validation_mode: Optional[str] = None
 
 
 class EventResponse(BaseModel):

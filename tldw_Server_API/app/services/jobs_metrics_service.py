@@ -23,8 +23,26 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
         return
 
     ensure_jobs_metrics_registered()
+    # Register audio-specific metrics lazily
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, MetricDefinition, MetricType
+        reg = get_metrics_registry()
+        try:
+            reg.register_metric(MetricDefinition(
+                name="audio.jobs.by_owner_status",
+                type=MetricType.GAUGE,
+                description="Audio jobs count by owner and status",
+                labels=["owner_user_id", "status"],
+            ))
+        except Exception:
+            pass
+    except Exception:
+        pass
     jm = JobManager()
     interval = float(os.getenv("JOBS_METRICS_INTERVAL_SEC", "30") or "30")
+    slo_enabled = str(os.getenv("JOBS_SLO_ENABLE", "")).lower() in {"1","true","yes","y","on"}
+    slo_window_h = int(os.getenv("JOBS_SLO_WINDOW_HOURS", "6") or "6")
+    slo_max_groups = int(os.getenv("JOBS_SLO_MAX_GROUPS", "100") or "100")
     ttl_enforce = str(os.getenv("JOBS_TTL_ENFORCE", "")).lower() in {"1","true","yes","y","on"}
     ttl_age = int(os.getenv("JOBS_TTL_AGE_SECONDS", "0") or "0") or None
     ttl_runtime = int(os.getenv("JOBS_TTL_RUNTIME_SECONDS", "0") or "0") or None
@@ -65,6 +83,48 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                             ready = int(q_ready or 0)
                             sched = int(q_sched or 0)
                             set_queue_gauges(str(domain), str(queue), str(job_type), ready, int(p or 0), backlog=(ready + sched), scheduled=sched)
+                        # Optional reconciliation into job_counters
+                        try:
+                            if str(os.getenv("JOBS_COUNTERS_RECONCILE", "")).lower() in {"1","true","yes","y","on"}:
+                                cur.execute(
+                                    (
+                                        "SELECT domain, queue, job_type, "
+                                        "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= NOW()) THEN 1 ELSE 0 END) AS q_ready, "
+                                        "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) THEN 1 ELSE 0 END) AS q_sched, "
+                                        "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p, "
+                                        "SUM(CASE WHEN status='quarantined' THEN 1 ELSE 0 END) AS qz "
+                                        "FROM jobs GROUP BY domain, queue, job_type"
+                                    )
+                                )
+                                rowsr = cur.fetchall() or []
+                                for (d, q, jt, rdy, sch, proc, qz) in rowsr:
+                                    try:
+                                        cur.execute(
+                                            (
+                                                "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                                                "ON CONFLICT (domain,queue,job_type) DO UPDATE SET ready_count = EXCLUDED.ready_count, scheduled_count = EXCLUDED.scheduled_count, processing_count = EXCLUDED.processing_count, quarantined_count = EXCLUDED.quarantined_count, updated_at = NOW()"
+                                            ),
+                                            (str(d), str(q), str(jt), int(rdy or 0), int(sch or 0), int(proc or 0), int(qz or 0)),
+                                        )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                        # Audio jobs by owner/status
+                        try:
+                            cur.execute(
+                                "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=%s GROUP BY owner_user_id, status",
+                                ("audio",),
+                            )
+                            rows = cur.fetchall() or []
+                            try:
+                                reg = get_metrics_registry()
+                                for (owner_user_id, status, count) in rows:
+                                    reg.set_gauge("audio.jobs.by_owner_status", int(count or 0), {"owner_user_id": str(owner_user_id or ""), "status": str(status or "")})
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
                         # Observe time to expiry for processing jobs
                         try:
                             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
@@ -84,6 +144,100 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                                     pass
                         except Exception:
                             pass
+                        # SLO percentiles per owner/job_type (windowed)
+                        if slo_enabled:
+                            try:
+                                # Queue latency percentiles (limit groups when many owners)
+                                if slo_max_groups and slo_max_groups > 0:
+                                    cur.execute(
+                                        (
+                                            "WITH groups AS ("
+                                            "  SELECT domain, queue, job_type, owner_user_id, COUNT(*) AS c "
+                                            "  FROM jobs WHERE acquired_at IS NOT NULL AND created_at >= NOW() - (%s || ' hours')::interval "
+                                            "  GROUP BY domain, queue, job_type, owner_user_id "
+                                            "  ORDER BY c DESC LIMIT %s"
+                                            ") "
+                                            "SELECT j.domain, j.queue, j.job_type, j.owner_user_id, "
+                                            "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p50, "
+                                            "percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p90, "
+                                            "percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p99 "
+                                            "FROM jobs j JOIN groups g USING (domain, queue, job_type, owner_user_id) "
+                                            "WHERE j.acquired_at IS NOT NULL AND j.created_at >= NOW() - (%s || ' hours')::interval "
+                                            "GROUP BY j.domain, j.queue, j.job_type, j.owner_user_id"
+                                        ),
+                                        (int(slo_window_h), int(slo_max_groups), int(slo_window_h)),
+                                    )
+                                else:
+                                    cur.execute(
+                                        (
+                                            "SELECT domain, queue, job_type, owner_user_id, "
+                                            "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p50, "
+                                            "percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p90, "
+                                            "percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (acquired_at - created_at))) AS p99 "
+                                            "FROM jobs WHERE acquired_at IS NOT NULL AND created_at >= NOW() - (%s || ' hours')::interval "
+                                            "GROUP BY domain, queue, job_type, owner_user_id"
+                                        ),
+                                        (int(slo_window_h),),
+                                    )
+                                rows = cur.fetchall() or []
+                                from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                reg = get_metrics_registry()
+                                for (domain, queue, job_type, owner, p50, p90, p99) in rows:
+                                    labels = {"domain": str(domain), "queue": str(queue), "job_type": str(job_type), "owner_user_id": str(owner or "")}
+                                    if p50 is not None:
+                                        reg.set_gauge("prompt_studio.jobs.queue_latency_p50_seconds", float(p50), labels)
+                                    if p90 is not None:
+                                        reg.set_gauge("prompt_studio.jobs.queue_latency_p90_seconds", float(p90), labels)
+                                    if p99 is not None:
+                                        reg.set_gauge("prompt_studio.jobs.queue_latency_p99_seconds", float(p99), labels)
+                            except Exception:
+                                pass
+                            try:
+                                # Duration percentiles (completed runs) with optional group limiting
+                                if slo_max_groups and slo_max_groups > 0:
+                                    cur.execute(
+                                        (
+                                            "WITH groups AS ("
+                                            "  SELECT domain, queue, job_type, owner_user_id, COUNT(*) AS c "
+                                            "  FROM jobs WHERE completed_at IS NOT NULL AND created_at >= NOW() - (%s || ' hours')::interval "
+                                            "  GROUP BY domain, queue, job_type, owner_user_id "
+                                            "  ORDER BY c DESC LIMIT %s"
+                                            ") "
+                                            "SELECT j.domain, j.queue, j.job_type, j.owner_user_id, "
+                                            "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p50, "
+                                            "percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p90, "
+                                            "percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p99 "
+                                            "FROM jobs j JOIN groups g USING (domain, queue, job_type, owner_user_id) "
+                                            "WHERE j.completed_at IS NOT NULL AND j.created_at >= NOW() - (%s || ' hours')::interval "
+                                            "GROUP BY j.domain, j.queue, j.job_type, j.owner_user_id"
+                                        ),
+                                        (int(slo_window_h), int(slo_max_groups), int(slo_window_h)),
+                                    )
+                                else:
+                                    cur.execute(
+                                        (
+                                            "SELECT domain, queue, job_type, owner_user_id, "
+                                            "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p50, "
+                                            "percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p90, "
+                                            "percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p99 "
+                                            "FROM jobs WHERE completed_at IS NOT NULL AND created_at >= NOW() - (%s || ' hours')::interval "
+                                            "GROUP BY domain, queue, job_type, owner_user_id"
+                                        ),
+                                        (int(slo_window_h),),
+                                    )
+                                rows2 = cur.fetchall() or []
+                                from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                                reg2 = get_metrics_registry()
+                                for (domain, queue, job_type, owner, p50, p90, p99) in rows2:
+                                    labels = {"domain": str(domain), "queue": str(queue), "job_type": str(job_type), "owner_user_id": str(owner or "")}
+                                    if p50 is not None:
+                                        reg2.set_gauge("prompt_studio.jobs.duration_p50_seconds", float(p50), labels)
+                                    if p90 is not None:
+                                        reg2.set_gauge("prompt_studio.jobs.duration_p90_seconds", float(p90), labels)
+                                    if p99 is not None:
+                                        reg2.set_gauge("prompt_studio.jobs.duration_p99_seconds", float(p99), labels)
+                            except Exception:
+                                pass
                 else:
                     # Stale processing counts
                     q = (
@@ -105,6 +259,42 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                         ready = int(q_ready or 0)
                         sched = int(q_sched or 0)
                         set_queue_gauges(str(domain), str(queue), str(job_type), ready, int(pd or 0), backlog=(ready + sched), scheduled=sched)
+                    # Reconcile into job_counters (SQLite)
+                    try:
+                        if str(os.getenv("JOBS_COUNTERS_RECONCILE", "")).lower() in {"1","true","yes","y","on"}:
+                            qrc = (
+                                "SELECT domain, queue, job_type, "
+                                "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) THEN 1 ELSE 0 END) AS q_ready, "
+                                "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) THEN 1 ELSE 0 END) AS q_sched, "
+                                "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS p, "
+                                "SUM(CASE WHEN status='quarantined' THEN 1 ELSE 0 END) AS qz "
+                                "FROM jobs GROUP BY domain, queue, job_type"
+                            )
+                            for (d, q, jt, rdy, sch, proc, qz) in conn.execute(qrc).fetchall() or []:
+                                try:
+                                    conn.execute(
+                                        (
+                                            "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,?,?) "
+                                            "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ?, scheduled_count = ?, processing_count = ?, quarantined_count = ?, updated_at = DATETIME('now')"
+                                        ),
+                                        (str(d), str(q), str(jt), int(rdy or 0), int(sch or 0), int(proc or 0), int(qz or 0), int(rdy or 0), int(sch or 0), int(proc or 0), int(qz or 0)),
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                    # Audio jobs by owner/status
+                    try:
+                        q3 = "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=? GROUP BY owner_user_id, status"
+                        rows = conn.execute(q3, ("audio",)).fetchall() or []
+                        try:
+                            reg = get_metrics_registry()
+                            for (owner_user_id, status, count) in rows:
+                                reg.set_gauge("audio.jobs.by_owner_status", int(count or 0), {"owner_user_id": str(owner_user_id or ""), "status": str(status or "")})
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                     # Observe time to expiry
                     try:
                         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
@@ -124,6 +314,68 @@ async def run_jobs_metrics_gauges(stop_event: Optional[asyncio.Event] = None) ->
                                 pass
                     except Exception:
                         pass
+                    # SLO percentiles for SQLite (approximate, windowed, limited groups)
+                    if slo_enabled:
+                        try:
+                            window_clause = f"DATETIME('now','-{int(slo_window_h)} hours')"
+                            # Queue latency rows
+                            q = (
+                                "SELECT domain, queue, job_type, owner_user_id, "
+                                "(julianday(acquired_at) - julianday(created_at)) * 86400.0 AS lat "
+                                "FROM jobs WHERE acquired_at IS NOT NULL AND created_at >= " + window_clause
+                            )
+                            rows = conn.execute(q).fetchall() or []
+                            groups: dict[tuple[str,str,str,str], list[float]] = {}
+                            for (domain, queue, job_type, owner, lat) in rows:
+                                key = (str(domain), str(queue), str(job_type), str(owner or ""))
+                                groups.setdefault(key, []).append(float(lat or 0.0))
+                            # Limit groups
+                            keys = list(groups.keys())[:slo_max_groups]
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                            reg = get_metrics_registry()
+                            for key in keys:
+                                vals = sorted(groups[key])
+                                if not vals:
+                                    continue
+                                def pct(p: float) -> float:
+                                    if not vals:
+                                        return 0.0
+                                    idx = max(0, min(len(vals)-1, int(round(p * (len(vals)-1)))))
+                                    return float(vals[idx])
+                                labels = {"domain": key[0], "queue": key[1], "job_type": key[2], "owner_user_id": key[3]}
+                                reg.set_gauge("prompt_studio.jobs.queue_latency_p50_seconds", pct(0.5), labels)
+                                reg.set_gauge("prompt_studio.jobs.queue_latency_p90_seconds", pct(0.9), labels)
+                                reg.set_gauge("prompt_studio.jobs.queue_latency_p99_seconds", pct(0.99), labels)
+                        except Exception:
+                            pass
+                        try:
+                            # Durations from completed
+                            qd = (
+                                "SELECT domain, queue, job_type, owner_user_id, "
+                                "(julianday(completed_at) - julianday(COALESCE(started_at, acquired_at))) * 86400.0 AS dur "
+                                "FROM jobs WHERE completed_at IS NOT NULL AND created_at >= " + window_clause
+                            )
+                            rowsd = conn.execute(qd).fetchall() or []
+                            groupsd: dict[tuple[str,str,str,str], list[float]] = {}
+                            for (domain, queue, job_type, owner, dur) in rowsd:
+                                key = (str(domain), str(queue), str(job_type), str(owner or ""))
+                                groupsd.setdefault(key, []).append(float(dur or 0.0))
+                            keysd = list(groupsd.keys())[:slo_max_groups]
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+                            regd = get_metrics_registry()
+                            for key in keysd:
+                                vals = sorted(groupsd[key])
+                                if not vals:
+                                    continue
+                                def pct(p: float) -> float:
+                                    if not vals:
+                                        return 0.0
+                                    idx = max(0, min(len(vals)-1, int(round(p * (len(vals)-1)))))
+                                    return float(vals[idx])
+                                labels = {"domain": key[0], "queue": key[1], "job_type": key[2], "owner_user_id": key[3]}
+                                regd.set_gauge("prompt_studio.jobs.duration_p50_seconds", pct(0.5), labels)
+                                regd.set_gauge("prompt_studio.jobs.duration_p90_seconds", pct(0.9), labels)
+                                regd.set_gauge("prompt_studio.jobs.duration_p99_seconds", pct(0.99), labels)
                 # Apply TTL policies if enabled
                 if ttl_enforce and (ttl_age or ttl_runtime):
                     try:

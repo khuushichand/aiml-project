@@ -3,6 +3,7 @@
 #
 # Imports
 from typing import Optional, Dict, Any
+import re
 import os
 #
 # 3rd-party imports
@@ -77,34 +78,51 @@ async def get_db_transaction():
         class _ConnAdapter:
             def __init__(self, _conn):
                 self._conn = _conn
+                # Heuristic: asyncpg connection exposes fetchrow; aiosqlite does not
+                self._is_sqlite = not hasattr(self._conn, "fetchrow")
+                self._dollar_param = re.compile(r"\$\d+")
+
+            def _normalize_sqlite_sql(self, query: str) -> str:
+                if not self._is_sqlite or "$" not in query:
+                    return query
+                # Replace $1, $2 ... with '?'
+                return self._dollar_param.sub("?", query)
 
             async def execute(self, query: str, *args):
                 # Postgres (asyncpg) supports variadic args; SQLite expects a sequence
-                if hasattr(self._conn, "fetchrow"):
+                if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.execute(query, *args)
                 else:
                     params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                    return await self._conn.execute(query, params)
+                    q = self._normalize_sqlite_sql(query)
+                    cur = await self._conn.execute(q, params)
+                    try:
+                        await self._conn.commit()
+                    except Exception:
+                        pass
+                    return cur
 
             async def fetchval(self, query: str, *args):
-                if hasattr(self._conn, "fetchval"):
+                if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchval(query, *args)
                 else:
                     params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                    cur = await self._conn.execute(query, params)
+                    q = self._normalize_sqlite_sql(query)
+                    cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     return row[0] if row else None
 
             async def fetch(self, query: str, *args):
-                if hasattr(self._conn, "fetch"):
+                if not self._is_sqlite:
                     # asyncpg connection
                     rows = await self._conn.fetch(query, *args)
                     return [dict(r) for r in rows]
                 else:
                     params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                    cur = await self._conn.execute(query, params)
+                    q = self._normalize_sqlite_sql(query)
+                    cur = await self._conn.execute(q, params)
                     rows = await cur.fetchall()
                     try:
                         return [{key: r[key] for key in r.keys()} for r in rows]
@@ -112,17 +130,25 @@ async def get_db_transaction():
                         return rows
 
             async def fetchrow(self, query: str, *args):
-                if hasattr(self._conn, "fetchrow"):
+                if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchrow(query, *args)
                 else:
                     params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args
-                    cur = await self._conn.execute(query, params)
+                    q = self._normalize_sqlite_sql(query)
+                    cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     try:
                         return {key: row[key] for key in row.keys()} if row else None
                     except Exception:
                         return row
+
+            async def commit(self):
+                if self._is_sqlite:
+                    try:
+                        await self._conn.commit()
+                    except Exception:
+                        pass
 
         adapter = _ConnAdapter(conn)
         try:

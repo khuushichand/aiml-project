@@ -34,8 +34,12 @@ async def get_prometheus_metrics() -> Response:
     """
     try:
         registry = get_metrics_registry()
-        prometheus_text = registry.export_prometheus_format()
-        
+        prometheus_text = registry.export_prometheus_format() or ""
+        try:
+            from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+            prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
+        except Exception:
+            pass
         return Response(
             content=prometheus_text,
             media_type="text/plain; version=0.0.4",

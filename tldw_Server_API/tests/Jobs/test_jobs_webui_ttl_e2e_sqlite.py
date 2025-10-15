@@ -73,6 +73,7 @@ def test_webui_ttl_e2e_sqlite(monkeypatch, tmp_path):
                 "queue": "default",
                 "job_type": "export",
             },
+            headers={**headers, "X-Confirm": "true"}
         )
         assert r1.status_code == 200
         assert r1.json()["affected"] >= 1

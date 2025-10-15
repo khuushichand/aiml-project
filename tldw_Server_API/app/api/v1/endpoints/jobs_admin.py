@@ -9,6 +9,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from fastapi.responses import StreamingResponse
+import asyncio
+import json as _json
 
 router = APIRouter()
 
@@ -95,7 +98,46 @@ class PruneResponse(BaseModel):
     deleted: int
 
 
-@router.post("/jobs/prune", response_model=PruneResponse)
+@router.post(
+    "/jobs/prune",
+    response_model=PruneResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "dryRun": {
+                            "summary": "Dry run prune (scoped)",
+                            "value": {
+                                "statuses": ["completed", "failed", "cancelled"],
+                                "older_than_days": 30,
+                                "domain": "chatbooks",
+                                "queue": "default",
+                                "job_type": "export",
+                                "dry_run": True
+                            },
+                        },
+                        "execute": {
+                            "summary": "Execute prune (requires X-Confirm: true)",
+                            "value": {
+                                "statuses": ["completed", "failed"],
+                                "older_than_days": 14,
+                                "domain": "chatbooks",
+                                "queue": "default",
+                                "job_type": "export",
+                                "dry_run": False
+                            },
+                        },
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {"content": {"application/json": {"example": {"deleted": 42}}}},
+            "400": {"description": "Missing X-Confirm header for destructive action"},
+        },
+    },
+)
 async def prune_jobs_endpoint(
     request: Request,
     user=Depends(require_admin),
@@ -113,13 +155,13 @@ async def prune_jobs_endpoint(
             raw_body = {}
         # Enforce domain-scoped RBAC (403) even if request body is incomplete
         _enforce_domain_scope(user, (raw_body or {}).get("domain"))
-        # Now validate the request body
-        req = PruneRequest(**(raw_body or {}))
-        # Confirm header for destructive action (skip when dry_run)
+        # Confirm header for destructive action (skip when dry_run) — check before model validation for consistent 400s
         if not bool((raw_body or {}).get("dry_run")):
             hdr = str(request.headers.get("x-confirm", "")).lower()
             if hdr not in {"1", "true", "yes", "y", "on"}:
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+        # Now validate the request body
+        req = PruneRequest(**(raw_body or {}))
 
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -179,6 +221,156 @@ class TTLSweepRequest(BaseModel):
     age_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
     runtime_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
     action: str = Field(default="cancel", pattern="^(cancel|fail)$", description="Action to apply to matching jobs")
+
+
+# -------------------- Job Events Outbox (CDC) --------------------
+
+class JobEvent(BaseModel):
+    id: int
+    job_id: int | None = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    event_type: str
+    attrs: dict = Field(default_factory=dict)
+    owner_user_id: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
+    created_at: str
+
+
+@router.get("/jobs/events", response_model=list[JobEvent])
+async def list_job_events(
+    after_id: int = 0,
+    limit: int = 200,
+    domain: Optional[str] = None,
+    queue: Optional[str] = None,
+    job_type: Optional[str] = None,
+    _=Depends(require_admin),
+):
+    """Return job events from the append-only outbox with a cursor (after_id).
+
+    Intended for reliable polling by dashboards or external sinks.
+    """
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    conn = jm._connect()
+    try:
+        rows = []
+        if jm.backend == "postgres":
+            with jm._pg_cursor(conn) as cur:
+                query = "SELECT id, job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at FROM job_events WHERE id > %s"
+                params = [int(after_id)]
+                if domain:
+                    query += " AND domain = %s"
+                    params.append(domain)
+                if queue:
+                    query += " AND queue = %s"
+                    params.append(queue)
+                if job_type:
+                    query += " AND job_type = %s"
+                    params.append(job_type)
+                query += " ORDER BY id ASC LIMIT %s"
+                params.append(int(min(1000, max(1, limit))))
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall() or []
+        else:
+            query = "SELECT id, job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at FROM job_events WHERE id > ?"
+            params = [int(after_id)]
+            if domain:
+                query += " AND domain = ?"
+                params.append(domain)
+            if queue:
+                query += " AND queue = ?"
+                params.append(queue)
+            if job_type:
+                query += " AND job_type = ?"
+                params.append(job_type)
+            query += " ORDER BY id ASC LIMIT ?"
+            params.append(int(min(1000, max(1, limit))))
+            rows = conn.execute(query, tuple(params)).fetchall() or []
+        events: list[JobEvent] = []
+        for r in rows:
+            try:
+                # r can be dict-row or tuple
+                if isinstance(r, dict):
+                    attrs = r.get("attrs_json")
+                    try:
+                        attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
+                    except Exception:
+                        attrs_obj = {}
+                    events.append(JobEvent(
+                        id=int(r.get("id")), job_id=(r.get("job_id")), domain=r.get("domain"), queue=r.get("queue"), job_type=r.get("job_type"),
+                        event_type=str(r.get("event_type")), attrs=attrs_obj, owner_user_id=r.get("owner_user_id"), request_id=r.get("request_id"), trace_id=r.get("trace_id"), created_at=str(r.get("created_at"))
+                    ))
+                else:
+                    attrs_val = r[6]
+                    try:
+                        attrs_obj = _json.loads(attrs_val) if isinstance(attrs_val, str) else (attrs_val or {})
+                    except Exception:
+                        attrs_obj = {}
+                    events.append(JobEvent(
+                        id=int(r[0]), job_id=(r[1]), domain=r[2], queue=r[3], job_type=r[4], event_type=str(r[5]), attrs=attrs_obj, owner_user_id=r[7], request_id=r[8], trace_id=r[9], created_at=str(r[10])
+                    ))
+            except Exception:
+                continue
+        return events
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@router.get("/jobs/events/stream")
+async def stream_job_events(after_id: int = 0, _=Depends(require_admin)):
+    """Server-Sent Events stream of job events from the outbox.
+
+    This is a simple tailer that polls the outbox and emits events without loss.
+    """
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+
+    async def event_gen():
+        nonlocal after_id
+        poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
+        while True:
+            conn = jm._connect()
+            try:
+                if jm.backend == "postgres":
+                    with jm._pg_cursor(conn) as cur:
+                        cur.execute("SELECT id, event_type, attrs_json FROM job_events WHERE id > %s ORDER BY id ASC LIMIT 500", (int(after_id),))
+                        rows = cur.fetchall() or []
+                else:
+                    rows = conn.execute("SELECT id, event_type, attrs_json FROM job_events WHERE id > ? ORDER BY id ASC LIMIT 500", (int(after_id),)).fetchall() or []
+                if rows:
+                    for r in rows:
+                        if isinstance(r, dict):
+                            eid = int(r.get("id"))
+                            et = str(r.get("event_type"))
+                            attrs = r.get("attrs_json")
+                        else:
+                            eid = int(r[0])
+                            et = str(r[1])
+                            attrs = r[2]
+                        try:
+                            payload = _json.dumps({"event": et, "attrs": (_json.loads(attrs) if isinstance(attrs, str) else (attrs or {}))})
+                        except Exception:
+                            payload = _json.dumps({"event": et, "attrs": {}})
+                        yield f"id: {eid}\nevent: job\ndata: {payload}\n\n"
+                        after_id = eid
+                await asyncio.sleep(poll_interval)
+            except Exception:
+                await asyncio.sleep(poll_interval)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
     domain: Optional[str] = Field(default=None)
     queue: Optional[str] = Field(default=None)
     job_type: Optional[str] = Field(default=None)
@@ -200,21 +392,63 @@ class TTLSweepResponse(BaseModel):
     affected: int
 
 
-@router.post("/jobs/ttl/sweep", response_model=TTLSweepResponse)
+@router.post(
+    "/jobs/ttl/sweep",
+    response_model=TTLSweepResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "cancel": {
+                            "summary": "Cancel expired queued/processing jobs (requires X-Confirm)",
+                            "value": {
+                                "age_seconds": 86400,
+                                "runtime_seconds": 7200,
+                                "action": "cancel",
+                                "domain": "chatbooks",
+                                "queue": "default"
+                            },
+                        },
+                        "fail": {
+                            "summary": "Fail expired jobs (requires X-Confirm)",
+                            "value": {
+                                "age_seconds": 604800,
+                                "runtime_seconds": 14400,
+                                "action": "fail",
+                                "domain": "chatbooks"
+                            },
+                        },
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {"content": {"application/json": {"example": {"affected": 10}}}},
+            "400": {"description": "Missing X-Confirm header for destructive action"},
+        },
+    },
+)
 async def ttl_sweep_endpoint(
-    req: TTLSweepRequest,
     request: Request,
     user=Depends(require_admin),
 ) -> TTLSweepResponse:
     try:
-        _enforce_domain_scope(user, req.domain)
-        # Confirm header for destructive action
+        # Pre-parse raw to enforce RBAC and confirm header before validation
+        try:
+            raw = await request.json()
+        except Exception:
+            raw = {}
+        _enforce_domain_scope(user, (raw or {}).get("domain"))
+        # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
         if hdr not in {"1", "true", "yes", "y", "on"}:
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
+        # Now validate the request model
+        req = TTLSweepRequest(**(raw or {}))
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -230,6 +464,86 @@ async def ttl_sweep_endpoint(
         raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}")
 
 
+class IntegritySweepRequest(BaseModel):
+    fix: bool = Field(default=False, description="When true, attempt to repair invalid states")
+    domain: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    job_type: Optional[str] = Field(default=None)
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "fix": False,
+                "domain": "chatbooks",
+                "queue": "default",
+                "job_type": None,
+            }
+        }
+
+
+class IntegritySweepResponse(BaseModel):
+    non_processing_with_lease: int
+    processing_expired: int
+    fixed: int
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "non_processing_with_lease": 3,
+                "processing_expired": 1,
+                "fixed": 2,
+            }
+        }
+
+
+@router.post(
+    "/jobs/integrity/sweep",
+    response_model=IntegritySweepResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "dryRun": {
+                            "summary": "Dry run integrity check (scoped)",
+                            "value": {"fix": False, "domain": "chatbooks", "queue": "default"},
+                        },
+                        "fix": {
+                            "summary": "Fix invalid states globally",
+                            "value": {"fix": True},
+                        },
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "example": {"non_processing_with_lease": 3, "processing_expired": 1, "fixed": 2}
+                    }
+                }
+            }
+        },
+    },
+)
+async def integrity_sweep_endpoint(
+    req: IntegritySweepRequest,
+    user=Depends(require_admin),
+):
+    try:
+        _enforce_domain_scope(user, req.domain)
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        stats = jm.integrity_sweep(fix=req.fix, domain=req.domain, queue=req.queue, job_type=req.job_type)
+        return IntegritySweepResponse(**stats)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}")
+
+
 class QueueStatsResponse(BaseModel):
     domain: str
     queue: str
@@ -237,6 +551,7 @@ class QueueStatsResponse(BaseModel):
     queued: int
     scheduled: int
     processing: int
+    quarantined: int
 
     class Config:
         schema_extra = {
@@ -247,6 +562,7 @@ class QueueStatsResponse(BaseModel):
                 "queued": 3,
                 "scheduled": 2,
                 "processing": 1,
+                "quarantined": 0,
             }
         }
 
@@ -566,3 +882,115 @@ async def batch_reschedule_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}")
+
+
+class BatchRequeueQuarantinedRequest(BaseModel):
+    domain: str
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    dry_run: bool = False
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "domain": "chatbooks",
+                "queue": "default",
+                "job_type": "export",
+                "dry_run": True
+            }
+        }
+
+
+class BatchRequeueQuarantinedResponse(BaseModel):
+    affected: int
+
+    class Config:
+        schema_extra = {"example": {"affected": 5}}
+
+
+@router.post(
+    "/jobs/batch/requeue_quarantined",
+    response_model=BatchRequeueQuarantinedResponse,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "dryRun": {
+                            "summary": "Dry run requeue for a scoped set",
+                            "value": {"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": True},
+                        },
+                        "requeue": {
+                            "summary": "Requeue quarantined jobs (requires X-Confirm: true)",
+                            "value": {"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
+                        },
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {"content": {"application/json": {"example": {"affected": 12}}}},
+            "400": {"description": "Missing confirmation header for destructive action"},
+        },
+    },
+)
+async def batch_requeue_quarantined_endpoint(
+    req: BatchRequeueQuarantinedRequest,
+    request: Request,
+    user=Depends(require_admin),
+):
+    try:
+        _enforce_domain_scope(user, req.domain)
+        if not req.dry_run:
+            hdr = str(request.headers.get("x-confirm", "")).lower()
+            if hdr not in {"1", "true", "yes", "y", "on"}:
+                raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+        db_url = os.getenv("JOBS_DB_URL")
+        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+        jm = JobManager(backend=backend, db_url=db_url)
+        conn = jm._connect()
+        try:
+            if jm.backend == "postgres":
+                where = ["domain = %s", "status = 'quarantined'"]
+                params: list = [req.domain]
+                if req.queue:
+                    where.append("queue = %s"); params.append(req.queue)
+                if req.job_type:
+                    where.append("job_type = %s"); params.append(req.job_type)
+                with conn:
+                    with jm._pg_cursor(conn) as cur:
+                        if req.dry_run:
+                            cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                            r = cur.fetchone()
+                            return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
+                        cur.execute(
+                            f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = NOW(), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
+                            tuple(params),
+                        )
+                        return BatchRequeueQuarantinedResponse(affected=int(cur.rowcount or 0))
+            else:
+                where = ["domain = ?", "status = 'quarantined'"]
+                params2: list = [req.domain]
+                if req.queue:
+                    where.append("queue = ?"); params2.append(req.queue)
+                if req.job_type:
+                    where.append("job_type = ?"); params2.append(req.job_type)
+                if req.dry_run:
+                    cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))
+                    r = cur.fetchone()
+                    return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
+                with conn:
+                    conn.execute(
+                        f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = DATETIME('now'), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
+                        tuple(params2),
+                    )
+                    return BatchRequeueQuarantinedResponse(affected=int(conn.total_changes or 0))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}")

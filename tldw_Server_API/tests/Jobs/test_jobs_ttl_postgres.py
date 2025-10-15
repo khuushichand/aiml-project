@@ -72,6 +72,7 @@ def test_jobs_ttl_sweep_pg(monkeypatch):
                 "queue": "default",
                 "job_type": "export",
             },
+            headers={**headers, "X-Confirm": "true"}
         )
         assert r.status_code == 200, r.text
         assert r.json()["affected"] >= 2
@@ -120,6 +121,7 @@ def test_jobs_ttl_sweep_fail_pg(monkeypatch):
                 "queue": "default",
                 "job_type": "export",
             },
+            headers={**headers, "X-Confirm": "true"}
         )
         assert r.status_code == 200, r.text
         assert r.json()["affected"] >= 2

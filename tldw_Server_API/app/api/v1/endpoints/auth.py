@@ -34,7 +34,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
     check_auth_rate_limit
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
@@ -227,7 +227,8 @@ async def login(
         
         # Fetch user from database using sanitized identifier
         user = None
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL: use two-parameter query to avoid driver-specific quirks
             ident_l = login_identifier.lower()
             user = await db.fetchrow(
@@ -375,7 +376,7 @@ async def login(
         # If password needs rehashing, update it
         if needs_rehash:
             new_hash = password_service.hash_password(form_data.password)
-            if hasattr(db, 'execute'):
+            if is_pg:
                 # PostgreSQL
                 await db.execute(
                     "UPDATE users SET password_hash = $1 WHERE id = $2",
@@ -448,7 +449,8 @@ async def login(
             session_info = temp_session_info
         
         # Update last login time
-        if hasattr(db, 'execute'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             await db.execute(
                 "UPDATE users SET last_login = $1 WHERE id = $2",
@@ -675,7 +677,8 @@ async def refresh_token(
         
         # Fetch user
         user = None
-        if hasattr(db, 'fetchrow'):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             # PostgreSQL
             user = await db.fetchrow(
                 "SELECT * FROM users WHERE id = $1 AND is_active = $2",

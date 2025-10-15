@@ -12,6 +12,10 @@ DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
 BLOCK_PRIVATE_ENV = "WORKFLOWS_EGRESS_BLOCK_PRIVATE"
 
+# Webhook-specific per-tenant allow/deny controls
+WEBHOOK_ALLOWLIST_ENV = "WORKFLOWS_WEBHOOK_ALLOWLIST"
+WEBHOOK_DENYLIST_ENV = "WORKFLOWS_WEBHOOK_DENYLIST"
+
 
 PRIVATE_RANGES = [
     ipaddress.ip_network("0.0.0.0/8"),       # "this" network
@@ -137,6 +141,7 @@ def evaluate_url_policy(
     url: str,
     *,
     allowlist: Sequence[str] | None = None,
+    denylist: Sequence[str] | None = None,
     block_private_override: bool | None = None,
 ) -> URLPolicyResult:
     """Evaluate whether a URL passes the egress policy."""
@@ -156,6 +161,17 @@ def evaluate_url_policy(
     allowlist = list(allowlist) if allowlist is not None else None
     if allowlist is None:
         allowlist = _get_allowlist(os.getenv(ALLOWLIST_ENV, ""))
+
+    # Denylist wins if provided
+    if denylist:
+        for denied in denylist:
+            if not denied:
+                continue
+            if denied.startswith("."):
+                denied = denied[1:]
+            d = _normalize_hostname(denied)
+            if host == d or host.endswith(f".{d}"):
+                return URLPolicyResult(False, "Host in denylist")
 
     if allowlist and not _host_matches_allowlist(host, allowlist):
         return URLPolicyResult(False, "Host not in allowlist")
@@ -178,4 +194,34 @@ def is_private_ip(ip: str) -> bool:
 def is_url_allowed(url: str) -> bool:
     """Check egress policy for a URL using env allowlist and private IP blocks."""
     result = evaluate_url_policy(url)
+    return result.allowed
+
+
+def _parse_list_env(value: str | None) -> list[str]:
+    if not value:
+        return []
+    out: list[str] = []
+    for raw in value.split(","):
+        v = raw.strip()
+        if not v:
+            continue
+        if v.startswith("*."):
+            v = v[1:]
+        out.append(_normalize_hostname(v))
+    return out
+
+
+def is_webhook_url_allowed_for_tenant(url: str, tenant_id: str) -> bool:
+    """Webhook egress evaluation with per-tenant allow/deny lists.
+
+    Env:
+      - WORKFLOWS_WEBHOOK_ALLOWLIST, WORKFLOWS_WEBHOOK_DENYLIST (global)
+      - WORKFLOWS_WEBHOOK_ALLOWLIST_<TENANT>, WORKFLOWS_WEBHOOK_DENYLIST_<TENANT>
+      - WORKFLOWS_EGRESS_BLOCK_PRIVATE (applies to webhooks too)
+    """
+    import os
+    t_key = (tenant_id or "default").upper().replace("-", "_")
+    allow = _parse_list_env(os.getenv(f"{WEBHOOK_ALLOWLIST_ENV}_{t_key}") or os.getenv(WEBHOOK_ALLOWLIST_ENV))
+    deny = _parse_list_env(os.getenv(f"{WEBHOOK_DENYLIST_ENV}_{t_key}") or os.getenv(WEBHOOK_DENYLIST_ENV))
+    result = evaluate_url_policy(url, allowlist=allow if allow else None, denylist=deny if deny else None)
     return result.allowed

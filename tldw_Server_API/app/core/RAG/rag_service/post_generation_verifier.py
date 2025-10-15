@@ -56,6 +56,18 @@ try:
 except Exception:
     AnswerGenerator = None  # type: ignore
 
+# Optional query rewrite tools
+try:
+    from .hyde import generate_hypothetical_answer, embed_text as hyde_embed_text
+except Exception:
+    generate_hypothetical_answer = None  # type: ignore
+    hyde_embed_text = None  # type: ignore
+
+try:
+    from .query_expansion import multi_strategy_expansion
+except Exception:
+    multi_strategy_expansion = None  # type: ignore
+
 try:
     # Central metrics registry (Prometheus/OTel)
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
@@ -91,6 +103,7 @@ class PostGenerationVerifier:
         unsupported_threshold: float = 0.15,
         max_claims: int = 20,
         time_budget_sec: Optional[float] = None,
+        use_advanced_rewrites: Optional[bool] = None,
     ):
         self._claims_runner = claims_runner
         self._max_retries = max(0, int(max_retries or 0))
@@ -100,6 +113,15 @@ class PostGenerationVerifier:
             self._threshold = 0.15
         self._max_claims = max(1, int(max_claims or 1))
         self._time_budget = float(time_budget_sec) if time_budget_sec is not None else None
+        # Toggle for advanced rewrites (HyDE + multi-strategy + diversity). Default enabled.
+        if use_advanced_rewrites is None:
+            try:
+                env_val = os.getenv("RAG_ADAPTIVE_ADVANCED_REWRITES", "true").strip().lower()
+                self._adv = env_val in {"1", "true", "yes", "on"}
+            except Exception:
+                self._adv = True
+        else:
+            self._adv = bool(use_advanced_rewrites)
 
     async def verify_and_maybe_fix(
         self,
@@ -232,10 +254,13 @@ class PostGenerationVerifier:
         outcome.claims = claims_payload
         outcome.summary = summary_payload
 
-        # Record metrics for unsupported claims
+        # Record metrics for unsupported and total claims
         try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter as _inc
+            if total > 0:
+                _inc("rag_total_claims_checked_total", total)
             if unsupported > 0:
-                increment_counter("rag_unsupported_claims_total", unsupported)
+                _inc("rag_unsupported_claims_total", unsupported)
         except Exception:
             pass
 
@@ -257,7 +282,7 @@ class PostGenerationVerifier:
                 outcome.reason = "time_budget_exhausted"
                 break
 
-            # Minimal second-chance retrieval: run hybrid over media_db if available
+            # Second-chance retrieval: use query rewrites (HyDE + multi-strategy) and apply diversity
             new_docs: List[Document] = base_documents[:]
             try:
                 if MultiDatabaseRetriever is not None and media_db_path:
@@ -265,12 +290,58 @@ class PostGenerationVerifier:
                     med = mdr.retrievers.get(getattr(DataSource, "MEDIA_DB", "media_db"))
                     if med is not None:
                         rh = getattr(med, 'retrieve_hybrid', None)
-                        if rh is not None and asyncio.iscoroutinefunction(rh) and search_mode == "hybrid":
-                            new_docs = await rh(query=query, alpha=min(max(hybrid_alpha, 0.1), 0.9))
+                        hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
+                        if not self._adv:
+                            # Simple path: single-query retrieval only
+                            if search_mode == "hybrid" and hybrid_supported:
+                                new_docs = await rh(query=query, alpha=min(max(hybrid_alpha, 0.1), 0.9))
+                            else:
+                                new_docs = await med.retrieve(query=query)
+                            new_docs = new_docs[: max(5, min(15, top_k))]
                         else:
-                            new_docs = await med.retrieve(query=query)
-                        # Cap docs
-                        new_docs = new_docs[: max(5, min(15, top_k))]
+                            # Advanced path: rewrites + HyDE + diversity
+                            candidate_queries: List[str] = [query]
+                            try:
+                                if multi_strategy_expansion is not None:
+                                    expanded = await multi_strategy_expansion(query, strategies=["acronym", "synonym", "domain"])  # light expansion
+                                    if isinstance(expanded, list):
+                                        candidate_queries.extend([q for q in expanded if isinstance(q, str) and q.strip()])
+                            except Exception:
+                                pass
+                            # Optional HyDE vector for the base query
+                            hyde_vector = None
+                            try:
+                                if generate_hypothetical_answer and hyde_embed_text:
+                                    hypo = generate_hypothetical_answer(query, None, None)
+                                    vec = await hyde_embed_text(hypo)
+                                    if vec:
+                                        hyde_vector = vec
+                            except Exception:
+                                hyde_vector = None
+
+                            # Aggregate retrieval across queries
+                            docs_union: Dict[str, Document] = {}
+                            for cq in list(dict.fromkeys(candidate_queries))[:4]:  # bound rewrites
+                                try:
+                                    cur_docs: List[Document]
+                                    if search_mode == "hybrid" and hybrid_supported:
+                                        kwargs = {"query": cq, "alpha": min(max(hybrid_alpha, 0.1), 0.9)}
+                                        if hyde_vector is not None and cq == query:
+                                            kwargs["query_vector"] = hyde_vector
+                                        cur_docs = await rh(**kwargs)
+                                    else:
+                                        cur_docs = await med.retrieve(query=cq)
+                                    for d in cur_docs or []:
+                                        prev = docs_union.get(getattr(d, "id", ""))
+                                        if prev is None or float(getattr(d, "score", 0.0)) > float(getattr(prev, "score", 0.0)):
+                                            docs_union[getattr(d, "id", "")] = d
+                                except Exception:
+                                    continue
+
+                            merged_docs = sorted(docs_union.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)
+                            merged_docs = merged_docs[: max(5, min(30, top_k * 2))]
+                            # Apply simple diversity filter to reduce near-duplicates
+                            new_docs = _select_diverse(merged_docs, k=max(5, min(15, top_k)))
             except Exception as e:
                 logger.debug(f"Adaptive retrieval failed; using base docs. Reason: {e}")
                 new_docs = base_documents[:]
@@ -366,3 +437,35 @@ async def _maybe_await(value):  # pragma: no cover - trivial helper
         return await value
     return value
 
+
+def _jaccard(a: str, b: str) -> float:
+    try:
+        sa = set((a or "").lower().split())
+        sb = set((b or "").lower().split())
+        if not sa or not sb:
+            return 0.0
+        inter = len(sa & sb)
+        union = len(sa | sb)
+        return float(inter) / float(union) if union else 0.0
+    except Exception:
+        return 0.0
+
+
+def _select_diverse(docs: List[Document], k: int = 10, sim_threshold: float = 0.6) -> List[Document]:
+    selected: List[Document] = []
+    for d in docs:
+        if len(selected) >= k:
+            break
+        # Keep if sufficiently different from all selected
+        if all(_jaccard(getattr(d, 'content', ''), getattr(s, 'content', '')) < sim_threshold for s in selected):
+            selected.append(d)
+    # If selection too small, pad with top docs
+    if len(selected) < min(k, len(docs)):
+        seen = {getattr(x, 'id', '') for x in selected}
+        for d in docs:
+            if len(selected) >= k:
+                break
+            if getattr(d, 'id', '') not in seen:
+                selected.append(d)
+                seen.add(getattr(d, 'id', ''))
+    return selected

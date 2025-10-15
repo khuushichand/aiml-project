@@ -10,7 +10,7 @@
 ## Non‑Goals (v1)
 
 - Full org/Team‑scoped RBAC inheritance and per‑resource ACLs (future).
-- Complex pre‑request model/provider enforcement for all LLM endpoints (v1 enforces endpoint scope and budgets; provider/model allowlists are stored and can be enforced later/after usage logging).
+- Org‑level membership APIs (v1 focuses on team membership; org_members table exists but is not exposed via admin APIs).
 
 ## User Stories
 
@@ -26,16 +26,17 @@
   - Extend `api_keys` with Virtual Key metadata:
     - `is_virtual`, `parent_key_id`, `org_id`, `team_id`.
     - Budget fields: `llm_budget_day_tokens`, `llm_budget_month_tokens`, `llm_budget_day_usd`, `llm_budget_month_usd`.
-    - Access control fields: `llm_allowed_endpoints`, `llm_allowed_providers`, `llm_allowed_models` (JSON text in SQLite; JSONB text in Postgres via initialize bootstrap).
+    - Access control fields: `llm_allowed_endpoints`, `llm_allowed_providers`, `llm_allowed_models` (stored as JSON strings in SQLite and Postgres for broad asyncpg compatibility; cast to JSONB as needed in Postgres code paths).
 
 - Services:
-  - `orgs_teams.py`: CRUD helpers for orgs, teams, and membership.
+  - `orgs_teams.py`: CRUD helpers for orgs, teams, and team membership (add/list/delete).
   - `virtual_keys.py`: helpers to read per‑key limits, evaluate current usage (day/month) using `llm_usage_log` (fallback) and `llm_usage_daily` when present.
 
 - Enforcement:
-  - New `LLMBudgetMiddleware` (FastAPI middleware) checks on LLM endpoints:
+  - `LLMBudgetMiddleware` (FastAPI middleware) checks on configured LLM endpoints:
     - Reads `request.state.api_key_id` (populated in API key auth path) and looks up limits.
     - Enforces endpoint allowlist early (reject 403 if not allowed).
+    - Optionally enforces provider/model allowlists if set on the key (provider from `X-LLM-Provider`, model from JSON body `model`); reject 403 if not allowed.
     - Enforces budgets (reject 402 Payment Required when exceeded).
   - Post‑request logging remains unchanged (existing `log_llm_usage`). This combination blocks subsequent requests once limits are reached.
 
@@ -76,6 +77,7 @@ Indexes: org/team membership by foreign keys; helpful composite indexes for list
   - DELETE /api/v1/admin/teams/{team_id}/members/{user_id} — remove member
   - POST /api/v1/admin/users/{user_id}/virtual-keys — create virtual key
   - GET  /api/v1/admin/users/{user_id}/virtual-keys — list virtual keys
+  - GET  /api/v1/admin/users/{user_id}/org-memberships — list org memberships
 
 Payload for create virtual key (subset):
 ```
@@ -95,9 +97,11 @@ Payload for create virtual key (subset):
 
 ## Enforcement Logic
 
-On each request to LLM endpoints:
+On each request to configured LLM endpoints (defaults: `/api/v1/chat/completions`, `/api/v1/embeddings`):
 1) If request uses API key auth and the key is_virtual=1:
    - If llm_allowed_endpoints is set, ensure the endpoint identifier is in the allowlist; else 403.
+   - If llm_allowed_providers is set, ensure `X-LLM-Provider` is in allowlist; else 403.
+   - If llm_allowed_models is set, ensure request JSON `model` is in allowlist; else 403.
    - Compute current usage for key_id:
        - Day: sum from `llm_usage_log` where date(ts)=UTC today and key_id matches.
        - Month: sum where ts IN current UTC month.
@@ -106,12 +110,13 @@ On each request to LLM endpoints:
 Notes:
 - We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked.
+ - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
 
 ## Settings (new)
 
 - `VIRTUAL_KEYS_ENABLED` (bool, default: true)
 - `LLM_BUDGET_ENFORCE` (bool, default: true)
-- `LLM_BUDGET_ENDPOINTS` (list[str], default: ["/api/v1/chat/completions", "/api/v1/embeddings"]) — paths to scope middleware.
+- `LLM_BUDGET_ENDPOINTS` (list[str], default: ["/api/v1/chat/completions", "/api/v1/embeddings"]) — paths to scope middleware. `allowed_endpoints` values map to identifiers used internally (e.g., `chat.completions`, `embeddings`).
 
 ## Testing Plan (v1)
 
@@ -120,13 +125,13 @@ Notes:
   - APIKeyManager.create_virtual_key inserts row with flags/limits; validate selection via validate_api_key.
   - virtual_keys.is_key_over_budget: simulate llm_usage_log rows and verify threshold checks.
 
-- Integration (follow‑up):
-  - Admin endpoints for org/team CRUD and virtual key creation.
-  - Middleware blocks disallowed endpoints and over‑budget keys.
+- Integration:
+  - Admin endpoints for org/team CRUD, add/list/remove team member, and virtual key creation/list.
+  - Middleware blocks disallowed providers/models when allowlists are set (403).
+  - Middleware returns 402 after budgets are exceeded for virtual keys.
 
 ## Rollout
 
 1) Ship migrations + services + middleware (guarded by settings).
 2) Add admin endpoints and minimal UI later; ensure docs describe usage and env vars.
 3) Backward compatible: non‑virtual keys unaffected; JWT flows unchanged.
-
