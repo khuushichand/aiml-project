@@ -235,6 +235,22 @@ Notes:
 - The response will include `metadata.hard_citations` (per‑sentence citations with `doc_id` and `start/end` offsets) and `metadata.numeric_fidelity` (present/missing/source_numbers).
 - In production mode (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the server defaults to enabling numeric fidelity and hard citations; you can still tighten behavior per request.
 
+### RAG Streaming Tip: Contexts and "Why These Sources"
+
+The streaming endpoint `POST /api/v1/rag/search/stream` now emits early context information, followed by reasoning and incremental answer chunks. Events are NDJSON lines:
+
+```
+{"type":"contexts","contexts":[{"id":"...","title":"...","score":0.73,"url":"...","source":"media_db"}, ...],"why":{"topicality":0.82,"diversity":null,"freshness":null}}
+{"type":"reasoning","plan":["Gather top-k contexts","Rerank using strategy=...","Ground claims","Synthesize final answer"]}
+{"type":"delta","text":"...partial token(s)..."}
+{"type":"claims_overlay","spans":[...],"claims":[...]}  // optional overlays when enabled
+{"type":"final_claims", ...}                          // final overlay summary
+```
+
+- The non‑streaming search (`/api/v1/rag/search`) response includes `metadata.why_these_sources` with:
+  - `diversity` (unique host/source ratio), `freshness` (recentness portion), `topicality` (normalized score), and `top_contexts` list.
+- In the WebUI RAG tab, you can watch the Response area for the initial `contexts` line to quickly preview which documents are being considered and a lightweight `why` summary.
+
 ## Configuration
 
 ### Auto-Configuration (New in v1.2.0)

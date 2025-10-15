@@ -28,6 +28,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
 
     # Projects
     add("ALTER TABLE IF EXISTS prompt_studio_projects ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_projects FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_projects_tenant_isolation ON prompt_studio_projects;")
     add(
         """
@@ -37,6 +38,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Prompts
     add("ALTER TABLE IF EXISTS prompt_studio_prompts ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_prompts FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_prompts_tenant_isolation ON prompt_studio_prompts;")
     add(
         """
@@ -52,6 +54,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Signatures
     add("ALTER TABLE IF EXISTS prompt_studio_signatures ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_signatures FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_signatures_tenant_isolation ON prompt_studio_signatures;")
     add(
         """
@@ -67,6 +70,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Test cases
     add("ALTER TABLE IF EXISTS prompt_studio_test_cases ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_test_cases FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_test_cases_tenant_isolation ON prompt_studio_test_cases;")
     add(
         """
@@ -82,6 +86,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Test runs
     add("ALTER TABLE IF EXISTS prompt_studio_test_runs ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_test_runs FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_test_runs_tenant_isolation ON prompt_studio_test_runs;")
     add(
         """
@@ -97,6 +102,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Evaluations
     add("ALTER TABLE IF EXISTS prompt_studio_evaluations ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_evaluations FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_evals_tenant_isolation ON prompt_studio_evaluations;")
     add(
         """
@@ -112,6 +118,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Optimizations
     add("ALTER TABLE IF EXISTS prompt_studio_optimizations ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_optimizations FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_opts_tenant_isolation ON prompt_studio_optimizations;")
     add(
         """
@@ -127,6 +134,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Optimization iterations
     add("ALTER TABLE IF EXISTS prompt_studio_optimization_iterations ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_optimization_iterations FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_iter_tenant_isolation ON prompt_studio_optimization_iterations;")
     add(
         """
@@ -144,6 +152,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Job queue
     add("ALTER TABLE IF EXISTS prompt_studio_job_queue ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_job_queue FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_jobq_tenant_isolation ON prompt_studio_job_queue;")
     add(
         """
@@ -160,6 +169,7 @@ def build_prompt_studio_rls_sql() -> List[str]:
     )
     # Idempotency (own + NULL scope)
     add("ALTER TABLE IF EXISTS prompt_studio_idempotency ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS prompt_studio_idempotency FORCE ROW LEVEL SECURITY;")
     add("DROP POLICY IF EXISTS ps_idem_tenant_isolation ON prompt_studio_idempotency;")
     add(
         """
@@ -168,6 +178,37 @@ def build_prompt_studio_rls_sql() -> List[str]:
             user_id = current_setting('app.user_id', true)
             OR user_id IS NULL
           );
+        """
+    )
+    return stmts
+
+
+def build_chacha_rls_sql() -> List[str]:
+    """RLS for ChaChaNotes (notes, character_cards) using client_id scoping."""
+    stmts: List[str] = []
+
+    def add(sql: str) -> None:
+        stmts.append(sql.strip())
+
+    # Notes
+    add("ALTER TABLE IF EXISTS notes ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS notes FORCE ROW LEVEL SECURITY;")
+    add("DROP POLICY IF EXISTS notes_tenant_isolation ON notes;")
+    add(
+        """
+        CREATE POLICY notes_tenant_isolation ON notes
+          USING (client_id = current_setting('app.user_id', true));
+        """
+    )
+
+    # Character cards
+    add("ALTER TABLE IF EXISTS character_cards ENABLE ROW LEVEL SECURITY;")
+    add("ALTER TABLE IF EXISTS character_cards FORCE ROW LEVEL SECURITY;")
+    add("DROP POLICY IF EXISTS chars_tenant_isolation ON character_cards;")
+    add(
+        """
+        CREATE POLICY chars_tenant_isolation ON character_cards
+          USING (client_id = current_setting('app.user_id', true));
         """
     )
     return stmts
@@ -201,3 +242,25 @@ def ensure_prompt_studio_rls(backend: DatabaseBackend) -> bool:
             pass
     return applied
 
+
+def ensure_chacha_rls(backend: DatabaseBackend) -> bool:
+    try:
+        if not hasattr(backend, 'backend_type') or getattr(backend, 'backend_type').name != 'POSTGRESQL':
+            return False
+    except Exception:
+        return False
+    stmts = build_chacha_rls_sql()
+    applied = False
+    with backend.transaction() as conn:
+        cur = conn.cursor()
+        for s in stmts:
+            try:
+                cur.execute(s)
+                applied = True
+            except Exception as e:
+                logger.debug(f"RLS apply skipped/failed for statement: {e}")
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return applied

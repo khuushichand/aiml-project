@@ -1,0 +1,30 @@
+# Add a reverse proxy (Caddy) in front of the app.
+# Use with the base compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
+
+services:
+  app:
+    # Remove any host port bindings and just expose 8000 for internal networking
+    ports: []
+    expose:
+      - "8000"
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://your.domain.com}
+
+  caddy:
+    image: caddy:2
+    container_name: tldw-caddy
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Samples/Caddy/Caddyfile.compose:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
+

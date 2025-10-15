@@ -658,6 +658,257 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     return {"logged": True, "message": message, "level": level}
 
 
+async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Synthesize speech from text using the internal TTS service.
+
+    Config:
+      - input: str (templated); defaults to last.text or inputs.summary or inputs.text
+      - model: str; default 'kokoro' (or 'tts-1')
+      - voice: str; default from TTS settings (af_heart fallback)
+      - response_format: str; one of mp3|wav|opus|flac|aac|pcm (default mp3)
+      - speed: float; default 1.0
+      - provider: str (optional hint)
+    Output:
+      - { "audio_uri": "file://...", "format": "mp3", "model": "...", "voice": "...", "size_bytes": N }
+      - Also persists as an artifact via context.add_artifact
+    """
+    try:
+        from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest, NormalizationOptions
+        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+    except Exception:
+        return {"error": "tts_unavailable"}
+
+    # Resolve input text
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    text_t = str(config.get("input") or "").strip()
+    if text_t:
+        text = _tmpl(text_t, context) or text_t
+    else:
+        text = None
+        try:
+            # Prefer last.text, then inputs.summary, then inputs.text
+            last = context.get("prev") or context.get("last") or {}
+            text = str(last.get("text")) if isinstance(last, dict) and last.get("text") else None
+        except Exception:
+            text = None
+        if not text and isinstance(context.get("inputs"), dict):
+            text = str(context["inputs"].get("summary") or context["inputs"].get("text") or "")
+    text = text or ""
+    if not text.strip():
+        return {"error": "missing_input_text"}
+
+    model = str(config.get("model") or "kokoro")
+    voice = str(config.get("voice") or "af_heart")
+    fmt = str(config.get("response_format") or "mp3").lower()
+    try:
+        speed = float(config.get("speed", 1.0))
+    except Exception:
+        speed = 1.0
+    provider = str(config.get("provider") or "").strip() or None
+
+    # Optional advanced fields
+    lang_code = str(config.get("lang_code") or "").strip() or None
+    normalization = None
+    try:
+        norm_cfg = config.get("normalization_options") or config.get("normalization")
+        if isinstance(norm_cfg, dict):
+            normalization = NormalizationOptions(**norm_cfg)
+    except Exception:
+        normalization = None
+    voice_reference = str(config.get("voice_reference") or "").strip() or None
+    reference_duration_min = None
+    try:
+        if config.get("reference_duration_min") is not None:
+            reference_duration_min = float(config.get("reference_duration_min"))
+    except Exception:
+        reference_duration_min = None
+    extra_params = config.get("extra_params") if isinstance(config.get("extra_params"), dict) else None
+
+    req = OpenAISpeechRequest(
+        model=model,
+        input=text,
+        voice=voice,
+        response_format=fmt,
+        speed=speed,
+        stream=True,
+        lang_code=lang_code,
+        normalization_options=normalization,
+        voice_reference=voice_reference,
+        reference_duration_min=reference_duration_min,
+        extra_params=extra_params,
+    )
+
+    # Prepare output path under Databases/artifacts/<step_run_id or ts>/speech.ext
+    import uuid, time as _time, os as _os
+    from pathlib import Path
+    step_run_id = str(context.get("step_run_id") or f"tts_{int(_time.time()*1000)}")
+    out_dir = Path("Databases") / "artifacts" / step_run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ext = "mp3" if fmt not in {"wav","opus","flac","aac","pcm"} else fmt
+    out_path = out_dir / f"speech.{ext}"
+
+    size_bytes = 0
+    try:
+        service = await get_tts_service_v2()
+        async with _async_file_writer(out_path) as writer:
+            async for chunk in service.generate_speech(req, provider=provider):
+                if isinstance(chunk, (bytes, bytearray)):
+                    await writer.write(chunk)
+                    size_bytes += len(chunk)
+                else:
+                    # Some providers may stream text errors when stream_errors_as_audio is enabled
+                    data = bytes(chunk)
+                    await writer.write(data)
+                    size_bytes += len(data)
+    except Exception as e:
+        return {"error": f"tts_error:{e}"}
+
+    # Persist as artifact if helper is available
+    # Prepare outputs and optional artifacts
+    outputs: Dict[str, Any] = {"audio_uri": f"file://{out_path}", "format": ext, "model": model, "voice": voice, "size_bytes": size_bytes}
+
+    # Create audio artifact and attach a download link if requested
+    attach_download = bool(config.get("attach_download_link"))
+    save_transcript = bool(config.get("save_transcript"))
+    audio_artifact_id = None
+    try:
+        if callable(context.get("add_artifact")):
+            import mimetypes
+            mime, _ = mimetypes.guess_type(str(out_path))
+            audio_artifact_id = f"tts_{uuid.uuid4()}"
+            context["add_artifact"](
+                type="tts_audio",
+                uri=f"file://{out_path}",
+                size_bytes=size_bytes,
+                mime_type=mime or "application/octet-stream",
+                metadata={"model": model, "voice": voice, "format": ext},
+                artifact_id=audio_artifact_id,
+            )
+    except Exception:
+        audio_artifact_id = None
+
+    if attach_download and audio_artifact_id:
+        outputs["download_url"] = f"/api/v1/workflows/artifacts/{audio_artifact_id}/download"
+
+    # Optional transcript artifact
+    if save_transcript and text:
+        try:
+            tx = out_dir / "transcript.txt"
+            tx.write_text(text or "", encoding="utf-8")
+            if callable(context.get("add_artifact")):
+                context["add_artifact"](
+                    type="tts_transcript",
+                    uri=f"file://{tx}",
+                    size_bytes=len(text.encode("utf-8")),
+                    mime_type="text/plain",
+                    metadata={"model": model, "voice": voice},
+                )
+            outputs["transcript"] = text
+        except Exception:
+            pass
+
+    return outputs
+
+
+async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Process media ephemerally using internal services (no persistence).
+
+    Currently supports kind: 'web_scraping'.
+
+    Config (web_scraping):
+      - scrape_method: "Individual URLs" | "Sitemap" | "URL Level" | "Recursive Scraping"
+      - url_input: str (single or multiline)
+      - url_level: int (if scrape_method == URL Level)
+      - max_pages: int (default 10)
+      - max_depth: int (default 3)
+      - summarize: bool (default false)
+      - custom_prompt, api_name, system_prompt, temperature, custom_cookies, user_agent, custom_headers
+    Output: { kind: 'web_scraping', status, results, count }
+    """
+    kind = str(config.get("kind") or "web_scraping").strip().lower()
+    if kind != "web_scraping":
+        return {"error": f"unsupported_process_media_kind:{kind}"}
+    try:
+        from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
+    except Exception:
+        return {"error": "web_scraping_service_unavailable"}
+
+    # Extract and sanitize config
+    scrape_method = str(config.get("scrape_method") or "Individual URLs")
+    url_input = str(config.get("url_input") or "").strip()
+    url_level = config.get("url_level")
+    try:
+        url_level = int(url_level) if url_level is not None else None
+    except Exception:
+        url_level = None
+    max_pages = int(config.get("max_pages", 10))
+    max_depth = int(config.get("max_depth", 3))
+    summarize = bool(config.get("summarize") or config.get("summarize_checkbox") or False)
+    custom_prompt = config.get("custom_prompt")
+    api_name = config.get("api_name")
+    system_prompt = config.get("system_prompt")
+    try:
+        temperature = float(config.get("temperature", 0.7))
+    except Exception:
+        temperature = 0.7
+    custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
+    user_agent = config.get("user_agent")
+    custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
+
+    try:
+        result = await process_web_scraping_task(
+            scrape_method=scrape_method,
+            url_input=url_input,
+            url_level=url_level,
+            max_pages=max_pages,
+            max_depth=max_depth,
+            summarize_checkbox=summarize,
+            custom_prompt=custom_prompt,
+            api_name=api_name,
+            api_key=None,
+            keywords="",
+            custom_titles=None,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            custom_cookies=custom_cookies,
+            mode="ephemeral",
+            user_id=None,
+            user_agent=user_agent,
+            custom_headers=custom_headers,
+        )
+    except Exception as e:
+        return {"error": f"process_media_error:{e}"}
+
+    # Normalize response
+    articles = []
+    try:
+        articles = result.get("results") or result.get("articles") or []
+        if isinstance(articles, dict):
+            articles = [articles]
+    except Exception:
+        articles = []
+    return {"kind": "web_scraping", "status": result.get("status", "ok"), "count": len(articles), "results": articles}
+
+
+class _async_file_writer:
+    """Minimal async file writer context manager for streaming to disk."""
+    def __init__(self, path: Path):
+        self._path = path
+        self._fp = None
+    async def __aenter__(self):
+        self._fp = open(self._path, "wb")
+        return self
+    async def write(self, data: bytes):
+        self._fp.write(data)
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if self._fp:
+                self._fp.flush()
+                self._fp.close()
+        except Exception:
+            pass
+
+
 async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate a simple boolean condition and select the next step.
 

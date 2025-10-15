@@ -5,12 +5,13 @@ from datetime import datetime, timedelta
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_postgres_session_cleanup_removes_expired(setup_test_database):
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+async def test_postgres_session_cleanup_removes_expired(test_db_pool):
+    from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 
-    pool = await get_db_pool()
-    session_manager = await get_session_manager()
+    pool = test_db_pool
+    # Use a SessionManager bound explicitly to the Postgres pool
+    session_manager = SessionManager(db_pool=pool)
+    await session_manager.initialize()
 
     # Insert a test user
     user_uuid = uuid.uuid4()

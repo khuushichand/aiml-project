@@ -346,6 +346,47 @@ Sample response (polling):
 }
 ```
 
+### Backpressure & Quotas (HTTP 429)
+
+When the orchestrated embeddings pipeline is overloaded, the API gates selected endpoints with backpressure to protect stability. Backpressure also applies to key media ingestion endpoints so upstream downloads and parsing do not exacerbate downstream queueing.
+
+- Behavior
+  - If any core embeddings queue’s depth or oldest message age exceeds a threshold, affected endpoints return HTTP 429 with a `Retry-After` header.
+  - In multi-user mode, per‑tenant request quotas (RPS) may also return HTTP 429 with `Retry-After: 1` and `X-RateLimit-*` headers.
+
+- Affected endpoints (non‑exhaustive)
+  - Embeddings: `POST /api/v1/embeddings`, `POST /api/v1/embeddings/batch`
+  - Paper ingestion: `POST /api/v1/paper-search/arxiv/ingest`, `POST /api/v1/paper-search/earthrxiv/ingest`
+  - Web ingestion: `POST /api/v1/ingest-web-content`
+  - MediaWiki ingest: `POST /api/v1/mediawiki/ingest-dump`
+
+- Configuration
+  - `EMB_BACKPRESSURE_MAX_DEPTH` (int, default 25000): max queue depth across `embeddings:{chunking|embedding|storage}` before 429.
+  - `EMB_BACKPRESSURE_MAX_AGE_SECONDS` (float, default 300): max age (seconds) of oldest message before 429.
+  - `EMBEDDINGS_TENANT_RPS` (int, default 0): per‑tenant RPS for embeddings endpoints (429 when exceeded; 0 disables).
+  - `INGEST_TENANT_RPS` (int, default 0): per‑tenant RPS for ingestion endpoints (falls back to `EMBEDDINGS_TENANT_RPS` when unset).
+
+- Operator tips
+  - Use the orchestrator summary/SSE to watch `ages` and `queues` while tuning thresholds.
+  - Start with higher thresholds and lower them once you have a baseline for normal load.
+  - If tenants routinely hit throttle, increase `*_TENANT_RPS` or provision more workers.
+
+- Examples
+```bash
+# Typical 429 from embeddings when overloaded
+curl -i -X POST http://localhost:8000/api/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"hello","model":"text-embedding-3-small"}'
+
+# Response (example):
+# HTTP/1.1 429 Too Many Requests
+# Retry-After: 10
+
+# Tenant quotas: query current limit/remaining (multi-user)
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:8000/api/v1/embeddings/tenant/quotas | jq .
+```
+
 ### Startup Checks & Compaction (optional)
 
 You can enable two optional maintenance features to harden indexing integrity and storage hygiene:
@@ -413,6 +454,14 @@ How it works
   - Embedding DLQ: `embeddings:embedding:dlq`
   - Storage DLQ: `embeddings:storage:dlq`
 - When a worker exhausts `max_retries`, it marks the job `failed` and publishes the original payload and error to the stage DLQ. The worker still `XACK`s the failed message to prevent hot looping.
+
+Security and privacy
+- PII/secret redaction: DLQ payload previews in the API/UI redact common secret fields (api_key, authorization, token, password). Avoid logging sensitive content.
+- Optional encryption at rest: set `EMBEDDINGS_DLQ_ENCRYPTION_KEY` to enable AES‑GCM encryption of DLQ payload bodies. The API will decrypt for previews when the key is present. Without the key, previews omit payloads.
+
+RBAC and auditing
+- All DLQ admin endpoints require admin privileges.
+- Admin actions are audit‑logged (state changes, (bulk) requeues), including operator, stage, and results.
 
 Operator tasks
 - Inspect latest DLQ entries:

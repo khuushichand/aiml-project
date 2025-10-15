@@ -525,7 +525,7 @@ except KeyboardInterrupt:
 4. **For Live Transcription**: Use Parakeet with VAD mode
 5. **For Resource-Constrained**: Use Parakeet ONNX or Whisper tiny
 
-## Notes & Limitations
+## Notes & Limitations {#notes--limitations}
 
 - Endpoint paths include `/api/v1` (examples reflect this; headings updated accordingly).
 - `timestamp_granularities` supports `segment` and `word`; send as CSV or JSON array. Word-level timestamps are available for Whisper only.
@@ -590,10 +590,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Related Documentation
 
-- [API Overview](./API_Overview.md)
-- [Configuration Guide](../User_Guides/Configuration.md)
-- [Live Transcription Guide](../User_Guides/Live_Transcription.md)
-- [Model Selection Guide](../User_Guides/Model_Selection.md)
+- [API Overview](./API_README.md)
+- [Installation & Setup](../User_Guides/Installation-Setup-Guide.md)
+- [Live Transcription](#live-transcription)
+- [Supported Models](#supported-models)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.

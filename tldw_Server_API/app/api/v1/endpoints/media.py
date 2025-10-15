@@ -82,6 +82,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     fetch_keywords_for_media,
 )
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 
 # -----------------------------
 # Code processing helpers
@@ -6893,6 +6894,7 @@ def get_mediawiki_form_data(
     "/mediawiki/ingest-dump",
     summary="Ingest and process a MediaWiki XML dump, storing results to database and vector store.",
     tags=["MediaWiki Processing"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
     # No specific response_model for StreamingResponse, individual yielded items can be documented.
 )
 async def ingest_mediawiki_dump_endpoint(
@@ -7065,7 +7067,7 @@ async def process_mediawiki_dump_ephemeral_endpoint(
 # Endpoints:
 #
 
-@router.post("/ingest-web-content")
+@router.post("/ingest-web-content", dependencies=[Depends(guard_backpressure_and_quota)])
 async def ingest_web_content(
     request: IngestWebContentRequest,
     background_tasks: BackgroundTasks,

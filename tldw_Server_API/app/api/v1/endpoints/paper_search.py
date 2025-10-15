@@ -6,6 +6,7 @@ import math
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
@@ -807,6 +808,7 @@ def _http_session():
     "/arxiv/ingest",
     summary="Download arXiv PDF by arXiv ID, process, and persist",
     tags=["paper-search"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def arxiv_ingest(
     arxiv_id: str = Query(..., description="arXiv ID, e.g., 1706.03762"),
@@ -967,6 +969,7 @@ async def arxiv_ingest(
     "/earthrxiv/ingest",
     summary="Download EarthArXiv PDF by OSF ID, process, and persist",
     tags=["paper-search"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def eartharxiv_ingest(
     osf_id: str = Query(..., description="EarthArXiv OSF ID (e.g., 12345)"),

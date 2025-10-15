@@ -74,8 +74,8 @@ def test_two_tier_reranker_calibration_and_gating(monkeypatch):
     cfg = RerankingConfig(top_k=2)
     two = TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))
 
-    loop = asyncio.get_event_loop()
-    scored = loop.run_until_complete(two.rerank("q?", docs))
+    # Python 3.12+ uses no default loop in sync context; prefer asyncio.run
+    scored = asyncio.run(two.rerank("q?", docs))
 
     # Returned docs should not include sentinel and should be <= top_k
     ids = [sd.document.id for sd in scored]
@@ -90,4 +90,3 @@ def test_two_tier_reranker_calibration_and_gating(monkeypatch):
     assert isinstance(two.last_metadata, dict)
     assert two.last_metadata.get("strategy") == "two_tier"
     assert bool(two.last_metadata.get("gated")) is True
-

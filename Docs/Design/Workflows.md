@@ -1,6 +1,6 @@
 # Workflows (v0.1)
 
-This document captures the current state of the Workflows module, its APIs, data model, execution engine behavior, security model, and the near‑term roadmap. It supersedes the placeholder links that were here previously. For the initial PRD, see `Workflows-PRD-1.md` at the repository root.
+This document captures the current state of the Workflows module, its APIs, data model, execution engine behavior, security model, and the near‑term roadmap. It supersedes the placeholder links that were here previously. For the consolidated PRD, see `Docs/Design/Workflows_PRD.md` (the historical draft remains at `Workflows-PRD-1.md`).
 
 ## Status & Scope
 
@@ -207,6 +207,70 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Readiness: `GET /readyz` returns `{ready, engine, db, time}` with DB connectivity and backend schema version (when using PostgreSQL) checked against the expected version.
  
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
+
+## Validation Modes
+
+- Global strict validation for artifact download scope:
+  - Env: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default: true)
+  - Behavior: when true, file:// downloads must be under the recorded workdir and have an allowed MIME; otherwise 400.
+  - When false, scope mismatches are logged as warnings and the download proceeds.
+- Per-run override:
+  - Run metadata may include `validation_mode: 'block'|'non-block'` (default: `block`).
+  - Non-block allows artifact download even when global strict is enabled.
+
+## Control: Cancel / Pause / Resume
+
+- `POST /runs/{run_id}/cancel` sets a cancel flag and attempts to terminate any recorded subprocesses; the running step cooperatively checks `is_cancelled()`.
+- `POST /runs/{run_id}/pause` transitions the run to `paused` and emits a `run_paused` event; `resume` returns the run to `running`.
+- Steps receive periodic heartbeats (`heartbeat_at`) and may be locked for a short TTL to prevent concurrent work.
+
+## Webhooks: Lifecycle and Delivery
+
+- Completion webhooks can be configured on definitions (`on_completion_webhook: {url, include_outputs}`) and are dispatched on terminal states.
+- Global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true` short-circuits dispatch.
+- SSRF/egress policy:
+  - Central evaluator enforces allowed schemes/ports, host allowlist, and private IP blocking.
+  - Per-tenant allow/deny via `WORKFLOWS_WEBHOOK_ALLOWLIST(_<TENANT>)`, `WORKFLOWS_WEBHOOK_DENYLIST(_<TENANT>)`.
+- Signing and tracing:
+  - HMAC header when `WORKFLOWS_WEBHOOK_SECRET` is set: `X-Workflows-Signature` and `X-Hub-Signature-256`.
+  - W3C `traceparent` is injected when tracing is enabled.
+- Delivery outcomes are recorded as `webhook_delivery` run events with `status=delivered|failed|blocked` and masked host.
+- Dead-letter queue (DLQ): failures enqueue into `workflow_webhook_dlq` for background retries with exponential backoff and jitter.
+
+## Retention Policy (Artifacts)
+
+- Optional background GC removes file:// artifacts and DB rows older than `WORKFLOWS_ARTIFACT_RETENTION_DAYS` (default 30).
+- Enable worker via `WORKFLOWS_ARTIFACT_GC_ENABLED=true`; interval controlled by `WORKFLOWS_ARTIFACT_GC_INTERVAL_SEC`.
+
+## Configuration Reference
+
+- Backend selection
+  - Uses shared content backend (see `Config_Files/config.txt` → `[Database] type=sqlite|postgres`); Workflows will default to Postgres when the content backend is Postgres.
+  - SQLite DB path (fallback): `Databases/workflows.db` (config key `workflows_path`).
+
+- Rate limits and quotas (disabled in tests automatically)
+  - Endpoint rate limits (slowapi): disabled with `WORKFLOWS_DISABLE_RATE_LIMITS=true`.
+  - Quotas at run start: `WORKFLOWS_QUOTA_BURST_PER_MIN` (60), `WORKFLOWS_QUOTA_DAILY_PER_USER` (1000), disable with `WORKFLOWS_DISABLE_QUOTAS=true`.
+
+- Engine concurrency
+  - `WORKFLOWS_TENANT_CONCURRENCY` (default 2), `WORKFLOWS_WORKFLOW_CONCURRENCY` (default 1).
+
+- Egress policy
+  - Profile: `WORKFLOWS_EGRESS_PROFILE=strict|permissive|custom` (defaults to `strict` in prod, `permissive` elsewhere).
+  - Allowed ports: `WORKFLOWS_EGRESS_ALLOWED_PORTS` (default `80,443`).
+  - Host allowlist: `WORKFLOWS_EGRESS_ALLOWLIST` (comma-separated, supports subdomains).
+  - Private IP blocking: `WORKFLOWS_EGRESS_BLOCK_PRIVATE=true|false` (default true).
+  - Webhook allow/deny: `WORKFLOWS_WEBHOOK_ALLOWLIST(_<TENANT>)`, `WORKFLOWS_WEBHOOK_DENYLIST(_<TENANT>)`.
+
+- Webhooks
+  - Global disable: `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS=true|false` (default false).
+  - Signing secret: `WORKFLOWS_WEBHOOK_SECRET`.
+  - DLQ worker: `WORKFLOWS_WEBHOOK_DLQ_ENABLED`, `WORKFLOWS_WEBHOOK_DLQ_INTERVAL_SEC`, `WORKFLOWS_WEBHOOK_DLQ_BATCH`, `WORKFLOWS_WEBHOOK_DLQ_TIMEOUT_SEC`, `WORKFLOWS_WEBHOOK_DLQ_BASE_SEC`, `WORKFLOWS_WEBHOOK_DLQ_MAX_BACKOFF_SEC`, `WORKFLOWS_WEBHOOK_DLQ_MAX_ATTEMPTS`.
+
+- Artifacts
+  - Validation strictness: `WORKFLOWS_ARTIFACT_VALIDATE_STRICT=true|false` (default true).
+  - Metadata encryption: `WORKFLOWS_ARTIFACT_ENCRYPTION=true|false` (+ `WORKFLOWS_ARTIFACT_ENC_KEY`).
+  - Retention worker: `WORKFLOWS_ARTIFACT_GC_ENABLED`, `WORKFLOWS_ARTIFACT_RETENTION_DAYS`, `WORKFLOWS_ARTIFACT_GC_INTERVAL_SEC`.
 
 ## WebUI
 

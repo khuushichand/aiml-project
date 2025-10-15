@@ -842,6 +842,48 @@ async def unified_search_stream_endpoint(
             except Exception:
                 docs = []
 
+            # Emit initial contexts (top-k with minimal fields) + a safe rationale plan
+            try:
+                top_contexts = []
+                for doc in (docs or [])[: min(10, (request.top_k or 10))]:
+                    md = getattr(doc, 'metadata', None) or (doc.get('metadata') if isinstance(doc, dict) else {}) or {}
+                    top_contexts.append({
+                        "id": getattr(doc, 'id', doc.get('id') if isinstance(doc, dict) else None),
+                        "title": (md.get('title') if isinstance(md, dict) else None),
+                        "score": float(getattr(doc, 'score', md.get('score', 0.0) if isinstance(md, dict) else 0.0) or 0.0),
+                        "url": md.get('url') if isinstance(md, dict) else None,
+                        "source": md.get('source') if isinstance(md, dict) else None,
+                    })
+                # Lightweight "why these sources" summary
+                def _safe_float(x):
+                    try:
+                        return float(x)
+                    except Exception:
+                        return 0.0
+                scores = [_safe_float(getattr(d, 'score', (getattr(d, 'metadata', {}) or {}).get('score', 0.0))) for d in (docs or [])]
+                topicality = 0.0
+                if scores:
+                    smin, smax = min(scores), max(scores)
+                    topicality = (sum((s - smin) / (smax - smin) if smax > smin else 1.0 for s in scores) / len(scores)) if scores else 0.0
+                why = {
+                    "topicality": round(float(topicality), 4),
+                    "diversity": None,  # full computation available in non-streaming pipeline metadata
+                    "freshness": None,
+                }
+                yield json.dumps({"type": "contexts", "contexts": top_contexts, "why": why}) + "\n"
+                # Safe partial rationale (no chain leakage)
+                rationale = {
+                    "plan": [
+                        "Gather top-k contexts",
+                        f"Rerank using strategy={getattr(request, 'reranking_strategy', 'flashrank')}",
+                        "Ground claims from sources",
+                        "Synthesize final answer",
+                    ]
+                }
+                yield json.dumps({"type": "reasoning", **rationale}) + "\n"
+            except Exception:
+                pass
+
             # Minimal context for generation
             context = types.SimpleNamespace()
             context.documents = docs

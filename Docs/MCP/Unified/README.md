@@ -8,6 +8,7 @@ The MCP Unified stack is the production Model Context Protocol surface that ship
 - `System_Admin_Guide.md` – Installation, configuration, monitoring, and security hardening
 - `User_Guide.md` – HTTP and WebSocket workflows, authentication, troubleshooting
 - `Modules.md` – Reference for creating and managing pluggable MCP modules
+- `Documentation_Ingestion_Playbook.md` – Step-by-step workflow for ingesting project docs and exposing them through MCP tools
 
 ## When to Use MCP Unified
 

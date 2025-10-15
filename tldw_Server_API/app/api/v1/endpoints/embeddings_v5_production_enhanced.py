@@ -274,6 +274,8 @@ embedding_stage_flag = get_or_create_gauge(
     ['stage', 'flag']
 )
 
+## Backpressure and quotas (configured later; depends on _cfg_int defined below)
+
 # ============================================================================
 # Configuration and Constants
 # ============================================================================
@@ -313,6 +315,99 @@ def _cfg_int(name: str, default_val: int) -> int:
     except Exception:
         pass
     return default_val
+
+# Backpressure and quotas configuration
+def _cfg_float(name: str, default_val: float) -> float:
+    try:
+        v = settings.get(name, None)
+        if isinstance(v, (int, float)):
+            return float(v)
+    except Exception:
+        pass
+    try:
+        env = os.getenv(name)
+        if env is not None and str(env).strip() != "":
+            return float(env)
+    except Exception:
+        pass
+    return float(default_val)
+
+BP_MAX_DEPTH = int(_cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000))
+BP_MAX_AGE_S = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
+TENANT_RPS = int(_cfg_int("EMBEDDINGS_TENANT_RPS", 0))  # 0 disables
+
+async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
+    """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    depths = []
+    ages = []
+    now = time.time()
+    for q in queues:
+        try:
+            d = await client.xlen(q)
+        except Exception:
+            d = 0
+        depths.append(int(d or 0))
+        try:
+            items = await client.xrange(q, "-", "+", count=1)
+            if items:
+                first_id = items[0][0]
+                ts_ms = float(first_id.split("-", 1)[0])
+                ages.append(max(0.0, now - (ts_ms / 1000.0)))
+            else:
+                ages.append(0.0)
+        except Exception:
+            ages.append(0.0)
+    return (max(depths) if depths else 0, max(ages) if ages else 0.0)
+
+async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
+    """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
+    # Orchestrator-based backpressure
+    try:
+        client = await _get_redis_client()
+    except Exception:
+        client = None
+    try:
+        if client is not None:
+            depth, age = await _orchestrator_depth_and_age(client)
+            if depth >= BP_MAX_DEPTH or age >= BP_MAX_AGE_S:
+                retry_after = 5
+                if age >= BP_MAX_AGE_S:
+                    retry_after = min(60, int(max(5, age / 2)))
+                headers = {"Retry-After": str(retry_after)}
+                return HTTPException(status_code=429, detail="Backpressure: queue overload", headers=headers)
+    except Exception:
+        pass
+    finally:
+        try:
+            if client is not None:
+                await client.close()
+        except Exception:
+            pass
+
+    # Per-tenant quotas in multi-user mode
+    try:
+        if not is_single_user_mode() and TENANT_RPS > 0:
+            client2 = await _get_redis_client()
+            ts = int(time.time())
+            key = f"embeddings:tenant:rps:{getattr(user, 'id', 'anon')}:{ts}"
+            current = await client2.incr(key)
+            await client2.expire(key, 2)
+            remaining = max(0, TENANT_RPS - int(current or 0))
+            if current > TENANT_RPS:
+                headers = {"Retry-After": "1", "X-RateLimit-Limit": str(TENANT_RPS), "X-RateLimit-Remaining": str(0)}
+                return HTTPException(status_code=429, detail="Tenant quota exceeded", headers=headers)
+            else:
+                if hasattr(request, 'state'):
+                    try:
+                        request.state.rate_limit_limit = TENANT_RPS
+                        request.state.rate_limit_remaining = remaining
+                    except Exception:
+                        pass
+            await client2.close()
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================================
@@ -1402,6 +1497,10 @@ async def create_embedding_endpoint(
     start_time = time.time()
     
     try:
+        # Backpressure and tenant quotas
+        exc = await _check_backpressure_and_quotas(request, current_user)
+        if exc is not None:
+            raise exc
         # Validate provider (defer policy checks until after input validation)
         provider = x_provider or "openai"
         model = embedding_request.model
@@ -1721,6 +1820,15 @@ async def create_embedding_endpoint(
         except Exception:
             pass
 
+        # Attach quota headers if set
+        try:
+            if hasattr(request, 'state') and response is not None:
+                if getattr(request.state, 'rate_limit_limit', None) is not None:
+                    response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
+                    response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+        except Exception:
+            pass
+
         return CreateEmbeddingResponse(
             data=output_data,
             model=f"{provider}:{model}" if provider != "openai" else model,
@@ -1755,7 +1863,8 @@ class EmbeddingsBatchResponse(BaseModel):
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    request: Request = None
 ) -> EmbeddingsBatchResponse:
     texts = payload.texts or []
     if not texts:
@@ -1795,6 +1904,17 @@ async def create_embeddings_batch_endpoint(
                 "details": too_long
             }
         )
+
+    # Backpressure and tenant quotas (best-effort; request may be None in some test paths)
+    try:
+        if request is not None:
+            exc = await _check_backpressure_and_quotas(request, current_user)
+            if exc is not None:
+                raise exc
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     embeddings = await create_embeddings_batch_async(
         texts=texts,
@@ -1891,6 +2011,51 @@ async def get_embedding_model_info(
         "max_tokens": max_tokens,
         "allowed": True
     }
+
+
+class TenantQuotaResponse(BaseModel):
+    limit_rps: int
+    remaining: Optional[int] = None
+
+
+@router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
+async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
+    if is_single_user_mode() or TENANT_RPS <= 0:
+        return TenantQuotaResponse(limit_rps=0, remaining=None)
+    try:
+        client = await _get_redis_client()
+        ts = int(time.time())
+        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}:{ts}"
+        val = await client.get(key)
+        await client.close()
+        used = int(val or 0)
+        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=max(0, TENANT_RPS - used))
+    except Exception:
+        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=None)
+
+
+class PriorityBumpRequest(BaseModel):
+    job_id: str
+    priority: str = Field(..., description="one of: high|normal|low")
+    ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
+
+
+@router.post("/embeddings/job/priority/bump", summary="Override/bump job priority for routing into priority queues (best-effort)")
+async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
+    if not getattr(current_user, 'is_admin', False) and not is_single_user_mode():
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    pr = (req.priority or "").strip().lower()
+    if pr not in ("high", "normal", "low"):
+        raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
+    try:
+        client = await _get_redis_client()
+        key = f"embeddings:priority:override:{req.job_id}"
+        await client.set(key, pr)
+        await client.expire(key, int(req.ttl_seconds or 600))
+        await client.close()
+        return {"status": "ok", "job_id": req.job_id, "priority": pr, "ttl_seconds": int(req.ttl_seconds or 600)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
 
 
 class ModelActionRequest(BaseModel):

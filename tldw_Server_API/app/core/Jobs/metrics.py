@@ -63,6 +63,18 @@ def ensure_jobs_metrics_registered() -> None:
             labels=["domain", "queue", "job_type"],
         ),
         MetricDefinition(
+            name="prompt_studio.jobs.sla_breaches_total",
+            type=MetricType.COUNTER,
+            description="Total SLA breaches (queue_latency/duration)",
+            labels=["domain", "queue", "job_type", "kind"],
+        ),
+        MetricDefinition(
+            name="prompt_studio.jobs.queue_flag",
+            type=MetricType.GAUGE,
+            description="Queue control flags (paused/drain)",
+            labels=["domain", "queue", "flag"],
+        ),
+        MetricDefinition(
             name="prompt_studio.jobs.scheduled",
             type=MetricType.GAUGE,
             description="Jobs scheduled gauge (available_at in the future)",
@@ -358,3 +370,20 @@ def increment_json_truncated(job: Dict, kind: str) -> None:
     labels = dict(labels)
     labels["kind"] = str(kind)
     get_metrics_registry().increment("prompt_studio.jobs.json_truncated_total", 1, labels)
+
+
+def increment_sla_breach(job: Dict, kind: str) -> None:
+    ensure_jobs_metrics_registered()
+    if not get_metrics_registry:
+        return
+    labels = _labels(job)
+    labels = dict(labels)
+    labels["kind"] = str(kind)
+    get_metrics_registry().increment("prompt_studio.jobs.sla_breaches_total", 1, labels)
+
+
+def set_queue_flag(domain: str, queue: str, flag: str, value: bool) -> None:
+    ensure_jobs_metrics_registered()
+    if not get_metrics_registry:
+        return
+    get_metrics_registry().set_gauge("prompt_studio.jobs.queue_flag", 1.0 if value else 0.0, {"domain": domain, "queue": queue, "flag": flag})

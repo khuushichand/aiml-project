@@ -447,6 +447,123 @@
         <div id="ragSimpleSearch_resultList" class="mt-2"></div>
     </div>
 
+    <!-- Streaming Preview: NDJSON events (contexts + reasoning + deltas) -->
+    <div class="endpoint-section" id="ragStreamingPreview">
+        <h2>
+            <span class="endpoint-method post">POST</span>
+            <span class="endpoint-path">/api/v1/rag/search/stream - Streaming Preview</span>
+        </h2>
+        <p>Preview the initial <strong>contexts</strong> and a lightweight <strong>why</strong> summary in real time (NDJSON). Uses the Simple form’s query/type/limit.</p>
+        <div class="form-group">
+            <button class="api-button" id="ragStream_start" onclick="startRagStreaming()">Start Streaming Preview</button>
+            <button class="api-button" id="ragStream_stop" onclick="stopRagStreaming()" disabled>Stop</button>
+        </div>
+        <div class="columns">
+            <div class="column">
+                <h3>Contexts</h3>
+                <pre id="ragStream_contexts">(none)</pre>
+            </div>
+            <div class="column">
+                <h3>Why</h3>
+                <pre id="ragStream_why">(none)</pre>
+            </div>
+        </div>
+        <script>
+            let ragStreamAbort = null;
+            let ragStreamActive = false;
+            function _ragAuthHeaders(hdr = {}) {
+                try {
+                    if (!apiClient || !apiClient.token) return hdr;
+                    if (apiClient.authMode === 'single-user' || apiClient.preferApiKeyInMultiUser) {
+                        hdr['X-API-KEY'] = apiClient.token;
+                    } else {
+                        hdr['Authorization'] = `Bearer ${apiClient.token}`;
+                    }
+                } catch (e) {}
+                return hdr;
+            }
+            async function startRagStreaming() {
+                try {
+                    if (ragStreamActive) return;
+                    const btnStart = document.getElementById('ragStream_start');
+                    const btnStop = document.getElementById('ragStream_stop');
+                    const preC = document.getElementById('ragStream_contexts');
+                    const preW = document.getElementById('ragStream_why');
+                    preC.textContent = '(waiting...)';
+                    preW.textContent = '(waiting...)';
+                    btnStart.disabled = true; btnStop.disabled = false;
+                    ragStreamActive = true;
+
+                    // Build payload from Simple controls
+                    const q = (document.getElementById('ragSimpleSearch_query')?.value || '').trim();
+                    const st = (document.getElementById('ragSimpleSearch_search_type')?.value || 'hybrid');
+                    const limStr = (document.getElementById('ragSimpleSearch_limit')?.value || '10');
+                    const topK = parseInt(limStr, 10);
+                    const searchMode = (st === 'semantic') ? 'vector' : ((st === 'fulltext') ? 'fts' : 'hybrid');
+                    const payload = {
+                        query: q,
+                        search_mode: searchMode,
+                        top_k: isNaN(topK) ? 10 : topK,
+                        enable_generation: true,
+                        enable_claims: false
+                    };
+
+                    // Fire NDJSON request
+                    const ctrl = new AbortController();
+                    ragStreamAbort = ctrl;
+                    const url = `${apiClient.baseUrl}/api/v1/rag/search/stream`;
+                    const headers = _ragAuthHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/x-ndjson' });
+                    const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: ctrl.signal });
+                    if (!resp.ok || !resp.body) { throw new Error(`HTTP ${resp.status}`); }
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    const _update = (evt) => {
+                        try {
+                            if (evt.type === 'contexts') {
+                                const list = Array.isArray(evt.contexts) ? evt.contexts : [];
+                                preC.textContent = JSON.stringify(list, null, 2);
+                                if (evt.why) preW.textContent = JSON.stringify(evt.why, null, 2);
+                            } else if (evt.type === 'reasoning') {
+                                // Optional: display the plan under Why
+                                const cur = preW.textContent.trim();
+                                const plan = { plan: evt.plan || [] };
+                                preW.textContent = (cur === '(waiting...)' || !cur) ? JSON.stringify(plan, null, 2)
+                                    : (cur + '\n' + JSON.stringify(plan, null, 2));
+                            }
+                        } catch (e) { /* ignore */ }
+                    };
+                    while (ragStreamActive) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        for (const line of lines) {
+                            const trimmed = (line || '').trim();
+                            if (!trimmed) continue;
+                            try { const evt = JSON.parse(trimmed); _update(evt); } catch (e) { /* ignore parse errors */ }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('stream error', e?.message || e);
+                } finally {
+                    ragStreamActive = false;
+                    const btnStart = document.getElementById('ragStream_start');
+                    const btnStop = document.getElementById('ragStream_stop');
+                    btnStart.disabled = false; btnStop.disabled = true;
+                }
+            }
+            function stopRagStreaming() {
+                try { if (ragStreamAbort) ragStreamAbort.abort(); } catch (e) {}
+                ragStreamActive = false;
+                const btnStart = document.getElementById('ragStream_start');
+                const btnStop = document.getElementById('ragStream_stop');
+                btnStart.disabled = false; btnStop.disabled = true;
+            }
+        </script>
+    </div>
+
     <div class="endpoint-section" id="ragComplexSearch">
         <h2>
             <span class="endpoint-method post">POST</span>

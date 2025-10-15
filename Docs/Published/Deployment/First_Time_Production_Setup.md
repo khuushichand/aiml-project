@@ -46,8 +46,8 @@ Step A1 — Clone and prepare env
 git clone https://github.com/<your-org>/tldw_server.git
 cd tldw_server
 
-# Copy quick-start auth template and edit
-cp .env.authnz.template .env
+# Copy example env and edit (recommended for Compose)
+cp .env.example .env
 
 # Required values (examples)
 export AUTH_MODE=multi_user
@@ -73,6 +73,9 @@ docker compose ps
 
 The app listens on `:8000` inside the container and is exposed on the host at `:8000` by default.
 
+Note
+- `docker-compose.override.yml` is included with production‑leaning defaults (tldw_production, CORS, Postgres). Compose auto‑loads it alongside `docker-compose.yml`.
+
 Step A3 — First‑time setup (optional wizard)
 - The server exposes a local‑only setup flow at `/setup` when enabled.
 - Check status: `curl http://127.0.0.1:8000/api/v1/setup/status`
@@ -97,6 +100,23 @@ open http://127.0.0.1:8000/webui/
 Notes
 - For multi‑user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
 - To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
+
+Optional: Add a reverse proxy with Caddy (automatic HTTPS)
+```bash
+# Use the proxy variant with the base compose file
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+
+# Edit the hostname/email in Samples/Caddy/Caddyfile.compose before starting
+```
+
+Optional: Add a reverse proxy with Nginx
+```bash
+# Use the nginx proxy variant with the base compose file
+docker compose -f docker-compose.yml -f docker-compose.proxy-nginx.yml up -d
+
+# Ensure Samples/Nginx/nginx.conf has your domain and cert paths
+# Map /etc/letsencrypt into the container or adjust the paths accordingly
+```
 
 ## 4) Option B — Bare‑Metal (systemd + Nginx)
 
@@ -222,4 +242,3 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   - Keep global and module‑specific rate limiters enabled and tuned for your users.
 
 For a comprehensive list, see `User_Guides/Production_Hardening_Checklist.md`.
-

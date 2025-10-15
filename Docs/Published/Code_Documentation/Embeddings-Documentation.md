@@ -484,7 +484,7 @@ graph TB
     end
 ```
 
-## Monitoring & Operations
+## Monitoring & Operations {#monitoring--operations}
 
 ### Metrics Collection Flow
 

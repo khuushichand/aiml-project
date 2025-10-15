@@ -352,7 +352,7 @@ if (health.status === 'healthy') {
 }
 ```
 
-## Request & Response Schemas
+## Request & Response Schemas {#request--response-schemas}
 
 ### Available Databases
 
@@ -375,7 +375,7 @@ if (health.status === 'healthy') {
 
 Enable expansion to improve recall using strategies like acronym, synonym, domain, and entity expansion. Control via `expand_query` and `expansion_strategies` in `POST /search`.
 
-## Search Types & Strategies
+## Search Types & Strategies {#search-types--strategies}
 
 ### Hybrid Search Configuration
 
@@ -414,6 +414,21 @@ Generates a hypothetical answer to improve semantic search:
 // "Gradient descent is an optimization algorithm that..."
 // Then searches for similar documents
 ```
+
+## Agent Modes & Tools {#agent-modes--tools}
+
+The advanced agent endpoint (`POST /agent/advanced`) supports multiple modes and tool integrations:
+
+- Modes
+  - `rag` (default): Retrieve context from your configured sources and generate an answer.
+  - `research`: Enable research tools (e.g., web search) and multi‑step reasoning; may stream intermediate events.
+
+- Tools (examples)
+  - `web_search`: Use configured web search providers to augment retrieval.
+  - `reasoning`: Invoke a chain‑of‑thought style assistant to plan sub‑queries (streaming supported).
+  - `rerank`: Apply reranking models to retrieved chunks for improved relevance.
+
+Enable tools via `tools: ["web_search", "reasoning"]` in the request body. Each tool emits usage/latency metrics and may contribute to token and cost accounting in admin reports.
 
 ## Capabilities & Features
 
@@ -831,7 +846,7 @@ Handle validation errors gracefully:
 }
 ```
 
-## Rate Limiting & Performance
+## Rate Limiting & Performance {#rate-limiting--performance}
 
 ### Rate Limits
 
@@ -1134,4 +1149,4 @@ class LearningAssistant {
 
 The RAG API provides powerful search and question-answering capabilities with a clean, intuitive interface. Whether you need simple search, conversational Q&A, or advanced research capabilities, the API offers the flexibility and performance for production applications.
 
-For implementation details and extending the RAG module, see the [RAG Developer Guide](../Development/RAG-Developer-Guide.md).
+For implementation details and extending the RAG module, see the [RAG API Documentation](RAG_API_Documentation.md).

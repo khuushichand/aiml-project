@@ -464,6 +464,18 @@ async def isolated_test_environment(monkeypatch):
 @pytest_asyncio.fixture
 async def setup_test_database():
     """Create and setup the test database for the test session."""
+    # Ensure FastAPI + core settings pick Postgres for this test DB
+    test_dsn = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
+    os.environ["DATABASE_URL"] = test_dsn
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+        _reset_settings()
+        # Reset any pre-existing pool so app endpoints use Postgres on first access
+        # (some tests hit endpoints that call get_db_pool inside request handlers)
+        await _reset_db_pool()
+    except Exception:
+        pass
     # Connect to postgres database to create test database
     conn = await asyncpg.connect(
         host=TEST_DB_HOST,

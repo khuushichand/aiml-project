@@ -405,7 +405,7 @@ Response headers for observability:
 
 ---
 
-## Performance & Scaling
+## Performance & Scaling {#performance--scaling}
 
 ### Caching Strategy
 
@@ -459,7 +459,7 @@ max_connections = 20
 
 ---
 
-## Monitoring & Observability
+## Monitoring & Observability {#monitoring--observability}
 
 ### Prometheus Metrics
 

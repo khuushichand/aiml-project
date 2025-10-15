@@ -1,7 +1,14 @@
-"""Re-export AuthNZ test fixtures for Postgres-specific suite."""
+"""Re-export AuthNZ test fixtures for Postgres-specific suite.
 
-from tldw_Server_API.tests.AuthNZ.conftest import (
-    setup_test_database,  # noqa: F401
-    reset_singletons,    # noqa: F401
-    event_loop,          # noqa: F401
+This ensures all tests in this folder use the shared Postgres
+database setup, pool, and optional real audit service.
+"""
+
+from tldw_Server_API.tests.AuthNZ.conftest import (  # noqa: F401
+    setup_test_database,
+    reset_singletons,
+    event_loop,
+    clean_database,
+    test_db_pool,
+    real_audit_service,
 )

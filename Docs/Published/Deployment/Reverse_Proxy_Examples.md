@@ -1,4 +1,4 @@
-# Reverse Proxy Examples (Nginx & Traefik)
+# Reverse Proxy Examples (Nginx, Traefik, Caddy)
 
 This guide shows example configurations for running tldw_server behind a reverse proxy with TLS and WebSocket support.
 
@@ -151,6 +151,42 @@ services:
       - "80:80"
       - "443:443"
 ```
+
+## Caddy
+
+Caddy provides automatic HTTPS via ACME and a simple reverse proxy configuration. See sample at `Samples/Caddy/Caddyfile`.
+
+Minimal example:
+
+```caddyfile
+your.domain.com {
+  encode zstd gzip
+  reverse_proxy localhost:8000 {
+    transport http {
+      read_timeout  3600s
+      write_timeout 3600s
+      dial_timeout   60s
+    }
+  }
+  tls you@example.com
+}
+```
+
+Docker Compose variant
+- Use `docker-compose.proxy.yml` together with the base file to run Caddy and the app:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+```
+- The Caddyfile used in Compose is at `Samples/Caddy/Caddyfile.compose` (proxies to `app:8000`).
+
+Nginx Compose variant
+- Use `docker-compose.proxy-nginx.yml` together with the base file to run Nginx and the app:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.proxy-nginx.yml up -d
+```
+- The Nginx config used in Compose is at `Samples/Nginx/nginx.conf` (proxies to `app:8000`). Ensure certificate paths and `server_name` are set for your domain.
 
 ## CORS
 

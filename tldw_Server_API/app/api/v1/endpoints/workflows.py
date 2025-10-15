@@ -42,6 +42,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 
 def _utcnow_iso() -> str:
@@ -1276,6 +1277,21 @@ async def list_step_types():
             "example": {"url": "https://example.com/hooks/workflow"},
             "min_engine_version": "0.1.0",
         },
+        "tts": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string", "description": "Templated text. Defaults to last.text or inputs.summary"},
+                "model": {"type": "string", "default": "kokoro"},
+                "voice": {"type": "string", "default": "af_heart"},
+                "response_format": {"type": "string", "enum": ["mp3","wav","opus","flac","aac","pcm"], "default": "mp3"},
+                "speed": {"type": "number", "minimum": 0.25, "maximum": 4.0, "default": 1.0},
+                "provider": {"type": "string"}
+            },
+            "required": [],
+            "additionalProperties": True,
+            "example": {"input": "Narrate: {{ last.text }}", "model": "kokoro", "voice": "af_heart", "response_format": "mp3"},
+            "min_engine_version": "0.1.2",
+        },
         "delay": {
             "type": "object",
             "properties": {"ms": {"type": "integer", "minimum": 1, "default": 1000}},
@@ -1292,6 +1308,29 @@ async def list_step_types():
             "example": {"message": "step reached", "level": "debug"},
             "min_engine_version": "0.1.0",
         },
+        "process_media": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["web_scraping"], "default": "web_scraping"},
+                "scrape_method": {"type": "string", "default": "Individual URLs"},
+                "url_input": {"type": "string"},
+                "url_level": {"type": ["integer", "null"]},
+                "max_pages": {"type": "integer", "default": 10},
+                "max_depth": {"type": "integer", "default": 3},
+                "summarize": {"type": "boolean", "default": False},
+                "custom_prompt": {"type": ["string","null"]},
+                "api_name": {"type": ["string","null"]},
+                "system_prompt": {"type": ["string","null"]},
+                "temperature": {"type": "number", "default": 0.7},
+                "custom_cookies": {"type": ["array","null"]},
+                "user_agent": {"type": ["string","null"]},
+                "custom_headers": {"type": ["object","null"]}
+            },
+            "required": ["url_input"],
+            "additionalProperties": True,
+            "example": {"kind": "web_scraping", "scrape_method": "Individual URLs", "url_input": "https://example.com/article"},
+            "min_engine_version": "0.1.2"
+        },
     }
     out = []
     for s in steps:
@@ -1304,6 +1343,66 @@ async def list_step_types():
             "min_engine_version": sch.get("min_engine_version", "0.1.0"),
         })
     return out
+
+
+@router.get("/config")
+async def get_workflows_config(current_user: User = Depends(get_request_user), db: WorkflowsDatabase = Depends(_get_db)):
+    """Return effective Workflows configuration derived from environment and backend (read-only)."""
+    import os
+    def _env_bool(name: str, default: bool = False) -> bool:
+        v = os.getenv(name, "")
+        if not v:
+            return default
+        return v.lower() in {"1", "true", "yes", "y", "on"}
+
+    backend_type = "sqlite"
+    try:
+        if getattr(db, "backend", None) and getattr(db.backend, "backend_type", None) == BackendType.POSTGRESQL:
+            backend_type = "postgres"
+    except Exception:
+        pass
+
+    def _csv(name: str) -> list[str]:
+        raw = os.getenv(name, "")
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    cfg = {
+        "backend": {
+            "type": backend_type,
+        },
+        "rate_limits": {
+            "disabled": _env_bool("WORKFLOWS_DISABLE_RATE_LIMITS", False),
+            "quotas_disabled": _env_bool("WORKFLOWS_DISABLE_QUOTAS", False),
+            "quota_burst_per_min": int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60") or 60),
+            "quota_daily_per_user": int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 1000),
+        },
+        "engine": {
+            "tenant_concurrency": int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2") or 2),
+            "workflow_concurrency": int(os.getenv("WORKFLOWS_WORKFLOW_CONCURRENCY", "1") or 1),
+        },
+        "egress": {
+            "profile": (os.getenv("WORKFLOWS_EGRESS_PROFILE", "") or "(auto)").strip(),
+            "allowed_ports": _csv("WORKFLOWS_EGRESS_ALLOWED_PORTS") or ["80","443"],
+            "allowlist": _csv("WORKFLOWS_EGRESS_ALLOWLIST"),
+            "block_private": _env_bool("WORKFLOWS_EGRESS_BLOCK_PRIVATE", True),
+        },
+        "webhooks": {
+            "completion_disabled": _env_bool("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", False),
+            "secret_set": bool(os.getenv("WORKFLOWS_WEBHOOK_SECRET")),
+            "dlq_enabled": _env_bool("WORKFLOWS_WEBHOOK_DLQ_ENABLED", False),
+            "allowlist": _csv("WORKFLOWS_WEBHOOK_ALLOWLIST"),
+            "denylist": _csv("WORKFLOWS_WEBHOOK_DENYLIST"),
+        },
+        "artifacts": {
+            "validate_strict": _env_bool("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", True),
+            "encryption_enabled": _env_bool("WORKFLOWS_ARTIFACT_ENCRYPTION", False),
+            "gc_enabled": _env_bool("WORKFLOWS_ARTIFACT_GC_ENABLED", False),
+            "retention_days": int(os.getenv("WORKFLOWS_ARTIFACT_RETENTION_DAYS", "30") or 30),
+        },
+    }
+    return cfg
 
 
 @router.post(

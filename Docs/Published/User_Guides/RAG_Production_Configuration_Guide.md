@@ -244,7 +244,7 @@ AND resolved = FALSE
 ORDER BY timestamp DESC;
 ```
 
-## Monitoring & Metrics
+## Monitoring & Metrics {#monitoring--metrics}
 
 ### 1. Enable Metrics Collection
 

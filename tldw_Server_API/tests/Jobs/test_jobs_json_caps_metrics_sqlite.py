@@ -23,6 +23,9 @@ def test_json_truncation_emits_metrics_sqlite(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBS_JSON_TRUNCATE", "true")
 
     jm = JobManager()
+    # Ensure acquire gate is open in case a prior TestClient closed lifespan
+    from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+    _JM.set_acquire_gate(False)
 
     # Payload truncation on create
     j = jm.create_job(
@@ -51,6 +54,8 @@ def test_json_caps_reject_does_not_emit_truncation_sqlite(monkeypatch, tmp_path)
     monkeypatch.delenv("JOBS_JSON_TRUNCATE", raising=False)
 
     jm = JobManager()
+    from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+    _JM.set_acquire_gate(False)
     with pytest.raises(ValueError):
         jm.create_job(
             domain="prompt_studio",
@@ -61,4 +66,3 @@ def test_json_caps_reject_does_not_emit_truncation_sqlite(monkeypatch, tmp_path)
         )
     # No truncation metric should be emitted when rejecting
     assert len(reg.values["prompt_studio.jobs.json_truncated_total"]) == 0
-

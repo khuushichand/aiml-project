@@ -46,8 +46,8 @@ Step A1 — Clone and prepare env
 git clone https://github.com/<your-org>/tldw_server.git
 cd tldw_server
 
-# Copy quick-start auth template and edit
-cp .env.authnz.template .env
+# Copy example env and edit (recommended for Compose)
+cp .env.example .env
 
 # Required values (examples)
 export AUTH_MODE=multi_user
@@ -72,6 +72,8 @@ docker compose ps
 ```
 
 The app listens on `:8000` inside the container and is exposed on the host at `:8000` by default.
+Compose note
+- `docker-compose.override.yml` ships with production‑leaning defaults and is auto‑loaded with `docker-compose.yml`.
 
 Step A3 — First‑time setup (optional wizard)
 - The server exposes a local‑only setup flow at `/setup` when enabled.

@@ -758,6 +758,12 @@ class WorkflowEngine:
             return await run_media_ingest_adapter(step_cfg, ctx)
         if step_type == "mcp_tool":
             return await run_mcp_tool_adapter(step_cfg, ctx)
+        if step_type == "tts":
+            from tldw_Server_API.app.core.Workflows.adapters import run_tts_adapter
+            return await run_tts_adapter(step_cfg, ctx)
+        if step_type == "process_media":
+            from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
+            return await run_process_media_adapter(step_cfg, ctx)
         if step_type == "webhook":
             return await run_webhook_adapter(step_cfg, ctx)
         if step_type == "branch":

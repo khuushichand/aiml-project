@@ -132,8 +132,32 @@ class ChunkingWorker(BaseWorker):
     
     async def _send_to_next_stage(self, result: EmbeddingMessage):
         """Send chunked data to embedding queue"""
+        # Priority routing: optional
+        target_queue = self.embedding_queue
+        try:
+            if str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes"):
+                # Check operator override first
+                pr = None
+                try:
+                    key = f"embeddings:priority:override:{result.job_id}"
+                    pr = await self.redis_client.get(key)
+                except Exception:
+                    pr = None
+                # Map numeric priority to bucket when no override
+                if not pr:
+                    p = int(getattr(result, 'priority', 50) or 50)
+                    if p >= 75:
+                        pr = 'high'
+                    elif p <= 25:
+                        pr = 'low'
+                    else:
+                        pr = 'normal'
+                target_queue = f"{self.embedding_queue}:{pr}"
+        except Exception:
+            target_queue = self.embedding_queue
+
         await self.redis_client.xadd(
-            self.embedding_queue,
+            target_queue,
             model_dump_compat(result)
         )
         logger.debug(f"Sent job {result.job_id} to embedding queue")

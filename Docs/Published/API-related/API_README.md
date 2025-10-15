@@ -70,4 +70,4 @@ The RAG module provides advanced search and question-answering capabilities acro
 
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
-- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
+- [RAG API Documentation](RAG_API_Documentation.md) - Architecture and implementation details

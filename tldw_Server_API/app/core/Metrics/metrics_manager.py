@@ -357,6 +357,38 @@ class MetricsRegistry:
                 buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
             )
         )
+        # Rewrite cache metrics
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_hits_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache hits",
+                labels=["corpus", "intent"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_misses_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache misses",
+                labels=["corpus", "intent", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_rewrite_cache_puts_total",
+                type=MetricType.COUNTER,
+                description="Total rewrite cache writes",
+                labels=["corpus", "intent"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_batch_query_reuse_total",
+                type=MetricType.COUNTER,
+                description="Total reused results in batch planning",
+            )
+        )
         self.register_metric(
             MetricDefinition(
                 name="rag_phase_budget_exhausted_total",

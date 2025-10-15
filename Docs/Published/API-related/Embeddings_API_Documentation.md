@@ -572,9 +572,9 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ## Related Documentation
 
-- [RAG Service Documentation](./RAG_Service_Documentation.md)
+- [RAG API Guide](./RAG-API-Guide.md)
 - [API Design Guide](./API_Design.md)
-- [Authentication Documentation](./Authentication_Documentation.md)
+- [AuthNZ API Guide](./AuthNZ-API-Guide.md)
 
 ### 9. Re-Embed Scheduling (Jobs)
 

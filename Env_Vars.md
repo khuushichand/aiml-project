@@ -184,6 +184,16 @@ Runtime overrides (non‑persistent) are available via API:
 - `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage‑specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma‑separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
 
+### Backpressure & Quotas
+- `EMB_BACKPRESSURE_MAX_DEPTH`: Maximum depth across core embeddings queues (`embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`) before ingest/embeddings endpoints return HTTP 429 with `Retry-After`. Default: `25000`.
+- `EMB_BACKPRESSURE_MAX_AGE_SECONDS`: Maximum age (seconds) of the oldest message across core embeddings queues before HTTP 429. Default: `300`.
+- `EMBEDDINGS_TENANT_RPS`: Per‑tenant requests per second limit for embeddings endpoints (multi‑tenant mode only). `0` disables. Default: `0`.
+- `INGEST_TENANT_RPS`: Per‑tenant requests per second limit for ingestion endpoints (multi‑tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
+
+### Priority Queues
+- `EMBEDDINGS_PRIORITY_ENABLED`: Enable per‑stage priority sub‑queues with weighted fair consumption (`true|false`). Default: `false`.
+- `EMBEDDINGS_PRIORITY_WEIGHTS`: Comma‑separated weights for `high`, `normal`, `low` priority buckets used by workers when `EMBEDDINGS_PRIORITY_ENABLED=true`. Example: `high:5,normal:3,low:1` (default).
+
 ## LLM Provider Keys
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_API_KEY`
 - Additional provider‑specific variables as required by their APIs.

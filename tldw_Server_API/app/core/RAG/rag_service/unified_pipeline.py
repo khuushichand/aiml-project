@@ -566,7 +566,7 @@ async def unified_rag_pipeline(
                         intent_label = None
                 if RewriteCache:
                     try:
-                        rc = RewriteCache()
+                        rc = RewriteCache(user_id=user_id or "anon")
                         cached = rc.get(query, intent=intent_label, corpus=index_namespace)
                         if cached:
                             cached_rewrites = [c for c in cached if isinstance(c, str) and c.strip()]
@@ -589,7 +589,7 @@ async def unified_rag_pipeline(
                     if RewriteCache and len(expanded_queries) > 1:
                         rew = [q for q in expanded_queries if q != query][:5]
                         if rew:
-                            rc = RewriteCache()
+                            rc = RewriteCache(user_id=user_id or "anon")
                             rc.put(query, rewrites=rew, intent=intent_label, corpus=index_namespace)
                 except Exception:
                     pass
@@ -1464,6 +1464,15 @@ async def unified_rag_pipeline(
                 logger.warning(f"VLM late-chunking failed: {e}")
 
 
+        # Apply personalization priors (pre-rerank) if requested
+        try:
+            if apply_feedback_boost and result.documents and UserPersonalizationStore:
+                store = UserPersonalizationStore(feedback_user_id or user_id)
+                result.documents = store.boost_documents(result.documents, corpus=index_namespace)
+                result.metadata.setdefault("personalization", {})["boost_applied_pre_rerank"] = True
+        except Exception:
+            pass
+
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
             rerank_start = time.time()
@@ -1615,6 +1624,88 @@ async def unified_rag_pipeline(
                         _otel_cm_rk.__exit__(None, None, None)
                     except Exception:
                         pass
+
+        # ========== WHY THESE SOURCES (metadata) ==========
+        try:
+            docs = result.documents or []
+            if docs:
+                import urllib.parse
+                def _host(u: Optional[str]) -> Optional[str]:
+                    try:
+                        if not u:
+                            return None
+                        return urllib.parse.urlparse(str(u)).hostname
+                    except Exception:
+                        return None
+                hosts = []
+                sources_ = []
+                ages = []
+                scores = []
+                now_ts = time.time()
+                for d in docs:
+                    md = getattr(d, 'metadata', None) or (d.get('metadata') if isinstance(d, dict) else {}) or {}
+                    url = md.get('url')
+                    h = _host(url)
+                    if h:
+                        hosts.append(h)
+                    src = md.get('source') or str(getattr(d, 'source', '') or '')
+                    if src:
+                        sources_.append(str(src))
+                    created = md.get('last_modified') or md.get('created_at')
+                    ts = None
+                    try:
+                        if isinstance(created, (int, float)):
+                            ts = float(created)
+                        elif isinstance(created, str) and created:
+                            from datetime import datetime
+                            ts = datetime.fromisoformat(created.replace('Z','+00:00')).timestamp()
+                    except Exception:
+                        ts = None
+                    if ts is not None:
+                        ages.append(max(0.0, (now_ts - ts) / 86400.0))
+                    try:
+                        scores.append(float(getattr(d, 'score', d.get('score', 0.0) if isinstance(d, dict) else 0.0)))
+                    except Exception:
+                        scores.append(0.0)
+                n = max(1, len(docs))
+                uniq_hosts = len(set(hosts)) if hosts else 0
+                uniq_sources = len(set(sources_)) if sources_ else 0
+                diversity = min(1.0, max(uniq_hosts, uniq_sources) / float(n))
+                fresh_portion = 0.5
+                if ages:
+                    fresh = sum(1 for a in ages if a <= 90.0)
+                    fresh_portion = fresh / float(len(ages))
+                if scores:
+                    smin, smax = min(scores), max(scores)
+                    if smax > smin:
+                        topicality = sum((s - smin) / (smax - smin) for s in scores) / float(len(scores))
+                    else:
+                        topicality = 1.0
+                else:
+                    topicality = 0.0
+                def _title(md):
+                    try:
+                        return (md.get('title') or '') if isinstance(md, dict) else ''
+                    except Exception:
+                        return ''
+                top_contexts = []
+                for d in docs[: min(10, n)]:
+                    md = getattr(d, 'metadata', None) or (d.get('metadata') if isinstance(d, dict) else {}) or {}
+                    top_contexts.append({
+                        "id": getattr(d, 'id', d.get('id') if isinstance(d, dict) else None),
+                        "title": _title(md),
+                        "score": float(getattr(d, 'score', md.get('score', 0.0) if isinstance(md, dict) else 0.0) or 0.0),
+                        "url": md.get('url'),
+                        "source": md.get('source') or str(getattr(d, 'source', '') or ''),
+                    })
+                result.metadata["why_these_sources"] = {
+                    "diversity": round(float(diversity), 4),
+                    "freshness": round(float(fresh_portion), 4),
+                    "topicality": round(float(topicality), 4),
+                    "top_contexts": top_contexts,
+                }
+        except Exception:
+            pass
 
         # ========== SIBLING INCLUSION ==========
         if include_sibling_chunks and result.documents and sibling_window and sibling_window > 0:
@@ -2710,27 +2801,154 @@ async def unified_batch_pipeline(
         List of results in the same order as queries
     """
     semaphore = asyncio.Semaphore(max_concurrent)
-    
+
+    # Lightweight normalizer to dedupe/cluster identical queries
+    def _normalize(q: str) -> str:
+        try:
+            q = (q or "").strip().lower()
+            out = []
+            prev_space = False
+            for ch in q:
+                if ch.isalnum():
+                    out.append(ch)
+                    prev_space = False
+                else:
+                    if not prev_space:
+                        out.append(" ")
+                        prev_space = True
+            return "".join(out).strip()
+        except Exception:
+            return q or ""
+
+    # Group indices by normalized query (identicals)
+    normalized_map: Dict[str, List[int]] = {}
+    for idx, q in enumerate(queries or []):
+        normalized_map.setdefault(_normalize(q), []).append(idx)
+
+    # Deduped representatives (first occurrence of each normalized key)
+    unique_keys = list(normalized_map.keys())
+    rep_texts = [queries[normalized_map[k][0]] for k in unique_keys]
+
+    # Near-duplicate clustering via cosine similarity of embeddings (best-effort)
+    clusters: Dict[int, List[int]] = {}
+    try:
+        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+            create_embeddings_batch,
+            get_embedding_config,
+        )
+        # Get embeddings for representative texts
+        cfg = get_embedding_config()
+        vectors = await asyncio.get_event_loop().run_in_executor(
+            None,
+            create_embeddings_batch,
+            rep_texts,
+            cfg,
+            None,
+        )
+        # Normalize vectors to unit length for cosine
+        def _norm(v):
+            try:
+                import math
+                if hasattr(v, 'tolist'):
+                    v = v.tolist()
+                s = math.sqrt(sum((float(x) or 0.0) ** 2 for x in v))
+                if s > 0:
+                    return [float(x) / s for x in v]
+            except Exception:
+                pass
+            return v
+        vecs = [_norm(v) for v in (vectors or [])]
+        # Cosine similarity
+        def _cos(a, b):
+            try:
+                return float(sum((ai * bi) for ai, bi in zip(a, b)))
+            except Exception:
+                return 0.0
+        # Threshold from env or default 0.9
+        import os as _os
+        try:
+            thr = float(_os.getenv('RAG_BATCH_NEAR_DUP_THRESHOLD', '0.9'))
+        except Exception:
+            thr = 0.9
+        used = set()
+        for i, vi in enumerate(vecs):
+            if i in used:
+                continue
+            clusters[i] = [i]
+            used.add(i)
+            for j in range(i + 1, len(vecs)):
+                if j in used:
+                    continue
+                vj = vecs[j]
+                if not isinstance(vi, list) or not isinstance(vj, list):
+                    continue
+                if _cos(vi, vj) >= thr:
+                    clusters[i].append(j)
+                    used.add(j)
+    except Exception:
+        # Fallback: each unique becomes its own cluster
+        clusters = {i: [i] for i in range(len(unique_keys))}
+
+    # Map cluster head index -> representative query text
+    heads = list(clusters.keys())
+    head_queries = [rep_texts[h] for h in heads]
+
     async def process_with_semaphore(query: str) -> UnifiedSearchResult:
         async with semaphore:
             return await unified_rag_pipeline(query=query, **kwargs)
-    
-    tasks = [process_with_semaphore(q) for q in queries]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Convert exceptions to error results
-    final_results = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            error_result = UnifiedSearchResult(
-                documents=[],
-                query=queries[i],
-                errors=[str(result)]
-            )
-            final_results.append(error_result)
-        else:
-            final_results.append(result)
-    
+
+    # Run heads only
+    tasks = [process_with_semaphore(q) for q in head_queries]
+    head_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Build final results in original order, reusing unique results
+    final_results: List[UnifiedSearchResult] = [None] * len(queries)  # type: ignore
+    reuse_count = 0
+    # Build mapping from unique key index -> head result
+    # unique_keys[i] corresponds to rep_texts[i]
+    # Find which head each i belongs to
+    head_for: Dict[int, int] = {}
+    for h, members in clusters.items():
+        for m in members:
+            head_for[m] = h
+    # Stitch results
+    for i_uq, key in enumerate(unique_keys):
+        # Find the head index for this unique
+        h = head_for.get(i_uq, i_uq)
+        ures = head_results[heads.index(h)] if h in heads else head_results[0]
+        indices = normalized_map.get(key, [])
+        for pos, i in enumerate(indices):
+            if isinstance(ures, Exception):
+                final_results[i] = UnifiedSearchResult(documents=[], query=queries[i], errors=[str(ures)])
+            else:
+                reuse_count += 1 if pos > 0 else 0
+                # Copy minimal fields for non-heads to preserve original query text
+                final_results[i] = (
+                    ures if pos == 0 and queries[i] == rep_texts[i_uq]
+                    else UnifiedSearchResult(
+                        documents=ures.documents,
+                        query=queries[i],
+                        expanded_queries=ures.expanded_queries,
+                        metadata=ures.metadata,
+                        timings=ures.timings,
+                        citations=ures.citations,
+                        feedback_id=ures.feedback_id,
+                        generated_answer=ures.generated_answer,
+                        cache_hit=ures.cache_hit,
+                        errors=ures.errors,
+                        security_report=ures.security_report,
+                        total_time=ures.total_time,
+                    )
+                )
+
+    # Metrics: record reuse count
+    try:
+        if reuse_count > 0:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+            increment_counter("rag_batch_query_reuse_total", reuse_count)
+    except Exception:
+        pass
+
     return final_results
 
 

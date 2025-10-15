@@ -246,7 +246,7 @@ GET `/api/v1/rag/advanced?query=...&with_citations=true&with_answer=true`
 
 Returns unified response with common features enabled.
 
-### Capabilities & Features
+### Capabilities & Features {#capabilities--features}
 
 GET `/api/v1/rag/capabilities` — service capabilities, defaults, limits
 

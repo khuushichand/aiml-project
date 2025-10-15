@@ -7,10 +7,9 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_endpoints_pg(setup_test_database):
+async def test_admin_endpoints_pg(test_db_pool):
     # App and overrides
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
@@ -18,8 +17,8 @@ async def test_admin_endpoints_pg(setup_test_database):
     from tldw_Server_API.app.core.config import settings as app_settings
     app_settings['CSRF_ENABLED'] = False
 
-    # Ensure Postgres pool
-    pool = await get_db_pool()
+    # Ensure Postgres pool from fixture
+    pool = test_db_pool
 
     # Ensure org/team/api_keys/usage tables exist
     await pool.execute(
@@ -141,4 +140,3 @@ async def test_admin_endpoints_pg(setup_test_database):
         assert any(k['id'] == vk['id'] for k in arr)
 
     app.dependency_overrides.pop(require_admin, None)
-

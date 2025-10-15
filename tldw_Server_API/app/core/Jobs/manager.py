@@ -27,10 +27,13 @@ from .metrics import (
     increment_completed,
     increment_cancelled,
     increment_json_truncated,
+    increment_sla_breach,
+    set_queue_flag,
 )
 from .tracing import job_span
 from .event_stream import emit_job_event
 from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob, decrypt_json_blob
+from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob_with_key, decrypt_json_blob_with_key
 
 
 def _parse_dt(v: Any) -> Optional[datetime]:
@@ -181,25 +184,22 @@ class JobManager:
 
     # --- Queue controls (pause/drain) ---
     def _get_queue_flags(self, domain: str, queue: str) -> Dict[str, bool]:
+        conn = self._connect()
         try:
-            conn = self._connect()
-            try:
-                if self.backend == "postgres":
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute("SELECT paused, drain FROM job_queue_controls WHERE domain=%s AND queue=%s", (domain, queue))
-                        row = cur.fetchone()
-                        if not row:
-                            return {"paused": False, "drain": False}
-                        return {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
-                else:
-                    row = conn.execute("SELECT paused, drain FROM job_queue_controls WHERE domain=? AND queue=?", (domain, queue)).fetchone()
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    cur.execute("SELECT paused, drain FROM job_queue_controls WHERE domain=%s AND queue=%s", (domain, queue))
+                    row = cur.fetchone()
                     if not row:
                         return {"paused": False, "drain": False}
-                    return {"paused": bool(int(row[0] or 0)), "drain": bool(int(row[1] or 0))}
-            finally:
-                conn.close()
-        except Exception:
-            return {"paused": False, "drain": False}
+                    return {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
+            else:
+                row = conn.execute("SELECT paused, drain FROM job_queue_controls WHERE domain=? AND queue=?", (domain, queue)).fetchone()
+                if not row:
+                    return {"paused": False, "drain": False}
+                return {"paused": bool(int(row[0] or 0)), "drain": bool(int(row[1] or 0))}
+        finally:
+            conn.close()
 
     def set_queue_control(self, domain: str, queue: str, action: str) -> Dict[str, bool]:
         action = str(action or "").lower()
@@ -225,7 +225,12 @@ class JobManager:
                             (domain, queue, bool(paused), bool(drain)),
                         )
                         row = cur.fetchone()
-                        return {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
+                        flags = {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
+                        try:
+                            set_queue_flag(domain, queue, "paused", flags["paused"]) ; set_queue_flag(domain, queue, "drain", flags["drain"])
+                        except Exception:
+                            pass
+                        return flags
             else:
                 with conn:
                     conn.execute(
@@ -236,7 +241,12 @@ class JobManager:
                         (domain, queue, 1 if paused else 0, 1 if drain else 0),
                     )
                     row = conn.execute("SELECT paused, drain FROM job_queue_controls WHERE domain=? AND queue=?", (domain, queue)).fetchone()
-                    return {"paused": bool(int(row[0] or 0)), "drain": bool(int(row[1] or 0))}
+                    flags = {"paused": bool(int(row[0] or 0)), "drain": bool(int(row[1] or 0))}
+                    try:
+                        set_queue_flag(domain, queue, "paused", flags["paused"]) ; set_queue_flag(domain, queue, "drain", flags["drain"])
+                    except Exception:
+                        pass
+                    return flags
         finally:
             conn.close()
 
@@ -378,6 +388,10 @@ class JobManager:
                         conn.execute("INSERT INTO job_attachments(job_id,kind,content_text) VALUES(?,?,?)", (int(job_id), "tag", msg))
                 try:
                     emit_job_event("job.sla_breached", job={"id": int(job_id), "domain": domain, "queue": queue, "job_type": job_type}, attrs={"kind": kind, "value": float(value), "threshold": float(threshold)})
+                except Exception:
+                    pass
+                try:
+                    increment_sla_breach({"domain": domain, "queue": queue, "job_type": job_type}, kind)
                 except Exception:
                     pass
             finally:
@@ -771,6 +785,18 @@ class JobManager:
                         )
                         row = cur.fetchone()
                         d = dict(row)
+                        # SLA check: queue latency (SQLite single-update path)
+                        try:
+                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
+                            if pol and (pol.get("enabled") in (True, 1)):
+                                ca = _parse_dt(d.get("acquired_at"))
+                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
+                                    qlat = max(0.0, (ca - cr).total_seconds())
+                                    if qlat > float(pol.get("max_queue_latency_seconds")):
+                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
+                        except Exception:
+                            pass
                         try:
                             self._assert_invariants(d)
                         except Exception:
@@ -1115,12 +1141,9 @@ class JobManager:
                 pass
             return None
         # Queue-specific pause/drain gate
-        try:
-            flags = self._get_queue_flags(domain, queue)
-            if flags.get("paused"):
-                return None
-        except Exception:
-            pass
+        flags = self._get_queue_flags(domain, queue)
+        if flags.get("paused"):
+            return None
         # Domain/user inflight limit
         try:
             max_inflight = self._quota_get("JOBS_QUOTA_MAX_INFLIGHT", domain, owner_user_id)
@@ -1186,7 +1209,7 @@ class JobManager:
                             if pol and (pol.get("enabled") in (True, 1)):
                                 ca = _parse_dt(d.get("acquired_at"))
                                 cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
-                                if ca and cr and pol.get("max_queue_latency_seconds"):
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
                                     qlat = max(0.0, (ca - cr).total_seconds())
                                     if qlat > float(pol.get("max_queue_latency_seconds")):
                                         self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
@@ -1313,13 +1336,25 @@ class JobManager:
                         if not row:
                             return None
                         d = dict(row)
+                        # SLA check: queue latency (SQLite two-step path)
+                        try:
+                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
+                            if pol and (pol.get("enabled") in (True, 1)):
+                                ca = _parse_dt(d.get("acquired_at"))
+                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
+                                    qlat = max(0.0, (ca - cr).total_seconds())
+                                    if qlat > float(pol.get("max_queue_latency_seconds")):
+                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
+                        except Exception:
+                            pass
                         # SLA check: queue latency
                         try:
                             pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
                             if pol and (pol.get("enabled") in (True, 1)):
                                 ca = _parse_dt(d.get("acquired_at"))
                                 cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
-                                if ca and cr and pol.get("max_queue_latency_seconds"):
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
                                     qlat = max(0.0, (ca - cr).total_seconds())
                                     if qlat > float(pol.get("max_queue_latency_seconds")):
                                         self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
@@ -1649,7 +1684,7 @@ class JobManager:
                                 # SLA check: duration
                                 try:
                                     pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
-                                    if pol and (pol.get("enabled") in (True, 1)) and pol.get("max_duration_seconds"):
+                                    if pol and (pol.get("enabled") in (True, 1)) and (pol.get("max_duration_seconds") is not None):
                                         st = _parse_dt(d.get("started_at")) or _parse_dt(d.get("acquired_at"))
                                         if st:
                                             dur = max(0.0, (datetime.utcnow() - st).total_seconds())
@@ -1744,7 +1779,7 @@ class JobManager:
                             # SLA check: duration
                             try:
                                 pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
-                                if pol and (pol.get("enabled") in (True, 1)) and pol.get("max_duration_seconds"):
+                                if pol and (pol.get("enabled") in (True, 1)) and (pol.get("max_duration_seconds") is not None):
                                     st = _parse_dt(d.get("started_at")) or _parse_dt(d.get("acquired_at"))
                                     if st:
                                         dur = max(0.0, (datetime.utcnow() - st).total_seconds())
@@ -3096,6 +3131,149 @@ class JobManager:
             out.append(j)
         return out
 
+    # --- Admin reschedule / retry-now helpers ---
+    def reschedule_jobs(
+        self,
+        *,
+        domain: Optional[str] = None,
+        queue: Optional[str] = None,
+        job_type: Optional[str] = None,
+        status: Optional[str] = None,
+        set_now: bool = True,
+        delta_seconds: Optional[int] = None,
+        dry_run: bool = False,
+    ) -> int:
+        """Reschedule jobs by adjusting available_at.
+
+        If set_now is True, sets available_at=now() for matched jobs.
+        Otherwise, adds delta_seconds to current available_at (or sets from now if NULL).
+        """
+        if status and status not in {"queued", "failed", "processing", "completed", "cancelled", "quarantined"}:
+            raise ValueError("Unsupported status filter")
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    where = ["1=1"]
+                    params: List[Any] = []
+                    if domain:
+                        where.append("domain=%s"); params.append(domain)
+                    if queue:
+                        where.append("queue=%s"); params.append(queue)
+                    if job_type:
+                        where.append("job_type=%s"); params.append(job_type)
+                    if status:
+                        where.append("status=%s"); params.append(status)
+                    wh = " AND ".join(where)
+                    cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params))
+                    count = int(cur.fetchone()[0])
+                    if dry_run:
+                        return count
+                    if set_now:
+                        cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
+                    else:
+                        if delta_seconds is None:
+                            raise ValueError("delta_seconds required when set_now=false")
+                        cur.execute(f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}", tuple([int(delta_seconds)] + params))
+                    return count
+            else:
+                where = ["1=1"]
+                params: List[Any] = []
+                if domain:
+                    where.append("domain=?"); params.append(domain)
+                if queue:
+                    where.append("queue=?"); params.append(queue)
+                if job_type:
+                    where.append("job_type=?"); params.append(job_type)
+                if status:
+                    where.append("status=?"); params.append(status)
+                wh = " AND ".join(where)
+                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params)).fetchone()
+                count = int(row[0]) if row else 0
+                if dry_run:
+                    return count
+                with conn:
+                    if set_now:
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
+                    else:
+                        if delta_seconds is None:
+                            raise ValueError("delta_seconds required when set_now=false")
+                        conn.execute(f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}")
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME(available_at, ?) WHERE {wh}", tuple([f"+{int(delta_seconds)} seconds"] + params))
+                return count
+        finally:
+            conn.close()
+
+    def retry_now_jobs(
+        self,
+        *,
+        domain: Optional[str] = None,
+        queue: Optional[str] = None,
+        job_type: Optional[str] = None,
+        only_failed: bool = True,
+        dry_run: bool = False,
+    ) -> int:
+        """Force immediate retry by moving eligible jobs to queued with available_at=now().
+
+        By default targets failed jobs with retries remaining. If only_failed is False,
+        also adjusts queued scheduled jobs by setting available_at=now().
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    where = ["1=1"]; params: List[Any] = []
+                    if domain:
+                        where.append("domain=%s"); params.append(domain)
+                    if queue:
+                        where.append("queue=%s"); params.append(queue)
+                    if job_type:
+                        where.append("job_type=%s"); params.append(job_type)
+                    wh = " AND ".join(where)
+                    cur.execute(
+                        (
+                            f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
+                            "(status='failed' AND retry_count < max_retries) "
+                            + (" OR (status='queued' AND available_at > NOW())" if not only_failed else "") + ")"
+                        ),
+                        tuple(params),
+                    )
+                    count = int(cur.fetchone()[0])
+                    if dry_run:
+                        return count
+                    with conn:
+                        cur.execute(f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries", tuple(params))
+                        if not only_failed:
+                            cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at > NOW()", tuple(params))
+                    return count
+            else:
+                where = ["1=1"]; params: List[Any] = []
+                if domain:
+                    where.append("domain=?"); params.append(domain)
+                if queue:
+                    where.append("queue=?"); params.append(queue)
+                if job_type:
+                    where.append("job_type=?"); params.append(job_type)
+                wh = " AND ".join(where)
+                row = conn.execute(
+                    (
+                        f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
+                        "(status='failed' AND retry_count < max_retries) "
+                        + (" OR (status='queued' AND available_at > DATETIME('now'))" if not only_failed else "") + ")"
+                    ),
+                    tuple(params),
+                ).fetchone()
+                count = int(row[0]) if row else 0
+                if dry_run:
+                    return count
+                with conn:
+                    conn.execute(f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries", tuple(params))
+                    if not only_failed:
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at > DATETIME('now')", tuple(params))
+                return count
+        finally:
+            conn.close()
+
     def get_queue_stats(
         self,
         *,
@@ -3208,6 +3386,175 @@ class JobManager:
                     where.append("queue = ?"); params2.append(queue)
                 row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()
                 return int(row[0]) if row else 0
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def add_job_attachment(self, job_id: int, *, kind: str, content_text: Optional[str] = None, url: Optional[str] = None) -> int:
+        kind = str(kind or "").strip().lower()
+        if kind not in {"log", "artifact", "tag"}:
+            raise ValueError("kind must be one of: log, artifact, tag")
+        if not content_text and not url:
+            raise ValueError("content_text or url is required")
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute("INSERT INTO job_attachments(job_id,kind,content_text,url) VALUES(%s,%s,%s,%s) RETURNING id", (int(job_id), kind, content_text, url))
+                        row = cur.fetchone()
+                        return int(row["id"]) if row else 0
+            else:
+                with conn:
+                    conn.execute("INSERT INTO job_attachments(job_id,kind,content_text,url) VALUES(?,?,?,?)", (int(job_id), kind, content_text, url))
+                    rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    return int(rid)
+        finally:
+            conn.close()
+
+    def list_job_attachments(self, job_id: int, *, limit: int = 100) -> List[Dict[str, Any]]:
+        limit = max(1, min(1000, int(limit)))
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    cur.execute("SELECT id, kind, content_text, url, created_at FROM job_attachments WHERE job_id = %s ORDER BY id ASC LIMIT %s", (int(job_id), limit))
+                    rows = cur.fetchall() or []
+                    return [dict(r) for r in rows]
+            else:
+                rows = conn.execute("SELECT id, kind, content_text, url, created_at FROM job_attachments WHERE job_id = ? ORDER BY id ASC LIMIT ?", (int(job_id), limit)).fetchall() or []
+                return [
+                    {"id": int(r[0]), "kind": r[1], "content_text": r[2], "url": r[3], "created_at": r[4]} for r in rows
+                ]
+        finally:
+            conn.close()
+
+    def rotate_encryption_keys(
+        self,
+        *,
+        domain: Optional[str] = None,
+        queue: Optional[str] = None,
+        job_type: Optional[str] = None,
+        old_key_b64: str,
+        new_key_b64: str,
+        fields: List[str],
+        limit: int = 1000,
+        dry_run: bool = False,
+    ) -> int:
+        """Re-encrypt encrypted JSON envelopes from old key to new key for selected rows.
+
+        Fields may include 'payload' and/or 'result'. Returns affected row count.
+        """
+        fields = [f for f in (fields or []) if f in {"payload", "result"}]
+        if not fields:
+            raise ValueError("fields must include at least one of: payload, result")
+        if not old_key_b64 or not new_key_b64:
+            raise ValueError("old_key_b64 and new_key_b64 are required")
+        affected = 0
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    where = ["1=1"]; params: List[Any] = []
+                    if domain:
+                        where.append("domain=%s"); params.append(domain)
+                    if queue:
+                        where.append("queue=%s"); params.append(queue)
+                    if job_type:
+                        where.append("job_type=%s"); params.append(job_type)
+                    cur.execute(f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT %s", tuple(params + [int(limit)]))
+                    rows = cur.fetchall() or []
+                    if dry_run:
+                        # Count candidates that would be re-encrypted
+                        for r in rows:
+                            for fld in fields:
+                                val = r.get(fld)
+                                env = val if isinstance(val, dict) else None
+                                if env and (env.get("_enc") == "aesgcm:v1" or isinstance(env.get("_encrypted"), dict)):
+                                    affected += 1; break
+                        return affected
+                    with conn:
+                        for r in rows:
+                            upd = {}
+                            for fld in fields:
+                                val = r.get(fld)
+                                obj = None
+                                if isinstance(val, dict) and val.get("_enc") == "aesgcm:v1":
+                                    obj = decrypt_json_blob_with_key(val, old_key_b64)
+                                elif isinstance(val, dict) and isinstance(val.get("_encrypted"), dict):
+                                    obj = decrypt_json_blob_with_key(val.get("_encrypted"), old_key_b64)
+                                if obj is not None:
+                                    env = encrypt_json_blob_with_key(obj, new_key_b64)
+                                    if env:
+                                        upd[fld] = {"_encrypted": env}
+                            if upd:
+                                sets = []
+                                params_upd: List[Any] = []
+                                for k, v in upd.items():
+                                    sets.append(f"{k}=%s::jsonb")
+                                    params_upd.append(json.dumps(v))
+                                params_upd.append(int(r["id"]))
+                                cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", tuple(params_upd))
+                                affected += 1
+                return affected
+            else:
+                rows = conn.execute(
+                    "SELECT id, payload, result, domain, queue, job_type FROM jobs ORDER BY id ASC LIMIT ?",
+                    (int(limit),),
+                ).fetchall() or []
+                if dry_run:
+                    for rid, pl, rs, *_ in rows:
+                        for fld, val in (("payload", pl), ("result", rs)):
+                            if fld not in fields:
+                                continue
+                            try:
+                                if isinstance(val, str) and val:
+                                    obj = json.loads(val)
+                                elif isinstance(val, dict):
+                                    obj = val
+                                else:
+                                    obj = None
+                            except Exception:
+                                obj = None
+                            if isinstance(obj, dict) and (obj.get("_enc") == "aesgcm:v1" or isinstance(obj.get("_encrypted"), dict)):
+                                affected += 1; break
+                    return affected
+                with conn:
+                    for rid, pl, rs, *_ in rows:
+                        upd: Dict[str, Any] = {}
+                        for fld, val in (("payload", pl), ("result", rs)):
+                            if fld not in fields:
+                                continue
+                            obj = None
+                            try:
+                                if isinstance(val, str) and val:
+                                    val_obj = json.loads(val)
+                                elif isinstance(val, dict):
+                                    val_obj = val
+                                else:
+                                    val_obj = None
+                            except Exception:
+                                val_obj = None
+                            if isinstance(val_obj, dict) and val_obj.get("_enc") == "aesgcm:v1":
+                                obj = decrypt_json_blob_with_key(val_obj, old_key_b64)
+                            elif isinstance(val_obj, dict) and isinstance(val_obj.get("_encrypted"), dict):
+                                obj = decrypt_json_blob_with_key(val_obj.get("_encrypted"), old_key_b64)
+                            if obj is not None:
+                                env = encrypt_json_blob_with_key(obj, new_key_b64)
+                                if env:
+                                    upd[fld] = json.dumps({"_encrypted": env})
+                        if upd:
+                            sets = []
+                            params_upd: List[Any] = []
+                            for k, v in upd.items():
+                                sets.append(f"{k} = ?")
+                                params_upd.append(v)
+                            params_upd.append(int(rid))
+                            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params_upd))
+                            affected += 1
+                return affected
         finally:
             try:
                 conn.close()

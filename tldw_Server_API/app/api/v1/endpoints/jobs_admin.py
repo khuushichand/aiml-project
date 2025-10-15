@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from fastapi.responses import StreamingResponse
 import asyncio
 import json as _json
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -215,6 +216,231 @@ async def prune_jobs_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prune failed: {e}")
+
+
+# --- Queue controls (pause/resume/drain) ---
+class QueueControlRequest(BaseModel):
+    domain: str
+    queue: str
+    action: str = Field(description="pause|resume|drain")
+
+
+class QueueFlagsResponse(BaseModel):
+    paused: bool
+    drain: bool
+
+
+@router.post("/jobs/queue/control", response_model=QueueFlagsResponse)
+async def queue_control_endpoint(req: QueueControlRequest, user=Depends(require_admin)) -> QueueFlagsResponse:
+    _enforce_domain_scope(user, req.domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    try:
+        flags = jm.set_queue_control(req.domain, req.queue, req.action)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return QueueFlagsResponse(**flags)
+
+
+@router.get("/jobs/queue/status", response_model=QueueFlagsResponse)
+async def queue_status_endpoint(domain: str, queue: str, user=Depends(require_admin)) -> QueueFlagsResponse:
+    _enforce_domain_scope(user, domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    flags = jm._get_queue_flags(domain, queue)
+    return QueueFlagsResponse(**flags)
+
+
+# --- Reschedule / Retry-now ---
+class RescheduleRequest(BaseModel):
+    domain: Optional[str] = None
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    status: Optional[str] = Field(default=None, description="Optional status filter")
+    set_now: bool = True
+    delta_seconds: Optional[int] = None
+    dry_run: bool = False
+
+
+class AffectedResponse(BaseModel):
+    affected: int
+
+
+@router.post("/jobs/reschedule", response_model=AffectedResponse)
+async def reschedule_jobs_endpoint(req: RescheduleRequest, user=Depends(require_admin)) -> AffectedResponse:
+    _enforce_domain_scope(user, req.domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    try:
+        n = jm.reschedule_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, status=req.status, set_now=req.set_now, delta_seconds=req.delta_seconds, dry_run=req.dry_run)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return AffectedResponse(affected=int(n))
+
+
+class RetryNowRequest(BaseModel):
+    domain: Optional[str] = None
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    only_failed: bool = True
+    dry_run: bool = False
+
+
+@router.post("/jobs/retry-now", response_model=AffectedResponse)
+async def retry_now_jobs_endpoint(req: RetryNowRequest, user=Depends(require_admin)) -> AffectedResponse:
+    _enforce_domain_scope(user, req.domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    n = jm.retry_now_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, only_failed=req.only_failed, dry_run=req.dry_run)
+    return AffectedResponse(affected=int(n))
+
+
+# --- Attachments ---
+class AttachmentRequest(BaseModel):
+    kind: str = Field(description="log|artifact|tag")
+    content_text: Optional[str] = None
+    url: Optional[str] = None
+
+
+class AttachmentItem(BaseModel):
+    id: int
+    kind: str
+    content_text: Optional[str]
+    url: Optional[str]
+    created_at: str
+
+
+@router.post("/jobs/{job_id}/attachments", response_model=AttachmentItem)
+async def add_job_attachment_endpoint(job_id: int, req: AttachmentRequest, user=Depends(require_admin)) -> AttachmentItem:
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    try:
+        rid = jm.add_job_attachment(job_id, kind=req.kind, content_text=req.content_text, url=req.url)
+        items = jm.list_job_attachments(job_id, limit=1_000)
+        item = next((i for i in items if int(i.get('id')) == int(rid)), None)
+        if not item:
+            raise HTTPException(status_code=500, detail="Failed to read back attachment")
+        return AttachmentItem(**item)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+
+@router.get("/jobs/{job_id}/attachments", response_model=list[AttachmentItem])
+async def list_job_attachments_endpoint(job_id: int, user=Depends(require_admin)) -> list[AttachmentItem]:
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    items = jm.list_job_attachments(job_id, limit=500)
+    return [AttachmentItem(**i) for i in items]
+
+
+# --- SLA policies ---
+class SlaPolicyRequest(BaseModel):
+    domain: str
+    queue: str
+    job_type: str
+    max_queue_latency_seconds: Optional[int] = None
+    max_duration_seconds: Optional[int] = None
+    enabled: bool = True
+
+
+@router.post("/jobs/sla/policy")
+async def upsert_sla_policy_endpoint(req: SlaPolicyRequest, user=Depends(require_admin)) -> dict:
+    _enforce_domain_scope(user, req.domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    jm.upsert_sla_policy(
+        domain=req.domain,
+        queue=req.queue,
+        job_type=req.job_type,
+        max_queue_latency_seconds=req.max_queue_latency_seconds,
+        max_duration_seconds=req.max_duration_seconds,
+        enabled=req.enabled,
+    )
+    return {"ok": True}
+
+
+@router.get("/jobs/sla/policies")
+async def list_sla_policies_endpoint(domain: Optional[str] = None, queue: Optional[str] = None, job_type: Optional[str] = None, user=Depends(require_admin)) -> list[dict]:
+    _enforce_domain_scope(user, domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    # Simple fetch via manager's internal connection
+    conn = jm._connect()
+    try:
+        if jm.backend == "postgres":
+            with jm._pg_cursor(conn) as cur:
+                where = ["1=1"]; params: list = []
+                if domain:
+                    where.append("domain=%s"); params.append(domain)
+                if queue:
+                    where.append("queue=%s"); params.append(queue)
+                if job_type:
+                    where.append("job_type=%s"); params.append(job_type)
+                cur.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params))
+                rows = cur.fetchall() or []
+                return [dict(r) for r in rows]
+        else:
+            where = ["1=1"]; params2: list = []
+            if domain:
+                where.append("domain=?"); params2.append(domain)
+            if queue:
+                where.append("queue=?"); params2.append(queue)
+            if job_type:
+                where.append("job_type=?"); params2.append(job_type)
+            rows = conn.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params2)).fetchall() or []
+            return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --- Maintenance: Encryption key rotation ---
+class CryptoRotateRequest(BaseModel):
+    old_key_b64: str
+    new_key_b64: str
+    domain: Optional[str] = None
+    queue: Optional[str] = None
+    job_type: Optional[str] = None
+    fields: list[str] = Field(default_factory=lambda: ["payload", "result"])
+    limit: int = 1000
+    dry_run: bool = False
+
+
+class CryptoRotateResponse(BaseModel):
+    affected: int
+
+
+@router.post("/jobs/crypto/rotate", response_model=CryptoRotateResponse)
+async def rotate_crypto_endpoint(request: Request, body: CryptoRotateRequest, user=Depends(require_admin)) -> CryptoRotateResponse:
+    # Require confirmation for destructive changes
+    if not body.dry_run:
+        hdr = str(request.headers.get("x-confirm", "")).lower()
+        if hdr not in {"1", "true", "yes", "y", "on"}:
+            raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    jm = JobManager(backend=backend, db_url=db_url)
+    try:
+        n = jm.rotate_encryption_keys(
+            domain=body.domain,
+            queue=body.queue,
+            job_type=body.job_type,
+            old_key_b64=body.old_key_b64,
+            new_key_b64=body.new_key_b64,
+            fields=body.fields,
+            limit=int(body.limit),
+            dry_run=bool(body.dry_run),
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return CryptoRotateResponse(affected=int(n))
 
 
 class TTLSweepRequest(BaseModel):

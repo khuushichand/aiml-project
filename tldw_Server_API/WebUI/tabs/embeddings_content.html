@@ -50,6 +50,20 @@
 
 <!-- Admin Tools Tab -->
 <div id="tabEmbeddingsAdmin" class="tab-content">
+    <div style="margin: 8px 0 12px 0; font-size: 0.95em; color: var(--text-2);">
+        <strong>Runtime Env Flags</strong>
+        <span class="help-tip" title="Backpressure thresholds and quotas (HTTP 429):
+- EMB_BACKPRESSURE_MAX_DEPTH (default 25000)
+- EMB_BACKPRESSURE_MAX_AGE_SECONDS (default 300)
+- EMBEDDINGS_TENANT_RPS (multi-tenant; 0 disables)
+- INGEST_TENANT_RPS (multi-tenant; fallback to EMBEDDINGS_TENANT_RPS)
+
+Priority queues (per-stage routing):
+- EMBEDDINGS_PRIORITY_ENABLED=true|false
+- EMBEDDINGS_PRIORITY_WEIGHTS=high:5,normal:3,low:1
+
+See Deployment Guide → Backpressure & Quotas for details.">?</span>
+    </div>
     <div class="endpoint-section" id="embeddingsHealth">
         <div style="margin: 6px 0;">
             <span class="badge" id="dlq-badge-embedding2" title="Embedding DLQ depth">embedding: 0</span>

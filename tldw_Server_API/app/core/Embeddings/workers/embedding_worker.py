@@ -484,8 +484,30 @@ class EmbeddingWorker(BaseWorker):
     
     async def _send_to_next_stage(self, result: StorageMessage):
         """Send embeddings to storage queue"""
+        target_queue = self.storage_queue
+        try:
+            if str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes"):
+                # Operator override takes precedence
+                pr = None
+                try:
+                    key = f"embeddings:priority:override:{result.job_id}"
+                    pr = await self.redis_client.get(key)
+                except Exception:
+                    pr = None
+                if not pr:
+                    p = int(getattr(result, 'priority', 50) or 50)
+                    if p >= 75:
+                        pr = 'high'
+                    elif p <= 25:
+                        pr = 'low'
+                    else:
+                        pr = 'normal'
+                target_queue = f"{self.storage_queue}:{pr}"
+        except Exception:
+            target_queue = self.storage_queue
+
         await self.redis_client.xadd(
-            self.storage_queue,
+            target_queue,
             model_dump_compat(result)
         )
         logger.debug(f"Sent job {result.job_id} to storage queue")

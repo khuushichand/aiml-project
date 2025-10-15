@@ -330,6 +330,7 @@ Security: The Prometheus endpoint is gated by default (admin required). Only set
 - System Admin Guide: `Docs/MCP/Unified/System_Admin_Guide.md`
 - User Guide: `Docs/MCP/Unified/User_Guide.md`
 - Module Authoring: `Docs/MCP/Unified/Modules.md`
+- Documentation Ingestion Playbook: `Docs/MCP/Unified/Documentation_Ingestion_Playbook.md`
 - Context search design (FTS-first): `Docs/Design/context_mcp_search.md`
 - API documentation available at `/docs` when server is running
 

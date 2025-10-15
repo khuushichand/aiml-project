@@ -3,23 +3,27 @@
 
 -- Notes/Characters (ChaChaNotes)
 ALTER TABLE IF EXISTS notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS notes FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS notes_tenant_isolation ON notes;
 CREATE POLICY notes_tenant_isolation ON notes
   USING (client_id = current_setting('app.user_id', true));
 
 ALTER TABLE IF EXISTS character_cards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS character_cards FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS chars_tenant_isolation ON character_cards;
 CREATE POLICY chars_tenant_isolation ON character_cards
   USING (client_id = current_setting('app.user_id', true));
 
 -- Prompt Studio tables (example: projects stored with user_id)
 ALTER TABLE IF EXISTS prompt_studio_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_projects FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_projects_tenant_isolation ON prompt_studio_projects;
 CREATE POLICY ps_projects_tenant_isolation ON prompt_studio_projects
   USING (user_id = current_setting('app.user_id', true));
 
 -- Prompts (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_prompts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_prompts FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_prompts_tenant_isolation ON prompt_studio_prompts;
 CREATE POLICY ps_prompts_tenant_isolation ON prompt_studio_prompts
   USING (
@@ -32,6 +36,7 @@ CREATE POLICY ps_prompts_tenant_isolation ON prompt_studio_prompts
 
 -- Signatures (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_signatures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_signatures FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_signatures_tenant_isolation ON prompt_studio_signatures;
 CREATE POLICY ps_signatures_tenant_isolation ON prompt_studio_signatures
   USING (
@@ -44,6 +49,7 @@ CREATE POLICY ps_signatures_tenant_isolation ON prompt_studio_signatures
 
 -- Test cases (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_test_cases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_test_cases FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_test_cases_tenant_isolation ON prompt_studio_test_cases;
 CREATE POLICY ps_test_cases_tenant_isolation ON prompt_studio_test_cases
   USING (
@@ -56,6 +62,7 @@ CREATE POLICY ps_test_cases_tenant_isolation ON prompt_studio_test_cases
 
 -- Test runs (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_test_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_test_runs FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_test_runs_tenant_isolation ON prompt_studio_test_runs;
 CREATE POLICY ps_test_runs_tenant_isolation ON prompt_studio_test_runs
   USING (
@@ -68,6 +75,7 @@ CREATE POLICY ps_test_runs_tenant_isolation ON prompt_studio_test_runs
 
 -- Evaluations (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_evaluations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_evaluations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_evals_tenant_isolation ON prompt_studio_evaluations;
 CREATE POLICY ps_evals_tenant_isolation ON prompt_studio_evaluations
   USING (
@@ -80,6 +88,7 @@ CREATE POLICY ps_evals_tenant_isolation ON prompt_studio_evaluations
 
 -- Optimizations (scope via owning project)
 ALTER TABLE IF EXISTS prompt_studio_optimizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_optimizations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_opts_tenant_isolation ON prompt_studio_optimizations;
 CREATE POLICY ps_opts_tenant_isolation ON prompt_studio_optimizations
   USING (
@@ -92,6 +101,7 @@ CREATE POLICY ps_opts_tenant_isolation ON prompt_studio_optimizations
 
 -- Optimization iterations (scope via optimization -> project)
 ALTER TABLE IF EXISTS prompt_studio_optimization_iterations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_optimization_iterations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_iter_tenant_isolation ON prompt_studio_optimization_iterations;
 CREATE POLICY ps_iter_tenant_isolation ON prompt_studio_optimization_iterations
   USING (
@@ -106,6 +116,7 @@ CREATE POLICY ps_iter_tenant_isolation ON prompt_studio_optimization_iterations
 
 -- Job queue (scope via project or client_id)
 ALTER TABLE IF EXISTS prompt_studio_job_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_job_queue FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_jobq_tenant_isolation ON prompt_studio_job_queue;
 CREATE POLICY ps_jobq_tenant_isolation ON prompt_studio_job_queue
   USING (
@@ -119,6 +130,7 @@ CREATE POLICY ps_jobq_tenant_isolation ON prompt_studio_job_queue
 
 -- Idempotency (allow own entries and NULL-scope)
 ALTER TABLE IF EXISTS prompt_studio_idempotency ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS prompt_studio_idempotency FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_idem_tenant_isolation ON prompt_studio_idempotency;
 CREATE POLICY ps_idem_tenant_isolation ON prompt_studio_idempotency
   USING (

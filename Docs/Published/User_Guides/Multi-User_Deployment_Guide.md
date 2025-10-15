@@ -611,7 +611,7 @@ CSP_DIRECTIVES="default-src 'self'; script-src 'self' 'unsafe-inline'"
 
 ---
 
-## Monitoring & Maintenance
+## Monitoring & Maintenance {#monitoring--maintenance}
 
 ### 1. Health Monitoring
 

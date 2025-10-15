@@ -4,13 +4,12 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_provider_model_allowlists_postgres(setup_test_database):
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+async def test_provider_model_allowlists_postgres(test_db_pool):
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
 
-    pool = await get_db_pool()
+    pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
 
     # Ensure tables used by manager and usage exist
@@ -46,8 +45,8 @@ async def test_provider_model_allowlists_postgres(setup_test_database):
         """
     )
 
-    # Manager to ensure api_keys columns
-    mgr = APIKeyManager()
+    # Manager to ensure api_keys columns (explicit pool)
+    mgr = APIKeyManager(pool)
     await mgr.initialize()
 
     # Insert user
@@ -87,4 +86,3 @@ async def test_provider_model_allowlists_postgres(setup_test_database):
         )
         assert r.status_code == 403
         assert "Provider 'anthropic' not allowed" in r.text
-

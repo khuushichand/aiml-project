@@ -21,6 +21,7 @@ Docker Compose
 - Logs: `docker compose logs -f app`
 - Rebuild: `docker compose build app && docker compose up -d`
 - Scale workers (CPU bound): set `UVICORN_WORKERS` env and rebuild or override at runtime.
+- Overrides: `docker-compose.override.yml` ships with production defaults (tldw_production, CORS, Postgres); Compose auto‑loads it.
 
 systemd (bare‑metal)
 - Status: `sudo systemctl status tldw`
@@ -93,6 +94,7 @@ Logs
 - Container logs (stdout/stderr) via `docker compose logs -f app`.
 - Bare‑metal via journal: `journalctl -u tldw -f`.
 - Adjust verbosity with `LOG_LEVEL`.
+ - Kubernetes: `kubectl logs -n tldw deploy/tldw-app -f`.
 
 ## 5) Capacity, Performance & Cost
 
@@ -114,6 +116,7 @@ LLM providers & cost
 RAG & embeddings
 - For high concurrency, consider the enterprise embeddings worker/orchestrator topology (see Embeddings Deployment Guide).
 - Place vector stores on persistent, fast storage; monitor `embedding_cache_*` metrics.
+ - Kubernetes samples are provided under `Samples/Kubernetes` (namespace, Postgres, Redis, app deployment, ingress). Adjust image, TLS, and resources for your cluster.
 
 ## 6) Security Operations
 
@@ -128,6 +131,7 @@ Registration controls (multi‑user)
 Network
 - Enforce TLS at the proxy and restrict `ALLOWED_ORIGINS`.
 - Ensure WebSocket upgrade rules for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
+ - Caddy example is available at `Samples/Caddy/Caddyfile`.
 
 Rate limiting
 - Keep global and module‑specific rate limiters enabled; adjust per your user base.
@@ -192,4 +196,3 @@ Recommended practice
 - Reverse proxy and TLS: `Deployment/Reverse_Proxy_Examples.md`
 - Postgres/SQLite backends: `Docs/Database-Backends.md`
 - Metrics and dashboards: `Monitoring/Metrics_Cheatsheet.md`
-

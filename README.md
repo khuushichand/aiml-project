@@ -5,6 +5,11 @@
 
 
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue)](https://github.com/rmusser01/tldw_server/releases)
+[![CI - Python](https://github.com/rmusser01/tldw_server/actions/workflows/python-tldw.yml/badge.svg)](.github/workflows/python-tldw.yml)
+[![CI - Workflows Suite](https://github.com/rmusser01/tldw_server/actions/workflows/workflows-tests.yml/badge.svg)](.github/workflows/workflows-tests.yml)
+[![CodeQL](https://github.com/rmusser01/tldw_server/actions/workflows/codeql.yml/badge.svg)](.github/workflows/codeql.yml)
+[![Pre-commit](https://github.com/rmusser01/tldw_server/actions/workflows/pre-commit.yml/badge.svg)](.github/workflows/pre-commit.yml)
+[![Coverage](https://img.shields.io/badge/coverage-codecov-blue)](https://app.codecov.io/gh/rmusser01/tldw_server)
 
 [![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server) 
 

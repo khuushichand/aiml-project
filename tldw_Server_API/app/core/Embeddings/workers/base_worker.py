@@ -57,6 +57,12 @@ class BaseWorker(ABC):
         self.processing_times: List[float] = []
         self._tasks: List[asyncio.Task] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._active_stream_for_batch: Optional[str] = None
+        # Priority queues (optional)
+        self._priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
+        self._priority_weights = self._parse_priority_weights(os.getenv("EMBEDDINGS_PRIORITY_WEIGHTS", "high:5,normal:3,low:1"))
+        self._priority_schedule = self._build_priority_schedule(self._priority_weights)
+        self._priority_index = 0
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -160,11 +166,20 @@ class BaseWorker(ABC):
                 except Exception:
                     # Do not fail loop on control check
                     pass
-                # Read messages from stream
+                # Read messages from stream(s) with optional priority routing
+                if self._priority_enabled:
+                    base = self.config.queue_name
+                    suffix = self._priority_schedule[self._priority_index % len(self._priority_schedule)]
+                    self._priority_index += 1
+                    stream_to_read = f"{base}:{suffix}"
+                    read_from = {stream_to_read: '>'}
+                else:
+                    read_from = {self.config.queue_name: '>'}
+
                 messages = await self.redis_client.xreadgroup(
                     self.config.consumer_group,
                     self.config.worker_id,
-                    {self.config.queue_name: '>'},
+                    read_from,
                     count=self.config.batch_size,
                     block=self.config.poll_interval_ms
                 )
@@ -176,7 +191,10 @@ class BaseWorker(ABC):
                             self._H_STAGE_BATCH_SIZE.labels(stage=self._stage_name()).observe(len(stream_messages))
                         except Exception:
                             pass
+                        # Set active stream for ACKs during this batch
+                        self._active_stream_for_batch = stream_name
                         await self._process_batch(stream_messages)
+                        self._active_stream_for_batch = None
                         
             except Exception as e:
                 logger.error(f"Error in message processing loop: {e}")
@@ -222,7 +240,7 @@ class BaseWorker(ABC):
                         first = await self._dedupe_mark_operation_once(str(op_id))
                         if not first:
                             await self.redis_client.xack(
-                                self.config.queue_name,
+                                self._active_stream_for_batch or self.config.queue_name,
                                 self.config.consumer_group,
                                 message_id
                             )
@@ -235,7 +253,7 @@ class BaseWorker(ABC):
                         # Mark cancelled and acknowledge
                         await self._update_job_status(message.job_id, JobStatus.CANCELLED, error_message="Skipped by operator")
                         await self.redis_client.xack(
-                            self.config.queue_name,
+                            self._active_stream_for_batch or self.config.queue_name,
                             self.config.consumer_group,
                             message_id
                         )
@@ -276,7 +294,7 @@ class BaseWorker(ABC):
                 
                 # Acknowledge message
                 await self.redis_client.xack(
-                    self.config.queue_name,
+                    self._active_stream_for_batch or self.config.queue_name,
                     self.config.consumer_group,
                     message_id
                 )
@@ -368,7 +386,7 @@ class BaseWorker(ABC):
                 
             # Always acknowledge to prevent reprocessing
             await self.redis_client.xack(
-                self.config.queue_name,
+                self._active_stream_for_batch or self.config.queue_name,
                 self.config.consumer_group,
                 message_id
             )
@@ -510,6 +528,32 @@ class BaseWorker(ABC):
         except Exception:
             pass
         return (self.config.worker_type or "").lower()
+
+    def _parse_priority_weights(self, spec: str) -> dict:
+        try:
+            out = {"high": 5, "normal": 3, "low": 1}
+            parts = [p.strip() for p in (spec or "").split(",") if p.strip()]
+            for p in parts:
+                if ":" in p:
+                    k, v = p.split(":", 1)
+                    k = k.strip().lower(); v = v.strip()
+                    if k in out:
+                        out[k] = max(1, int(v))
+            return out
+        except Exception:
+            return {"high": 5, "normal": 3, "low": 1}
+
+    def _build_priority_schedule(self, weights: dict) -> list[str]:
+        sched: list[str] = []
+        try:
+            for label in ("high", "normal", "low"):
+                w = int(weights.get(label, 0) or 0)
+                sched.extend([label] * max(0, w))
+            if not sched:
+                sched = ["high", "normal", "low"]
+        except Exception:
+            sched = ["high", "normal", "low"]
+        return sched
 
     async def _is_stage_paused(self) -> bool:
         key = f"embeddings:stage:{self._stage_name()}:paused"

@@ -1092,6 +1092,22 @@ results = await unified_batch_pipeline(
 - Progress tracking
 - Partial result recovery
 
+### Near‑Duplicate Clustering & Reuse (New)
+
+Batch processing now performs a lightweight normalization + embedding‑based clustering step to deduplicate and reuse retrieval/reranking across near‑duplicate queries.
+
+- Identical queries (ignoring case/punctuation) are processed exactly once; results are reused for duplicates.
+- Near‑duplicates are clustered via cosine similarity of their query embeddings (best‑effort; falls back to exact dedupe if embeddings are unavailable).
+- The cluster head is executed; member queries reuse its results, reducing redundant work and latency in batched workloads.
+
+Controls and observability:
+- Env: `RAG_BATCH_NEAR_DUP_THRESHOLD` (default `0.9`) controls cosine similarity threshold for clustering.
+- Metric: `rag_batch_query_reuse_total` increments when results are reused across duplicates/near‑duplicates.
+
+Notes:
+- This is an in‑memory, per‑request optimization in the unified batch pipeline and does not persist any shared state.
+- If your embedding backend is not available, the code transparently falls back to exact dedupe so batches remain reliable.
+
 ## Analytics & Feedback System
 
 Integrated dual-database feedback system for both server QA and user experience:

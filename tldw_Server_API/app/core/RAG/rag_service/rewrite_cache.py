@@ -74,9 +74,35 @@ class RewriteEntry:
 class RewriteCache:
     """Append-only JSONL cache with in-memory index."""
 
-    def __init__(self, path: Optional[str] = None, half_life_hours: float = 72.0) -> None:
-        self.path = str(_safe_path() if path is None else Path(path))
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        half_life_hours: float = 72.0,
+        user_id: Optional[str] = None,
+        ttl_hours: Optional[float] = None,
+    ) -> None:
+        # Determine storage path (per-user if provided)
+        if path is None:
+            if user_id:
+                base = Path("Databases/user_databases") / str(user_id) / "Rewrite_Cache"
+                try:
+                    base.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                self.path = str(base / "rewrite_cache.jsonl")
+            else:
+                self.path = str(_safe_path())
+        else:
+            self.path = str(Path(path))
+        # Decay settings
         self.half_life = max(1.0, float(half_life_hours))
+        # TTL expiry for cache entries (hard expiration)
+        try:
+            _ttl_env = os.getenv("RAG_REWRITE_CACHE_TTL_HOURS")
+            ttl_fallback = float(_ttl_env) if _ttl_env is not None else None
+        except Exception:
+            ttl_fallback = None
+        self.ttl_hours = float(ttl_hours) if ttl_hours is not None else (ttl_fallback if ttl_fallback is not None else None)
         self._index: Dict[str, RewriteEntry] = {}
         self._loaded = False
 
@@ -127,12 +153,43 @@ class RewriteCache:
         cid = _cluster_id(query, intent=intent, corpus=corpus)
         entry = self._index.get(cid)
         if not entry:
+            # metrics: miss (no entry)
+            try:
+                from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "empty"})
+            except Exception:
+                pass
             return None
+        # Hard TTL expiry
+        if self.ttl_hours is not None:
+            now = time.time()
+            last = float(entry.last_used or entry.created_at or now)
+            ttl_sec = float(self.ttl_hours) * 3600.0
+            if now - last > ttl_sec:
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                    increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "expired"})
+                except Exception:
+                    pass
+                return None
         # Apply decay to reorder (heavier first)
         try:
             scored = [(self._decay(entry), r) for r in (entry.rewrites or [])]
             scored.sort(key=lambda x: x[0], reverse=True)
-            return [r for _, r in scored if isinstance(r, str) and r.strip()][:5]
+            out = [r for _, r in scored if isinstance(r, str) and r.strip()][:5]
+            if out:
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                    increment_counter("rag_rewrite_cache_hits_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or "")})
+                except Exception:
+                    pass
+            else:
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                    increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "empty_rewrites"})
+                except Exception:
+                    pass
+            return out
         except Exception:
             return entry.rewrites[:5]
 
@@ -177,6 +234,10 @@ class RewriteCache:
                     "last_used": entry.last_used,
                     "created_at": entry.created_at,
                 }) + "\n")
+            try:
+                from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                increment_counter("rag_rewrite_cache_puts_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or "")})
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Failed to persist rewrite cache: {e}")
-

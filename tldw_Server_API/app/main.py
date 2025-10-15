@@ -229,11 +229,42 @@ def _trace_log_patcher(record):
         record["extra"].setdefault("request_id", "")
         record["extra"].setdefault("session_id", "")
 
+    # Optional: redact secrets/PII from log message
+    try:
+        import re as _re
+        msg = record.get("message", "")
+        # Common token patterns (best-effort)
+        msg = _re.sub(r"sk-[A-Za-z0-9-_]{8,}", "sk-***REDACTED***", msg)
+        msg = _re.sub(r"(?i)(api[_-]?key|authorization|token|password)\s*[:=]\s*[^\s,;]+", r"\1=***REDACTED***", msg)
+        record["message"] = msg
+    except Exception:
+        pass
+
+# Use a safe formatter to avoid KeyError when extra keys are missing
+def _safe_log_format(record: dict) -> str:
+    try:
+        ts = record.get("time")
+        # Format timestamp with millisecond precision
+        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
+    except Exception:
+        ts_str = ""
+    level = record.get("level").name if record.get("level") else "INFO"
+    extra = record.get("extra") or {}
+    trace_id = extra.get("trace_id", "")
+    span_id = extra.get("span_id", "")
+    request_id = extra.get("request_id", "")
+    session_id = extra.get("session_id", "")
+    name = record.get("name", "")
+    function = record.get("function", "")
+    line = record.get("line", "")
+    message = record.get("message", "")
+    return f"{ts_str} | {level:<8} | trace={trace_id} span={span_id} req={request_id} ses={session_id} | {name}:{function}:{line} - {message}"
+
 logger.add(
     sys.stderr,
     level=log_level,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | trace={extra[trace_id]} span={extra[span_id]} req={extra[request_id]} ses={extra[session_id]} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    colorize=True,
+    format=_safe_log_format,
+    colorize=False,
 )
 logger = logger.patch(_trace_log_patcher)
 
@@ -689,6 +720,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
+    # Jobs crypto rotate worker (optional staged rotation)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.jobs_crypto_rotate_service import run_jobs_crypto_rotate as _run_jobs_crypto
+        if _skip_heavy:
+            logger.info("Test mode/heavy-startup disabled: Skipping Jobs crypto rotate worker")
+        else:
+            _enabled = (_os.getenv("JOBS_CRYPTO_ROTATE_SERVICE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"})
+            if _enabled:
+                jobs_crypto_rotate_stop_event = _asyncio.Event()
+                jobs_crypto_rotate_task = _asyncio.create_task(_run_jobs_crypto(jobs_crypto_rotate_stop_event))
+                logger.info("Jobs crypto rotate worker started with explicit stop_event signal")
+            else:
+                logger.info("Jobs crypto rotate worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs crypto rotate worker: {e}")
+
     # Jobs webhooks worker (signed callbacks)
     try:
         import os as _os
@@ -869,6 +918,28 @@ async def lifespan(app: FastAPI):
                 logger.info("LLM usage aggregator started")
     except Exception as e:
         logger.warning(f"Failed to start LLM usage aggregator: {e}")
+
+    # Ensure PG RLS policies (optional, guarded by env)
+    try:
+        _ensure_rls = _env_os.getenv("RAG_ENSURE_PG_RLS", "").lower() in {"1", "true", "yes", "on"}
+        if _ensure_rls and not _skip_heavy:
+            from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+            from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
+                ensure_prompt_studio_rls,
+                ensure_chacha_rls,
+            )
+            _cfg = DatabaseConfig.from_env()
+            _backend = DatabaseBackendFactory.create_backend(_cfg)
+            _ps_ok = ensure_prompt_studio_rls(_backend)
+            _cc_ok = ensure_chacha_rls(_backend)
+            logger.info(
+                f"PG RLS ensure invoked (prompt_studio_applied={_ps_ok}, chacha_applied={_cc_ok})"
+            )
+        else:
+            logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
+    except Exception as e:
+        logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
 
     # Start RAG quality eval scheduler (nightly dashboards)
     try:
@@ -1094,6 +1165,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     jobs_metrics_task.cancel()
+                except Exception:
+                    pass
+
+        # Jobs crypto rotate worker shutdown
+        if 'jobs_crypto_rotate_task' in locals() and jobs_crypto_rotate_task:
+            try:
+                if 'jobs_crypto_rotate_stop_event' in locals() and jobs_crypto_rotate_stop_event:
+                    jobs_crypto_rotate_stop_event.set()
+                    await _asyncio.wait_for(jobs_crypto_rotate_task, timeout=5.0)
+                    logger.info("Jobs crypto rotate worker stopped via stop_event")
+                else:
+                    jobs_crypto_rotate_task.cancel()
+            except Exception:
+                try:
+                    jobs_crypto_rotate_task.cancel()
                 except Exception:
                     pass
 

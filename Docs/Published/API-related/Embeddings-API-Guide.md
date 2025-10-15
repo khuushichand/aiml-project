@@ -374,7 +374,7 @@ Response headers:
 - `X-Embeddings-Fallback-From`: the originally requested provider if fallback was used
 - `X-Embeddings-Dimensions-Policy`: dimension policy applied when `dimensions` is set (`reduce`, `pad`, or `ignore`)
 
-## Providers & Models
+## Providers & Models {#providers--models}
 
 ### Available Providers
 
@@ -429,6 +429,28 @@ def select_provider(requirements):
     
     # Default balanced option
     return "openai", "text-embedding-3-small"
+```
+
+## Rate Limits & Quotas {#rate-limits--quotas}
+
+The embeddings endpoint participates in the global rate limiter configured via AuthNZ. Defaults (typical):
+- Enabled: true (`RATE_LIMIT_ENABLED`)
+- Requests/minute: 60 (`RATE_LIMIT_PER_MINUTE`)
+- Burst: 10 (`RATE_LIMIT_BURST`)
+
+Notes
+- In single-user mode, the API key is treated as admin; adjust your reverse proxy limits as needed.
+- Per‑provider/model throttling can be layered on top of global limits at the proxy or client.
+
+Client handling example (JS):
+```js
+async function withBackoff(fn, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    const res = await fn();
+    if (res.status !== 429) return res;
+    await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+  }
+}
 ```
 
 ## Error Handling

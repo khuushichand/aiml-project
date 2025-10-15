@@ -1,6 +1,18 @@
 <!-- Workflows Tab -->
 <div id="tabWorkflowsDefinitions" class="tab-content">
   <h2>Workflows: Definitions</h2>
+  <div class="card" style="margin-bottom:12px; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+      <div>
+        <h3 style="margin:0 0 6px 0">Configuration Cheat Sheet</h3>
+        <div style="color:var(--color-base-0); font-size:0.9em">Read-only snapshot of effective Workflows settings</div>
+      </div>
+      <div>
+        <button class="api-button" onclick="wfLoadConfig()">Refresh</button>
+      </div>
+    </div>
+    <div id="wfConfig_card" style="margin-top:8px"></div>
+  </div>
   <div class="form-group">
     <button class="api-button" onclick="wfGetStepTypes()">Get Step Types</button>
   </div>
@@ -22,6 +34,8 @@
     <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
     <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
     <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
+    <button class="api-button" onclick="wfInsertTTS()">Insert TTS Step</button>
+    <button class="api-button" onclick="wfInsertProcessMedia()">Insert Process Media Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -41,6 +55,38 @@
   </div>
   <pre id="wfDef_result" class="json-viewer"></pre>
   <script>
+  async function wfLoadConfig(){
+    try{
+      const cfg = await apiClient.makeRequest('GET','/api/v1/workflows/config');
+      wfRenderConfigCard(cfg);
+    }catch(e){ Toast.error('Failed to load config: '+(e?.message||e)); }
+  }
+  function _wfRow(label, value){
+    const v = (Array.isArray(value) ? value.join(', ') : (value===true? 'true': value===false? 'false' : (value ?? '')));
+    return `<div style=\"display:flex;gap:8px;justify-content:space-between;border-bottom:1px dashed var(--color-base-30);padding:4px 0\"><div style=\"color:var(--color-base-0)\">${label}</div><div style=\"font-family:monospace\">${String(v)}</div></div>`;
+  }
+  function wfRenderConfigCard(cfg){
+    try{
+      const c = document.getElementById('wfConfig_card');
+      if (!cfg || typeof cfg !== 'object'){ c.innerHTML = '<div style="color:var(--color-base-0)">No data</div>'; return; }
+      const backend = cfg.backend||{};
+      const rl = cfg.rate_limits||{};
+      const eng = cfg.engine||{};
+      const eg = cfg.egress||{};
+      const wh = cfg.webhooks||{};
+      const art = cfg.artifacts||{};
+      let html = '';
+      html += '<div style="display:grid;grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));gap:12px">';
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Backend</div>${_wfRow('type', backend.type||'(auto)')}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Rate Limits / Quotas</div>${_wfRow('limits_disabled', rl.disabled)}${_wfRow('quotas_disabled', rl.quotas_disabled)}${_wfRow('burst_per_min', rl.quota_burst_per_min)}${_wfRow('daily_per_user', rl.quota_daily_per_user)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Engine</div>${_wfRow('tenant_concurrency', eng.tenant_concurrency)}${_wfRow('workflow_concurrency', eng.workflow_concurrency)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Egress</div>${_wfRow('profile', eg.profile)}${_wfRow('allowed_ports', eg.allowed_ports)}${_wfRow('allowlist', eg.allowlist)}${_wfRow('block_private', eg.block_private)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Webhooks</div>${_wfRow('completion_disabled', wh.completion_disabled)}${_wfRow('secret_set', wh.secret_set)}${_wfRow('dlq_enabled', wh.dlq_enabled)}${_wfRow('allowlist', wh.allowlist)}${_wfRow('denylist', wh.denylist)}</div>`;
+      html += `<div style="border:1px solid var(--color-base-30);border-radius:6px;padding:8px"><div style="font-weight:600;margin-bottom:4px">Artifacts</div>${_wfRow('validate_strict', art.validate_strict)}${_wfRow('encryption_enabled', art.encryption_enabled)}${_wfRow('gc_enabled', art.gc_enabled)}${_wfRow('retention_days', art.retention_days)}</div>`;
+      html += '</div>';
+      c.innerHTML = html;
+    }catch(e){ /* ignore */ }
+  }
   async function wfCreateDefinition(){
     try{
       const body = JSON.parse(document.getElementById('wfDef_payload').value);
@@ -104,6 +150,28 @@
       ta.value = JSON.stringify(obj,null,2);
       Toast.success('Inserted prompt step');
     }catch(e){ Toast.error('Could not insert prompt: '+(e?.message||e)); }
+  }
+  function wfInsertProcessMedia(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'proc_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'process_media', config: { kind: 'web_scraping', scrape_method: 'Individual URLs', url_input: 'https://example.com/article', summarize: true, temperature: 0.7 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted process_media step');
+    }catch(e){ Toast.error('Could not insert process_media: '+(e?.message||e)); }
+  }
+  function wfInsertTTS(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'tts_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'tts', config: { input: 'Narrate: {{ last.text || inputs.summary || "" }}', model: 'kokoro', voice: 'af_heart', response_format: 'mp3', speed: 1.0 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted TTS step');
+    }catch(e){ Toast.error('Could not insert tts: '+(e?.message||e)); }
   }
   function wfInsertRagSearch(){
     try{

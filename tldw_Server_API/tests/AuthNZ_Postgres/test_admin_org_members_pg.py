@@ -4,17 +4,16 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_org_members_endpoints_postgres(setup_test_database):
+async def test_admin_org_members_endpoints_postgres(test_db_pool):
     # App and overrides
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
 
     # Disable CSRF for test client
     from tldw_Server_API.app.core.config import settings as app_settings
     app_settings['CSRF_ENABLED'] = False
 
-    pool = await get_db_pool()
+    pool = test_db_pool
 
     # Ensure org tables exist
     await pool.execute(
@@ -107,4 +106,3 @@ async def test_admin_org_members_endpoints_postgres(setup_test_database):
         assert "No membership found" in r.text
 
     app.dependency_overrides.pop(require_admin, None)
-
