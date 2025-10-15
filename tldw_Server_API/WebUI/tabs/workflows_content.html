@@ -39,11 +39,11 @@
       <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
       <button class="api-button" onclick="wfTplRun()">Run This Template</button>
       <button class="api-button" onclick="wfTplRunWatch()">Run & Watch</button>
-      <button class="api-button" onclick="wfTplCopyCurl()">Copy cURL (Create+Run)</button>
-      <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em">
-        <span id="wfTpl_curl_note">Requires jq</span>
+      <button class="api-button" onclick="wfTplCopyCurlAlt()" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em" title="jq is used to extract the workflow id from the create response. Toggle 'No jq' for a placeholder-based script.">
+        <span id="wfTpl_curl_note" title="Default: jq required. Switch to 'No jq' for a manual WID placeholder.">Requires jq</span>
         <span style="opacity:0.8">|</span>
-        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()"> No jq
+        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
       </label>
     </div>
     <textarea id="wfDef_payload" rows="12" style="width:100%">{
@@ -321,6 +321,66 @@
       await navigator.clipboard.writeText(snippet);
       Toast.success('Copied cURL (create+run)');
     }catch(e){ Toast.error('Copy cURL failed: '+(e?.message||e)); }
+  }
+
+  // New generator supporting no-jq mode and using current API base/token
+  async function wfTplCopyCurlAlt(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : 'YOUR_API_KEY_HERE';
+      const json = JSON.stringify(tpl, null, 2);
+      const nojq = !!document.getElementById('wfTpl_curl_nojq')?.checked;
+      let snippet;
+      if (!nojq){
+        snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\n# Requires: jq\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\nCREATE=$(curl -sS -X POST "$BASE/api/v1/workflows" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data-binary @/tmp/wf_def.json)\necho "$CREATE" | jq .\nWID=$(echo "$CREATE" | jq -r '.id')\n\nRUN=$(curl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data '{"inputs": {}}')\necho "$RUN" | jq .\n`;
+      } else {
+        snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\n# Create definition (response saved to file)\ncurl -sS -X POST "$BASE/api/v1/workflows" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data-binary @/tmp/wf_def.json > /tmp/wf_created.json\n\necho "Created response saved to /tmp/wf_created.json"\necho "Open it and set WID manually:"\necho "export WID=REPLACE_WITH_ID"\n\n# Run (replace WID first)\ncurl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n+  -H "Content-Type: application/json" \\\n+  -H "X-API-KEY: $API_KEY" \\\n+  --data '{"inputs": {}}' > /tmp/wf_run.json\n\necho "Run response saved to /tmp/wf_run.json"\n`;
+      }
+      await navigator.clipboard.writeText(snippet);
+      Toast.success('Copied cURL (create+run)');
+    }catch(e){ Toast.error('Copy cURL failed: '+(e?.message||e)); }
+  }
+
+  function wfTplCurlToggle(){
+    try{
+      const chk = document.getElementById('wfTpl_curl_nojq');
+      const note = document.getElementById('wfTpl_curl_note');
+      if (!note || !chk) return;
+      note.textContent = chk.checked ? 'No jq mode' : 'Requires jq';
+    }catch(_){ }
+  }
+
+  // Simple run status watcher for the Runs tab
+  let wfStatusTimer = null;
+  let wfStatusRunId = null;
+  function wfStartWatchStatus(runId){
+    try{
+      if (wfStatusTimer){ clearInterval(wfStatusTimer); wfStatusTimer = null; }
+      wfStatusRunId = runId;
+      try{ const inp=document.getElementById('wfRun_run_id'); if (inp){ inp.value = String(runId||''); } }catch(_){ }
+      wfStatusTimer = setInterval(async ()=>{
+        try{
+          const r = await apiClient.makeRequest('GET',`/api/v1/workflows/runs/${encodeURIComponent(wfStatusRunId)}`);
+          set('wfRun_result', r);
+          const st = (r && r.status) ? String(r.status) : '';
+          if (st && (st === 'succeeded' || st === 'failed' || st === 'cancelled')){
+            clearInterval(wfStatusTimer); wfStatusTimer = null;
+            Toast.info(`Run ${st}`);
+          }
+        }catch(e){ /* ignore transient */ }
+      }, 1500);
+      // Optionally enable auto events
+      try{
+        const chk = document.getElementById('wfEvents_auto');
+        if (chk && !chk.checked){ chk.checked = true; wfToggleAutoEvents(); }
+      }catch(_){ }
+      // Cleanup on unload
+      window.addEventListener('beforeunload', ()=>{ try{ if (wfStatusTimer) clearInterval(wfStatusTimer); }catch(_){ } });
+    }catch(_){ }
   }
 
   // Navigate to the Workflows → Runs tab and pre-fill the run ID

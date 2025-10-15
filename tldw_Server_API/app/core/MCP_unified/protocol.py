@@ -382,6 +382,13 @@ class MCPProtocol:
         if method in public_methods:
             return True
         
+        # Admin override (e.g., endpoint-level admin guard) for certain methods
+        try:
+            if isinstance(getattr(context, "metadata", None), dict):
+                if context.metadata.get("admin_override") is True and request.method in {"modules/health"}:
+                    return True
+        except Exception:
+            pass
         # No user context means no auth
         if not context.user_id:
             return False

@@ -636,7 +636,7 @@ async def list_modules(
 
 @router.get("/modules/health")
 async def get_modules_health(
-    _: TokenData = Depends(require_admin)
+    user: TokenData = Depends(require_admin)
 ):
     """
     Get detailed health status of all modules (requires admin).
@@ -649,7 +649,7 @@ async def get_modules_health(
     if not server.initialized:
         await server.initialize()
     
-    response = await server.handle_http_request(request)
+    response = await server.handle_http_request(request, user_id=user.sub, metadata={"admin_override": True})
     
     if response.error:
         if response.error.code == -32001:

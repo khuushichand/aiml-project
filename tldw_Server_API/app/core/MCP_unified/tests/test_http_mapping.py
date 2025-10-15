@@ -86,3 +86,14 @@ def test_tools_list_get_bearer_ok(client: TestClient):
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, dict) and "tools" in data
+
+
+def test_modules_health_admin_bearer_ok(client: TestClient):
+    # Use MCP JWT with admin role so it passes regardless of auth mode
+    from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
+    os.environ.setdefault("MCP_JWT_SECRET", "x" * 64)
+    token = get_jwt_manager().create_access_token(subject="1", roles=["admin"])  # embed admin role
+    r = client.get("/api/v1/mcp/modules/health", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, dict) and "health" in data
