@@ -71,6 +71,19 @@ jobs:
           pip install bandit
           bandit -r tldw_Server_API -x tldw_Server_API/tests -lll || true
 
+      - name: Verify Postgres image tags pinned to 18.* across repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -RInE "image:[[:space:]]*postgres:" -- . || true)
+          echo "Found Postgres image references:\n${matches}"
+          violations=$(echo "$matches" | grep -v "postgres:18" || true)
+          if [ -n "$violations" ]; then
+            echo "Non-18 Postgres images detected (should be 18.*):"
+            echo "$violations"
+            exit 1
+          fi
+
   # Job 2: Unit Tests
   unit-tests:
     name: Unit Tests - ${{ matrix.os }} - Python ${{ matrix.python-version }}
@@ -79,7 +92,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         exclude:
           # Exclude Python 3.13 on Windows if issues arise
           - os: windows-latest
@@ -237,11 +250,15 @@ jobs:
   postgres-tests:
     name: PostgreSQL Backend Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     needs: unit-tests
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18-bookworm
         env:
           POSTGRES_USER: tldw
           POSTGRES_PASSWORD: tldw
@@ -269,10 +286,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml
@@ -310,17 +327,21 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-postgres
+          name: test-results-postgres-py-${{ matrix.python-version }}
           path: postgres-tests.xml
 
   postgres-heavy-ps-tests:
     name: PostgreSQL Prompt Studio Heavy Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     needs: postgres-tests
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18-bookworm
         env:
           POSTGRES_USER: tldw
           POSTGRES_PASSWORD: tldw
@@ -348,10 +369,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml
@@ -379,18 +400,22 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-postgres-heavy-ps
+          name: test-results-postgres-heavy-ps-py-${{ matrix.python-version }}
       path: postgres-heavy-ps-tests.xml
 
   postgres-authnz-tests:
     name: PostgreSQL AuthNZ Tests (isolated, allow-fail)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     needs: postgres-tests
     timeout-minutes: 30
     continue-on-error: true
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18-bookworm
         env:
           POSTGRES_USER: tldw
           POSTGRES_PASSWORD: tldw
@@ -414,10 +439,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml

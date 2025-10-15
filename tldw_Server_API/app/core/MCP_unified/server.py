@@ -45,6 +45,7 @@ class WebSocketConnection:
         self.last_activity = self.connected_at
         self.message_count = 0
         self.error_count = 0
+        self.request_times: Deque[float] = deque(maxlen=1000)
     
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON data to client"""
@@ -146,10 +147,17 @@ class MCPServer:
         if self.initialized:
             logger.warning("Server already initialized")
             return
-        
+
         logger.info("Initializing MCP Server")
-        
+
         try:
+            # Warn if demo auth is enabled in a non-debug environment
+            try:
+                import os as _os
+                if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
+                    logger.warning("MCP_ENABLE_DEMO_AUTH is enabled — for development only; DO NOT USE IN PRODUCTION")
+            except Exception:
+                pass
             # Start module health monitoring
             await self.module_registry.start_health_monitoring()
             
@@ -299,6 +307,15 @@ class MCPServer:
                     module_id = m["id"]
                     class_ref = m["class"]
                     module_path, class_name = class_ref.split(":", 1)
+                    # Restrict module autoload to allowed namespace for safety
+                    allowed_prefixes = (
+                        "tldw_Server_API.app.core.MCP_unified.modules.implementations",
+                    )
+                    if not any(module_path.startswith(p) for p in allowed_prefixes):
+                        logger.warning(
+                            f"Blocked module autoload for '{class_ref}': outside allowed namespace"
+                        )
+                        continue
                     cls = getattr(importlib.import_module(module_path), class_name)
 
                     mc = ModuleConfig(
@@ -476,27 +493,78 @@ class MCPServer:
         except Exception:
             client_ip = "unknown"
         
-        # Authenticate if token provided (MCP JWT, or fallback to AuthNZ JWT)
+        # Origin validation (enforce when ws_allowed_origins configured)
+        try:
+            allowed = list(self.config.ws_allowed_origins or [])
+            if allowed:
+                # Allow wildcard '*' if explicitly configured
+                origin = websocket.headers.get("origin") or websocket.headers.get("Origin") or ""
+                if "*" not in allowed:
+                    if not origin or origin not in allowed:
+                        await websocket.close(code=1008, reason="Origin not allowed")
+                        return
+        except Exception:
+            # Fail-safe: do not block if config parsing fails
+            pass
+
+        # Gate query parameter auth tokens if disabled by config
+        if (auth_token or api_key) and not self.config.ws_allow_query_auth:
+            try:
+                # Emit a deprecation warning; ignore query tokens unless explicitly allowed
+                logger.warning("WS query-parameter authentication is disabled; pass Authorization bearer token or X-API-KEY header instead")
+            except Exception:
+                pass
+            auth_token = None
+            api_key = None
+
+        # Prefer headers/subprotocol for auth if present
+        try:
+            # Authorization: Bearer <token>
+            _authz = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+            if _authz and _authz.lower().startswith("bearer "):
+                auth_token = _authz.split(" ", 1)[1].strip()
+        except Exception:
+            pass
+        try:
+            # X-API-KEY header
+            _xkey = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+            if _xkey:
+                api_key = _xkey.strip()
+        except Exception:
+            pass
+        try:
+            # Sec-WebSocket-Protocol: bearer,<token>
+            _proto = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
+            if _proto and not auth_token:
+                # pick first value that looks like bearer,<token>
+                parts = [p.strip() for p in _proto.split(",")]
+                if len(parts) >= 2 and parts[0].lower() == "bearer" and parts[1]:
+                    auth_token = parts[1]
+        except Exception:
+            pass
+
+        # Authenticate if token provided (prefer AuthNZ JWT, then MCP JWT)
         if auth_token:
             ok = False
             try:
-                token_data = self.jwt_manager.verify_token(auth_token)
-                user_id = token_data.sub
-                ok = True
-                logger.info(f"WebSocket authenticated for user (MCP JWT): {user_id}")
+                # Try AuthNZ JWT first for consistency with HTTP endpoints
+                from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+                jwt_service = get_jwt_service()
+                payload = jwt_service.decode_access_token(auth_token)
+                user_id = str(payload.get("user_id") or payload.get("sub")) if payload else None
+                ok = bool(user_id)
+                if ok:
+                    logger.info(f"WebSocket authenticated for user (AuthNZ JWT): {user_id}")
             except Exception as e:
-                logger.debug(f"MCP JWT auth failed: {e}")
-                # Try AuthNZ JWT
+                logger.debug(f"AuthNZ JWT auth failed: {e}")
+                # Try MCP JWT
                 try:
-                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-                    jwt_service = get_jwt_service()
-                    payload = jwt_service.decode_access_token(auth_token)
-                    user_id = str(payload.get("user_id") or payload.get("sub")) if payload else None
-                    ok = bool(user_id)
-                    if ok:
-                        logger.info(f"WebSocket authenticated for user (AuthNZ JWT): {user_id}")
+                    token_data = self.jwt_manager.verify_token(auth_token)
+                    user_id = token_data.sub
+                    ok = True
+                    logger.info(f"WebSocket authenticated for user (MCP JWT): {user_id}")
                 except Exception as _e:
-                    logger.debug(f"AuthNZ JWT auth failed: {_e}")
+                    logger.debug(f"MCP JWT auth failed: {_e}")
             if auth_token and not ok:
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
@@ -633,6 +701,18 @@ class MCPServer:
         while True:
             try:
                 await asyncio.sleep(self.config.ws_ping_interval)
+                # Idle timeout enforcement
+                try:
+                    idle_seconds = (datetime.now(timezone.utc) - connection.last_activity).total_seconds()
+                    if self.config.ws_idle_timeout_seconds and idle_seconds > max(5, int(self.config.ws_idle_timeout_seconds)):
+                        try:
+                            get_metrics_collector().record_ws_session_closure("idle")
+                        except Exception:
+                            pass
+                        await connection.close(code=1001, reason="Idle timeout")
+                        break
+                except Exception:
+                    pass
                 await connection.websocket.send_json({"type": "ping"})
             except Exception:
                 try:
@@ -669,10 +749,37 @@ class MCPServer:
                     "id": data.get("id") if isinstance(data, dict) else None
                 })
                 continue
-            
+
             # Handle ping/pong
             if isinstance(data, dict) and data.get("type") == "pong":
                 continue
+
+            # Per-session rate limit: requests per window
+            try:
+                now_ts = datetime.now(timezone.utc).timestamp()
+                connection.request_times.append(now_ts)
+                window = max(1, int(self.config.ws_session_rate_limit_window_seconds))
+                threshold = max(1, int(self.config.ws_session_rate_limit_count))
+                # Prune
+                while connection.request_times and (now_ts - connection.request_times[0]) > window:
+                    connection.request_times.popleft()
+                if len(connection.request_times) > threshold:
+                    await connection.send_json({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32002,
+                            "message": "Session rate limit exceeded"
+                        },
+                        "id": data.get("id") if isinstance(data, dict) else None
+                    })
+                    try:
+                        get_metrics_collector().record_ws_session_closure("session_rate")
+                    except Exception:
+                        pass
+                    await connection.close(code=1013, reason="Session rate limit exceeded")
+                    break
+            except Exception:
+                pass
             
             # Ensure session exists and update with client/safe config if applicable
             try:

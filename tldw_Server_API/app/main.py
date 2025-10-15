@@ -968,6 +968,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start AuthNZ scheduler: {e}")
 
+    # Start Workflows recurring scheduler (cron-based submission into core Scheduler)
+    workflows_sched_task = None
+    try:
+        from tldw_Server_API.app.services.workflows_scheduler import start_workflows_scheduler
+        workflows_sched_task = await start_workflows_scheduler()
+        if workflows_sched_task:
+            logger.info("Workflows recurring scheduler started")
+        else:
+            logger.info("Workflows recurring scheduler disabled (WORKFLOWS_SCHEDULER_ENABLED != true)")
+    except Exception as e:
+        logger.warning(f"Failed to start Workflows recurring scheduler: {e}")
+
     # Display authentication mode (mask API key in production)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -1151,6 +1163,17 @@ async def lifespan(app: FastAPI):
         except Exception:
             try:
                 llm_usage_task.cancel()
+            except Exception:
+                pass
+        # Stop Workflows recurring scheduler
+        try:
+            if 'workflows_sched_task' in locals() and workflows_sched_task:
+                from tldw_Server_API.app.services.workflows_scheduler import stop_workflows_scheduler as _stop_wf_sched
+                await _stop_wf_sched(workflows_sched_task)
+        except Exception:
+            try:
+                if 'workflows_sched_task' in locals() and workflows_sched_task:
+                    workflows_sched_task.cancel()
             except Exception:
                 pass
         # Jobs metrics gauges worker shutdown
@@ -2052,6 +2075,10 @@ app.include_router(rag_unified_router, tags=["rag-unified"])
 
 # Workflows API (v0.1 scaffolding)
 app.include_router(workflows_router, tags=["workflows"])
+
+# Workflows Scheduler (CRUD for schedules)
+from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
+app.include_router(scheduler_workflows_router, tags=["scheduler"])
 
 
 # Router for Research endpoint

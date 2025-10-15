@@ -18,6 +18,34 @@
   </div>
   <div class="form-group">
     <label for="wfDef_payload">Definition JSON</label>
+    <div id="wfTpl_featured" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:6px 0">
+      <span style="opacity:0.85">Featured:</span>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('site_watch_digest_tts')">Site Watch + Digest + TTS</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('site_watch_digest_tts')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('pdf_qa')">PDF → Q&A</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('pdf_qa')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('paper_roundup')">Paper Roundup</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('paper_roundup')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('policy_checker')">Policy Checker</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('policy_checker')">Run Featured</button>
+      <button class="api-button btn-sm" onclick="wfTplLoadByName('podcast_summary_narration')">Podcast → Summary → TTS</button>
+      <button class="api-button btn-sm" onclick="wfTplRunByName('podcast_summary_narration')">Run Featured</button>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
+      <label style="margin:0">Templates</label>
+      <select id="wfTpl_select" style="min-width:240px"></select>
+      <button class="api-button" onclick="wfTplLoadList()">Refresh</button>
+      <button class="api-button" onclick="wfTplApply()">Load Selected</button>
+      <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
+      <button class="api-button" onclick="wfTplRun()">Run This Template</button>
+      <button class="api-button" onclick="wfTplRunWatch()">Run & Watch</button>
+      <button class="api-button" onclick="wfTplCopyCurl()">Copy cURL (Create+Run)</button>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em">
+        <span id="wfTpl_curl_note">Requires jq</span>
+        <span style="opacity:0.8">|</span>
+        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()"> No jq
+      </label>
+    </div>
     <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
   "version": 1,
@@ -25,6 +53,35 @@
     {"id": "s1", "type": "prompt", "config": {"template": "Hello {{ inputs.name }}", "save_artifact": true}}
   ]
 }</textarea>
+  </div>
+  <div class="card" style="margin:12px 0; padding:10px; border:1px solid var(--color-base-40); border-radius:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+      <div>
+        <h3 style="margin:0 0 6px 0">Scheduler (workflow_run)</h3>
+        <div style="color:var(--color-base-0); font-size:0.9em">Create cron schedules that enqueue workflow runs</div>
+      </div>
+      <div>
+        <button class="api-button" onclick="wfSchedList()">Refresh</button>
+      </div>
+    </div>
+    <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+      <input type="text" id="wfSched_workflow_id" placeholder="workflow_id (optional)" style="width:140px"/>
+      <input type="text" id="wfSched_name" placeholder="name (optional)" style="width:160px"/>
+      <input type="text" id="wfSched_cron" placeholder="cron (e.g., */15 * * * *)" style="width:200px"/>
+      <input type="text" id="wfSched_tz" placeholder="timezone (optional)" style="width:160px"/>
+      <select id="wfSched_mode">
+        <option value="async">async</option>
+        <option value="sync">sync</option>
+      </select>
+      <select id="wfSched_validation">
+        <option value="block">block</option>
+        <option value="non-block">non-block</option>
+      </select>
+      <label style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="wfSched_enabled" checked /> Enabled</label>
+      <input type="text" id="wfSched_inputs" placeholder='inputs JSON (optional)' style="flex:1; min-width:220px"/>
+      <button class="api-button" onclick="wfSchedCreate()">Create</button>
+    </div>
+    <div id="wfSched_list"></div>
   </div>
   <div class="form-group">
     <button class="api-button" onclick="wfCreateDefinition()">Create Definition</button>
@@ -36,6 +93,12 @@
     <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
     <button class="api-button" onclick="wfInsertTTS()">Insert TTS Step</button>
     <button class="api-button" onclick="wfInsertProcessMedia()">Insert Process Media Step</button>
+    <button class="api-button" onclick="wfInsertRSSFetch()">Insert RSS Fetch Step</button>
+    <button class="api-button" onclick="wfInsertEmbed()">Insert Embed Step</button>
+    <button class="api-button" onclick="wfInsertTranslate()">Insert Translate Step</button>
+    <button class="api-button" onclick="wfInsertSTT()">Insert STT Transcribe Step</button>
+    <button class="api-button" onclick="wfInsertNotify()">Insert Notify Step</button>
+    <button class="api-button" onclick="wfInsertDiff()">Insert Diff Change Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -95,6 +158,215 @@
       Toast.success('Created definition id='+(resp?.id||''));
     }catch(e){ Toast.error('Create failed: '+(e?.message||e)); }
   }
+  async function wfTplLoadList(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      sel.innerHTML = '';
+      const items = await apiClient.makeRequest('GET','/api/v1/workflows/templates');
+      if (!Array.isArray(items) || items.length===0){
+        const opt = document.createElement('option'); opt.value=''; opt.textContent='(no templates found)'; sel.appendChild(opt); return;
+      }
+      for (const it of items){
+        const opt = document.createElement('option');
+        opt.value = it.name;
+        const pretty = wfHumanTitle(it.title || it.name);
+        const label = (it.name && pretty && pretty !== it.name) ? `${pretty} — ${it.name}` : pretty || it.name;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      // Restore last selection if present
+      try{
+        const saved = (typeof Utils !== 'undefined') ? Utils.getFromStorage('workflows-last-template') : null;
+        if (saved){ sel.value = saved; }
+      }catch(_){ }
+      // Persist selection on change (attach once)
+      try{
+        if (!sel._wf_has_onchange){
+          sel.addEventListener('change', ()=>{ try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', sel.value); }catch(_){ } });
+          sel._wf_has_onchange = true;
+        }
+      }catch(_){ }
+      Toast.success('Templates loaded');
+    }catch(e){ Toast.error('Failed to load templates: '+(e?.message||e)); }
+  }
+  function wfHumanTitle(s){
+    try{
+      if (!s) return '';
+      let t = String(s).replace(/[\-_]+/g, ' ').trim();
+      // Title case words, preserving non-word tokens like arrows
+      t = t.replace(/\b([a-z])(\w*)/g, (m,a,b)=> a.toUpperCase()+b.toLowerCase());
+      return t;
+    }catch(_){ return String(s); }
+  }
+  async function wfTplApply(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const data = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      document.getElementById('wfDef_payload').value = JSON.stringify(data,null,2);
+      Toast.success('Template loaded: '+name);
+    }catch(e){ Toast.error('Failed to load template: '+(e?.message||e)); }
+  }
+  async function wfTplLoadByName(name){
+    try{
+      if (!name){ return; }
+      const data = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      document.getElementById('wfDef_payload').value = JSON.stringify(data,null,2);
+      Toast.success('Template loaded: '+wfHumanTitle(name));
+    }catch(e){ Toast.error('Failed to load template: '+(e?.message||e)); }
+  }
+  async function wfTplInsert(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const ta = document.getElementById('wfDef_payload');
+      const obj = (()=>{ try{ return JSON.parse(ta.value||'{}'); }catch(_){ return {}; } })();
+      obj.name = obj.name || (tpl && tpl.name) || 'composed';
+      obj.version = obj.version || 1;
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      if (Array.isArray(tpl?.steps)){
+        for (const step of tpl.steps){ obj.steps.push(step); }
+      }
+      ta.value = JSON.stringify(obj, null, 2);
+      Toast.success('Inserted steps from template: '+name);
+    }catch(e){ Toast.error('Failed to insert: '+(e?.message||e)); }
+  }
+  async function wfTplRun(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      // Create definition
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id;
+      if (!wid){ throw new Error('Create did not return id'); }
+      // Default inputs
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      document.getElementById('wfDef_result').textContent = JSON.stringify({ created, run }, null, 2);
+      const runId = run?.run_id || '';
+      const toastEl = Toast.success('Run started: '+ runId, 8000);
+      // Append a quick-link button to jump to Runs tab and pre-fill run_id
+      try{
+        const btn = document.createElement('button');
+        btn.className = 'api-button btn-sm';
+        btn.style.marginLeft = '8px';
+        btn.textContent = 'Open in Runs';
+        btn.onclick = () => { try{ wfGoToRun(runId); }catch(_){} };
+        const content = toastEl?.querySelector?.('.toast-content .toast-message') || toastEl?.querySelector?.('.toast-content') || toastEl;
+        if (content) content.appendChild(btn);
+      }catch(_){ /* ignore */ }
+    }catch(e){ Toast.error('Run template failed: '+(e?.message||e)); }
+  }
+
+  // Create+Run and automatically navigate and watch status
+  async function wfTplRunWatch(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      try{ if (typeof Utils !== 'undefined') Utils.saveToStorage('workflows-last-template', name); }catch(_){ }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id; if (!wid){ throw new Error('Create did not return id'); }
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      const runId = run?.run_id || '';
+      document.getElementById('wfDef_result').textContent = JSON.stringify({ created, run }, null, 2);
+      wfGoToRun(runId);
+      setTimeout(()=>{ try{ wfStartWatchStatus(runId); }catch(_){ } }, 350);
+    }catch(e){ Toast.error('Run & Watch failed: '+(e?.message||e)); }
+  }
+
+  async function wfTplRunByName(name){
+    try{
+      if (!name){ return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const created = await apiClient.makeRequest('POST','/api/v1/workflows',{ body: tpl });
+      const wid = created?.id;
+      if (!wid){ throw new Error('Create did not return id'); }
+      const inputs = (tpl && typeof tpl.default_inputs==='object' && tpl.default_inputs) ? tpl.default_inputs : {};
+      const run = await apiClient.makeRequest('POST',`/api/v1/workflows/${encodeURIComponent(wid)}/run?mode=async`,{ body: { inputs } });
+      const runId = run?.run_id || '';
+      const toastEl = Toast.success('Run started: '+ runId, 8000);
+      try{
+        const btn = document.createElement('button');
+        btn.className = 'api-button btn-sm';
+        btn.style.marginLeft = '8px';
+        btn.textContent = 'Open in Runs';
+        btn.onclick = () => { try{ wfGoToRun(runId); }catch(_){} };
+        const content = toastEl?.querySelector?.('.toast-content .toast-message') || toastEl?.querySelector?.('.toast-content') || toastEl;
+        if (content) content.appendChild(btn);
+      }catch(_){ }
+    }catch(e){ Toast.error('Run featured failed: '+(e?.message||e)); }
+  }
+
+  async function wfTplCopyCurl(){
+    try{
+      const sel = document.getElementById('wfTpl_select');
+      const name = sel.value;
+      if (!name){ Toast.error('Pick a template'); return; }
+      const tpl = await apiClient.makeRequest('GET',`/api/v1/workflows/templates/${encodeURIComponent(name)}`);
+      const base = (apiClient && apiClient.baseUrl) ? apiClient.baseUrl : 'http://localhost:8000';
+      const token = (apiClient && apiClient.token) ? apiClient.token : 'YOUR_API_KEY_HERE';
+      const json = JSON.stringify(tpl, null, 2);
+      const snippet = `#!/usr/bin/env bash\nset -e\nBASE='${base}'\nAPI_KEY='${token}'\n\n# Requires: jq\ncat > /tmp/wf_def.json << 'JSON'\n${json}\nJSON\n\nCREATE=$(curl -sS -X POST "$BASE/api/v1/workflows" \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-KEY: $API_KEY" \\\n  --data-binary @/tmp/wf_def.json)\necho "$CREATE" | jq .\nWID=$(echo "$CREATE" | jq -r '.id')\n\nRUN=$(curl -sS -X POST "$BASE/api/v1/workflows/$WID/run?mode=async" \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-KEY: $API_KEY" \\\n  --data '{"inputs": {}}')\necho "$RUN" | jq .\n`;
+      await navigator.clipboard.writeText(snippet);
+      Toast.success('Copied cURL (create+run)');
+    }catch(e){ Toast.error('Copy cURL failed: '+(e?.message||e)); }
+  }
+
+  // Navigate to the Workflows → Runs tab and pre-fill the run ID
+  function wfGoToRun(runId){
+    try{
+      const topBtn = document.querySelector('.top-tab-button[data-toptab="workflows"]');
+      const doFill = () => { setTimeout(()=>{ try{ const inp=document.getElementById('wfRun_run_id'); if (inp){ inp.value = String(runId||''); } }catch(_){ } }, 150); };
+      if (window.webUI && topBtn){
+        // Activate Workflows tab, then the Runs sub-tab
+        Promise.resolve(webUI.activateTopTab(topBtn)).then(()=>{
+          try{ const runsBtn = document.querySelector('#workflows-subtabs .sub-tab-button[data-content-id="tabWorkflowsRuns"]'); if (runsBtn) webUI.activateSubTab(runsBtn); }catch(_){ }
+          doFill();
+          // Follow-up toast with quick Get Status action
+          setTimeout(()=>{
+            try{
+              const t = Toast.info('Ready to check status', 6000);
+              const btn = document.createElement('button');
+              btn.className = 'api-button btn-sm';
+              btn.style.marginLeft = '8px';
+              btn.textContent = 'Get Status';
+              btn.onclick = ()=>{ try{ wfGetRun(); }catch(_){} };
+              const content = t?.querySelector?.('.toast-content .toast-message') || t?.querySelector?.('.toast-content') || t;
+              if (content) content.appendChild(btn);
+            }catch(_){ }
+          }, 220);
+        });
+      } else {
+        // Fallback: show content directly
+        try{
+          document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
+          const runs = document.getElementById('tabWorkflowsRuns'); if (runs) runs.classList.add('active');
+        }catch(_){ }
+        doFill();
+        try{
+          const t = Toast.info('Ready to check status', 6000);
+          const btn = document.createElement('button');
+          btn.className = 'api-button btn-sm';
+          btn.style.marginLeft = '8px';
+          btn.textContent = 'Get Status';
+          btn.onclick = ()=>{ try{ wfGetRun(); }catch(_){} };
+          const content = t?.querySelector?.('.toast-content .toast-message') || t?.querySelector?.('.toast-content') || t;
+          if (content) content.appendChild(btn);
+        }catch(_){ }
+      }
+    }catch(_){ }
+  }
   async function wfListDefinitions(){
     try{
       const resp = await apiClient.makeRequest('GET','/api/v1/workflows');
@@ -118,6 +390,73 @@
       Toast.success('Run started: '+(resp?.run_id||''));
     }catch(e){ Toast.error('Run failed: '+(e?.message||e)); }
   }
+  async function wfSchedCreate(){
+    try{
+      const widRaw = document.getElementById('wfSched_workflow_id').value.trim();
+      const name = document.getElementById('wfSched_name').value.trim() || null;
+      const cron = document.getElementById('wfSched_cron').value.trim();
+      const timezone = document.getElementById('wfSched_tz').value.trim() || null;
+      const run_mode = document.getElementById('wfSched_mode').value;
+      const validation_mode = document.getElementById('wfSched_validation').value;
+      const enabled = document.getElementById('wfSched_enabled').checked;
+      const inputsText = document.getElementById('wfSched_inputs').value.trim();
+      const body = { name, cron, timezone, run_mode, validation_mode, enabled };
+      if (widRaw) body.workflow_id = parseInt(widRaw,10);
+      if (inputsText){ try{ body.inputs = JSON.parse(inputsText); }catch(e){ Toast.error('Invalid inputs JSON'); return; } }
+      const resp = await apiClient.makeRequest('POST','/api/v1/scheduler/workflows',{ body });
+      Toast.success('Created schedule '+(resp?.id||''));
+      await wfSchedList();
+    }catch(e){ Toast.error('Create schedule failed: '+(e?.message||e)); }
+  }
+  async function wfSchedList(){
+    try{
+      const resp = await apiClient.makeRequest('GET','/api/v1/scheduler/workflows');
+      const host = document.getElementById('wfSched_list');
+      host.innerHTML = wfSchedRender(resp||[]);
+    }catch(e){ Toast.error('List schedules failed: '+(e?.message||e)); }
+  }
+  function wfSchedRender(items){
+    if (!Array.isArray(items) || items.length===0){ return '<div style="color:var(--color-base-0)">No schedules</div>'; }
+    let rows = '';
+    for (const it of items){
+      rows += `<tr>
+        <td style="font-family:monospace">${it.id}</td>
+        <td>${it.name||''}</td>
+        <td>${String(it.workflow_id||'')}</td>
+        <td><code>${it.cron}</code></td>
+        <td>${it.timezone||''}</td>
+        <td>${it.run_mode}</td>
+        <td>${it.validation_mode}</td>
+        <td>${it.enabled? 'yes':'no'}</td>
+        <td>
+          <button class="api-button btn-sm" onclick="wfSchedRunNow('${it.id}')">Run</button>
+          <button class="api-button btn-sm" onclick="wfSchedToggle('${it.id}', ${it.enabled? 'false':'true'})">${it.enabled? 'Disable':'Enable'}</button>
+          <button class="api-button btn-sm danger" onclick="wfSchedDelete('${it.id}')">Delete</button>
+        </td>
+      </tr>`;
+    }
+    return `<table class="table-compact"><thead><tr><th>ID</th><th>Name</th><th>WID</th><th>Cron</th><th>TZ</th><th>Mode</th><th>Validation</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  async function wfSchedDelete(id){
+    try{
+      await apiClient.makeRequest('DELETE',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}`);
+      await wfSchedList();
+      Toast.success('Deleted');
+    }catch(e){ Toast.error('Delete failed: '+(e?.message||e)); }
+  }
+  async function wfSchedToggle(id, enabled){
+    try{
+      const body = { enabled };
+      await apiClient.makeRequest('PATCH',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}`,{ body });
+      await wfSchedList();
+    }catch(e){ Toast.error('Toggle failed: '+(e?.message||e)); }
+  }
+  async function wfSchedRunNow(id){
+    try{
+      const r = await apiClient.makeRequest('POST',`/api/v1/scheduler/workflows/${encodeURIComponent(id)}/run-now`);
+      Toast.success('Enqueued task '+(r?.task_id||''));
+    }catch(e){ Toast.error('Run-now failed: '+(e?.message||e)); }
+  }
   function wfInsertDelay(){
     try{
       const ta = document.getElementById('wfDef_payload');
@@ -139,6 +478,72 @@
       ta.value = JSON.stringify(obj,null,2);
       Toast.success('Inserted log step');
     }catch(e){ Toast.error('Could not insert log: '+(e?.message||e)); }
+  }
+  function wfInsertRSSFetch(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'rss_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'rss_fetch', config: { urls: ['https://example.com/feed.xml'], limit: 5 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted rss_fetch step');
+    }catch(e){ Toast.error('Could not insert rss_fetch: '+(e?.message||e)); }
+  }
+  function wfInsertEmbed(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'embed_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'embed', config: { texts: '{{ last.text }}', collection: 'user_{{ user_id }}_workflows' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted embed step');
+    }catch(e){ Toast.error('Could not insert embed: '+(e?.message||e)); }
+  }
+  function wfInsertTranslate(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'translate_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'translate', config: { input: '{{ last.text }}', target_lang: 'en' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted translate step');
+    }catch(e){ Toast.error('Could not insert translate: '+(e?.message||e)); }
+  }
+  function wfInsertSTT(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'stt_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'stt_transcribe', config: { file_uri: 'file:///ABSOLUTE/PATH/TO/audio.wav', model: 'large-v3', word_timestamps: false }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted stt_transcribe step');
+    }catch(e){ Toast.error('Could not insert stt_transcribe: '+(e?.message||e)); }
+  }
+  function wfInsertNotify(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'notify_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'notify', config: { url: 'https://hooks.slack.com/services/xxx', message: '{{ last.text }}' }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted notify step');
+    }catch(e){ Toast.error('Could not insert notify: '+(e?.message||e)); }
+  }
+  function wfInsertDiff(){
+    try{
+      const ta = document.getElementById('wfDef_payload');
+      const obj = JSON.parse(ta.value||"{}");
+      obj.steps = Array.isArray(obj.steps)? obj.steps : [];
+      const id = 'diff_'+(obj.steps.length+1);
+      obj.steps.push({ id, type: 'diff_change_detector', config: { current: '{{ last.text }}', method: 'ratio', threshold: 0.95 }});
+      ta.value = JSON.stringify(obj,null,2);
+      Toast.success('Inserted diff_change_detector step');
+    }catch(e){ Toast.error('Could not insert diff change: '+(e?.message||e)); }
   }
   function wfInsertPrompt(){
     try{
@@ -795,4 +1200,27 @@
   }
   function wfCopyModal(){ try{ const txt=document.getElementById('wfModal_content').textContent||''; navigator.clipboard.writeText(txt).then(()=>Toast.success('Copied')).catch(()=>Toast.error('Copy failed')); }catch(e){} }
   function escapeHtml(s){ return (s||'').replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'}[m])); }
+</script>
+<script>
+  // Auto-load Templates list when the Workflows Definitions tab becomes active
+  (function(){
+    try{
+      const target = document.getElementById('tabWorkflowsDefinitions');
+      if (!target) return;
+      const trigger = () => { try { wfTplLoadList(); } catch(e) { /* ignore */ } };
+      // If already active (first open), trigger immediately
+      if (target.classList.contains('active')) { trigger(); }
+      // Observe class changes to detect activation
+      const obs = new MutationObserver((muts)=>{
+        for (const m of muts){
+          if (m.attributeName === 'class' && target.classList.contains('active')){
+            trigger();
+          }
+        }
+      });
+      obs.observe(target, { attributes: true });
+      // Cleanup on unload
+      window.addEventListener('beforeunload', ()=>{ try{ obs.disconnect(); }catch(_){} });
+    }catch(e){ /* ignore */ }
+  })();
 </script>

@@ -658,6 +658,102 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     return {"logged": True, "message": message, "level": level}
 
 
+async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Policy/PII gate step.
+
+    Config:
+      - text_source: 'last'|'inputs'|'field' (default: last)
+      - field: path in context if text_source='field' (e.g., 'inputs.summary')
+      - block_on_pii: bool (default false)
+      - block_words: [str] (optional)
+      - max_length: int (optional; characters)
+      - redact_preview: bool (default false) include redacted text in outputs.preview
+
+    Output:
+      - { flags: { pii: {...}, block_words: [...], too_long: bool }, blocked: bool, reasons: [...], preview?: str }
+    """
+    source = str(config.get("text_source") or "last").strip().lower()
+    field = str(config.get("field") or "").strip()
+    block_on_pii = bool(config.get("block_on_pii") or False)
+    block_words = config.get("block_words") or []
+    max_length = config.get("max_length")
+    redact_preview = bool(config.get("redact_preview") or False)
+
+    text = ""
+    try:
+        if source == "inputs":
+            if isinstance(context.get("inputs"), dict):
+                text = str(context["inputs"].get("text") or context["inputs"].get("summary") or "")
+        elif source == "field" and field:
+            # Minimal dotted lookup
+            obj = context
+            for part in field.split('.'):
+                if isinstance(obj, dict):
+                    obj = obj.get(part)
+                else:
+                    obj = getattr(obj, part, None)
+            if isinstance(obj, (str, bytes)):
+                text = obj if isinstance(obj, str) else obj.decode("utf-8", errors="ignore")
+            else:
+                text = str(obj or "")
+        else:
+            last = context.get("prev") or context.get("last") or {}
+            if isinstance(last, dict):
+                text = str(last.get("text") or last.get("content") or "")
+    except Exception:
+        text = str(text or "")
+
+    flags: Dict[str, Any] = {"pii": {}, "block_words": [], "too_long": False}
+    reasons: list[str] = []
+    blocked = False
+
+    # PII detection
+    try:
+        from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+        pii = PIIDetector().detect(text)
+        if pii:
+            flags["pii"] = pii
+            if block_on_pii:
+                blocked = True
+                reasons.append("pii_detected")
+    except Exception:
+        pass
+
+    # Block words
+    if isinstance(block_words, list) and block_words:
+        found = []
+        low = (text or "").lower()
+        for w in block_words:
+            try:
+                if w and str(w).lower() in low:
+                    found.append(w)
+            except Exception:
+                continue
+        if found:
+            flags["block_words"] = found
+            blocked = True
+            reasons.append("blocked_terms")
+
+    # Max length
+    try:
+        if isinstance(max_length, int) and max_length > 0 and len(text or "") > max_length:
+            flags["too_long"] = True
+            blocked = True
+            reasons.append("too_long")
+    except Exception:
+        pass
+
+    out: Dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
+    if redact_preview and text:
+        try:
+            from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+            out["preview"] = PIIDetector().redact(text)
+        except Exception:
+            out["preview"] = text[:500]
+
+    return out
+
+
 async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Synthesize speech from text using the internal TTS service.
 
@@ -722,7 +818,14 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             reference_duration_min = float(config.get("reference_duration_min"))
     except Exception:
         reference_duration_min = None
-    extra_params = config.get("extra_params") if isinstance(config.get("extra_params"), dict) else None
+    # Merge provider-specific options into extra_params
+    extra_params = config.get("extra_params") if isinstance(config.get("extra_params"), dict) else {}
+    provider_opts = config.get("provider_options") if isinstance(config.get("provider_options"), dict) else {}
+    try:
+        if provider_opts:
+            extra_params = {**(extra_params or {}), **provider_opts}
+    except Exception:
+        pass
 
     req = OpenAISpeechRequest(
         model=model,
@@ -745,7 +848,34 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     out_dir = Path("Databases") / "artifacts" / step_run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "mp3" if fmt not in {"wav","opus","flac","aac","pcm"} else fmt
-    out_path = out_dir / f"speech.{ext}"
+    # Optional file naming template
+    try:
+        tmpl = str(config.get("output_filename_template") or "").strip()
+    except Exception:
+        tmpl = ""
+    if tmpl:
+        try:
+            # Expose common fields in template context
+            from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl2
+            tctx = {
+                **context,
+                "voice": voice,
+                "model": model,
+                "ext": ext,
+                "run_id": str(context.get("run_id") or ""),
+                "step_id": str(context.get("step_run_id") or ""),
+                "timestamp": str(int(__import__('time').time())),
+            }
+            fname = (_tmpl2(tmpl, tctx) or tmpl).strip()
+            if not fname:
+                fname = f"speech.{ext}"
+            if not fname.lower().endswith(f".{ext}"):
+                fname = f"{fname}.{ext}"
+        except Exception:
+            fname = f"speech.{ext}"
+    else:
+        fname = f"speech.{ext}"
+    out_path = out_dir / fname
 
     size_bytes = 0
     try:
@@ -763,9 +893,38 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     except Exception as e:
         return {"error": f"tts_error:{e}"}
 
+    # Optional post-process normalization via ffmpeg (best-effort)
+    pp = config.get("post_process") or {}
+    normalized = False
+    normalized_path = out_path
+    try:
+        if isinstance(pp, dict) and pp.get("normalize"):
+            import shutil, subprocess
+            if shutil.which("ffmpeg"):
+                # Use EBU R128 loudness normalization as a sane default
+                target_lufs = float(pp.get("target_lufs", -16.0))
+                true_peak = float(pp.get("true_peak_dbfs", -1.5))
+                lra = float(pp.get("lra", 11.0))
+                norm_out = out_dir / f"normalized.{ext}"
+                cmd = [
+                    "ffmpeg", "-y", "-i", str(out_path),
+                    "-af", f"loudnorm=I={target_lufs}:TP={true_peak}:LRA={lra}",
+                    str(norm_out)
+                ]
+                try:
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    normalized = True
+                    normalized_path = norm_out
+                except Exception:
+                    normalized = False
+            else:
+                normalized = False
+    except Exception:
+        normalized = False
+
     # Persist as artifact if helper is available
     # Prepare outputs and optional artifacts
-    outputs: Dict[str, Any] = {"audio_uri": f"file://{out_path}", "format": ext, "model": model, "voice": voice, "size_bytes": size_bytes}
+    outputs: Dict[str, Any] = {"audio_uri": f"file://{normalized_path}", "format": ext, "model": model, "voice": voice, "size_bytes": size_bytes, "normalized": normalized}
 
     # Create audio artifact and attach a download link if requested
     attach_download = bool(config.get("attach_download_link"))
@@ -778,7 +937,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             audio_artifact_id = f"tts_{uuid.uuid4()}"
             context["add_artifact"](
                 type="tts_audio",
-                uri=f"file://{out_path}",
+                uri=f"file://{normalized_path}",
                 size_bytes=size_bytes,
                 mime_type=mime or "application/octet-stream",
                 metadata={"model": model, "voice": voice, "format": ext},
@@ -813,25 +972,46 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Process media ephemerally using internal services (no persistence).
 
-    Currently supports kind: 'web_scraping'.
+    Supports kinds:
+      - web_scraping (existing)
+      - pdf (file_uri)
+      - ebook (file_uri)
+      - xml (file_uri)
+      - mediawiki_dump (file_uri)
+      - podcast (url)
 
-    Config (web_scraping):
-      - scrape_method: "Individual URLs" | "Sitemap" | "URL Level" | "Recursive Scraping"
-      - url_input: str (single or multiline)
-      - url_level: int (if scrape_method == URL Level)
-      - max_pages: int (default 10)
-      - max_depth: int (default 3)
-      - summarize: bool (default false)
-      - custom_prompt, api_name, system_prompt, temperature, custom_cookies, user_agent, custom_headers
-    Output: { kind: 'web_scraping', status, results, count }
+    For smoother chains, the adapter emits a best-effort `text` field in
+    outputs (e.g., first article summary/content, or extracted text), so
+    downstream steps like `prompt` and `tts` can use `last.text` directly.
     """
+    def _emit(out: Dict[str, Any]) -> Dict[str, Any]:
+        # Attach best-effort text for chaining convenience
+        try:
+            if "text" not in out or not out.get("text"):
+                # Try to find first rich text content
+                txt: Optional[str] = None
+                # Web scraping shape: results -> list of {content, summary}
+                results = out.get("results") if isinstance(out, dict) else None
+                if isinstance(results, list) and results:
+                    item0 = results[0]
+                    if isinstance(item0, dict):
+                        txt = (item0.get("summary") or item0.get("content") or item0.get("text") or "")
+                # Generic shapes
+                if not txt:
+                    txt = out.get("content") or out.get("text") or ""
+                if txt:
+                    out["text"] = txt
+        except Exception:
+            pass
+        return out
+
     kind = str(config.get("kind") or "web_scraping").strip().lower()
-    if kind != "web_scraping":
-        return {"error": f"unsupported_process_media_kind:{kind}"}
-    try:
-        from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
-    except Exception:
-        return {"error": "web_scraping_service_unavailable"}
+    # Web scraping
+    if kind == "web_scraping":
+        try:
+            from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
+        except Exception:
+            return {"error": "web_scraping_service_unavailable"}
 
     # Extract and sanitize config
     scrape_method = str(config.get("scrape_method") or "Individual URLs")
@@ -855,8 +1035,8 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
     user_agent = config.get("user_agent")
     custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
 
-    try:
-        result = await process_web_scraping_task(
+        try:
+            result = await process_web_scraping_task(
             scrape_method=scrape_method,
             url_input=url_input,
             url_level=url_level,
@@ -875,19 +1055,446 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             user_id=None,
             user_agent=user_agent,
             custom_headers=custom_headers,
-        )
-    except Exception as e:
-        return {"error": f"process_media_error:{e}"}
-
-    # Normalize response
-    articles = []
-    try:
-        articles = result.get("results") or result.get("articles") or []
-        if isinstance(articles, dict):
-            articles = [articles]
-    except Exception:
+            )
+        except Exception as e:
+            return {"error": f"process_media_error:{e}"}
+        # Normalize response
         articles = []
-    return {"kind": "web_scraping", "status": result.get("status", "ok"), "count": len(articles), "results": articles}
+        try:
+            articles = result.get("results") or result.get("articles") or []
+            if isinstance(articles, dict):
+                articles = [articles]
+        except Exception:
+            articles = []
+        return _emit({"kind": "web_scraping", "status": result.get("status", "ok"), "count": len(articles), "results": articles})
+
+    # PDF (file_uri required)
+    if kind == "pdf":
+        file_uri = str(config.get("file_uri") or "").strip()
+        if not file_uri.startswith("file://"):
+            return {"error": "missing_or_invalid_file_uri"}
+        path = file_uri[len("file://"):]
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
+            fb = Path(path).read_bytes()
+            performed_analysis = bool(config.get("perform_analysis", True))
+            chunk_opts = config.get("chunking") or {}
+            result = await process_pdf_task(
+                file_bytes=fb,
+                filename=Path(path).name,
+                parser=str(config.get("parser") or "pymupdf4llm"),
+                perform_analysis=performed_analysis,
+                api_name=config.get("api_name") if performed_analysis else None,
+                custom_prompt=config.get("custom_prompt"),
+                system_prompt=config.get("system_prompt"),
+                perform_chunking=bool(chunk_opts.get("perform", performed_analysis)),
+                chunk_method=chunk_opts.get("method"),
+                max_chunk_size=chunk_opts.get("max_size"),
+                chunk_overlap=chunk_opts.get("overlap"),
+            )
+        except Exception as e:
+            return {"error": f"pdf_process_error:{e}"}
+        # Map to a simple shape
+        out = {
+            "kind": "pdf",
+            "status": result.get("status", "Success"),
+            "content": result.get("text") or result.get("content") or "",
+            "metadata": result.get("metadata") or {},
+        }
+        return _emit(out)
+
+    # Ebook (file_uri; placeholder service)
+    if kind == "ebook":
+        file_uri = str(config.get("file_uri") or "").strip()
+        if not file_uri.startswith("file://"):
+            return {"error": "missing_or_invalid_file_uri"}
+        path = file_uri[len("file://"):]
+        try:
+            from tldw_Server_API.app.services.ebook_processing_service import process_ebook_task
+            res = await process_ebook_task(file_path=path, title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
+            out = {"kind": "ebook", "content": res.get("text") or "", "summary": res.get("summary") or "", "metadata": res.get("metadata") or {}}
+            return _emit(out)
+        except Exception as e:
+            return {"error": f"ebook_process_error:{e}"}
+
+    # XML (file_uri; placeholder service)
+    if kind == "xml":
+        file_uri = str(config.get("file_uri") or "").strip()
+        if not file_uri.startswith("file://"):
+            return {"error": "missing_or_invalid_file_uri"}
+        path = file_uri[len("file://"):]
+        try:
+            from tldw_Server_API.app.services.xml_processing_service import process_xml_task
+            fb = Path(path).read_bytes()
+            res = await process_xml_task(
+                file_bytes=fb,
+                filename=Path(path).name,
+                title=config.get("title"),
+                author=config.get("author"),
+                keywords=config.get("keywords") or [],
+                system_prompt=config.get("system_prompt"),
+                custom_prompt=config.get("custom_prompt"),
+                auto_summarize=bool(config.get("summarize")),
+                api_name=config.get("api_name"),
+                api_key=None,
+            )
+            text = "\n".join([seg.get("Text") or "" for seg in (res.get("segments") or [])])
+            out = {"kind": "xml", "content": text, "summary": res.get("summary"), "metadata": res.get("info_dict") or {}}
+            return _emit(out)
+        except Exception as e:
+            return {"error": f"xml_process_error:{e}"}
+
+    # MediaWiki dump (file_uri) – ephemeral process
+    if kind == "mediawiki_dump":
+        file_uri = str(config.get("file_uri") or "").strip()
+        if not file_uri.startswith("file://"):
+            return {"error": "missing_or_invalid_file_uri"}
+        # In workflows, we return a placeholder summary; full streaming is endpoint-only
+        path = file_uri[len("file://"):]
+        try:
+            content = Path(path).read_text(errors="ignore")
+        except Exception:
+            content = ""
+        return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": Path(path).name}})
+
+    # Podcast (url)
+    if kind == "podcast":
+        url = str(config.get("url") or "").strip()
+        if not url:
+            return {"error": "missing_url"}
+        try:
+            from tldw_Server_API.app.services.podcast_processing_service import process_podcast_task
+            res = await process_podcast_task(
+                url=url,
+                custom_prompt=config.get("custom_prompt"),
+                api_name=config.get("api_name"),
+                api_key=None,
+                keywords=config.get("keywords") or [],
+                diarize=bool(config.get("diarize")),
+                whisper_model=str(config.get("whisper_model") or "small"),
+                keep_original_audio=False,
+                start_time=config.get("start_time"),
+                end_time=config.get("end_time"),
+                include_timestamps=True,
+                cookies=None,
+            )
+            out = {"kind": "podcast", "content": res.get("transcript") or "", "summary": res.get("summary"), "metadata": res.get("metadata")}
+            return _emit(out)
+        except Exception as e:
+            return {"error": f"podcast_process_error:{e}"}
+
+    return {"error": f"unsupported_process_media_kind:{kind}"}
+
+
+async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch RSS/Atom feeds and return items.
+
+    Config:
+      - urls: list[str] | str (newline/comma separated)
+      - limit: int (default 10)
+      - include_content: bool (default true) — include summary/content in results
+
+    Output:
+      - { results: [{title, link, summary, published}], count, text }
+    """
+    urls_cfg = config.get("urls")
+    if isinstance(urls_cfg, list):
+        urls = [str(u).strip() for u in urls_cfg if str(u).strip()]
+    else:
+        raw = str(urls_cfg or "").strip()
+        if raw:
+            # split by newline or comma
+            parts = [p.strip() for p in raw.replace("\n", ",").split(",") if p.strip()]
+            urls = parts
+        else:
+            urls = []
+    limit = int(config.get("limit", 10))
+    include_content = bool(config.get("include_content", True))
+
+    # Test-friendly behavior without network
+    import os as _os
+    if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        fake = [{"title": "Test Item", "link": "https://example.com/x", "summary": "Test", "published": None}]
+        return {"results": fake[:limit], "count": min(limit, len(fake)), "text": fake[0]["summary"]}
+
+    results: list[dict] = []
+    if not urls:
+        return {"results": [], "count": 0}
+    try:
+        import httpx
+        import xml.etree.ElementTree as ET
+        from urllib.parse import urlparse
+        for u in urls:
+            try:
+                if not (u.startswith("http://") or u.startswith("https://")):
+                    continue
+                if not is_url_allowed(u):
+                    continue
+                host = urlparse(u).hostname or ""
+                timeout = float(_os.getenv("WORKFLOWS_RSS_TIMEOUT", "8"))
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.get(u)
+                    if resp.status_code // 100 != 2:
+                        continue
+                    text = resp.text
+                # Parse as XML (RSS or Atom)
+                try:
+                    root = ET.fromstring(text)
+                except Exception:
+                    continue
+                # Heuristic: RSS <item> or Atom <entry>
+                items = root.findall('.//item')
+                if not items:
+                    items = root.findall('.//{http://www.w3.org/2005/Atom}entry')
+                for it in items:
+                    title = None
+                    link = None
+                    summary = None
+                    published = None
+                    # Namespaces
+                    def _find_text(node, names):
+                        for n in names:
+                            x = node.find(n)
+                            if x is not None and (x.text or "").strip():
+                                return x.text.strip()
+                        return None
+                    title = _find_text(it, ["title", "{http://www.w3.org/2005/Atom}title"]) or ""
+                    # Atom links are in attributes
+                    lnode = it.find("link")
+                    if lnode is not None and (lnk := lnode.get("href")):
+                        link = lnk
+                    else:
+                        link = _find_text(it, ["link", "{http://www.w3.org/2005/Atom}link"]) or ""
+                    summary = _find_text(it, ["description", "{http://www.w3.org/2005/Atom}summary", "{http://www.w3.org/2005/Atom}content"]) or ""
+                    published = _find_text(it, ["pubDate", "{http://www.w3.org/2005/Atom}updated", "{http://www.w3.org/2005/Atom}published"]) or None
+                    rec = {"title": title, "link": link}
+                    if include_content:
+                        rec["summary"] = summary
+                    if published:
+                        rec["published"] = published
+                    results.append(rec)
+            except Exception:
+                continue
+        results = results[:limit]
+        text_concat = "\n\n".join([r.get("summary") or r.get("title") or "" for r in results if (r.get("summary") or r.get("title"))])
+        return {"results": results, "count": len(results), "text": text_concat}
+    except Exception as e:
+        return {"error": f"rss_error:{e}"}
+
+
+async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Embed texts and upsert into vector store (Chroma) directly.
+
+    Config:
+      - texts: list[str] | str (defaults to last.text)
+      - collection: str (default: user_{user_id}_workflows)
+      - model_id: str (optional override)
+      - metadata: dict (optional global metadata per text)
+
+    Output: { upserted: n, collection: name }
+    """
+    from tldw_Server_API.app.core.config import settings as _settings
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings_batch_async
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    import uuid as _uuid
+
+    # Resolve texts
+    texts_cfg = config.get("texts")
+    texts: list[str]
+    if isinstance(texts_cfg, list):
+        texts = [str(t) for t in texts_cfg if str(t).strip()]
+    elif isinstance(texts_cfg, str) and texts_cfg.strip():
+        texts = [texts_cfg]
+    else:
+        prev = context.get("prev") or {}
+        txt = str(prev.get("text") or prev.get("content") or "").strip()
+        if not txt:
+            return {"error": "no_text"}
+        texts = [txt]
+
+    user_id = str(context.get("user_id") or "1")
+    collection = str(config.get("collection") or f"user_{user_id}_workflows")
+    model_id = str(config.get("model_id") or "") or None
+    md_global = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+
+    # Build embedding config
+    user_app_config = dict(_settings.get("EMBEDDING_CONFIG", {}))
+    user_app_config["USER_DB_BASE_DIR"] = _settings.get("USER_DB_BASE_DIR")
+    embeds = await create_embeddings_batch_async(texts=texts, user_app_config=user_app_config, model_id_override=model_id)
+
+    ids = [f"wf_{_uuid.uuid4().hex}" for _ in texts]
+    metadatas = []
+    for t in texts:
+        m = {"run_id": context.get("run_id"), "step_run_id": context.get("step_run_id")}
+        if md_global:
+            try:
+                m.update({k: v for k, v in md_global.items()})
+            except Exception:
+                pass
+        metadatas.append(m)
+
+    # Upsert into per-user collection
+    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=user_app_config)
+    mgr.store_in_chroma(collection_name=collection, texts=texts, embeddings=embeds, ids=ids, metadatas=metadatas, embedding_model_id_for_dim_check=model_id)
+    return {"upserted": len(texts), "collection": collection}
+
+
+async def run_translate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate text using configured chat provider (best-effort), or no-op in test.
+
+    Config:
+      - input: str (templated) or defaults to last.text
+      - target_lang: str (e.g., 'en', 'fr')
+      - provider/model: optional hints
+
+    Output: { text: translated_text, target_lang, provider? }
+    """
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    import os as _os
+    txt_t = str(config.get("input") or "").strip()
+    if txt_t:
+        text = _tmpl(txt_t, context) or txt_t
+    else:
+        prev = context.get("prev") or {}
+        text = str(prev.get("text") or prev.get("content") or "")
+    target = str(config.get("target_lang") or "en").strip()
+    if not text:
+        return {"error": "missing_input_text"}
+
+    # Test mode no-op
+    if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        return {"text": text, "target_lang": target, "simulated": True}
+
+    # Try OpenAI-compatible first; fall back to returning input
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
+        system = f"You are a professional translator. Translate the user text to {target}. Preserve meaning and tone. Output only the translation."
+        messages = [{"role": "user", "content": text}]
+        resp = await chat_with_openai_async(messages, model=None, api_key=None, system_message=system, streaming=False)
+        # Extract text from OpenAI-like response
+        out = None
+        try:
+            out = ((resp or {}).get("choices") or [{}])[0].get("message", {}).get("content")
+        except Exception:
+            out = None
+        if not out:
+            return {"text": text, "target_lang": target, "provider": "openai", "fallback": True}
+        return {"text": out, "target_lang": target, "provider": "openai"}
+    except Exception:
+        # Fallback: return original
+        return {"text": text, "target_lang": target, "provider": "none", "fallback": True}
+
+
+async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Transcribe audio file locally; optional diarization.
+
+    Config:
+      - file_uri: file:// path to audio/video file
+      - model: whisper model name (default 'large-v3')
+      - language: source language code (optional)
+      - diarize: bool (default false)
+      - word_timestamps: bool (default false)
+
+    Output: { text, segments: [...], language? }
+    """
+    file_uri = str(config.get("file_uri") or "").strip()
+    if not (file_uri and file_uri.startswith("file://")):
+        return {"error": "missing_or_invalid_file_uri"}
+    path = file_uri[len("file://"):]
+    model = str(config.get("model") or "large-v3")
+    language = config.get("language") or None
+    diarize = bool(config.get("diarize", False))
+    word_ts = bool(config.get("word_timestamps", False))
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
+        segs_or_pair = speech_to_text(path, whisper_model=model, selected_source_lang=language or 'en', vad_filter=False, diarize=diarize, word_timestamps=word_ts, return_language=True)
+        if isinstance(segs_or_pair, tuple) and len(segs_or_pair) == 2:
+            segments, lang = segs_or_pair
+        else:
+            segments, lang = segs_or_pair, None
+        text = " ".join([s.get("Text", "").strip() for s in (segments or []) if isinstance(s, dict)])
+        return {"text": text, "segments": segments, "language": lang}
+    except Exception as e:
+        return {"error": f"stt_error:{e}"}
+
+
+async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a notification via webhook (Slack/email-compatible JSON).
+
+    Config:
+      - url: http(s) webhook URL
+      - message: str (templated)
+      - subject: str (optional)
+      - headers: dict (optional extra headers)
+
+    Output: { dispatched: bool, status_code?, provider?: 'slack'|'webhook' }
+    """
+    import os as _os
+    from urllib.parse import urlparse
+    msg_t = str(config.get("message") or "").strip()
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    message = _tmpl(msg_t, context) or msg_t
+    subject = str(config.get("subject") or "").strip() or None
+    url = str(config.get("url") or "").strip()
+    extra_headers = config.get("headers") if isinstance(config.get("headers"), dict) else {}
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return {"error": "invalid_url"}
+    if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        return {"dispatched": False, "test_mode": True}
+    try:
+        if not is_url_allowed(url):
+            return {"dispatched": False, "error": "blocked_egress"}
+        import httpx
+        headers = {"content-type": "application/json"}
+        try:
+            headers.update({k: str(v) for k, v in extra_headers.items()})
+        except Exception:
+            pass
+        body = {"text": message}
+        if subject:
+            body["subject"] = subject
+        timeout = float(_os.getenv("WORKFLOWS_NOTIFY_TIMEOUT", "10"))
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, json=body, headers=headers)
+            ok = 200 <= resp.status_code < 300
+        host = urlparse(url).hostname or ""
+        prov = "slack" if "slack" in host else "webhook"
+        return {"dispatched": ok, "status_code": resp.status_code, "provider": prov}
+    except Exception as e:
+        return {"dispatched": False, "error": str(e)}
+
+
+async def run_diff_change_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Compare last vs current text to detect changes.
+
+    Config:
+      - current: str (templated) or take from inputs.text
+      - method: 'ratio'|'unified' (default 'ratio')
+      - threshold: float (for ratio; default 0.9)
+
+    Output:
+      - { changed: bool, ratio?, diff?, text }
+    """
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    import difflib
+    prev = context.get("prev") or {}
+    prev_text = str(prev.get("text") or prev.get("content") or "")
+    cur_t = str(config.get("current") or "").strip()
+    if cur_t:
+        current_text = _tmpl(cur_t, context) or cur_t
+    else:
+        current_text = str((context.get("inputs") or {}).get("text") or "")
+    method = str(config.get("method") or "ratio").strip().lower()
+    th = float(config.get("threshold", 0.9))
+    if method == "unified":
+        diff = "\n".join(difflib.unified_diff(prev_text.splitlines(), current_text.splitlines(), fromfile="prev", tofile="current", lineterm=""))
+        changed = prev_text != current_text
+        return {"changed": changed, "diff": diff, "text": current_text}
+    else:
+        sm = difflib.SequenceMatcher(a=prev_text, b=current_text)
+        ratio = sm.ratio()
+        changed = ratio < th
+        return {"changed": changed, "ratio": ratio, "text": current_text}
 
 
 class _async_file_writer:

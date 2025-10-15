@@ -648,7 +648,17 @@ async def admin_list_org_members(
 ) -> list[OrgMemberListItem]:
     try:
         rows = await list_org_members(org_id=org_id, limit=limit, offset=offset, role=role, status=status)
-        return [OrgMemberListItem(**r) for r in rows]
+        out: list[OrgMemberListItem] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                from datetime import datetime
+                if isinstance(d.get('added_at'), datetime):
+                    d['added_at'] = d['added_at'].isoformat()
+            except Exception:
+                pass
+            out.append(OrgMemberListItem(**d))
+        return out
     except Exception as e:
         logger.error(f"Failed to list org members: {e}")
         raise HTTPException(status_code=500, detail="Failed to list org members")

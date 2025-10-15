@@ -335,6 +335,11 @@ class MediaModule(BaseModule):
         """Execute media tool with validation and error handling"""
         # Validate and sanitize inputs
         arguments = self.sanitize_input(arguments)
+        # High-risk operations: validate against stricter schema
+        try:
+            self.validate_tool_arguments(tool_name, arguments)
+        except Exception as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         
         # Log tool execution
         logger.info(f"Executing media tool: {tool_name}", extra={"audit": True})
@@ -1054,6 +1059,53 @@ class MediaModule(BaseModule):
                 return False
         
         return True
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+        """Stricter validation for high-risk tools."""
+        if tool_name == "ingest_media":
+            url = arguments.get("url")
+            if not isinstance(url, str) or not self._validate_url(url) or len(url) > 2048:
+                raise ValueError("url must be a valid http(s) URL <= 2048 chars")
+            title = arguments.get("title")
+            if title is not None and (not isinstance(title, str) or len(title) > 512):
+                raise ValueError("title must be a string <= 512 chars")
+            tags = arguments.get("tags")
+            if tags is not None:
+                if not isinstance(tags, list) or any(not isinstance(t, str) or len(t) > 64 for t in tags):
+                    raise ValueError("tags must be list[str] with each tag <= 64 chars")
+            process_type = arguments.get("process_type", "transcribe")
+            if process_type not in {"transcribe", "summarize", "both", "none"}:
+                raise ValueError("process_type invalid")
+            priority = arguments.get("priority", "normal")
+            if priority not in {"low", "normal", "high"}:
+                raise ValueError("priority invalid")
+
+        elif tool_name == "update_media":
+            mid = arguments.get("media_id")
+            if not isinstance(mid, int) or mid <= 0:
+                raise ValueError("media_id must be a positive integer")
+            updates = arguments.get("updates")
+            if not isinstance(updates, dict) or not updates:
+                raise ValueError("updates must be a non-empty object")
+            for k, v in updates.items():
+                if k == "title":
+                    if not isinstance(v, str) or len(v) > 512:
+                        raise ValueError("title must be a string <= 512 chars")
+                elif k == "description":
+                    if not isinstance(v, str) or len(v) > 4096:
+                        raise ValueError("description must be a string <= 4096 chars")
+                elif k == "tags":
+                    if not isinstance(v, list) or any(not isinstance(t, str) or len(t) > 64 for t in v):
+                        raise ValueError("tags must be list[str] with each tag <= 64 chars")
+                else:
+                    raise ValueError(f"unsupported update field: {k}")
+
+        elif tool_name == "delete_media":
+            mid = arguments.get("media_id")
+            if not isinstance(mid, int) or mid <= 0:
+                raise ValueError("media_id must be a positive integer")
+            if "permanent" in arguments and not isinstance(arguments.get("permanent"), bool):
+                raise ValueError("permanent must be a boolean")
     
     async def _create_ingestion_job(self, **kwargs) -> str:
         """Create media ingestion job"""

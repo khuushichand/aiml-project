@@ -66,6 +66,13 @@ class MCPConfig(BaseSettings):
     ws_ping_timeout: int = Field(default=60, env="MCP_WS_PING_TIMEOUT")
     ws_close_timeout: int = Field(default=10, env="MCP_WS_CLOSE_TIMEOUT")
     ws_auth_required: bool = Field(default=False, env="MCP_WS_AUTH_REQUIRED")
+    # WS security
+    ws_allowed_origins: List[str] = Field(default_factory=list, env="MCP_WS_ALLOWED_ORIGINS")
+    ws_allow_query_auth: bool = Field(default=False, env="MCP_WS_ALLOW_QUERY_AUTH")
+    # WS session policies
+    ws_idle_timeout_seconds: int = Field(default=300, env="MCP_WS_IDLE_TIMEOUT_SECONDS")
+    ws_session_rate_limit_count: int = Field(default=120, env="MCP_WS_SESSION_RATE_COUNT")
+    ws_session_rate_limit_window_seconds: int = Field(default=60, env="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
 
     # CORS Configuration
     cors_enabled: bool = Field(default=True, env="MCP_CORS_ENABLED")
@@ -171,6 +178,13 @@ class MCPConfig(BaseSettings):
         """Parse CORS origins from comma-separated string"""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
+        return v
+
+    @validator("ws_allowed_origins", pre=True)
+    def parse_ws_allowed_origins(cls, v):
+        """Parse WS allowed origins from comma-separated string."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
     
     @validator("database_url")

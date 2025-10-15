@@ -123,6 +123,13 @@ class MetricsCollector:
             ['type', 'error'],
             registry=self.registry
         )
+        # WS session closures for policy enforcement
+        self.ws_session_closures = Counter(
+            'mcp_ws_session_closures_total',
+            'Total WS session closures by policy',
+            ['reason'],
+            registry=self.registry
+        )
         
         # WebSocket rejection metrics (e.g., per-IP caps)
         self.ws_rejections = Counter(
@@ -137,6 +144,13 @@ class MetricsCollector:
             'mcp_rate_limit_hits_total',
             'Total rate limit hits',
             ['key_type'],
+            registry=self.registry
+        )
+        # Rate limiter fallback events (e.g., Redis → in-memory)
+        self.rate_limit_fallbacks = Counter(
+            'mcp_rate_limit_fallback_total',
+            'Total rate limiter fallback events',
+            ['backend'],
             registry=self.registry
         )
         
@@ -280,6 +294,18 @@ class MetricsCollector:
                 error=error
             ).inc()
 
+    def record_ws_session_closure(self, reason: str):
+        """Record a WS session closure (e.g., idle, session_rate)."""
+        metric = MetricData(
+            name=f"ws_session_closure_{reason}",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"reason": reason}
+        )
+        self._metrics[f"ws_session_closure_{reason}"].append(metric)
+        if self.enable_prometheus:
+            self.ws_session_closures.labels(reason=reason).inc()
+
     def record_ws_rejection(self, reason: str, ip_bucket: str = "unknown"):
         """Record a WebSocket rejection (e.g., per-IP cap)."""
         metric = MetricData(
@@ -306,6 +332,18 @@ class MetricsCollector:
         # Prometheus metrics
         if self.enable_prometheus:
             self.rate_limit_hits.labels(key_type=key_type).inc()
+
+    def record_rate_limit_fallback(self, backend: str = "redis"):
+        """Record that limiter fell back to a different backend (e.g., in-memory)."""
+        metric = MetricData(
+            name=f"rate_limit_fallback_{backend}",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={"backend": backend}
+        )
+        self._metrics[f"rate_limit_fallback_{backend}"].append(metric)
+        if self.enable_prometheus:
+            self.rate_limit_fallbacks.labels(backend=backend).inc()
     
     def record_cache_access(self, cache_name: str, hit: bool):
         """Record cache access"""

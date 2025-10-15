@@ -778,6 +778,27 @@ class WorkflowEngine:
         if step_type == "log":
             from tldw_Server_API.app.core.Workflows.adapters import run_log_adapter
             return await run_log_adapter(step_cfg, ctx)
+        if step_type == "policy_check":
+            from tldw_Server_API.app.core.Workflows.adapters import run_policy_check_adapter
+            return await run_policy_check_adapter(step_cfg, ctx)
+        if step_type == "rss_fetch" or step_type == "atom_fetch":
+            from tldw_Server_API.app.core.Workflows.adapters import run_rss_fetch_adapter
+            return await run_rss_fetch_adapter(step_cfg, ctx)
+        if step_type == "embed":
+            from tldw_Server_API.app.core.Workflows.adapters import run_embed_adapter
+            return await run_embed_adapter(step_cfg, ctx)
+        if step_type == "translate":
+            from tldw_Server_API.app.core.Workflows.adapters import run_translate_adapter
+            return await run_translate_adapter(step_cfg, ctx)
+        if step_type == "stt_transcribe":
+            from tldw_Server_API.app.core.Workflows.adapters import run_stt_transcribe_adapter
+            return await run_stt_transcribe_adapter(step_cfg, ctx)
+        if step_type == "notify":
+            from tldw_Server_API.app.core.Workflows.adapters import run_notify_adapter
+            return await run_notify_adapter(step_cfg, ctx)
+        if step_type == "diff_change_detector":
+            from tldw_Server_API.app.core.Workflows.adapters import run_diff_change_adapter
+            return await run_diff_change_adapter(step_cfg, ctx)
         if step_type == "wait_for_human":
             # Mark run waiting, signal caller via special status
             self.db.update_run_status(run_id, status="waiting_human", status_reason="awaiting_review")

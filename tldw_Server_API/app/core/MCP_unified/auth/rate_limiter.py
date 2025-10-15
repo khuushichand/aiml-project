@@ -246,6 +246,7 @@ class DistributedRateLimiter(BaseRateLimiter):
         self.rate = rate
         self.window = window
         self.redis = redis_client
+        self._fallback = None  # lazy TokenBucketRateLimiter fallback
         
         # Lua script for atomic rate limit check
         self.lua_script = """
@@ -284,7 +285,19 @@ class DistributedRateLimiter(BaseRateLimiter):
         """Check if request is allowed using Redis"""
         if not self.redis:
             # Fallback to in-memory if Redis not available
-            logger.warning("Redis not available, using in-memory rate limiting")
+            if self._fallback is None:
+                try:
+                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
+                    logger.warning("Redis not available; using in-memory rate limiting fallback")
+                except Exception:
+                    pass
+            try:
+                from ..monitoring.metrics import get_metrics_collector
+                get_metrics_collector().record_rate_limit_fallback("redis")
+            except Exception:
+                pass
+            if self._fallback:
+                return await self._fallback.is_allowed(key)
             return (True, 0)
         
         try:
@@ -301,8 +314,19 @@ class DistributedRateLimiter(BaseRateLimiter):
             return (bool(result[0]), int(result[1]))
             
         except Exception as e:
-            logger.error(f"Redis rate limit error: {e}")
-            # Allow request on error (fail open)
+            logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
+            if self._fallback is None:
+                try:
+                    self._fallback = TokenBucketRateLimiter(rate=self.rate, per=self.window, burst=self.rate)
+                except Exception:
+                    pass
+            try:
+                from ..monitoring.metrics import get_metrics_collector
+                get_metrics_collector().record_rate_limit_fallback("redis")
+            except Exception:
+                pass
+            if self._fallback:
+                return await self._fallback.is_allowed(key)
             return (True, 0)
     
     async def reset(self, key: str):
@@ -312,10 +336,17 @@ class DistributedRateLimiter(BaseRateLimiter):
                 await self.redis.delete(f"rate_limit:{key}")
             except Exception as e:
                 logger.error(f"Redis reset error: {e}")
+        if self._fallback:
+            try:
+                await self._fallback.reset(key)
+            except Exception:
+                pass
     
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics from Redis"""
         if not self.redis:
+            if self._fallback:
+                return await self._fallback.get_usage(key)
             return {"error": "Redis not available"}
         
         try:
@@ -334,7 +365,12 @@ class DistributedRateLimiter(BaseRateLimiter):
             }
             
         except Exception as e:
-            logger.error(f"Redis usage error: {e}")
+            logger.error(f"Redis usage error: {e}; using in-memory usage stats if available")
+            if self._fallback:
+                try:
+                    return await self._fallback.get_usage(key)
+                except Exception:
+                    pass
             return {"error": str(e)}
 
 

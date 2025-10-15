@@ -501,6 +501,11 @@ async def get_users_db() -> UsersDB:
         await _users_db.initialize()
     return _users_db
 
+async def reset_users_db() -> None:
+    """Reset the UsersDB singleton (testing utility)."""
+    global _users_db
+    _users_db = None
+
 # Convenience functions for backward compatibility
 async def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """Get user by ID (convenience function)"""

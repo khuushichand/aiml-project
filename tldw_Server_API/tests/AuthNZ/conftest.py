@@ -86,6 +86,7 @@ async def reset_singletons(request):
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
+    from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
     
     # Disable CSRF protection for tests
     original_csrf_setting = settings.get('CSRF_ENABLED')
@@ -101,24 +102,24 @@ async def reset_singletons(request):
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_api_key_manager()
-    
-        # Clear any FastAPI dependency overrides
+    await reset_users_db()
+
+    # Clear any FastAPI dependency overrides and stub audit unless real audit requested
+    try:
+        from tldw_Server_API.app.main import app as _app
+        _app.dependency_overrides.clear()
+        # In TEST_MODE, stub audit service to avoid background task group errors
         try:
-            from tldw_Server_API.app.main import app as _app
-            _app.dependency_overrides.clear()
-            # In TEST_MODE, stub audit service to avoid background task group errors
-            try:
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
             async def _override_audit_dep(*_args, **_kwargs):
                 return _StubAuditService()
 
-            # Respect @pytest.mark.real_audit to use real audit service
             if not request.node.get_closest_marker("real_audit"):
                 _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
-            except Exception:
-                # If import fails here, tests that don't hit audit won't care
-                pass
+        except Exception:
+            # If import fails here, tests that don't hit audit won't care
+            pass
 
         # Also, in TEST_MODE, strip non-essential middlewares that may perform
         # background DB work after response (to avoid TaskGroup noise in full runs)
@@ -153,6 +154,7 @@ async def reset_singletons(request):
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_api_key_manager()
+    await reset_users_db()
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()

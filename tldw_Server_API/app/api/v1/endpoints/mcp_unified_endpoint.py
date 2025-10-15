@@ -492,7 +492,8 @@ async def list_tools(
     """
     request = MCPRequest(
         method="tools/list",
-        params={"module": module} if module else {}
+        params={"module": module} if module else {},
+        id="http-tools-list"
     )
     
     server = get_mcp_server()
@@ -611,7 +612,7 @@ async def list_modules(
     
     Returns module information including status and capabilities.
     """
-    request = MCPRequest(method="modules/list")
+    request = MCPRequest(method="modules/list", id="http-modules-list")
     
     server = get_mcp_server()
     if not server.initialized:
@@ -642,7 +643,7 @@ async def get_modules_health(
     
     Returns health checks and metrics for each module.
     """
-    request = MCPRequest(method="modules/health")
+    request = MCPRequest(method="modules/health", id="http-modules-health")
     
     server = get_mcp_server()
     if not server.initialized:
@@ -670,7 +671,7 @@ async def list_resources(
     
     Resources are filtered based on user permissions if authenticated.
     """
-    request = MCPRequest(method="resources/list")
+    request = MCPRequest(method="resources/list", id="http-resources-list")
     
     server = get_mcp_server()
     if not server.initialized:
@@ -701,7 +702,7 @@ async def list_prompts(
     
     Prompts are filtered based on user permissions if authenticated.
     """
-    request = MCPRequest(method="prompts/list")
+    request = MCPRequest(method="prompts/list", id="http-prompts-list")
     
     server = get_mcp_server()
     if not server.initialized:

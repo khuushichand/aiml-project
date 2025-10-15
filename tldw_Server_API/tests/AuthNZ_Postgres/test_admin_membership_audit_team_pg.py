@@ -17,7 +17,7 @@ async def test_team_membership_audit_events_postgres(tmp_path, real_audit_servic
     from tldw_Server_API.app.core.config import settings as app_settings
     app_settings['CSRF_ENABLED'] = False
 
-    # Ensure org/team tables exist (idempotent)
+    # Ensure org/team/member tables exist (idempotent)
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS organizations (
@@ -46,6 +46,18 @@ async def test_team_membership_audit_events_postgres(tmp_path, real_audit_servic
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (org_id, name)
+        )
+        """
+    )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(32) DEFAULT 'member',
+            status VARCHAR(32) DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, user_id)
         )
         """
     )

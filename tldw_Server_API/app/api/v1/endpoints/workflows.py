@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 from loguru import logger
+from pathlib import Path
 
 from tldw_Server_API.app.api.v1.schemas.workflows import (
     WorkflowDefinitionCreate,
@@ -1285,7 +1286,20 @@ async def list_step_types():
                 "voice": {"type": "string", "default": "af_heart"},
                 "response_format": {"type": "string", "enum": ["mp3","wav","opus","flac","aac","pcm"], "default": "mp3"},
                 "speed": {"type": "number", "minimum": 0.25, "maximum": 4.0, "default": 1.0},
-                "provider": {"type": "string"}
+                "provider": {"type": "string"},
+                "output_filename_template": {"type": "string", "description": "e.g., audio_{{timestamp}}_{{voice}}"},
+                "provider_options": {"type": "object"},
+                "attach_download_link": {"type": "boolean", "default": False},
+                "save_transcript": {"type": "boolean", "default": False},
+                "post_process": {
+                    "type": "object",
+                    "properties": {
+                        "normalize": {"type": "boolean", "default": False},
+                        "target_lufs": {"type": "number", "default": -16.0},
+                        "true_peak_dbfs": {"type": "number", "default": -1.5},
+                        "lra": {"type": "number", "default": 11.0}
+                    }
+                }
             },
             "required": [],
             "additionalProperties": True,
@@ -1311,7 +1325,7 @@ async def list_step_types():
         "process_media": {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["web_scraping"], "default": "web_scraping"},
+                "kind": {"type": "string", "enum": ["web_scraping","pdf","ebook","xml","mediawiki_dump","podcast"], "default": "web_scraping"},
                 "scrape_method": {"type": "string", "default": "Individual URLs"},
                 "url_input": {"type": "string"},
                 "url_level": {"type": ["integer", "null"]},
@@ -1324,12 +1338,117 @@ async def list_step_types():
                 "temperature": {"type": "number", "default": 0.7},
                 "custom_cookies": {"type": ["array","null"]},
                 "user_agent": {"type": ["string","null"]},
-                "custom_headers": {"type": ["object","null"]}
+                "custom_headers": {"type": ["object","null"]},
+                "file_uri": {"type": "string", "description": "file:// path for pdf/ebook/xml/mediawiki_dump"},
+                "url": {"type": "string", "description": "Podcast URL (for kind=podcast)"}
             },
-            "required": ["url_input"],
+            "required": [],
             "additionalProperties": True,
             "example": {"kind": "web_scraping", "scrape_method": "Individual URLs", "url_input": "https://example.com/article"},
             "min_engine_version": "0.1.2"
+        },
+        "rss_fetch": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": ["array","string"], "description": "RSS/Atom feed URLs (list or string)"},
+                "limit": {"type": "integer", "default": 10},
+                "include_content": {"type": "boolean", "default": true}
+            },
+            "required": ["urls"],
+            "additionalProperties": true,
+            "example": {"urls": ["https://example.com/feed.xml"], "limit": 5},
+            "min_engine_version": "0.1.3"
+        },
+        "atom_fetch": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": ["array","string"]},
+                "limit": {"type": "integer", "default": 10}
+            },
+            "required": ["urls"],
+            "additionalProperties": true,
+            "example": {"urls": ["https://example.com/atom.xml"]},
+            "min_engine_version": "0.1.3"
+        },
+        "embed": {
+            "type": "object",
+            "properties": {
+                "texts": {"type": ["array","string"]},
+                "collection": {"type": "string"},
+                "model_id": {"type": ["string","null"]},
+                "metadata": {"type": ["object","null"]}
+            },
+            "required": [],
+            "additionalProperties": true,
+            "example": {"texts": "{{ last.text }}", "collection": "user_1_workflows"},
+            "min_engine_version": "0.1.3"
+        },
+        "translate": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"},
+                "target_lang": {"type": "string", "default": "en"},
+                "provider": {"type": ["string","null"]},
+                "model": {"type": ["string","null"]}
+            },
+            "required": ["target_lang"],
+            "additionalProperties": true,
+            "example": {"input": "{{ last.text }}", "target_lang": "fr"},
+            "min_engine_version": "0.1.3"
+        },
+        "stt_transcribe": {
+            "type": "object",
+            "properties": {
+                "file_uri": {"type": "string", "description": "file:// path to audio/video"},
+                "model": {"type": "string", "default": "large-v3"},
+                "language": {"type": ["string","null"]},
+                "diarize": {"type": "boolean", "default": false},
+                "word_timestamps": {"type": "boolean", "default": false}
+            },
+            "required": ["file_uri"],
+            "additionalProperties": true,
+            "example": {"file_uri": "file:///abs/path/audio.wav", "model": "large-v3"},
+            "min_engine_version": "0.1.3"
+        },
+        "notify": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "message": {"type": "string"},
+                "subject": {"type": ["string","null"]},
+                "headers": {"type": ["object","null"]}
+            },
+            "required": ["url","message"],
+            "additionalProperties": true,
+            "example": {"url": "https://hooks.slack.com/services/...", "message": "{{ last.text }}"},
+            "min_engine_version": "0.1.3"
+        },
+        "diff_change_detector": {
+            "type": "object",
+            "properties": {
+                "current": {"type": "string"},
+                "method": {"type": "string", "enum": ["ratio","unified"], "default": "ratio"},
+                "threshold": {"type": "number", "default": 0.9}
+            },
+            "required": [],
+            "additionalProperties": true,
+            "example": {"current": "{{ last.text }}", "method": "ratio", "threshold": 0.95},
+            "min_engine_version": "0.1.3"
+        },
+        "policy_check": {
+            "type": "object",
+            "properties": {
+                "text_source": {"type": "string", "enum": ["last","inputs","field"], "default": "last"},
+                "field": {"type": "string"},
+                "block_on_pii": {"type": "boolean", "default": false},
+                "block_words": {"type": "array", "items": {"type": "string"}},
+                "max_length": {"type": "integer", "minimum": 1},
+                "redact_preview": {"type": "boolean", "default": false}
+            },
+            "required": [],
+            "additionalProperties": true,
+            "example": {"text_source": "last", "block_on_pii": true, "block_words": ["secret","password"], "max_length": 10000},
+            "min_engine_version": "0.1.3"
         },
     }
     out = []
@@ -1343,6 +1462,83 @@ async def list_step_types():
             "min_engine_version": sch.get("min_engine_version", "0.1.0"),
         })
     return out
+
+
+@router.get("/templates")
+async def list_workflow_templates() -> list[dict[str, str]]:
+    """List available example workflow templates shipped with the server.
+
+    Returns a list of {name, filename} items. Use GET /api/v1/workflows/templates/{name}
+    to retrieve the JSON content.
+    """
+    try:
+        # Locate repo root and Samples/Workflows directory
+        here = Path(__file__).resolve()
+        # repo_root = .../tldw_Server_API/app/api/v1/endpoints -> parents[5]
+        repo_root = here.parents[5] if len(here.parents) > 5 else here.parents[-1]
+        tpl_dir = repo_root / "Samples" / "Workflows"
+        items: list[dict[str, str]] = []
+        if tpl_dir.exists():
+            for p in tpl_dir.glob("*.workflow.json"):
+                try:
+                    # Derive template name without the trailing ".workflow.json"
+                    fname = p.name
+                    if fname.endswith(".workflow.json"):
+                        name = fname[: -len(".workflow.json")]
+                    else:
+                        # Fallback: stem (may include an extra suffix on some platforms)
+                        name = p.stem
+                    # Load title from the template JSON's "name" field for a human-friendly label
+                    title: str = name
+                    try:
+                        import json as _json
+                        raw = p.read_text(encoding="utf-8")
+                        data = _json.loads(raw)
+                        tpl_title = str(data.get("name") or "").strip()
+                        if tpl_title:
+                            title = tpl_title
+                    except Exception:
+                        # Ignore parse errors; fall back to filename-derived name
+                        pass
+                    items.append({"name": name, "filename": p.name, "title": title})
+                except Exception:
+                    continue
+        return items
+    except Exception as e:
+        logger.warning(f"Failed to list workflow templates: {e}")
+        return []
+
+
+@router.get("/templates/{name}")
+async def get_workflow_template(name: str) -> Dict[str, Any]:
+    """Return JSON content for a named workflow template (sans extension)."""
+    # Disallow path separators
+    if ("/" in name) or ("\\" in name) or name.strip() == "":
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    try:
+        here = Path(__file__).resolve()
+        repo_root = here.parents[5] if len(here.parents) > 5 else here.parents[-1]
+        tpl_dir = repo_root / "Samples" / "Workflows"
+        # Support names passed either with or without the optional ".workflow" suffix
+        candidates = [
+            tpl_dir / f"{name}.workflow.json",
+        ]
+        if not name.endswith(".workflow"):
+            candidates.append(tpl_dir / f"{name}.workflow.workflow.json")
+        target = next((c for c in candidates if c.exists() and c.is_file()), None)
+        if not (tpl_dir.exists() and target):
+            raise HTTPException(status_code=404, detail="Template not found")
+        import json as _json
+        # Size guard (1MB cap)
+        raw = target.read_text(encoding="utf-8")
+        if len(raw.encode("utf-8")) > 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Template too large")
+        return _json.loads(raw)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Failed to read workflow template {name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load template")
 
 
 @router.get("/config")

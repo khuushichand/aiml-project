@@ -238,7 +238,28 @@ MCP_RATE_LIMIT_RPM_READ=120
 MCP_METRICS_ENABLED=true
 MCP_LOG_LEVEL=INFO
 MCP_WS_AUTH_REQUIRED=1                  # Require authenticated WS (prod hardening)
+MCP_WS_ALLOWED_ORIGINS=https://your-ui.example.com  # Enforce WS Origin; comma-separated list
+MCP_WS_ALLOW_QUERY_AUTH=0               # Disable ?token= / ?api_key= query auth (use headers/subprotocol)
 ```
+
+## 🔐 Production Hardening
+
+Recommended hardening steps for Internet-exposed deployments:
+
+- Require WS auth and enforce allowed origins
+  - Set `MCP_WS_AUTH_REQUIRED=1`
+  - Set `MCP_WS_ALLOWED_ORIGINS=https://your-ui.example.com` (comma-separated if multiple)
+  - Prefer header-based auth for WS: `Authorization: Bearer <token>` or `X-API-KEY`
+  - Optional: Subprotocol auth: `Sec-WebSocket-Protocol: bearer,<token>`
+- Disable query-string authentication for WS
+  - `MCP_WS_ALLOW_QUERY_AUTH=0` (default). If a client passes `?token=` or `?api_key=`, the server ignores it and logs a warning.
+- Rate limiting
+  - Enable Redis limiter for multi-node and avoid fail-open: `MCP_RATE_LIMIT_USE_REDIS=1`
+  - The server falls back to an in-memory token bucket if Redis is unavailable.
+- Restrict module autoloads
+  - Only classes under `tldw_Server_API.app.core.MCP_unified.modules.implementations` are allowed when auto-loading.
+- Demo auth (dev only)
+  - `MCP_ENABLE_DEMO_AUTH` is for development/testing. If enabled in non-debug environments, the server logs a loud warning.
 
 ## 🔧 Rate Limits
 
