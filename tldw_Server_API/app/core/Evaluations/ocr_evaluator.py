@@ -78,8 +78,9 @@ class OCREvaluator:
     def __init__(self) -> None:
         # Ensure a default event loop exists for environments where tests call
         # asyncio.get_event_loop().run_until_complete without prior loop setup (e.g., Python 3.13)
+        # Prefer get_running_loop (Py3.7+) to avoid deprecation warnings
         try:
-            _asyncio.get_event_loop()
+            _asyncio.get_running_loop()
         except RuntimeError:
             loop = _asyncio.new_event_loop()
             _asyncio.set_event_loop(loop)

@@ -10,6 +10,7 @@ Provides CRUD operations and query methods for:
 
 import json
 import sqlite3
+from datetime import datetime
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
@@ -172,7 +173,12 @@ class EvaluationsDatabase:
     def get_connection(self):
         """Context manager for database connections (backend-aware)."""
         if self.backend_type == BackendType.SQLITE:
-            conn = sqlite3.connect(self.db_path)
+            # Register explicit adapters to avoid deprecated defaults on Python 3.12+
+            try:
+                sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
+            except Exception:
+                pass
+            conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             conn.row_factory = sqlite3.Row
             try:
                 yield conn

@@ -145,7 +145,12 @@ class UserRateLimiter:
     
     def _init_database(self):
         """Initialize rate limiting tables."""
-        with sqlite3.connect(self.db_path) as conn:
+        # Register explicit adapters to avoid deprecated defaults on Python 3.12+
+        try:
+            sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
+        except Exception:
+            pass
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES) as conn:
             # User rate limits table (created in migration)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_rate_limits (
