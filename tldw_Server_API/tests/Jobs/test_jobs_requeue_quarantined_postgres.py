@@ -54,3 +54,59 @@ def test_endpoint_requeue_quarantined_postgres(monkeypatch):
         assert row2 and row2.get("status") == "queued"
         assert (row2.get("failure_streak_count") or 0) == 0
 
+
+def test_requeue_quarantined_updates_counters_postgres(monkeypatch):
+    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
+    monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "1")
+    monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
+    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
+    ensure_jobs_tables_pg(pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+
+    # Quarantine a job
+    j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
+    acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
+    assert acq and acq.get("id") == j["id"]
+    jm.fail_job(int(j["id"]), error="boom", retryable=True, backoff_seconds=0, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
+
+    # Pre-check counters: quarantined_count should be >=1
+    conn = jm._connect()
+    try:
+        with jm._pg_cursor(conn) as cur:
+            cur.execute(
+                "SELECT ready_count, scheduled_count, processing_count, quarantined_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s",
+                ("chatbooks", "default", "export"),
+            )
+            row = cur.fetchone()
+            if row:
+                assert int(row["quarantined_count"] or 0) >= 1
+    finally:
+        conn.close()
+
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+    from fastapi.testclient import TestClient
+    with TestClient(app, headers=headers) as client:
+        r = client.post(
+            "/api/v1/jobs/batch/requeue_quarantined",
+            headers={**headers, "X-Confirm": "true"},
+            json={"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
+        )
+        assert r.status_code == 200
+        assert r.json()["affected"] >= 1
+
+    conn2 = jm._connect()
+    try:
+        with jm._pg_cursor(conn2) as cur:
+            cur.execute(
+                "SELECT ready_count, scheduled_count, processing_count, quarantined_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s",
+                ("chatbooks", "default", "export"),
+            )
+            row2 = cur.fetchone()
+            if row2:
+                assert int(row2["ready_count"] or 0) >= 1
+                assert int(row2["quarantined_count"] or 0) == 0
+    finally:
+        conn2.close()

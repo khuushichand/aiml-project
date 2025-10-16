@@ -547,6 +547,7 @@ async def execute_streaming_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
+    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
     moderation_getter: Optional[Callable[[], Any]] = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
@@ -678,7 +679,13 @@ async def execute_streaming_call(
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
-                    cleaned_args["api_endpoint"] = fallback_provider
+                    try:
+                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                    except Exception as refresh_error:
+                        provider_manager.record_failure(fallback_provider, refresh_error)
+                        raise
+                    cleaned_args = refreshed_args
+                    model = refreshed_model or model
                     llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
                     try:
                         raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
@@ -686,6 +693,7 @@ async def execute_streaming_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        llm_call_func = llm_call_func_fb
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         try:
                             metrics.track_provider_fallback_success(
@@ -951,6 +959,7 @@ async def execute_non_stream_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
+    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
     moderation_getter: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
@@ -1058,7 +1067,13 @@ async def execute_non_stream_call(
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
-                    cleaned_args["api_endpoint"] = fallback_provider
+                    try:
+                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                    except Exception as refresh_error:
+                        provider_manager.record_failure(fallback_provider, refresh_error)
+                        raise
+                    cleaned_args = refreshed_args
+                    model = refreshed_model or model
                     try:
                         llm_response = await perform_chat_api_call_async(**cleaned_args)
                         fallback_latency = time.time() - llm_start_time

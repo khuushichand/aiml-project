@@ -70,3 +70,46 @@ def test_outbox_list_and_sse_sqlite(monkeypatch, tmp_path):
                 if time.time() > deadline:
                     break
             assert got, "Did not receive job.created event from SSE stream"
+
+
+@pytest.mark.integration
+def test_outbox_after_id_and_filters_sqlite(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+
+    jm = JobManager()
+    # Create two domains worth of events
+    j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u1")
+    j2 = jm.create_job(domain="other", queue="default", job_type="import", payload={}, owner_user_id="u2")
+    # Emit synthetic events for both
+    from tldw_Server_API.app.core.Jobs.event_stream import emit_job_event
+    emit_job_event("jobs.filter_test", job={"id": int(j1["id"]), "domain": "chatbooks", "queue": "default", "job_type": "export"}, attrs={})
+    emit_job_event("jobs.filter_test", job={"id": int(j2["id"]), "domain": "other", "queue": "default", "job_type": "import"}, attrs={})
+
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+    with TestClient(app, headers=headers) as client:
+        # Domain filter only returns chatbooks
+        r = client.get("/api/v1/jobs/events", params={"after_id": 0, "domain": "chatbooks"})
+        assert r.status_code == 200
+        rows = r.json()
+        assert all(ev.get("domain") == "chatbooks" for ev in rows)
+
+        # after_id paging returns only newer events
+        if rows:
+            last_id = rows[-1]["id"]
+        else:
+            last_id = 0
+        # Create a new event and request after last_id
+        emit_job_event("jobs.paging_test", job={"id": int(j1["id"]), "domain": "chatbooks", "queue": "default", "job_type": "export"}, attrs={})
+        r2 = client.get("/api/v1/jobs/events", params={"after_id": int(last_id)})
+        assert r2.status_code == 200
+        rows2 = r2.json()
+        assert all(ev["id"] > int(last_id) for ev in rows2)
+
+        # SSE open + immediate disconnect
+        with client.stream("GET", "/api/v1/jobs/events/stream", params={"after_id": 0}) as s:
+            # Close immediately to exercise disconnect without hanging
+            pass

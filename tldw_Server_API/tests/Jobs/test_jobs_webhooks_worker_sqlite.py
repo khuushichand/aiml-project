@@ -98,3 +98,63 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     # Should not raise SystemExit
     _verify_sig(args)
 
+
+@pytest.mark.asyncio
+async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
+    # Enable outbox + webhooks
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setenv("JOBS_WEBHOOKS_URL", "http://example.test/hook")
+    monkeypatch.setenv("JOBS_WEBHOOKS_SECRET_KEYS", "devsecret")
+    monkeypatch.setenv("JOBS_WEBHOOKS_INTERVAL_SEC", "0.01")
+    # Persist cursor to a tmp file
+    cursor_file = tmp_path / "cursor.txt"
+    monkeypatch.setenv("JOBS_WEBHOOKS_CURSOR_PATH", str(cursor_file))
+
+    from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
+    ensure_jobs_tables(tmp_path / "jobs.db")
+    jm = JobManager()
+
+    # Seed an event
+    j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u")
+    acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
+    jm.complete_job(int(acq["id"]))
+
+    sent = {"ids": []}
+
+    class _Resp:
+        def __init__(self):
+            self.status_code = 200
+            self.text = "ok"
+
+    class _StubClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+        async def post(self, url, headers=None, content=None):
+            try:
+                sent["ids"].append(int(headers.get("X-Jobs-Event-Id")))
+            except Exception:
+                pass
+            return _Resp()
+
+    import tldw_Server_API.app.services.jobs_webhooks_service as svc
+    class _AsyncClientWrapper:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return _StubClient()
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+    monkeypatch.setattr(svc, "httpx", type("_M", (), {"AsyncClient": _AsyncClientWrapper}))
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(svc.run_jobs_webhooks_worker(stop))
+    await asyncio.sleep(0.05)
+    stop.set()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    # Cursor file should exist with the last processed id
+    assert cursor_file.exists()
+    fid = int((cursor_file.read_text() or "0").strip() or 0)
+    assert any(i >= fid for i in sent["ids"]) or fid in sent["ids"]

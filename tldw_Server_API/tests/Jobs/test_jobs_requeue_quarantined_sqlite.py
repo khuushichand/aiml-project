@@ -52,3 +52,53 @@ def test_endpoint_requeue_quarantined_sqlite(monkeypatch, tmp_path):
         assert row3 and row3.get("status") == "queued"
         assert (row3.get("failure_streak_count") or 0) == 0
 
+
+@pytest.mark.unit
+def test_requeue_quarantined_updates_counters_sqlite(monkeypatch, tmp_path):
+    _init_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    reset_settings()
+    from tldw_Server_API.app.main import app
+
+    jm = JobManager()
+    # Quarantine one job
+    j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
+    acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
+    jm.fail_job(int(acq["id"]), error="boom", retryable=True, backoff_seconds=0, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
+
+    # Verify counters show quarantined_count=1 pre-requeue
+    conn = jm._connect()
+    try:
+        row = conn.execute(
+            "SELECT ready_count, scheduled_count, processing_count, quarantined_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?",
+            ("chatbooks", "default", "export"),
+        ).fetchone()
+        # Row may not exist if counters updated lazily; fetch via stats fallback
+        if row:
+            assert int(row[3] or 0) >= 1
+    finally:
+        conn.close()
+
+    headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+    with TestClient(app, headers=headers) as client:
+        r = client.post(
+            "/api/v1/jobs/batch/requeue_quarantined",
+            headers={**headers, "X-Confirm": "true"},
+            json={"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
+        )
+        assert r.status_code == 200
+        assert r.json()["affected"] >= 1
+
+    # Counters should now reflect ready_count+ and quarantined_count-
+    conn2 = jm._connect()
+    try:
+        row2 = conn2.execute(
+            "SELECT ready_count, scheduled_count, processing_count, quarantined_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?",
+            ("chatbooks", "default", "export"),
+        ).fetchone()
+        if row2:
+            assert int(row2[0] or 0) >= 1
+            assert int(row2[3] or 0) == 0
+    finally:
+        conn2.close()

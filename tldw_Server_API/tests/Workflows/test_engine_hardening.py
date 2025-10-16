@@ -218,7 +218,9 @@ async def test_webhook_hmac_and_ssrf(monkeypatch, client_with_wf: TestClient):
     await engine._maybe_send_completion_webhook(definition, run_id, status="succeeded")
     assert captured["calls"] == 1
     import hmac, hashlib
-    expected_sig = hmac.new(b"supersecret", captured["data"].encode("utf-8"), hashlib.sha256).hexdigest()
+    ts = captured["headers"].get("X-Signature-Timestamp")
+    signed_body = f"{ts}.{captured['data']}" if ts else captured["data"]
+    expected_sig = hmac.new(b"supersecret", signed_body.encode("utf-8"), hashlib.sha256).hexdigest()
     assert captured["headers"].get("X-Workflows-Signature") == expected_sig
 
     # SSRF block: ensure no call happens

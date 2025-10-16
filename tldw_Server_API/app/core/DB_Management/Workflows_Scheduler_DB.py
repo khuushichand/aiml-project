@@ -15,11 +15,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+
 from loguru import logger
 
-from .backends.base import DatabaseBackend, QueryResult
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from .backends.base import BackendType, DatabaseBackend, DatabaseConfig, QueryResult
 from .backends.factory import DatabaseBackendFactory
-from .backends.base import DatabaseConfig
 
 
 def _utcnow_iso() -> str:
@@ -107,11 +111,73 @@ class WorkflowSchedule:
 
 
 class WorkflowsSchedulerDB:
-    def __init__(self, backend: Optional[DatabaseBackend] = None) -> None:
+    def __init__(self, backend: Optional[DatabaseBackend] = None, *, user_id: Optional[int] = None) -> None:
         if backend is not None:
             self.backend = backend
         else:
             cfg = DatabaseConfig.from_env()
+            effective_user = user_id if user_id is not None else DatabasePaths.get_single_user_id()
+            default_path = DatabasePaths.get_workflows_scheduler_db_path(effective_user)
+
+            # Allow dedicated scheduler database URL override
+            custom_url = os.getenv("WORKFLOWS_SCHEDULER_DATABASE_URL")
+            if custom_url:
+                parsed = urlparse(custom_url)
+                scheme = (parsed.scheme or "").lower()
+                if scheme in {"sqlite", ""}:
+                    cfg.backend_type = BackendType.SQLITE
+                    raw_path = parsed.path or ""
+                    if raw_path.startswith("/./"):
+                        raw_path = raw_path[1:]
+                    if raw_path.startswith("/") and raw_path != "/:memory:":
+                        candidate = Path(raw_path)
+                    else:
+                        candidate = Path(raw_path or default_path.name)
+                        candidate = default_path.parent / candidate
+                    cfg.sqlite_path = str(candidate)
+                elif scheme in {"postgres", "postgresql"}:
+                    cfg = DatabaseConfig(
+                        backend_type=BackendType.POSTGRESQL,
+                        connection_string=custom_url,
+                    )
+                    cfg.pg_host = parsed.hostname or "localhost"
+                    try:
+                        cfg.pg_port = int(parsed.port or 5432)
+                    except Exception:
+                        cfg.pg_port = 5432
+                    cfg.pg_database = (parsed.path or "/").lstrip("/") or None
+                    cfg.pg_user = parsed.username or None
+                    cfg.pg_password = parsed.password or None
+                # Other schemes fall back to default cfg
+
+            # Allow explicit sqlite path override
+            custom_path = os.getenv("WORKFLOWS_SCHEDULER_SQLITE_PATH")
+            if custom_path:
+                cfg.backend_type = BackendType.SQLITE
+                cfg.sqlite_path = custom_path
+
+            if cfg.backend_type == BackendType.SQLITE:
+                sqlite_path_str = (cfg.sqlite_path or "").strip()
+                default_candidates = {
+                    "",
+                    "./Databases/Media_DB_v2.db",
+                    "Databases/Media_DB_v2.db",
+                    "Media_DB_v2.db",
+                }
+                if sqlite_path_str in default_candidates:
+                    sqlite_path = default_path
+                else:
+                    sqlite_path = Path(sqlite_path_str)
+                    if not sqlite_path.is_absolute():
+                        sqlite_path = (default_path.parent / sqlite_path).resolve()
+                try:
+                    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    logger.error(f"WorkflowsSchedulerDB: failed to create directory {sqlite_path.parent}: {e}")
+                    raise
+                cfg.sqlite_path = str(sqlite_path)
+                logger.info(f"WorkflowsSchedulerDB using SQLite path: {cfg.sqlite_path}")
+
             self.backend = DatabaseBackendFactory.create_backend(cfg)
         self._ensure_schema()
 

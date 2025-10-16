@@ -503,6 +503,8 @@ async def create_chat_completion(
     
     # Parse provider and model for metrics (no mutation)
     provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)
+    initial_provider = provider
+    raw_model_input = request_data.model
     
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
     
@@ -676,6 +678,7 @@ async def create_chat_completion(
 
     # Normalize provider/model on the request for downstream logic
     provider = normalize_request_provider_and_model(request_data, DEFAULT_LLM_PROVIDER)
+    model = request_data.model or model
     
     user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
     logger.info(
@@ -747,6 +750,69 @@ async def create_chat_completion(
             templated_llm_payload=templated_llm_payload,
             final_system_message=final_system_message,
         )
+
+        def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
+            normalized = target_provider.replace(".", "_").replace("-", "_")
+            env_key = f"DEFAULT_MODEL_{normalized.upper()}"
+            env_val = os.getenv(env_key)
+            if env_val:
+                return env_val
+            config_key = f"default_model_{normalized.lower()}"
+            if _chat_config:
+                cfg_val = _chat_config.get(config_key)
+                if cfg_val:
+                    return cfg_val
+            return None
+
+        if not cleaned_args.get("model"):
+            default_model_for_provider = _get_default_model_for_provider_name(provider)
+            if default_model_for_provider:
+                cleaned_args["model"] = default_model_for_provider
+                if not request_data.model:
+                    request_data.model = default_model_for_provider
+                model = default_model_for_provider
+
+        def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+            dynamic_keys_latest = get_api_keys()
+            raw_value_new, provider_api_key_new = merge_api_keys_for_provider(
+                target_provider,
+                module_keys,
+                dynamic_keys_latest,
+                PROVIDER_REQUIRES_KEY,
+            )
+            if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not raw_value_new:
+                logger.error(
+                    f"API key for provider '{target_provider}' is missing or not configured (fallback)."
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Service for '{target_provider}' is not configured (key missing)."
+                )
+
+            refreshed_args = build_call_params_from_request(
+                request_data=request_data,
+                target_api_provider=target_provider,
+                provider_api_key=provider_api_key_new,
+                templated_llm_payload=templated_llm_payload,
+                final_system_message=final_system_message,
+            )
+            refreshed_model = refreshed_args.get("model")
+            use_default_model = False
+            if not refreshed_model:
+                use_default_model = True
+            elif target_provider != initial_provider and raw_model_input:
+                if "/" in raw_model_input:
+                    prefix = raw_model_input.split("/", 1)[0].strip().lower()
+                    if prefix and prefix != target_provider.lower():
+                        use_default_model = True
+            if use_default_model:
+                default_model = _get_default_model_for_provider_name(target_provider)
+                if default_model:
+                    refreshed_args["model"] = default_model
+                    refreshed_model = default_model
+
+            refreshed_args["api_endpoint"] = target_provider
+            return refreshed_args, refreshed_model
 
         # Use provider manager for health checks and failover
         provider_manager = get_provider_manager()
@@ -927,6 +993,7 @@ async def create_chat_completion(
                 queue_execution_enabled=QUEUED_EXECUTION,
                 enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                 llm_call_func=llm_call_func,
+                refresh_provider_params=rebuild_call_params_for_provider,
                 moderation_getter=get_moderation_service,
             )
 
@@ -953,6 +1020,7 @@ async def create_chat_completion(
                 queue_execution_enabled=QUEUED_EXECUTION,
                 enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                 llm_call_func=llm_call_func,
+                refresh_provider_params=rebuild_call_params_for_provider,
                 moderation_getter=get_moderation_service,
             )
             # Track response size and return

@@ -709,6 +709,12 @@ async def ttl_sweep_endpoint(
             queue=req.queue,
             job_type=req.job_type,
         )
+        # Refresh gauges when fully scoped to avoid stale metrics
+        try:
+            if req.domain and req.queue and req.job_type:
+                jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+        except Exception:
+            pass
         return TTLSweepResponse(affected=int(affected))
     except HTTPException:
         raise
@@ -1068,6 +1074,33 @@ async def batch_cancel_endpoint(
                         )
                         c = cur.fetchone()
                         return BatchCancelResponse(affected=int(c[0] if c else 0))
+                    # Counters pre-measure per group
+                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    grp_ready = []
+                    grp_sched = []
+                    grp_proc = []
+                    if counters_enabled:
+                        cur.execute(
+                            (
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "
+                                "AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type"
+                            ),
+                            tuple(params),
+                        )
+                        grp_ready = cur.fetchall() or []
+                        cur.execute(
+                            (
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "
+                                "AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type"
+                            ),
+                            tuple(params),
+                        )
+                        grp_sched = cur.fetchall() or []
+                        cur.execute(
+                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",
+                            tuple(params),
+                        )
+                        grp_proc = cur.fetchall() or []
                     # queued immediate cancel
                     cur.execute(
                         f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
@@ -1080,6 +1113,44 @@ async def batch_cancel_endpoint(
                         tuple(params),
                     )
                     affected += cur.rowcount or 0
+                    # Adjust counters and refresh gauges per group
+                    try:
+                        if counters_enabled:
+                            for r in grp_ready:
+                                d = r["domain"] if isinstance(r, dict) else r[0]
+                                q = r["queue"] if isinstance(r, dict) else r[1]
+                                jt = r["job_type"] if isinstance(r, dict) else r[2]
+                                c = int(r["c"] if isinstance(r, dict) else r[3])
+                                cur.execute(
+                                    "UPDATE job_counters SET ready_count = GREATEST(ready_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                    (c, d, q, jt),
+                                )
+                            for r in grp_sched:
+                                d = r["domain"] if isinstance(r, dict) else r[0]
+                                q = r["queue"] if isinstance(r, dict) else r[1]
+                                jt = r["job_type"] if isinstance(r, dict) else r[2]
+                                c = int(r["c"] if isinstance(r, dict) else r[3])
+                                cur.execute(
+                                    "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                    (c, d, q, jt),
+                                )
+                            for r in grp_proc:
+                                d = r["domain"] if isinstance(r, dict) else r[0]
+                                q = r["queue"] if isinstance(r, dict) else r[1]
+                                jt = r["job_type"] if isinstance(r, dict) else r[2]
+                                c = int(r["c"] if isinstance(r, dict) else r[3])
+                                cur.execute(
+                                    "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                    (c, d, q, jt),
+                                )
+                    except Exception:
+                        pass
+                    try:
+                        # If fully scoped, refresh gauges
+                        if req.domain and req.queue and req.job_type:
+                            jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                    except Exception:
+                        pass
                     return BatchCancelResponse(affected=int(affected))
             else:
                 if req.dry_run:
@@ -1089,6 +1160,30 @@ async def batch_cancel_endpoint(
                     )
                     r = cur.fetchone()
                     return BatchCancelResponse(affected=int(r[0] if r else 0))
+                # Counters pre-measure
+                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                grp_ready2 = []
+                grp_sched2 = []
+                grp_proc2 = []
+                if counters_enabled:
+                    grp_ready2 = conn.execute(
+                        (
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "
+                            "AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type"
+                        ),
+                        tuple(params),
+                    ).fetchall() or []
+                    grp_sched2 = conn.execute(
+                        (
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "
+                            "AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type"
+                        ),
+                        tuple(params),
+                    ).fetchall() or []
+                    grp_proc2 = conn.execute(
+                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",
+                        tuple(params),
+                    ).fetchall() or []
                 conn.execute(
                     f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
                     tuple(params),
@@ -1099,6 +1194,31 @@ async def batch_cancel_endpoint(
                     tuple(params),
                 )
                 affected += conn.total_changes or 0
+                # Adjust counters
+                try:
+                    if counters_enabled:
+                        for d, q, jt, c in grp_ready2:
+                            conn.execute(
+                                "UPDATE job_counters SET ready_count = CASE WHEN (ready_count - ?) < 0 THEN 0 ELSE ready_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                (int(c), int(c), d, q, jt),
+                            )
+                        for d, q, jt, c in grp_sched2:
+                            conn.execute(
+                                "UPDATE job_counters SET scheduled_count = CASE WHEN (scheduled_count - ?) < 0 THEN 0 ELSE scheduled_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                (int(c), int(c), d, q, jt),
+                            )
+                        for d, q, jt, c in grp_proc2:
+                            conn.execute(
+                                "UPDATE job_counters SET processing_count = CASE WHEN (processing_count - ?) < 0 THEN 0 ELSE processing_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                (int(c), int(c), d, q, jt),
+                            )
+                except Exception:
+                    pass
+                try:
+                    if req.domain and req.queue and req.job_type:
+                        jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                except Exception:
+                    pass
                 return BatchCancelResponse(affected=int(affected))
         finally:
             try:
@@ -1157,10 +1277,40 @@ async def batch_reschedule_endpoint(
                         )
                         r = cur.fetchone()
                         return BatchRescheduleResponse(affected=int(r[0] if r else 0))
+                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    grp_ready = []
+                    if counters_enabled:
+                        cur.execute(
+                            (
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} "
+                                "AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type"
+                            ),
+                            tuple(params),
+                        )
+                        grp_ready = cur.fetchall() or []
                     cur.execute(
                         f"UPDATE jobs SET available_at = NOW() + (%s || ' seconds')::interval WHERE {' AND '.join(where)}",
                         tuple([int(req.delay_seconds)] + params),
                     )
+                    # Update counters: ready -> scheduled for affected
+                    try:
+                        if counters_enabled and grp_ready:
+                            for r in grp_ready:
+                                d = r["domain"] if isinstance(r, dict) else r[0]
+                                q = r["queue"] if isinstance(r, dict) else r[1]
+                                jt = r["job_type"] if isinstance(r, dict) else r[2]
+                                c = int(r["c"] if isinstance(r, dict) else r[3])
+                                cur.execute(
+                                    "UPDATE job_counters SET ready_count = GREATEST(ready_count - %s, 0), scheduled_count = job_counters.scheduled_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                    (c, c, d, q, jt),
+                                )
+                    except Exception:
+                        pass
+                    try:
+                        if req.domain and req.queue and req.job_type:
+                            jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                    except Exception:
+                        pass
                     return BatchRescheduleResponse(affected=int(cur.rowcount or 0))
             else:
                 if req.dry_run:
@@ -1170,10 +1320,37 @@ async def batch_reschedule_endpoint(
                     )
                     r = cur.fetchone()
                     return BatchRescheduleResponse(affected=int(r[0] if r else 0))
+                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                grp_ready2 = []
+                if counters_enabled:
+                    grp_ready2 = conn.execute(
+                        (
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type"
+                        ),
+                        tuple(params),
+                    ).fetchall() or []
                 conn.execute(
                     f"UPDATE jobs SET available_at = DATETIME('now', ?) WHERE {' AND '.join(where)}",
                     tuple([f"+{int(req.delay_seconds)} seconds"] + params),
                 )
+                # Update counters
+                try:
+                    if counters_enabled and grp_ready2:
+                        for d, q, jt, c in grp_ready2:
+                            conn.execute(
+                                (
+                                    "UPDATE job_counters SET ready_count = CASE WHEN (ready_count - ?) < 0 THEN 0 ELSE ready_count - ? END, "
+                                    "scheduled_count = scheduled_count + ?, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?"
+                                ),
+                                (int(c), int(c), int(c), d, q, jt),
+                            )
+                except Exception:
+                    pass
+                try:
+                    if req.domain and req.queue and req.job_type:
+                        jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                except Exception:
+                    pass
                 return BatchRescheduleResponse(affected=int(conn.total_changes or 0))
         finally:
             try:
@@ -1263,11 +1440,44 @@ async def batch_requeue_quarantined_endpoint(
                             cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params))
                             r = cur.fetchone()
                             return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
+                        # Compute group counts to adjust counters post-update when enabled
+                        counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                        grp_rows: list = []
+                        if counters_enabled:
+                            cur.execute(
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",
+                                tuple(params),
+                            )
+                            grp_rows = cur.fetchall() or []
                         cur.execute(
                             f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = NOW(), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
                             tuple(params),
                         )
-                        return BatchRequeueQuarantinedResponse(affected=int(cur.rowcount or 0))
+                        affected = int(cur.rowcount or 0)
+                        # Adjust job_counters: quarantined -> ready
+                        try:
+                            if counters_enabled and grp_rows:
+                                for r in grp_rows:
+                                    d = r["domain"] if isinstance(r, dict) else r[0]
+                                    q = r["queue"] if isinstance(r, dict) else r[1]
+                                    jt = r["job_type"] if isinstance(r, dict) else r[2]
+                                    c = int(r["c"] if isinstance(r, dict) else r[3])
+                                    cur.execute(
+                                        (
+                                            "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(%s,%s,%s,0,0,0,0) "
+                                            "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = job_counters.ready_count + %s, quarantined_count = GREATEST(job_counters.quarantined_count - %s, 0), updated_at = NOW()"
+                                        ),
+                                        (d, q, jt, c, c),
+                                    )
+                        except Exception:
+                            pass
+                        try:
+                            # Refresh gauges for the scope (best-effort)
+                            if req.domain and req.queue and req.job_type:
+                                jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                        except Exception:
+                            pass
+                        return BatchRequeueQuarantinedResponse(affected=affected)
             else:
                 where = ["domain = ?", "status = 'quarantined'"]
                 params2: list = [req.domain]
@@ -1280,11 +1490,38 @@ async def batch_requeue_quarantined_endpoint(
                     r = cur.fetchone()
                     return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
                 with conn:
+                    # Measure groups for counters before update
+                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    grp_rows2 = []
+                    if counters_enabled:
+                        grp_rows2 = conn.execute(
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",
+                            tuple(params2),
+                        ).fetchall() or []
                     conn.execute(
                         f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = DATETIME('now'), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
                         tuple(params2),
                     )
-                    return BatchRequeueQuarantinedResponse(affected=int(conn.total_changes or 0))
+                    affected2 = int(conn.total_changes or 0)
+                    # Adjust job_counters
+                    try:
+                        if counters_enabled and grp_rows2:
+                            for d, q, jt, c in grp_rows2:
+                                conn.execute(
+                                    (
+                                        "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,0,0,0) "
+                                        "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, quarantined_count = CASE WHEN (quarantined_count - ?) < 0 THEN 0 ELSE quarantined_count - ? END, updated_at = DATETIME('now')"
+                                    ),
+                                    (d, q, jt, 0, int(c), int(c), int(c)),
+                                )
+                    except Exception:
+                        pass
+                    try:
+                        if req.domain and req.queue and req.job_type:
+                            jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+                    except Exception:
+                        pass
+                    return BatchRequeueQuarantinedResponse(affected=affected2)
         finally:
             try:
                 conn.close()

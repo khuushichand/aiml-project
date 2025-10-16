@@ -551,6 +551,7 @@ def get_user_db_path(user_id: int, db_name: str = "media") -> str:
         "evaluations": DatabasePaths.get_evaluations_db_path,
         "personalization": DatabasePaths.get_personalization_db_path,
         "workflows": DatabasePaths.get_workflows_db_path,
+        "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path,
     }
 
     getter = path_getters.get(db_name_normalized)
